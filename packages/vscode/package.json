@@ -1,0 +1,12 @@
+{
+  "name": "@radon-lite/vscode",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "main": "dist/extension.js",
+  "activationEvents": [],
+  "contributes": {},
+  "dependencies": { "@radon-lite/server": "*" },
+  "devDependencies": { "@types/vscode": "^1.85.0", "esbuild": "^0.24.0" },
+  "scripts": { "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --platform=node" }
+}

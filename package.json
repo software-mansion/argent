@@ -1,20 +1,11 @@
 {
-  "name": "radon-lite",
-  "version": "0.1.0",
-  "description": "iOS simulator control server",
-  "main": "dist/index.js",
+  "name": "radon-lite-workspace",
+  "private": true,
+  "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
-  },
-  "dependencies": {
-    "express": "^4.19.2"
-  },
-  "devDependencies": {
-    "@types/express": "^4.17.21",
-    "@types/node": "^22.0.0",
-    "typescript": "^5.5.0",
-    "ts-node": "^10.9.2"
+    "build": "tsc --build",
+    "build:server": "npm run build -w packages/server",
+    "start": "npm run start -w packages/server",
+    "dev": "npm run dev -w packages/server"
   }
 }

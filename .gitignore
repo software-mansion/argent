@@ -1,3 +1,5 @@
 node_modules/
 dist/
 *.log
+packages/*/dist/
+packages/*/node_modules/
