@@ -51,6 +51,7 @@ export class SimulatorServerProcess extends EventEmitter {
   private rl: readline.Interface | null = null;
   private _streamUrl = "";
   private _state: "starting" | "ready" | "dead" = "starting";
+  private _tokenState: "no_token" | "validating" | "valid" | "invalid";
 
   private readyResolve: ((url: string) => void) | null = null;
   private readyReject: ((err: Error) => void) | null = null;
@@ -69,6 +70,7 @@ export class SimulatorServerProcess extends EventEmitter {
   constructor(options: SimulatorServerOptions) {
     super();
     this.options = { ...options };
+    this._tokenState = options.token ? "validating" : "no_token";
     this.readyPromise = new Promise((resolve, reject) => {
       this.readyResolve = resolve;
       this.readyReject = reject;
@@ -204,6 +206,18 @@ export class SimulatorServerProcess extends EventEmitter {
       this.emit("screenshot_error", { id, errorMessage });
       return;
     }
+
+    if (line.startsWith("token_valid ")) {
+      this._tokenState = "valid";
+      this.emit("token_valid", { plan: line.split(" ")[1] });
+      return;
+    }
+
+    if (line.startsWith("token_invalid ")) {
+      this._tokenState = "invalid";
+      this.emit("token_invalid", { reason: line.split(" ").slice(1).join(" ") });
+      return;
+    }
   }
 
   private handleReplayReady(result: ReplayResult): void {
@@ -293,6 +307,7 @@ export class SimulatorServerProcess extends EventEmitter {
   }
 
   updateToken(token: string): void {
+    this._tokenState = "validating";
     this.sendCommand(`token ${token}\n`);
   }
 
@@ -352,6 +367,10 @@ export class SimulatorServerProcess extends EventEmitter {
 
   get state(): "starting" | "ready" | "dead" {
     return this._state;
+  }
+
+  get tokenState(): "no_token" | "validating" | "valid" | "invalid" {
+    return this._tokenState;
   }
 
   get currentSettings(): { replay: boolean; showTouches: boolean } {

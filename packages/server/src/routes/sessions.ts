@@ -1,6 +1,16 @@
 import { Router, Request, Response } from "express";
 import { SessionManager } from "../services/SessionManager";
+import { SimulatorServerProcess } from "../services/SimulatorServerProcess";
 import { Config, DeviceOrientation, TouchType, ButtonName } from "../types/index";
+
+function requiresToken(res: Response, proc: SimulatorServerProcess): boolean {
+  const ts = proc.tokenState;
+  if (ts === "no_token" || ts === "invalid") {
+    res.status(403).json({ error: "Token required: screenshot, recording, and replay require a Pro plan" });
+    return true;
+  }
+  return false;
+}
 
 export function createSessionsRouter(sessionManager: SessionManager, config: Config): Router {
   const router = Router();
@@ -106,6 +116,7 @@ export function createSessionsRouter(sessionManager: SessionManager, config: Con
       res.status(404).json({ error: "Session not found" });
       return;
     }
+    if (requiresToken(res, internal.process)) return;
     const { rotation } = req.body as { rotation?: DeviceOrientation };
     try {
       const result = await internal.process.screenshot(rotation);
@@ -133,6 +144,7 @@ export function createSessionsRouter(sessionManager: SessionManager, config: Con
       res.status(404).json({ error: "Session not found" });
       return;
     }
+    if (requiresToken(res, internal.process)) return;
     const { rotation } = req.body as { rotation?: DeviceOrientation };
     try {
       const result = await internal.process.stopAndSaveRecording(rotation ?? "Portrait");
@@ -149,6 +161,7 @@ export function createSessionsRouter(sessionManager: SessionManager, config: Con
       res.status(404).json({ error: "Session not found" });
       return;
     }
+    if (requiresToken(res, internal.process)) return;
     if (!internal.process.currentSettings.replay) {
       res.status(409).json({ error: "Replay is not enabled for this session" });
       return;
