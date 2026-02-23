@@ -5,7 +5,7 @@ import { SessionManager } from "./services/SessionManager";
 import { createSimulatorsRouter } from "./routes/simulators";
 import { createSessionsRouter } from "./routes/sessions";
 
-export function createServer(config: Config): express.Application {
+export function createServer(config: Config): { app: express.Application; shutdown: () => void } {
   const app = express();
 
   app.use(express.json());
@@ -84,5 +84,5 @@ export function createServer(config: Config): express.Application {
   app.use("/simulators", createSimulatorsRouter(simulatorService));
   app.use("/sessions", createSessionsRouter(sessionManager, config));
 
-  return app;
+  return { app, shutdown: () => sessionManager.destroyAll() };
 }

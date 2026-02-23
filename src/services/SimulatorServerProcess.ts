@@ -48,6 +48,7 @@ export interface SimulatorServerOptions {
 
 export class SimulatorServerProcess extends EventEmitter {
   private proc: ChildProcess | null = null;
+  private rl: readline.Interface | null = null;
   private _streamUrl = "";
   private _state: "starting" | "ready" | "dead" = "starting";
 
@@ -86,8 +87,8 @@ export class SimulatorServerProcess extends EventEmitter {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const rl = readline.createInterface({ input: this.proc.stdout! });
-    rl.on("line", (line) => this.handleLine(line.trim()));
+    this.rl = readline.createInterface({ input: this.proc.stdout! });
+    this.rl.on("line", (line) => this.handleLine(line.trim()));
 
     this.proc.stderr?.on("data", (data: Buffer) => {
       process.stderr.write(`[sim ${this.options.udid.slice(0, 8)}] ${data}`);
@@ -335,6 +336,8 @@ export class SimulatorServerProcess extends EventEmitter {
   }
 
   kill(): void {
+    this.rl?.close();
+    this.rl = null;
     if (this.proc) {
       this.proc.stdin?.end();
       this.proc.kill();

@@ -53,6 +53,13 @@ export class SessionManager {
     return true;
   }
 
+  destroyAll(): void {
+    for (const session of this.sessions.values()) {
+      session.process.kill();
+    }
+    this.sessions.clear();
+  }
+
   toPublic(session: InternalSession): Session {
     return {
       id: session.id,

@@ -1,7 +1,7 @@
 import { config } from "./config";
 import { createServer } from "./server";
 
-const app = createServer(config);
+const { app, shutdown } = createServer(config);
 
 app.listen(config.port, () => {
   console.log(`radon-lite listening on port ${config.port}`);
@@ -9,5 +9,5 @@ app.listen(config.port, () => {
   console.log(`  showTouches: ${config.showTouches}`);
 });
 
-process.on("SIGTERM", () => process.exit(0));
-process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => { shutdown(); process.exit(0); });
+process.on("SIGINT",  () => { shutdown(); process.exit(0); });
