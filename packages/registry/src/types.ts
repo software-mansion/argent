@@ -1,4 +1,5 @@
 import { TypedEventEmitter } from './event-emitter';
+import { z } from 'zod';
 
 // ── Service Types ──
 
@@ -73,7 +74,9 @@ export interface InvokeToolOptions {
 export interface ToolDefinition<TParams = void, TResult = unknown> {
   id: string;
   description?: string;
-  /** JSON Schema for tool input; used for listing (GET /tools). */
+  /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
+  zodSchema?: z.ZodObject<any>;
+  /** JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not explicitly set. */
   inputSchema?: Record<string, unknown>;
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;

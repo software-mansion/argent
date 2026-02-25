@@ -1,16 +1,6 @@
 import express, { Request, Response } from "express";
 import type { Registry } from "@radon-lite/registry";
 import { ToolNotFoundError } from "@radon-lite/registry";
-import { z } from "zod";
-import { listSimulatorsTool } from "./tools/list-simulators";
-import { bootSimulatorTool } from "./tools/boot-simulator";
-import { simulatorServerInputSchema } from "./tools/simulator-server";
-
-const toolInputSchemas: Record<string, z.ZodTypeAny> = {
-  "list-simulators": listSimulatorsTool.inputSchema,
-  "boot-simulator": bootSimulatorTool.inputSchema,
-  "simulator-server": simulatorServerInputSchema,
-};
 
 export function createHttpApp(registry: Registry): express.Application {
   const app = express();
@@ -56,16 +46,20 @@ export function createHttpApp(registry: Registry): express.Application {
 
   app.post("/tools/:name", async (req: Request, res: Response) => {
     const name = req.params.name!;
-    const schema = toolInputSchemas[name];
-    if (!schema) {
+    const def = registry.getTool(name);
+    if (!def) {
       res.status(404).json({ error: `Tool "${name}" not found` });
       return;
     }
 
-    const parseResult = schema.safeParse(req.body);
-    if (!parseResult.success) {
-      res.status(400).json({ error: parseResult.error.message });
-      return;
+    let parsedData = req.body;
+    if (def.zodSchema) {
+      const parseResult = def.zodSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        res.status(400).json({ error: parseResult.error.message });
+        return;
+      }
+      parsedData = parseResult.data;
     }
 
     const controller = new AbortController();
@@ -74,7 +68,7 @@ export function createHttpApp(registry: Registry): express.Application {
     });
 
     try {
-      const data = await registry.invokeTool(name, parseResult.data, {
+      const data = await registry.invokeTool(name, parsedData, {
         signal: controller.signal,
       });
       res.json({ data });

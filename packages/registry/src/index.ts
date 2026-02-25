@@ -24,3 +24,4 @@ export {
 } from './errors';
 export { Registry } from './registry';
 export { attachRegistryLogger } from './logger';
+export { zodObjectToJsonSchema } from './zod-to-json-schema';

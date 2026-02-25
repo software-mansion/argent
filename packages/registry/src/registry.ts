@@ -18,6 +18,7 @@ import {
   ToolExecutionError,
 } from './errors';
 import { parseURN } from './urn';
+import { zodObjectToJsonSchema } from './zod-to-json-schema';
 
 export class Registry {
   /** Single map: URN -> ServiceNode (all instances). */
@@ -58,6 +59,10 @@ export class Registry {
   ): void {
     if (this.tools.has(definition.id)) {
       throw new Error(`Tool "${definition.id}" already registered`);
+    }
+    // Auto-derive inputSchema from zodSchema if not explicitly provided
+    if (definition.zodSchema && !definition.inputSchema) {
+      definition.inputSchema = zodObjectToJsonSchema(definition.zodSchema);
     }
     this.tools.set(definition.id, { definition });
     this.events.emit('toolRegistered', definition.id);
