@@ -27,6 +27,20 @@ export function createHttpApp(registry: Registry): express.Application {
     next();
   });
 
+  app.get("/registry/snapshot", (_req: Request, res: Response) => {
+    const snapshot = registry.getSnapshot();
+    const services: Record<string, { state: string; dependents: string[] }> =
+      {};
+    for (const [urn, data] of snapshot.services) {
+      services[urn] = { state: data.state, dependents: [...data.dependents] };
+    }
+    res.json({
+      services,
+      namespaces: snapshot.namespaces,
+      tools: snapshot.tools,
+    });
+  });
+
   app.get("/tools", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();
     const tools = snapshot.tools.map((id) => {
