@@ -1,5 +1,6 @@
-import { useEffect, useState, useRef } from 'react'
-import type { ApiClient, Orientation } from '../api/client'
+import { useEffect, useState, useRef, useMemo } from 'react'
+import type { Orientation } from '../api/client'
+import { createSessionClient } from '../api/client'
 import DeviceScreen from '../components/DeviceScreen'
 import TokenRequiredOverlay from '../components/TokenRequiredOverlay'
 import { useAdapter } from '../App'
@@ -12,7 +13,7 @@ interface FpsReport {
 }
 
 interface SessionViewProps {
-  api: ApiClient
+  apiUrl: string
   sessionId: string
   streamUrl: string
   serverUrl: string
@@ -30,7 +31,7 @@ const ORIENTATIONS: Orientation[] = [
 ]
 
 export default function SessionView({
-  api,
+  apiUrl,
   sessionId,
   streamUrl,
   serverUrl,
@@ -45,40 +46,39 @@ export default function SessionView({
   const [error, setError] = useState<string | null>(null)
   const panelLocationRef = useRef<'left' | 'right' | 'bottom'>('left')
 
-  // Push token to server whenever host provides one
+  const sessionClient = useMemo(() => createSessionClient(apiUrl), [apiUrl])
+  useEffect(() => () => sessionClient.close(), [sessionClient])
+
+  // Push token to binary whenever host provides one
   useEffect(() => {
     if (!token) return
-    api.updateToken(sessionId, token).catch(() => {})
-  }, [api, sessionId, token])
+    sessionClient.updateToken(sessionId, token).catch(() => {})
+  }, [sessionClient, sessionId, token])
 
-  // SSE connection
+  // WebSocket event handling
   useEffect(() => {
-    const eventsUrl = api.eventsUrl(sessionId)
-    const es = new EventSource(eventsUrl)
-
-    es.addEventListener('fps_report', (e) => {
-      const data = JSON.parse(e.data) as FpsReport
-      setFps(data.fps)
-    })
-
-    es.addEventListener('exit', () => {
-      es.close()
-      onSessionEnded()
-    })
-
-    es.onerror = () => {
-      // SSE will auto-reconnect; just note the error
-      setError('Stream connection lost — reconnecting…')
+    const { ws } = sessionClient
+    const handler = (e: MessageEvent) => {
+      const msg = JSON.parse(e.data as string) as { event: string; data?: Partial<FpsReport> }
+      if (msg.event === 'fps_report') setFps(msg.data?.fps ?? null)
     }
-
-    return () => es.close()
-  }, [api, sessionId, onSessionEnded])
+    const closeHandler = () => onSessionEnded()
+    const errorHandler = () => setError('WebSocket error')
+    ws.addEventListener('message', handler)
+    ws.addEventListener('close', closeHandler)
+    ws.addEventListener('error', errorHandler)
+    return () => {
+      ws.removeEventListener('message', handler)
+      ws.removeEventListener('close', closeHandler)
+      ws.removeEventListener('error', errorHandler)
+    }
+  }, [sessionClient, onSessionEnded])
 
   async function handleRotate() {
     const nextIdx = (orientationIdx + 1) % ORIENTATIONS.length
     setOrientationIdx(nextIdx)
     try {
-      await api.rotate(sessionId, ORIENTATIONS[nextIdx])
+      await sessionClient.rotate(sessionId, ORIENTATIONS[nextIdx])
     } catch (e) {
       setError(String(e))
     }
@@ -86,7 +86,7 @@ export default function SessionView({
 
   async function handleScreenshot() {
     try {
-      await api.screenshot(sessionId)
+      await sessionClient.screenshot(sessionId)
     } catch (e) {
       const msg = String(e)
       if (msg.includes('403') || msg.includes('token')) {
@@ -99,7 +99,7 @@ export default function SessionView({
 
   async function handleDestroy() {
     try {
-      await api.destroySession(sessionId)
+      await sessionClient.destroySession(sessionId)
     } finally {
       onSessionEnded()
     }
@@ -170,7 +170,7 @@ export default function SessionView({
           streamUrl={streamUrl}
           sessionId={sessionId}
           serverUrl={serverUrl}
-          api={api}
+          api={sessionClient}
         />
       </div>
 

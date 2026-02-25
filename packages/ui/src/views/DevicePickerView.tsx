@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
-import type { ApiClient, Simulator } from '../api/client'
+import type { ToolsClient, Simulator } from '../api/client'
 
 interface DevicePickerViewProps {
-  api: ApiClient
+  api: ToolsClient
   loading: boolean
   onStarting: () => void
-  onSessionCreated: (sessionId: string, streamUrl: string) => void
+  onSessionCreated: (sessionId: string, streamUrl: string, apiUrl: string) => void
 }
 
 export default function DevicePickerView({
@@ -38,8 +38,8 @@ export default function DevicePickerView({
   async function selectDevice(udid: string) {
     onStarting()
     try {
-      const session = await api.createSession({ udid })
-      onSessionCreated(session.id, session.streamUrl)
+      const session = await api.startSimulator({ udid })
+      onSessionCreated(session.udid, session.streamUrl, session.apiUrl)
     } catch (e) {
       setError(String(e))
     }

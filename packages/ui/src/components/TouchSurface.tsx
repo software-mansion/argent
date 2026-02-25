@@ -1,9 +1,9 @@
 import { useRef, useState, ReactNode, WheelEvent, PointerEvent } from 'react'
-import type { ApiClient } from '../api/client'
+import type { SessionClient } from '../api/client'
 
 interface TouchSurfaceProps {
   sessionId: string
-  api: ApiClient
+  api: SessionClient
   children: ReactNode
 }
 

@@ -1,4 +1,4 @@
-import type { ApiClient } from '../api/client'
+import type { SessionClient } from '../api/client'
 import MjpegCanvas from './MjpegCanvas'
 import TouchSurface from './TouchSurface'
 
@@ -6,7 +6,7 @@ interface DeviceScreenProps {
   streamUrl: string
   sessionId: string
   serverUrl: string
-  api: ApiClient
+  api: SessionClient
 }
 
 /**

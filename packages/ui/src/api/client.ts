@@ -3,15 +3,13 @@ export interface Simulator {
   name: string
   state: string
   runtime: string
-  deviceType?: string
+  isAvailable: boolean
 }
 
-export interface Session {
-  id: string
+export interface SimulatorSession {
   udid: string
-  state: string
   streamUrl: string
-  createdAt: string
+  apiUrl: string
 }
 
 export interface TouchPoint {
@@ -42,67 +40,111 @@ async function req<T>(
 ): Promise<T> {
   const res = await fetch(url, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText)
     throw new Error(`${method} ${url} → ${res.status}: ${text}`)
   }
-  // 204 No Content
   if (res.status === 204) return undefined as T
-  return res.json() as Promise<T>
+  const json = await res.json()
+  // Unwrap tools server { data: ... } wrapper
+  if (json && typeof json === 'object' && 'data' in json) return (json as { data: T }).data
+  return json as T
 }
 
-export function createClient(baseUrl: string) {
-  const base = baseUrl.replace(/\/$/, '')
+export function createClient(toolsUrl: string) {
+  const base = toolsUrl.replace(/\/$/, '')
 
   return {
     listSimulators: () =>
-      req<Simulator[]>('GET', `${base}/simulators`),
+      req<{ simulators: Simulator[] }>('POST', `${base}/tools/list-simulators`, {})
+        .then(d => d.simulators),
 
     listRunningSimulators: () =>
-      req<Simulator[]>('GET', `${base}/simulators/running`),
+      req<{ simulators: Simulator[] }>('POST', `${base}/tools/list-simulators`, {})
+        .then(d => d.simulators.filter(s => s.state === 'Booted')),
 
     bootSimulator: (udid: string) =>
-      req<void>('POST', `${base}/simulators/${encodeURIComponent(udid)}/boot`),
+      req<void>('POST', `${base}/tools/boot-simulator`, { udid }),
 
-    createSession: (params: { udid: string; token?: string; replay?: boolean; showTouches?: boolean }) =>
-      req<Session>('POST', `${base}/sessions`, params),
-
-    destroySession: (id: string) =>
-      req<void>('DELETE', `${base}/sessions/${encodeURIComponent(id)}`),
-
-    updateToken: (id: string, token: string) =>
-      req<void>('PUT', `${base}/sessions/${encodeURIComponent(id)}/token`, { token }),
-
-    touch: (id: string, type: TouchType, points: TouchPoint[]) =>
-      req<void>('POST', `${base}/sessions/${encodeURIComponent(id)}/input/touch`, { type, points }),
-
-    scroll: (id: string, params: { x: number; y: number; deltaX: number; deltaY: number }) =>
-      req<void>('POST', `${base}/sessions/${encodeURIComponent(id)}/input/scroll`, params),
-
-    button: (id: string, direction: ButtonDirection, button: ButtonName) =>
-      req<void>('POST', `${base}/sessions/${encodeURIComponent(id)}/input/button`, { direction, button }),
-
-    rotate: (id: string, orientation: Orientation) =>
-      req<void>('POST', `${base}/sessions/${encodeURIComponent(id)}/input/rotate`, { orientation }),
-
-    paste: (id: string, text: string) =>
-      req<void>('POST', `${base}/sessions/${encodeURIComponent(id)}/input/paste`, { text }),
-
-    screenshot: (id: string, rotation?: string) =>
-      req<{ id: string; url: string; filePath: string }>(
-        'POST',
-        `${base}/sessions/${encodeURIComponent(id)}/screenshot`,
-        rotation ? { rotation } : {}
-      ),
-
-    eventsUrl: (id: string) =>
-      `${base}/sessions/${encodeURIComponent(id)}/events`,
-
-    streamUrl: (session: Session) => session.streamUrl,
+    startSimulator: (params: { udid: string; token?: string }) =>
+      req<SimulatorSession>('POST', `${base}/tools/simulator-server`, params),
   }
 }
 
-export type ApiClient = ReturnType<typeof createClient>
+export function createSessionClient(apiUrl: string) {
+  const { host } = new URL(apiUrl)
+  const ws = new WebSocket(`ws://${host}/ws`)
+  let reqId = 0
+  const send = (cmd: object) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ id: String(++reqId), ...cmd }))
+    }
+  }
+
+  return {
+    ws,
+
+    touch: (_id: string, type: TouchType, points: TouchPoint[]): Promise<void> => {
+      send({
+        cmd: 'touch',
+        type,
+        x: points[0].x,
+        y: points[0].y,
+        second_x: points[1]?.x ?? null,
+        second_y: points[1]?.y ?? null,
+      })
+      return Promise.resolve()
+    },
+
+    scroll: (_id: string, p: { x: number; y: number; deltaX: number; deltaY: number }): Promise<void> => {
+      send({ cmd: 'wheel', x: p.x, y: p.y, dx: p.deltaX, dy: p.deltaY })
+      return Promise.resolve()
+    },
+
+    button: (_id: string, direction: ButtonDirection, button: ButtonName): Promise<void> => {
+      send({ cmd: 'button', direction, button })
+      return Promise.resolve()
+    },
+
+    rotate: (_id: string, orientation: Orientation): Promise<void> => {
+      send({ cmd: 'rotate', direction: orientation })
+      return Promise.resolve()
+    },
+
+    paste: (_id: string, text: string): Promise<void> => {
+      send({ cmd: 'paste', text })
+      return Promise.resolve()
+    },
+
+    screenshot: (_id: string, rotation?: string): Promise<{ url: string; path: string }> =>
+      fetch(`${apiUrl}/api/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(rotation ? { rotation } : {}),
+      }).then(async r => {
+        const body = await r.json()
+        if (!r.ok) throw new Error(`${r.status}: ${(body as { error?: string }).error ?? r.statusText}`)
+        return body as { url: string; path: string }
+      }),
+
+    updateToken: (_id: string, token: string): Promise<void> =>
+      fetch(`${apiUrl}/api/token/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      }).then(() => undefined),
+
+    destroySession: (_id: string): Promise<void> => {
+      ws.close()
+      return Promise.resolve()
+    },
+
+    close: () => ws.close(),
+  }
+}
+
+export type ToolsClient = ReturnType<typeof createClient>
+export type SessionClient = ReturnType<typeof createSessionClient>

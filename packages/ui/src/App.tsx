@@ -1,7 +1,7 @@
 import { useReducer, useEffect, createContext, useContext } from 'react'
 import type { HostAdapter, HostMessage } from './adapters/types'
 import { createClient } from './api/client'
-import type { ApiClient } from './api/client'
+import type { ToolsClient } from './api/client'
 import ConnectView from './views/ConnectView'
 import DevicePickerView from './views/DevicePickerView'
 import SessionView from './views/SessionView'
@@ -17,8 +17,8 @@ export function useAdapter(): HostAdapter {
 
 // ── API client context ─────────────────────────────────────────────────────────
 
-const ApiContext = createContext<ApiClient | null>(null)
-export function useApi(): ApiClient {
+const ApiContext = createContext<ToolsClient | null>(null)
+export function useApi(): ToolsClient {
   const a = useContext(ApiContext)
   if (!a) throw new Error('useApi must be used inside App with a serverUrl')
   return a
@@ -30,12 +30,12 @@ type AppState =
   | { view: 'waiting-for-url' }
   | { view: 'picking-device'; serverUrl: string }
   | { view: 'session-starting'; serverUrl: string }
-  | { view: 'session-active'; serverUrl: string; sessionId: string; streamUrl: string; token?: string }
-  | { view: 'token-needed'; serverUrl: string; sessionId: string; streamUrl: string }
+  | { view: 'session-active'; serverUrl: string; sessionId: string; streamUrl: string; apiUrl: string; token?: string }
+  | { view: 'token-needed'; serverUrl: string; sessionId: string; streamUrl: string; apiUrl: string }
 
 type AppAction =
   | { type: 'SET_SERVER_URL'; url: string }
-  | { type: 'SESSION_CREATED'; sessionId: string; streamUrl: string }
+  | { type: 'SESSION_CREATED'; sessionId: string; streamUrl: string; apiUrl: string }
   | { type: 'SESSION_STARTING' }
   | { type: 'TOKEN_NEEDED' }
   | { type: 'SET_TOKEN'; token: string }
@@ -57,6 +57,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         serverUrl: (state as { serverUrl: string }).serverUrl,
         sessionId: action.sessionId,
         streamUrl: action.streamUrl,
+        apiUrl: action.apiUrl,
       }
 
     case 'TOKEN_NEEDED':
@@ -66,6 +67,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         serverUrl: state.serverUrl,
         sessionId: state.sessionId,
         streamUrl: state.streamUrl,
+        apiUrl: state.apiUrl,
       }
 
     case 'SET_TOKEN':
@@ -75,6 +77,7 @@ function reducer(state: AppState, action: AppAction): AppState {
         serverUrl: (state as { serverUrl: string }).serverUrl,
         sessionId: (state as { sessionId: string }).sessionId,
         streamUrl: (state as { streamUrl: string }).streamUrl,
+        apiUrl: (state as { apiUrl: string }).apiUrl,
         token: action.token,
       }
 
@@ -122,8 +125,8 @@ export default function App({ adapter }: AppProps) {
     dispatch({ type: 'SESSION_STARTING' })
   }
 
-  function handleSessionCreated(sessionId: string, streamUrl: string) {
-    dispatch({ type: 'SESSION_CREATED', sessionId, streamUrl })
+  function handleSessionCreated(sessionId: string, streamUrl: string, apiUrl: string) {
+    dispatch({ type: 'SESSION_CREATED', sessionId, streamUrl, apiUrl })
     adapter.send({ type: 'sessionCreated', sessionId })
   }
 
@@ -152,11 +155,11 @@ export default function App({ adapter }: AppProps) {
           />
         )}
 
-        {(state.view === 'session-active' || state.view === 'token-needed') && api && (
+        {(state.view === 'session-active' || state.view === 'token-needed') && (
           <SessionView
-            api={api}
             sessionId={state.sessionId}
             streamUrl={state.streamUrl}
+            apiUrl={state.apiUrl}
             serverUrl={state.serverUrl}
             token={'token' in state ? state.token : undefined}
             tokenNeeded={state.view === 'token-needed'}

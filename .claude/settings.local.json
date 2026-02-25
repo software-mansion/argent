@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/filip/Documents/radon/radon-lite/simulator-server:*)",
+      "Bash(~/Documents/radon/radon-lite/simulator-server:*)",
+      "Bash(curl:*)",
+      "Bash(echo:*)",
+      "Bash(npx tsc:*)",
+      "Bash(./simulator-server verify_token:*)",
+      "Bash(git init:*)",
+      "WebSearch",
+      "Bash(git add:*)",
+      "Bash(git push:*)",
+      "Bash(tail:*)"
+    ]
+  }
+}
