@@ -1,7 +1,7 @@
 {
   "files": [],
   "references": [
-    { "path": "packages/server" },
+{ "path": "packages/tools" },
     { "path": "packages/ui" },
     { "path": "packages/vscode" }
   ]

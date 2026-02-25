@@ -3,9 +3,6 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsc --build",
-    "build:server": "npm run build -w packages/server",
-    "start": "npm run start -w packages/server",
-    "dev": "npm run dev -w packages/server"
+    "build": "tsc --build"
   }
 }
