@@ -18,16 +18,18 @@ export class ToolRegistry {
     name: string;
     description: string;
     inputSchema: Record<string, unknown>;
+    outputHint?: string;
   }> {
     return Array.from(this.tools.values()).map((tool) => ({
       name: tool.name,
       description: tool.description,
       inputSchema: zodObjectToJsonSchema(tool.inputSchema),
+      ...(tool.outputHint ? { outputHint: tool.outputHint } : {}),
     }));
   }
 }
 
-function zodObjectToJsonSchema(
+export function zodObjectToJsonSchema(
   schema: z.ZodObject<any>
 ): Record<string, unknown> {
   const shape = schema.shape as Record<string, z.ZodTypeAny>;
@@ -49,14 +51,22 @@ function zodObjectToJsonSchema(
 }
 
 function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
-  if (type instanceof z.ZodString) return { type: "string" };
-  if (type instanceof z.ZodNumber) return { type: "number" };
-  if (type instanceof z.ZodBoolean) return { type: "boolean" };
-  if (type instanceof z.ZodOptional) return zodTypeToJsonSchema(type.unwrap());
-  if (type instanceof z.ZodArray) {
-    return { type: "array", items: zodTypeToJsonSchema(type.element) };
-  }
-  return {};
+  const description = (type as any)._def?.description as string | undefined;
+  const inner = type instanceof z.ZodOptional ? type.unwrap() : type;
+
+  let schema: Record<string, unknown>;
+  if (inner instanceof z.ZodString) schema = { type: "string" };
+  else if (inner instanceof z.ZodNumber) schema = { type: "number" };
+  else if (inner instanceof z.ZodBoolean) schema = { type: "boolean" };
+  else if (inner instanceof z.ZodEnum)
+    schema = { type: "string", enum: inner.options };
+  else if (inner instanceof z.ZodArray)
+    schema = { type: "array", items: zodTypeToJsonSchema(inner.element) };
+  else if (inner instanceof z.ZodObject) schema = zodObjectToJsonSchema(inner);
+  else schema = {};
+
+  if (description) schema.description = description;
+  return schema;
 }
 
 function isOptional(type: z.ZodTypeAny): boolean {
