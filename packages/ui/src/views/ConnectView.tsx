@@ -5,7 +5,7 @@ interface ConnectViewProps {
 }
 
 export default function ConnectView({ onConnect }: ConnectViewProps) {
-  const saved = localStorage.getItem('rl-serverUrl') ?? 'http://localhost:3000'
+  const saved = localStorage.getItem('rl-serverUrl') ?? 'http://localhost:3001'
   const [url, setUrl] = useState(saved)
 
   function handleSubmit(e: FormEvent) {
@@ -31,7 +31,7 @@ export default function ConnectView({ onConnect }: ConnectViewProps) {
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="http://localhost:3000"
+            placeholder="http://localhost:3001"
             className="
               px-3 py-2 rounded border
               bg-rl-surface border-rl-border text-rl-fg

@@ -1,18 +1,22 @@
+import {attachRegistryLogger} from "@radon-lite/registry";
 import { createHttpApp } from "./http";
-import { registry } from "./registry";
-import { listSimulatorsTool } from "./tools/list-simulators";
-import { bootSimulatorTool } from "./tools/boot-simulator";
-import { simulatorServerTool } from "./tools/simulator-server";
+import { createRegistry } from "./setup-registry";
 
-registry.register(listSimulatorsTool);
-registry.register(bootSimulatorTool);
-registry.register(simulatorServerTool);
-
+const registry = createRegistry();
+attachRegistryLogger(registry);
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
-const app = createHttpApp();
+const app = createHttpApp(registry);
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Tools server listening on http://localhost:${PORT}`);
   console.log(`  GET  http://localhost:${PORT}/tools`);
   console.log(`  POST http://localhost:${PORT}/tools/:name`);
 });
+
+const shutdown = async () => {
+  await registry.dispose();
+  server.close();
+  process.exit(0);
+};
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
