@@ -1,10 +1,11 @@
 import { z } from "zod";
-import { Tool } from "../types";
-import { ensureServer, sendCommand } from "../simulator-registry";
+import type { ToolDefinition } from "@radon-lite/registry";
+import type { SimulatorServerApi } from "../blueprints/simulator-server";
+import { sendCommand } from "../simulator-api";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const inputSchema = z.object({
+const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   button: z
     .enum([
@@ -19,19 +20,22 @@ const inputSchema = z.object({
     .describe("Hardware button to press"),
 });
 
-export const buttonTool: Tool<
-  typeof inputSchema,
+export const buttonTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
   { pressed: string }
 > = {
-  name: "button",
+  id: "button",
   description: `Press a simulator hardware button. Sends Down then Up events automatically.
 Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.`,
-  inputSchema,
-  async execute(input) {
-    const entry = await ensureServer(input.udid);
-    sendCommand(entry, { cmd: "button", direction: "Down", button: input.button });
+  zodSchema,
+  services: (params) => ({
+    simulatorServer: `SimulatorServer:${params.udid}`,
+  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    sendCommand(api, { cmd: "button", direction: "Down", button: params.button });
     await sleep(50);
-    sendCommand(entry, { cmd: "button", direction: "Up", button: input.button });
-    return { pressed: input.button };
+    sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
+    return { pressed: params.button };
   },
 };

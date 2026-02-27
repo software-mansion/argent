@@ -5,6 +5,7 @@ import type { ToolsClient } from './api/client'
 import ConnectView from './views/ConnectView'
 import DevicePickerView from './views/DevicePickerView'
 import SessionView from './views/SessionView'
+import ServicesGraphView from './views/ServicesGraphView'
 
 // ── Adapter context ────────────────────────────────────────────────────────────
 
@@ -29,22 +30,29 @@ export function useApi(): ToolsClient {
 type AppState =
   | { view: 'waiting-for-url' }
   | { view: 'picking-device'; serverUrl: string }
+  | { view: 'registry-graph'; serverUrl: string }
   | { view: 'session-starting'; serverUrl: string }
   | { view: 'session-active'; serverUrl: string; sessionId: string; streamUrl: string; apiUrl: string; token?: string }
   | { view: 'token-needed'; serverUrl: string; sessionId: string; streamUrl: string; apiUrl: string }
 
 type AppAction =
   | { type: 'SET_SERVER_URL'; url: string }
+  | { type: 'SHOW_REGISTRY_GRAPH' }
   | { type: 'SESSION_CREATED'; sessionId: string; streamUrl: string; apiUrl: string }
   | { type: 'SESSION_STARTING' }
   | { type: 'TOKEN_NEEDED' }
   | { type: 'SET_TOKEN'; token: string }
   | { type: 'SESSION_ENDED' }
+  | { type: 'BACK_TO_PICKER' }
 
 function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_SERVER_URL':
       return { view: 'picking-device', serverUrl: action.url }
+
+    case 'SHOW_REGISTRY_GRAPH':
+      if (state.view !== 'picking-device' && state.view !== 'registry-graph') return state
+      return { view: 'registry-graph', serverUrl: (state as { serverUrl: string }).serverUrl }
 
     case 'SESSION_STARTING':
       if (state.view !== 'picking-device') return state
@@ -84,6 +92,10 @@ function reducer(state: AppState, action: AppAction): AppState {
     case 'SESSION_ENDED':
       if (state.view === 'waiting-for-url') return state
       return { view: 'picking-device', serverUrl: (state as { serverUrl: string }).serverUrl }
+
+    case 'BACK_TO_PICKER':
+      if (state.view !== 'registry-graph') return state
+      return { view: 'picking-device', serverUrl: state.serverUrl }
 
     default:
       return state
@@ -152,6 +164,14 @@ export default function App({ adapter }: AppProps) {
             loading={state.view === 'session-starting'}
             onStarting={handleSessionStart}
             onSessionCreated={handleSessionCreated}
+            onShowRegistryGraph={() => dispatch({ type: 'SHOW_REGISTRY_GRAPH' })}
+          />
+        )}
+
+        {state.view === 'registry-graph' && api && (
+          <ServicesGraphView
+            api={api}
+            onBack={() => dispatch({ type: 'BACK_TO_PICKER' })}
           />
         )}
 

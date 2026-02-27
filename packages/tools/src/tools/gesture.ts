@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { Tool } from "../types";
-import { ensureServer, sendCommand } from "../simulator-registry";
+import type { ToolDefinition } from "@radon-lite/registry";
+import type { SimulatorServerApi } from "../blueprints/simulator-server";
+import { sendCommand } from "../simulator-api";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -22,18 +23,18 @@ const eventSchema = z.object({
     .describe("Delay before this event in milliseconds (default 16ms ≈ 60fps)"),
 });
 
-const inputSchema = z.object({
+const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   events: z
     .array(eventSchema)
     .describe("Sequence of touch events to send to the simulator"),
 });
 
-export const gestureTool: Tool<
-  typeof inputSchema,
+export const gestureTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
   { events: number }
 > = {
-  name: "gesture",
+  id: "gesture",
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the tap tool. For straight-line scrolling use the swipe tool.
@@ -46,12 +47,15 @@ Example smooth scroll down:
   [{"type":"Down","x":0.5,"y":0.7},
    {"type":"Move","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.5},{"type":"Move","x":0.5,"y":0.4},
    {"type":"Up","x":0.5,"y":0.3}]`,
-  inputSchema,
-  async execute(input) {
-    const entry = await ensureServer(input.udid);
-    for (const event of input.events) {
+  zodSchema,
+  services: (params) => ({
+    simulatorServer: `SimulatorServer:${params.udid}`,
+  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    for (const event of params.events) {
       await sleep(event.delayMs ?? 16);
-      sendCommand(entry, {
+      sendCommand(api, {
         cmd: "touch",
         type: event.type,
         x: event.x,
@@ -60,6 +64,6 @@ Example smooth scroll down:
         second_y: event.y2 ?? null,
       });
     }
-    return { events: input.events.length };
+    return { events: params.events.length };
   },
 };

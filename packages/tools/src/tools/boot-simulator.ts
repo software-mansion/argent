@@ -1,30 +1,22 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { Tool } from "../types";
+import type { ToolDefinition } from "@radon-lite/registry";
 
 const execFileAsync = promisify(execFile);
 
-const inputSchema = z.object({
+const zodSchema = z.object({
   udid: z.string().describe("The UDID of the simulator to boot"),
 });
 
-const outputSchema = z.object({
-  udid: z.string(),
-  booted: z.literal(true),
-});
-
-export const bootSimulatorTool: Tool<
-  typeof inputSchema,
-  z.infer<typeof outputSchema>
-> = {
-  name: "boot-simulator",
+export const bootSimulatorTool: ToolDefinition<{ udid: string }> = {
+  id: "boot-simulator",
   description: "Boot an iOS simulator by UDID",
-  inputSchema,
-  outputSchema,
-  async execute(input, _signal) {
+  zodSchema,
+  services: () => ({}),
+  async execute(_services, params, _options) {
     try {
-      await execFileAsync("xcrun", ["simctl", "boot", input.udid]);
+      await execFileAsync("xcrun", ["simctl", "boot", params.udid]);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       // xcrun simctl boot exits with an error if the device is already booted — treat as success
@@ -32,6 +24,6 @@ export const bootSimulatorTool: Tool<
         throw err;
       }
     }
-    return { udid: input.udid, booted: true };
+    return { udid: params.udid, booted: true };
   },
 };

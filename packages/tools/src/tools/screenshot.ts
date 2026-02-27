@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { Tool } from "../types";
-import { ensureServer, httpScreenshot } from "../simulator-registry";
+import type { ToolDefinition } from "@radon-lite/registry";
+import type { SimulatorServerApi } from "../blueprints/simulator-server";
+import { httpScreenshot } from "../simulator-api";
 
-const inputSchema = z.object({
+const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
@@ -16,20 +17,26 @@ const inputSchema = z.object({
     ),
 });
 
-export const screenshotTool: Tool<
-  typeof inputSchema,
+export const screenshotTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
   { url: string; path: string }
 > = {
-  name: "screenshot",
+  id: "screenshot",
   description: `Take a screenshot of the simulator screen. Returns { url, path }.
 The MCP adapter returns this as a visible image.
 Requires a Pro JWT token — pass it via the token param or call simulator-server first.
 If screenshot times out, the simulator-server likely has no token; restart with a token.`,
-  inputSchema,
+  zodSchema,
   outputHint: "image",
-  async execute(input, signal) {
-    const entry = await ensureServer(input.udid, input.token, signal);
-    const timeout = AbortSignal.timeout(16_000);
-    return httpScreenshot(entry, input.rotation, timeout);
+  services: (params) => ({
+    simulatorServer: {
+      urn: `SimulatorServer:${params.udid}`,
+      options: { token: params.token },
+    },
+  }),
+  async execute(services, params, options) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const signal = options?.signal ?? AbortSignal.timeout(16_000);
+    return httpScreenshot(api, params.rotation, signal);
   },
 };

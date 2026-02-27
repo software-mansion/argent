@@ -12,6 +12,19 @@ export interface SimulatorSession {
   apiUrl: string
 }
 
+export type RegistryServiceState =
+  | 'IDLE'
+  | 'STARTING'
+  | 'RUNNING'
+  | 'TERMINATING'
+  | 'ERROR'
+
+export interface RegistrySnapshot {
+  services: Record<string, { state: RegistryServiceState; dependents: string[] }>
+  namespaces: string[]
+  tools: string[]
+}
+
 export interface TouchPoint {
   x: number
   y: number
@@ -58,6 +71,9 @@ export function createClient(toolsUrl: string) {
   const base = toolsUrl.replace(/\/$/, '')
 
   return {
+    getRegistrySnapshot: () =>
+      req<RegistrySnapshot>('GET', `${base}/registry/snapshot`),
+
     listSimulators: () =>
       req<{ simulators: Simulator[] }>('POST', `${base}/tools/list-simulators`, {})
         .then(d => d.simulators),

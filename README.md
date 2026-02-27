@@ -78,6 +78,48 @@ The full OpenAPI 3.0.3 spec lives at [`packages/server/openapi.yaml`](packages/s
 
 Paste it into [editor.swagger.io](https://editor.swagger.io) for interactive docs, or import it into Postman via **File → Import**.
 
+## Tools server and registry
+
+The **tools** package (`packages/tools`) exposes an HTTP API for listing and invoking tools (list-simulators, boot-simulator, simulator-server). It is backed by the in-repo **registry** (`packages/registry`), a dependency-aware service lifecycle manager: the simulator-server process is modeled as a URN-scoped service (one instance per simulator UDID), and tools declare their service dependencies; the registry resolves and starts services on demand. Start the tools server from the tools package:
+
+```bash
+cd packages/tools && npm run build && npm start
+```
+
+Default port is 3001. `GET /tools` lists tools with input schemas; `POST /tools/:name` invokes a tool with a JSON body. On shutdown, the server calls `registry.dispose()` to tear down all running simulator-server processes.
+
+## Running the app with frontend
+
+To run the full app (tools API + web UI) from the terminal:
+
+**1. Install and build (once):**
+
+```bash
+npm install
+cd packages/registry && npm run build
+cd ../tools && npm run build
+```
+
+**2. Start the tools server** (terminal 1). It serves the API at **http://localhost:3001**:
+
+```bash
+cd packages/tools && npm start
+```
+
+**3. Start the frontend** (terminal 2). Vite serves the UI at **http://localhost:5173**:
+
+```bash
+cd packages/ui && npm run dev
+```
+
+**4. Open the app** in a browser:
+
+- Go to **http://localhost:5173**
+- On the Connect screen, the default server URL is **http://localhost:3001** (or use `?serverUrl=http://localhost:3001` in the URL). Click **Connect**.
+- Pick a simulator (list will load from the tools server), boot it if needed, then start the session to get the stream and controls.
+
+The UI talks to the tools server for listing simulators, booting, and starting the simulator-server process; the session then uses the returned `apiUrl` / `streamUrl` for touch, stream, etc.
+
 ## Development
 
 ```bash

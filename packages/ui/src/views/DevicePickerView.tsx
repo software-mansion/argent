@@ -6,6 +6,7 @@ interface DevicePickerViewProps {
   loading: boolean
   onStarting: () => void
   onSessionCreated: (sessionId: string, streamUrl: string, apiUrl: string) => void
+  onShowRegistryGraph?: () => void
 }
 
 export default function DevicePickerView({
@@ -13,6 +14,7 @@ export default function DevicePickerView({
   loading,
   onStarting,
   onSessionCreated,
+  onShowRegistryGraph,
 }: DevicePickerViewProps) {
   const [running, setRunning] = useState<Simulator[]>([])
   const [all, setAll] = useState<Simulator[]>([])
@@ -111,12 +113,22 @@ export default function DevicePickerView({
         )}
       </ul>
 
-      <button
-        onClick={() => setShowAll((v) => !v)}
-        className="text-xs text-rl-accent hover:text-rl-accent-hover self-start"
-      >
-        {showAll ? '← Show running only' : 'Boot another…'}
-      </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={() => setShowAll((v) => !v)}
+          className="text-xs text-rl-accent hover:text-rl-accent-hover"
+        >
+          {showAll ? '← Show running only' : 'Boot another…'}
+        </button>
+        {onShowRegistryGraph && (
+          <button
+            onClick={onShowRegistryGraph}
+            className="text-xs text-rl-accent hover:text-rl-accent-hover"
+          >
+            View registry graph →
+          </button>
+        )}
+      </div>
     </div>
   )
 }
