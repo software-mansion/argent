@@ -1,0 +1,20 @@
+{
+  "name": "@radon-lite/mcp",
+  "version": "0.1.0",
+  "description": "MCP bridge for radon-lite tools",
+  "type": "module",
+  "bin": {
+    "radon-lite-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "node --loader ts-node/esm src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

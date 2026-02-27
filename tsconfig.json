@@ -1,8 +1,9 @@
 {
   "files": [],
   "references": [
-{ "path": "packages/tools" },
+    { "path": "packages/tools" },
     { "path": "packages/ui" },
-    { "path": "packages/vscode" }
+    { "path": "packages/vscode" },
+    { "path": "packages/mcp" }
   ]
 }
