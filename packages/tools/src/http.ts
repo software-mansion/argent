@@ -35,11 +35,18 @@ export function createHttpApp(registry: Registry): express.Application {
     const snapshot = registry.getSnapshot();
     const tools = snapshot.tools.map((id) => {
       const def = registry.getTool(id);
-      return {
+      const entry: {
+        name: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+        outputHint?: string;
+      } = {
         name: id,
         description: def?.description ?? "",
         inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
       };
+      if (def?.outputHint) entry.outputHint = def.outputHint;
+      return entry;
     });
     res.json({ tools });
   });

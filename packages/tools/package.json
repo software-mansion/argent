@@ -10,12 +10,14 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "ws": "^8.18.0",
     "zod": "^3.23.0",
     "@radon-lite/registry": "file:../registry"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.10",
     "typescript": "^5.5.0",
     "ts-node": "^10.9.2"
   }

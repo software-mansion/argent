@@ -35,7 +35,6 @@ function buildLayout(snapshot: RegistrySnapshot): LayoutNode[] {
   for (const data of Object.values(services)) {
     for (const d of data.dependents) dependentsSet.add(d)
   }
-  const roots = urns.filter((u) => !dependentsSet.has(u))
 
   const targetsOf = new Map<string, string[]>()
   for (const [urn, data] of Object.entries(services)) {
