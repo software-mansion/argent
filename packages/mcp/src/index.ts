@@ -32,8 +32,8 @@ async function callTool(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(args ?? {}),
   });
-  const json = (await res.json()) as { data?: unknown; error?: string };
-  if (!res.ok) throw new Error(json.error ?? res.statusText);
+  const json = (await res.json()) as { data?: unknown; error?: string; message?: string };
+  if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
   return { result: json.data, outputHint: meta?.outputHint };
 }
 
@@ -61,7 +61,16 @@ async function toMcpContent(result: unknown, outputHint?: string) {
 
 const server = new Server(
   { name: "radon-lite", version: "0.1.0" },
-  { capabilities: { tools: {} } }
+  {
+    capabilities: { tools: {} },
+    instructions:
+      "Radon Lite — iOS Simulator Control. " +
+      "Most tools require a valid license. If any tool returns an error containing " +
+      "'No Radon Lite license found', call the activate-sso tool first — it opens a " +
+      "browser on the user's machine for sign-in and returns { success: true, plan }. " +
+      "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
+      "Alternatively, call activate-license-key with the user's license key.",
+  }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({

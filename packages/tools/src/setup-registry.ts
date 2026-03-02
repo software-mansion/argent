@@ -10,6 +10,10 @@ import { gestureTool } from "./tools/gesture";
 import { buttonTool } from "./tools/button";
 import { pasteTool } from "./tools/paste";
 import { rotateTool } from "./tools/rotate";
+import { activateLicenseKeyTool } from "./tools/activate-license-key";
+import { activateSsoTool } from "./tools/activate-sso";
+import { getLicenseStatusTool } from "./tools/get-license-status";
+import { removeLicenseTool } from "./tools/remove-license";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -26,6 +30,10 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(pasteTool);
   registry.registerTool(rotateTool);
+  registry.registerTool(activateLicenseKeyTool);
+  registry.registerTool(activateSsoTool);
+  registry.registerTool(getLicenseStatusTool);
+  registry.registerTool(removeLicenseTool);
 
   return registry;
 }

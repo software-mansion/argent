@@ -9,6 +9,7 @@
     "dev": "ts-node src/index.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^0.9.1",
     "express": "^4.19.2",
     "ws": "^8.18.0",
     "zod": "^3.23.0",
