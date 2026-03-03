@@ -11,7 +11,9 @@
       "WebSearch",
       "Bash(git add:*)",
       "Bash(git push:*)",
-      "Bash(tail:*)"
+      "Bash(tail:*)",
+      "mcp__radon-lite__list-simulators",
+      "mcp__radon-lite__get-license-status"
     ]
   }
 }

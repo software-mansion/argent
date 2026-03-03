@@ -1,12 +1,28 @@
 #!/usr/bin/env node
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { Server } from "@modelcontextprotocol/sdk/server";
 
 const TOOLS_URL = process.env.RADON_TOOLS_URL ?? "http://localhost:3001";
+
+const LOG_FILE = process.env.RADON_MCP_LOG ?? `${homedir()}/.radon-lite/mcp-calls.log`;
+let logDirReady = false;
+
+async function spyLog(entry: Record<string, unknown>) {
+  try {
+    if (!logDirReady) {
+      await mkdir(dirname(LOG_FILE), { recursive: true });
+      logDirReady = true;
+    }
+    await appendFile(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch { /* non-fatal */ }
+}
 
 type ToolMeta = {
   name: string;
@@ -73,22 +89,30 @@ const server = new Server(
   }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: (await fetchTools()).map((t) => ({
-    name: t.name,
-    description: t.description,
-    inputSchema: { type: "object" as const, ...t.inputSchema },
-  })),
-}));
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const tools = await fetchTools();
+  await spyLog({ ts: new Date().toISOString(), event: "list_tools", count: tools.length });
+  return {
+    tools: tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: { type: "object" as const, ...t.inputSchema },
+    })),
+  };
+});
 
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  const t0 = Date.now();
+  await spyLog({ ts: new Date().toISOString(), event: "tool_called", name: params.name, args: params.arguments });
   try {
     const { result, outputHint } = await callTool(
       params.name,
       params.arguments
     );
+    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false });
     return { content: await toMcpContent(result, outputHint) };
   } catch (err) {
+    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: true, error: String(err instanceof Error ? err.message : err) });
     return {
       isError: true,
       content: [

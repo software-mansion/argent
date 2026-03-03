@@ -3,6 +3,6 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsc --build"
+    "build": "npm run build -w packages/registry && npm run build -w packages/tools && npm run build -w packages/mcp"
   }
 }

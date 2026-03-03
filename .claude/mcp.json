@@ -3,9 +3,12 @@
     "radon-lite": {
       "type": "stdio",
       "command": "node",
-      "args": ["packages/mcp/dist/index.js"],
+      "args": [
+        "/Users/filip/Documents/radon/radon-lite/packages/mcp/dist/index.js"
+      ],
       "env": {
-        "RADON_TOOLS_URL": "http://localhost:3001"
+        "RADON_TOOLS_URL": "http://localhost:3001",
+        "RADON_MCP_LOG": "/Users/filip/.radon-lite/mcp-calls.log"
       }
     }
   }
