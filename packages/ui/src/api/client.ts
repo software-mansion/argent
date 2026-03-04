@@ -67,6 +67,41 @@ async function req<T>(
   return json as T
 }
 
+// ── Metro types ────────────────────────────────────────────────────────────────
+
+export interface MetroConnectionInfo {
+  port: number
+  projectRoot: string
+  deviceName: string
+  isNewDebugger: boolean
+  connected: boolean
+}
+
+export interface MetroStatusInfo extends MetroConnectionInfo {
+  loadedScripts: number
+  enabledDomains: string[]
+}
+
+export interface ComponentEntry {
+  id: number
+  name: string
+  depth: number
+  rect: { x: number; y: number; w: number; h: number } | null
+  isHost: boolean
+  parentIdx: number
+}
+
+export interface InspectItem {
+  name: string
+  source: { file: string; line: number; column: number } | null
+  code: string | null
+}
+
+export interface BreakpointResult {
+  breakpointId: string
+  locations: Array<{ scriptId: string; lineNumber: number; columnNumber: number }>
+}
+
 export function createClient(toolsUrl: string) {
   const base = toolsUrl.replace(/\/$/, '')
 
@@ -87,6 +122,40 @@ export function createClient(toolsUrl: string) {
 
     startSimulator: (params: { udid: string; token?: string }) =>
       req<SimulatorSession>('POST', `${base}/tools/simulator-server`, params),
+
+    // ── Metro tools ──
+
+    metroConnect: (port = 8081) =>
+      req<MetroConnectionInfo>('POST', `${base}/tools/metro-connect`, { port }),
+
+    metroStatus: (port = 8081) =>
+      req<MetroStatusInfo>('POST', `${base}/tools/metro-status`, { port }),
+
+    metroEvaluate: (expression: string, port = 8081) =>
+      req<{ result: unknown }>('POST', `${base}/tools/metro-evaluate`, { port, expression }),
+
+    metroSetBreakpoint: (file: string, line: number, port = 8081, condition?: string) =>
+      req<BreakpointResult>('POST', `${base}/tools/metro-set-breakpoint`, { port, file, line, condition }),
+
+    metroRemoveBreakpoint: (breakpointId: string, port = 8081) =>
+      req<{ removed: boolean }>('POST', `${base}/tools/metro-remove-breakpoint`, { port, breakpointId }),
+
+    metroPause: (port = 8081) =>
+      req<{ paused: boolean }>('POST', `${base}/tools/metro-pause`, { port }),
+
+    metroResume: (port = 8081) =>
+      req<{ resumed: boolean }>('POST', `${base}/tools/metro-resume`, { port }),
+
+    metroStep: (action: 'stepOver' | 'stepInto' | 'stepOut', port = 8081) =>
+      req<{ action: string; sent: boolean }>('POST', `${base}/tools/metro-step`, { port, action }),
+
+    metroComponentTree: (port = 8081) =>
+      req<{ components: ComponentEntry[] } | { error: string }>('POST', `${base}/tools/metro-component-tree`, { port }),
+
+    metroInspectElement: (x: number, y: number, port = 8081, contextLines = 3) =>
+      req<{ x: number; y: number; items: InspectItem[] } | { error: string }>(
+        'POST', `${base}/tools/metro-inspect-element`, { port, x, y, contextLines }
+      ),
   }
 }
 

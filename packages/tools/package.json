@@ -6,19 +6,24 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cdp-verify": "ts-node test/metro-cdp-verify.ts"
   },
   "dependencies": {
+    "@radon-lite/registry": "file:../registry",
     "express": "^4.19.2",
+    "source-map-js": "^1.2.1",
     "ws": "^8.18.0",
-    "zod": "^3.23.0",
-    "@radon-lite/registry": "file:../registry"
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.10",
+    "ts-node": "^10.9.2",
     "typescript": "^5.5.0",
-    "ts-node": "^10.9.2"
+    "vitest": "^4.0.18"
   }
 }

@@ -3,6 +3,12 @@
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
-    "build": "tsc --build"
+    "build": "tsc --build",
+    "start": "npm run build -w @radon-lite/registry && concurrently -n ui,tools \"npm run dev -w @radon-lite/ui\" \"npm run dev -w @radon-lite/tools\"",
+    "start:ui": "npm run dev -w @radon-lite/ui",
+    "start:tools": "npm run build -w @radon-lite/registry && npm run dev -w @radon-lite/tools"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
   }
 }

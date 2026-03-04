@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Tools Server",
+      "runtimeArgs": ["-r", "ts-node/register"],
+      "program": "${workspaceFolder}/packages/tools/src/index.ts",
+      "cwd": "${workspaceFolder}/packages/tools",
+      "console": "integratedTerminal",
+      "env": {
+        "PORT": "3001"
+      }
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "UI (Chrome)",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/packages/ui",
+      "preLaunchTask": "start-vite"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Tools Server (built)",
+      "program": "${workspaceFolder}/packages/tools/dist/index.js",
+      "cwd": "${workspaceFolder}/packages/tools",
+      "console": "integratedTerminal",
+      "env": {
+        "PORT": "3001"
+      },
+      "preLaunchTask": "build-tools"
+    },
+  ],
+  "compounds": [
+    {
+      "name": "Full (Tools + UI)",
+      "configurations": ["Tools Server", "UI (Chrome)"]
+    }
+  ]
+}
