@@ -8,7 +8,17 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "node --loader ts-node/esm src/index.ts"
+    "dev": "node --loader ts-node/esm src/index.ts",
+    "install-mcp": "node scripts/install.cjs",
+    "install-mcp:allow": "node scripts/install.cjs --allow",
+    "install-mcp:user": "node scripts/install.cjs --user",
+    "install-mcp:user:allow": "node scripts/install.cjs --user --allow",
+    "uninstall-mcp": "node scripts/uninstall.cjs",
+    "uninstall-mcp:allow": "node scripts/uninstall.cjs --allow",
+    "uninstall-mcp:user": "node scripts/uninstall.cjs --user",
+    "uninstall-mcp:user:allow": "node scripts/uninstall.cjs --user --allow",
+    "observe": "node scripts/observe.cjs",
+    "benchmark": "node scripts/benchmark.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0"

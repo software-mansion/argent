@@ -54,6 +54,15 @@ export const listSimulatorsTool: ToolDefinition = {
       }
     }
 
+    simulators.sort((a, b) => {
+      const aBooted = a.state === "Booted" ? 0 : 1;
+      const bBooted = b.state === "Booted" ? 0 : 1;
+      if (aBooted !== bBooted) return aBooted - bBooted;
+      const aIpad = a.name.includes("iPad") ? 1 : 0;
+      const bIpad = b.name.includes("iPad") ? 1 : 0;
+      return aIpad - bIpad;
+    });
+
     return { simulators };
   },
 };

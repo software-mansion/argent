@@ -1,6 +1,37 @@
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import type { Registry } from "@radon-lite/registry";
 import { ToolNotFoundError } from "@radon-lite/registry";
+import { readToken } from "./license";
+
+const LICENSE_EXEMPT_TOOLS = new Set([
+  "activate-license-key",
+  "activate-sso",
+  "get-license-status",
+  "remove-license",
+]);
+
+async function licenseGate(req: Request, res: Response, next: NextFunction) {
+  const name = req.params.name!;
+
+  if (LICENSE_EXEMPT_TOOLS.has(name)) {
+    next();
+    return;
+  }
+
+  const token = await readToken();
+
+  if (!token) {
+    res.status(402).json({
+      error:
+        "No Radon Lite license found. Call the activate-sso tool to open a browser sign-in flow, or activate-license-key if you have a license key.",
+    });
+    return;
+  }
+
+  // Inject keychain token as default; non-empty explicit token in body takes precedence
+  req.body = { ...req.body, token: req.body.token || token };
+  next();
+}
 
 export function createHttpApp(registry: Registry): express.Application {
   const app = express();
@@ -51,8 +82,9 @@ export function createHttpApp(registry: Registry): express.Application {
     res.json({ tools });
   });
 
-  app.post("/tools/:name", async (req: Request, res: Response) => {
+  app.post("/tools/:name", licenseGate, async (req: Request, res: Response) => {
     const name = req.params.name!;
+
     const def = registry.getTool(name);
     if (!def) {
       res.status(404).json({ error: `Tool "${name}" not found` });

@@ -1,12 +1,3 @@
 {
-  "mcpServers": {
-    "radon-lite": {
-      "type": "stdio",
-      "command": "node",
-      "args": ["packages/mcp/dist/index.js"],
-      "env": {
-        "RADON_TOOLS_URL": "http://localhost:3001"
-      }
-    }
-  }
+  "mcpServers": {}
 }

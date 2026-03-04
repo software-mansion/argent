@@ -1,12 +1,28 @@
 #!/usr/bin/env node
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { appendFile, mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { Server } from "@modelcontextprotocol/sdk/server";
 
 const TOOLS_URL = process.env.RADON_TOOLS_URL ?? "http://localhost:3001";
+
+const LOG_FILE = process.env.RADON_MCP_LOG ?? `${homedir()}/.radon-lite/mcp-calls.log`;
+let logDirReady = false;
+
+async function spyLog(entry: Record<string, unknown>) {
+  try {
+    if (!logDirReady) {
+      await mkdir(dirname(LOG_FILE), { recursive: true });
+      logDirReady = true;
+    }
+    await appendFile(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch { /* non-fatal */ }
+}
 
 type ToolMeta = {
   name: string;
@@ -32,8 +48,8 @@ async function callTool(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(args ?? {}),
   });
-  const json = (await res.json()) as { data?: unknown; error?: string };
-  if (!res.ok) throw new Error(json.error ?? res.statusText);
+  const json = (await res.json()) as { data?: unknown; error?: string; message?: string };
+  if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
   return { result: json.data, outputHint: meta?.outputHint };
 }
 
@@ -61,25 +77,42 @@ async function toMcpContent(result: unknown, outputHint?: string) {
 
 const server = new Server(
   { name: "radon-lite", version: "0.1.0" },
-  { capabilities: { tools: {} } }
+  {
+    capabilities: { tools: {} },
+    instructions:
+      "Radon Lite — iOS Simulator Control. " +
+      "Most tools require a valid license. If any tool returns an error containing " +
+      "'No Radon Lite license found', call the activate-sso tool first — it opens a " +
+      "browser on the user's machine for sign-in and returns { success: true, plan }. " +
+      "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
+      "Alternatively, call activate-license-key with the user's license key.",
+  }
 );
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: (await fetchTools()).map((t) => ({
-    name: t.name,
-    description: t.description,
-    inputSchema: { type: "object" as const, ...t.inputSchema },
-  })),
-}));
+server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const tools = await fetchTools();
+  await spyLog({ ts: new Date().toISOString(), event: "list_tools", count: tools.length });
+  return {
+    tools: tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      inputSchema: { type: "object" as const, ...t.inputSchema },
+    })),
+  };
+});
 
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
+  const t0 = Date.now();
+  await spyLog({ ts: new Date().toISOString(), event: "tool_called", name: params.name, args: params.arguments });
   try {
     const { result, outputHint } = await callTool(
       params.name,
       params.arguments
     );
+    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false, result });
     return { content: await toMcpContent(result, outputHint) };
   } catch (err) {
+    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: true, error: String(err instanceof Error ? err.message : err) });
     return {
       isError: true,
       content: [

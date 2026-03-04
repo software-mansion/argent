@@ -15,10 +15,10 @@ export const simulatorServerTool: ToolDefinition<
   { udid: string; apiUrl: string; streamUrl: string }
 > = {
   id: "simulator-server",
-  description: `Get (or start) the simulator-server for a UDID.
-Returns { apiUrl, streamUrl }. If no server is running for this UDID, one is started automatically.
-Use this explicitly to pass a JWT token for Pro features (screenshot, recording).
-All other tools also trigger auto-start without a token if needed.`,
+  description: `SETUP ONLY — Get (or start) the simulator-server for a UDID.
+Do not call this during interaction tasks; tap, swipe, paste, screenshot, and all other tools start the server automatically.
+Use this only to explicitly pass a JWT token for Pro features (screenshot, recording) before running those tools.
+Returns { apiUrl, streamUrl }.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: {
