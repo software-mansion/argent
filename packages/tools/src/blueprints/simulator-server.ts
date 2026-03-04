@@ -22,6 +22,10 @@ const READY_TIMEOUT_MS = 30_000;
 export interface SimulatorServerApi {
   apiUrl: string;
   streamUrl: string;
+  /** Update the JWT token in the running binary (stdin `token <jwt>` command). */
+  setToken(jwt: string): void;
+  /** Send a key Down or Up event by USB HID keycode (stdin `key <direction> <keyCode>` command). */
+  pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
 function spawnSimulatorServerProcess(
@@ -138,7 +142,16 @@ export const simulatorServerBlueprint: ServiceBlueprint<
     });
 
     const instance: ServiceInstance<SimulatorServerApi> = {
-      api: { apiUrl, streamUrl },
+      api: {
+        apiUrl,
+        streamUrl,
+        setToken: (jwt: string) => {
+          proc.stdin?.write(`token ${jwt}\n`);
+        },
+        pressKey: (direction: "Down" | "Up", keyCode: number) => {
+          proc.stdin?.write(`key ${direction} ${keyCode}\n`);
+        },
+      },
       dispose: async () => {
         proc.kill();
       },

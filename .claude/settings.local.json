@@ -1,19 +1,30 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/Users/filip/Documents/radon/radon-lite/simulator-server:*)",
-      "Bash(~/Documents/radon/radon-lite/simulator-server:*)",
-      "Bash(curl:*)",
       "Bash(echo:*)",
       "Bash(npx tsc:*)",
-      "Bash(./simulator-server verify_token:*)",
       "Bash(git init:*)",
       "WebSearch",
       "Bash(git add:*)",
       "Bash(git push:*)",
       "Bash(tail:*)",
+      "Bash(npm run:*)",
       "mcp__radon-lite__list-simulators",
-      "mcp__radon-lite__get-license-status"
+      "mcp__radon-lite__get-license-status",
+      "mcp__radon-lite__boot-simulator",
+      "mcp__radon-lite__launch-app",
+      "mcp__radon-lite__open-url",
+      "mcp__radon-lite__simulator-server",
+      "mcp__radon-lite__screenshot",
+      "mcp__radon-lite__tap",
+      "mcp__radon-lite__swipe",
+      "mcp__radon-lite__gesture",
+      "mcp__radon-lite__button",
+      "mcp__radon-lite__keyboard",
+      "mcp__radon-lite__rotate",
+      "mcp__radon-lite__activate-sso",
+      "mcp__radon-lite__activate-license-key",
+      "mcp__radon-lite__remove-license"
     ]
   }
 }

@@ -42,9 +42,19 @@ function formatEntry(entry) {
     return `${DIM}${time}${RESET} ${CYAN}→${RESET}  tool_called   ${pad(entry.name, 12)} ${DIM}${args}${RESET}`;
   }
   if (entry.event === "tool_result") {
-    const status = entry.isError
-      ? `${RED}✗${RESET}  ${DIM}${entry.error ?? ""}${RESET}`
-      : `${GREEN}✓${RESET}`;
+    let status;
+    if (entry.isError) {
+      status = `${RED}✗${RESET}  ${DIM}${entry.error ?? ""}${RESET}`;
+    } else {
+      let resultStr = "";
+      if (entry.result !== undefined) {
+        const raw = typeof entry.result === "string"
+          ? entry.result
+          : JSON.stringify(entry.result);
+        resultStr = "  " + DIM + (raw.length > 120 ? raw.slice(0, 117) + "…" : raw) + RESET;
+      }
+      status = `${GREEN}✓${RESET}${resultStr}`;
+    }
     return `${DIM}${time}${RESET} ${entry.isError ? RED : GREEN}←${RESET}  tool_result   ${pad(entry.name, 12)} ${entry.durationMs}ms ${status}`;
   }
   return `${DIM}${time}${RESET} ${JSON.stringify(entry)}`;

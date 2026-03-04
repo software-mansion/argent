@@ -109,7 +109,7 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       params.name,
       params.arguments
     );
-    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false });
+    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false, result });
     return { content: await toMcpContent(result, outputHint) };
   } catch (err) {
     await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: true, error: String(err instanceof Error ? err.message : err) });

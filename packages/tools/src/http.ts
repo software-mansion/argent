@@ -28,8 +28,8 @@ async function licenseGate(req: Request, res: Response, next: NextFunction) {
     return;
   }
 
-  // Inject token as default; explicit token in body takes precedence
-  req.body = { token, ...req.body };
+  // Inject keychain token as default; non-empty explicit token in body takes precedence
+  req.body = { ...req.body, token: req.body.token || token };
   next();
 }
 

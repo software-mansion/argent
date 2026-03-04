@@ -1,3 +1,5 @@
+// DEAD FOR NOW PASTE DOES NOT WORK (FILIP)
+
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
@@ -5,7 +7,7 @@ import { sendCommand } from "../simulator-api";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  text: z.string().describe("Text to paste into the focused input field"),
+  text: z.string().describe("Text to paste into the focused field"),
 });
 
 export const pasteTool: ToolDefinition<
@@ -13,8 +15,9 @@ export const pasteTool: ToolDefinition<
   { pasted: boolean }
 > = {
   id: "paste",
-  description: `Paste text into the focused input field on the simulator.
-Faster and more reliable than simulating individual key presses.`,
+  description: `Paste text into the focused field on the simulator (fastest text entry).
+Tap the text field first to focus it, then call paste.
+If paste doesn't work for a particular field, use the keyboard tool instead.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

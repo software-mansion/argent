@@ -24,8 +24,7 @@ export const screenshotTool: ToolDefinition<
   id: "screenshot",
   description: `Take a screenshot of the simulator screen. Returns { url, path }.
 The MCP adapter returns this as a visible image.
-Requires a Pro JWT token — pass it via the token param or call simulator-server first.
-If screenshot times out, the simulator-server likely has no token; restart with a token.`,
+Requires a Pro license — if this fails with a license error, call activate-sso first.`,
   zodSchema,
   outputHint: "image",
   services: (params) => ({
@@ -36,6 +35,11 @@ If screenshot times out, the simulator-server likely has no token; restart with 
   }),
   async execute(services, params, options) {
     const api = services.simulatorServer as SimulatorServerApi;
+    // Always push the current token into the running binary so it is
+    // up-to-date even if the binary was started before activation.
+    if (params.token) {
+      api.setToken(params.token);
+    }
     const signal = options?.signal ?? AbortSignal.timeout(16_000);
     return httpScreenshot(api, params.rotation, signal);
   },

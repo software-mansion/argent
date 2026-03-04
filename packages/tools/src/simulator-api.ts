@@ -37,6 +37,25 @@ export function sendCommand(api: SimulatorServerApi, cmd: object): void {
 }
 
 /**
+ * Fetch the iOS accessibility element tree via the simulator-server HTTP API.
+ * Returns normalized [0,1] frame coordinates matching the touch coordinate space.
+ */
+export async function httpDescribe(
+  api: SimulatorServerApi,
+  signal?: AbortSignal
+): Promise<unknown> {
+  const res = await fetch(`${api.apiUrl}/api/ui/describe`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+    signal,
+  });
+  const body = (await res.json()) as { error?: string } & Record<string, unknown>;
+  if (!res.ok || body.error) throw new Error(body.error ?? `describe ${res.status}`);
+  return body;
+}
+
+/**
  * Take a screenshot via the simulator-server HTTP API.
  */
 export async function httpScreenshot(
