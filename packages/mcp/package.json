@@ -17,7 +17,8 @@
     "uninstall-mcp:allow": "node scripts/uninstall.cjs --allow",
     "uninstall-mcp:user": "node scripts/uninstall.cjs --user",
     "uninstall-mcp:user:allow": "node scripts/uninstall.cjs --user --allow",
-    "observe": "node scripts/observe.cjs"
+    "observe": "node scripts/observe.cjs",
+    "benchmark": "node scripts/benchmark.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.0"
