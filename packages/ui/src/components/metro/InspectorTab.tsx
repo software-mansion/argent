@@ -45,7 +45,7 @@ export default function InspectorTab({
       </div>
 
       {inspectResult.items.map((item, i) => (
-        <div key={i} className="border-b border-rl-border">
+        <div key={i} className="border-b border-rl-border mt-7">
           <div className="flex items-center gap-2 px-3 py-1.5">
             <span className="text-xs font-medium text-rl-fg">&lt;{item.name} /&gt;</span>
             {item.source && (
