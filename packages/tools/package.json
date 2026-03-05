@@ -12,6 +12,7 @@
     "test:cdp-verify": "ts-node test/metro-cdp-verify.ts"
   },
   "dependencies": {
+    "@clack/prompts": "^1.1.0",
     "@radon-lite/registry": "file:../registry",
     "express": "^4.19.2",
     "source-map-js": "^1.2.1",
