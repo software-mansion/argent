@@ -23,6 +23,8 @@ import { metroResumeTool } from "./tools/metro-resume";
 import { metroStepTool } from "./tools/metro-step";
 import { metroComponentTreeTool } from "./tools/metro-component-tree";
 import { metroInspectElementTool } from "./tools/metro-inspect-element";
+import { metroConsoleLogsTool } from "./tools/metro-console-logs";
+import { metroConsoleListenTool } from "./tools/metro-console-listen";
 import { describeTool } from "./tools/describe";
 import { activateLicenseKeyTool } from "./tools/activate-license-key";
 import { activateSsoTool } from "./tools/activate-sso";
@@ -57,6 +59,8 @@ export function createRegistry(): Registry {
   registry.registerTool(metroStepTool);
   registry.registerTool(metroComponentTreeTool);
   registry.registerTool(metroInspectElementTool);
+  registry.registerTool(metroConsoleLogsTool);
+  registry.registerTool(metroConsoleListenTool);
   registry.registerTool(describeTool);
   registry.registerTool(activateLicenseKeyTool);
   registry.registerTool(activateSsoTool);

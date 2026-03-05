@@ -102,6 +102,64 @@ export interface BreakpointResult {
   locations: Array<{ scriptId: string; lineNumber: number; columnNumber: number }>
 }
 
+export interface ConsoleLogEntry {
+  id: number
+  level: string
+  args: Array<{ type: string; value?: unknown; description?: string }>
+  message: string
+  timestamp: number
+}
+
+type ConsoleLogListener = (entry: ConsoleLogEntry) => void
+
+export interface ConsoleLogStream {
+  on(event: 'log', listener: ConsoleLogListener): void
+  on(event: 'error', listener: (err: Error) => void): void
+  on(event: 'close', listener: () => void): void
+  off(event: 'log', listener: ConsoleLogListener): void
+  off(event: 'error', listener: (err: Error) => void): void
+  off(event: 'close', listener: () => void): void
+  close(): void
+}
+
+function createConsoleLogStream(base: string, port: number): ConsoleLogStream {
+  const listeners = new Map<string, Set<Function>>()
+
+  const emit = (event: string, ...args: unknown[]) => {
+    listeners.get(event)?.forEach((fn) => fn(...args))
+  }
+
+  let ws: WebSocket | null = null
+
+  req<{ url: string }>('POST', `${base}/tools/metro-console-listen`, { port })
+    .then(({ url }) => {
+      ws = new WebSocket(url)
+      ws.onmessage = (event) => {
+        try {
+          const entry: ConsoleLogEntry = JSON.parse(event.data as string)
+          emit('log', entry)
+        } catch { /* skip malformed */ }
+      }
+      ws.onerror = () => emit('error', new Error('Console log WebSocket error'))
+      ws.onclose = () => emit('close')
+    })
+    .catch((err) => emit('error', err instanceof Error ? err : new Error(String(err))))
+
+  return {
+    on(event: string, listener: Function) {
+      if (!listeners.has(event)) listeners.set(event, new Set())
+      listeners.get(event)!.add(listener)
+    },
+    off(event: string, listener: Function) {
+      listeners.get(event)?.delete(listener)
+    },
+    close() {
+      ws?.close()
+      listeners.clear()
+    },
+  } as ConsoleLogStream
+}
+
 export function createClient(toolsUrl: string) {
   const base = toolsUrl.replace(/\/$/, '')
 
@@ -156,6 +214,14 @@ export function createClient(toolsUrl: string) {
       req<{ x: number; y: number; items: InspectItem[] } | { error: string }>(
         'POST', `${base}/tools/metro-inspect-element`, { port, x, y, contextLines }
       ),
+
+    metroConsoleLogs: (count: number | 'all' = 'all', port = 8081, sinceId?: number) =>
+      req<{ logs: ConsoleLogEntry[]; total: number }>(
+        'POST', `${base}/tools/metro-console-logs`, { port, count, sinceId }
+      ),
+
+    metroConsoleStream: (port = 8081): ConsoleLogStream =>
+      createConsoleLogStream(base, port),
   }
 }
 

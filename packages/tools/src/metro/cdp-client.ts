@@ -10,6 +10,20 @@ export interface ScriptInfo {
   endLine: number;
 }
 
+export interface ConsoleCallArg {
+  type: string;
+  value?: unknown;
+  description?: string;
+  className?: string;
+}
+
+export interface ConsoleAPICalledParams {
+  type: string;
+  args: ConsoleCallArg[];
+  timestamp: number;
+  stackTrace?: Record<string, unknown>;
+}
+
 export type CDPClientEvents = {
   connected: () => void;
   disconnected: (error?: Error) => void;
@@ -17,6 +31,7 @@ export type CDPClientEvents = {
   bindingCalled: (name: string, payload: string) => void;
   scriptParsed: (script: ScriptInfo) => void;
   paused: (params: Record<string, unknown>) => void;
+  consoleAPICalled: (params: ConsoleAPICalledParams) => void;
 };
 
 interface PendingRequest {
@@ -254,6 +269,15 @@ export class CDPClient {
       }
 
       this.events.emit("bindingCalled", name, payload);
+    }
+
+    if (method === "Runtime.consoleAPICalled") {
+      this.events.emit("consoleAPICalled", {
+        type: (params.type as string) ?? "log",
+        args: (params.args as ConsoleCallArg[]) ?? [],
+        timestamp: (params.timestamp as number) ?? Date.now(),
+        stackTrace: params.stackTrace as Record<string, unknown> | undefined,
+      });
     }
 
     if (method === "Debugger.paused") {
