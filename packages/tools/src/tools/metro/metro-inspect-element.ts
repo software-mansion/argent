@@ -1,8 +1,8 @@
 import { z } from "zod";
 import * as crypto from "node:crypto";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../blueprints/metro-debugger";
-import { makeInspectScript } from "../metro/scripts/inspect-at-point";
+import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import { makeInspectScript } from "../../metro/scripts/inspect-at-point";
 
 interface InspectItem {
   name: string;

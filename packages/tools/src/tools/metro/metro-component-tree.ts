@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../blueprints/metro-debugger";
-import { COMPONENT_TREE_SCRIPT } from "../metro/scripts/component-tree";
+import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import { COMPONENT_TREE_SCRIPT } from "../../metro/scripts/component-tree";
 
 interface ComponentEntry {
   id: number;

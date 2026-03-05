@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import { activateWithSSO } from "../license";
+import { activateWithSSO } from "../../license";
 
 const zodSchema = z.object({
   name: z

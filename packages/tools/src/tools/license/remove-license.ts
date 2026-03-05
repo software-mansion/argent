@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import { removeToken } from "../license";
+import { removeToken } from "../../license";
 
 const zodSchema = z.object({});
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../blueprints/metro-debugger";
+import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
 
 interface CallFrameInfo {
   functionName: string;
