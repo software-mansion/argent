@@ -6,7 +6,7 @@
     "build": "tsc --build",
     "start": "npm run build -w @radon-lite/registry && concurrently -n ui,tool-server \"npm run dev -w @radon-lite/ui\" \"npm run dev -w @radon-lite/tool-server\"",
     "start:ui": "npm run dev -w @radon-lite/ui",
-    "start:tools": "npm run build -w @radon-lite/registry && npm run dev -w @radon-lite/tool-server"
+    "start:tool-server": "npm run build -w @radon-lite/registry && npm run dev -w @radon-lite/tool-server"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
