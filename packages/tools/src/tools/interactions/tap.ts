@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { SimulatorServerApi } from "../blueprints/simulator-server";
-import { sendCommand } from "../simulator-api";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../simulator-api";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

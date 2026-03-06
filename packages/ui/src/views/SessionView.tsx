@@ -1,9 +1,10 @@
-import { useEffect, useState, useRef, useMemo } from 'react'
-import type { Orientation } from '../api/client'
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import type { Orientation, InspectItem } from '../api/client'
 import { createSessionClient } from '../api/client'
 import DeviceScreen from '../components/DeviceScreen'
 import TokenRequiredOverlay from '../components/TokenRequiredOverlay'
-import { useAdapter } from '../App'
+import MetroPanel from '../components/metro/MetroPanel'
+import { useAdapter, useApi } from '../App'
 
 interface FpsReport {
   fps: number
@@ -41,21 +42,27 @@ export default function SessionView({
   onTokenNeeded,
 }: SessionViewProps) {
   const adapter = useAdapter()
+  const toolsApi = useApi()
   const [fps, setFps] = useState<number | null>(null)
   const [orientationIdx, setOrientationIdx] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const panelLocationRef = useRef<'left' | 'right' | 'bottom'>('left')
 
+  // Metro debugger state
+  const [metroOpen, setMetroOpen] = useState(false)
+  const [inspectMode, setInspectMode] = useState(false)
+  const [inspectResult, setInspectResult] = useState<{ x: number; y: number; items: InspectItem[] } | null>(null)
+  const [inspecting, setInspecting] = useState(false)
+  const metroPort = 8081
+
   const sessionClient = useMemo(() => createSessionClient(apiUrl), [apiUrl])
   useEffect(() => () => sessionClient.close(), [sessionClient])
 
-  // Push token to binary whenever host provides one
   useEffect(() => {
     if (!token) return
     sessionClient.updateToken(sessionId, token).catch(() => {})
   }, [sessionClient, sessionId, token])
 
-  // WebSocket event handling
   useEffect(() => {
     const { ws } = sessionClient
     const handler = (e: MessageEvent) => {
@@ -73,6 +80,26 @@ export default function SessionView({
       ws.removeEventListener('error', errorHandler)
     }
   }, [sessionClient, onSessionEnded])
+
+  const handleInspectClick = useCallback(
+    async (x: number, y: number) => {
+      if (!toolsApi || !inspectMode) return
+      setInspecting(true)
+      try {
+        const result = await toolsApi.metroInspectElement(x, y, metroPort)
+        if ('error' in result) {
+          setError(result.error)
+        } else {
+          setInspectResult(result)
+        }
+      } catch (e) {
+        setError(String(e))
+      } finally {
+        setInspecting(false)
+      }
+    },
+    [toolsApi, inspectMode, metroPort]
+  )
 
   async function handleRotate() {
     const nextIdx = (orientationIdx + 1) % ORIENTATIONS.length
@@ -131,6 +158,20 @@ export default function SessionView({
           <CameraIcon />
         </button>
 
+        <div className="w-px h-4 bg-rl-border mx-1" />
+
+        <button
+          onClick={() => setMetroOpen((v) => !v)}
+          title={metroOpen ? 'Close Metro Debugger' : 'Open Metro Debugger'}
+          className={`p-1 rounded transition-colors ${
+            metroOpen
+              ? 'bg-rl-accent text-white'
+              : 'text-rl-fg-muted hover:text-rl-fg hover:bg-rl-bg'
+          }`}
+        >
+          <MetroIcon />
+        </button>
+
         <div className="flex-1" />
 
         {adapter.capabilities.canChangePanelLocation && (
@@ -164,14 +205,35 @@ export default function SessionView({
         </div>
       )}
 
-      {/* Device screen — fills remaining space */}
-      <div className="flex-1 flex items-center justify-center overflow-hidden p-2">
-        <DeviceScreen
-          streamUrl={streamUrl}
-          sessionId={sessionId}
-          serverUrl={serverUrl}
-          api={sessionClient}
-        />
+      {/* Main content: device screen + optional metro panel */}
+      <div className="flex-1 flex overflow-hidden">
+        <div className="flex-1 flex items-center justify-center overflow-hidden p-2 relative">
+          <DeviceScreen
+            streamUrl={streamUrl}
+            sessionId={sessionId}
+            serverUrl={serverUrl}
+            api={sessionClient}
+            inspectMode={inspectMode}
+            onInspectClick={handleInspectClick}
+          />
+
+          {inspectMode && (
+            <div className="absolute top-2 left-2 px-2 py-1 rounded bg-rl-accent/80 text-white text-[10px] font-medium pointer-events-none">
+              Inspect mode — click on the screen
+            </div>
+          )}
+        </div>
+
+        {metroOpen && toolsApi && (
+          <MetroPanel
+            api={toolsApi}
+            metroPort={metroPort}
+            inspectMode={inspectMode}
+            onToggleInspect={() => setInspectMode((v) => !v)}
+            inspectResult={inspectResult}
+            inspecting={inspecting}
+          />
+        )}
       </div>
 
       {/* Status bar */}
@@ -182,13 +244,12 @@ export default function SessionView({
         )}
       </div>
 
-      {/* Token needed overlay */}
       {tokenNeeded && <TokenRequiredOverlay />}
     </div>
   )
 }
 
-// ── Icons (inline SVG) ─────────────────────────────────────────────────────────
+// ── Icons ─────────────────────────────────────────────────────────────────
 
 function RotateIcon() {
   return (
@@ -225,6 +286,15 @@ function MoveIcon() {
       <polyline points="19 9 22 12 19 15" />
       <line x1="2" y1="12" x2="22" y2="12" />
       <line x1="12" y1="2" x2="12" y2="22" />
+    </svg>
+  )
+}
+
+function MetroIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16" />
+      <path d="M8 12h.01M12 12h.01M16 12h.01" />
     </svg>
   )
 }

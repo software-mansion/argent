@@ -67,6 +67,99 @@ async function req<T>(
   return json as T
 }
 
+// ── Metro types ────────────────────────────────────────────────────────────────
+
+export interface MetroConnectionInfo {
+  port: number
+  projectRoot: string
+  deviceName: string
+  isNewDebugger: boolean
+  connected: boolean
+}
+
+export interface MetroStatusInfo extends MetroConnectionInfo {
+  loadedScripts: number
+  enabledDomains: string[]
+}
+
+export interface ComponentEntry {
+  id: number
+  name: string
+  depth: number
+  rect: { x: number; y: number; w: number; h: number } | null
+  isHost: boolean
+  parentIdx: number
+}
+
+export interface InspectItem {
+  name: string
+  source: { file: string; line: number; column: number } | null
+  code: string | null
+}
+
+export interface BreakpointResult {
+  breakpointId: string
+  locations: Array<{ scriptId: string; lineNumber: number; columnNumber: number }>
+}
+
+export interface ConsoleLogEntry {
+  id: number
+  level: string
+  args: Array<{ type: string; value?: unknown; description?: string }>
+  message: string
+  timestamp: number
+}
+
+type ConsoleLogListener = (entry: ConsoleLogEntry) => void
+
+export interface ConsoleLogStream {
+  on(event: 'log', listener: ConsoleLogListener): void
+  on(event: 'error', listener: (err: Error) => void): void
+  on(event: 'close', listener: () => void): void
+  off(event: 'log', listener: ConsoleLogListener): void
+  off(event: 'error', listener: (err: Error) => void): void
+  off(event: 'close', listener: () => void): void
+  close(): void
+}
+
+function createConsoleLogStream(base: string, port: number): ConsoleLogStream {
+  const listeners = new Map<string, Set<Function>>()
+
+  const emit = (event: string, ...args: unknown[]) => {
+    listeners.get(event)?.forEach((fn) => fn(...args))
+  }
+
+  let ws: WebSocket | null = null
+
+  req<{ url: string }>('POST', `${base}/tools/debugger-console-listen`, { port })
+    .then(({ url }) => {
+      ws = new WebSocket(url)
+      ws.onmessage = (event) => {
+        try {
+          const entry: ConsoleLogEntry = JSON.parse(event.data as string)
+          emit('log', entry)
+        } catch { /* skip malformed */ }
+      }
+      ws.onerror = () => emit('error', new Error('Console log WebSocket error'))
+      ws.onclose = () => emit('close')
+    })
+    .catch((err) => emit('error', err instanceof Error ? err : new Error(String(err))))
+
+  return {
+    on(event: string, listener: Function) {
+      if (!listeners.has(event)) listeners.set(event, new Set())
+      listeners.get(event)!.add(listener)
+    },
+    off(event: string, listener: Function) {
+      listeners.get(event)?.delete(listener)
+    },
+    close() {
+      ws?.close()
+      listeners.clear()
+    },
+  } as ConsoleLogStream
+}
+
 export function createClient(toolsUrl: string) {
   const base = toolsUrl.replace(/\/$/, '')
 
@@ -87,6 +180,48 @@ export function createClient(toolsUrl: string) {
 
     startSimulator: (params: { udid: string; token?: string }) =>
       req<SimulatorSession>('POST', `${base}/tools/simulator-server`, params),
+
+    // ── Metro tools ──
+
+    metroConnect: (port = 8081) =>
+      req<MetroConnectionInfo>('POST', `${base}/tools/debugger-connect`, { port }),
+
+    metroStatus: (port = 8081) =>
+      req<MetroStatusInfo>('POST', `${base}/tools/debugger-status`, { port }),
+
+    metroEvaluate: (expression: string, port = 8081) =>
+      req<{ result: unknown }>('POST', `${base}/tools/debugger-evaluate`, { port, expression }),
+
+    metroSetBreakpoint: (file: string, line: number, port = 8081, condition?: string) =>
+      req<BreakpointResult>('POST', `${base}/tools/debugger-set-breakpoint`, { port, file, line, condition }),
+
+    metroRemoveBreakpoint: (breakpointId: string, port = 8081) =>
+      req<{ removed: boolean }>('POST', `${base}/tools/debugger-remove-breakpoint`, { port, breakpointId }),
+
+    metroPause: (port = 8081) =>
+      req<{ paused: boolean }>('POST', `${base}/tools/debugger-pause`, { port }),
+
+    metroResume: (port = 8081) =>
+      req<{ resumed: boolean }>('POST', `${base}/tools/debugger-resume`, { port }),
+
+    metroStep: (action: 'stepOver' | 'stepInto' | 'stepOut', port = 8081) =>
+      req<{ action: string; sent: boolean }>('POST', `${base}/tools/debugger-step`, { port, action }),
+
+    metroComponentTree: (port = 8081) =>
+      req<{ components: ComponentEntry[] } | { error: string }>('POST', `${base}/tools/debugger-component-tree`, { port }),
+
+    metroInspectElement: (x: number, y: number, port = 8081, contextLines = 3) =>
+      req<{ x: number; y: number; items: InspectItem[] } | { error: string }>(
+        'POST', `${base}/tools/debugger-inspect-element`, { port, x, y, contextLines }
+      ),
+
+    metroConsoleLogs: (count: number | 'all' = 'all', port = 8081, sinceId?: number) =>
+      req<{ logs: ConsoleLogEntry[]; total: number }>(
+        'POST', `${base}/tools/debugger-console-logs`, { port, count, sinceId }
+      ),
+
+    metroConsoleStream: (port = 8081): ConsoleLogStream =>
+      createConsoleLogStream(base, port),
   }
 }
 

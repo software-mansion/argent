@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import { readToken, decodeJWTPayload, verifyToken } from "../license";
+import { readToken, decodeJWTPayload, verifyToken } from "../../license";
 
 const zodSchema = z.object({});
 

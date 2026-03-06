@@ -64,7 +64,7 @@ export async function runActivationTUI(): Promise<string | null> {
     message: "Enter your license key:",
     placeholder: "XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
     validate: (v) =>
-      LICENSE_KEY_REGEX.test(v) ? undefined : "Invalid format — expected XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
+      LICENSE_KEY_REGEX.test(v ?? "") ? undefined : "Invalid format — expected XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX",
   });
 
   if (p.isCancel(licenseKey)) {

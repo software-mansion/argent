@@ -1,21 +1,43 @@
 {
-  // Use IntelliSense to learn about possible attributes.
-  // Hover to view descriptions of existing attributes.
-  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
   "version": "0.2.0",
   "configurations": [
-
     {
       "type": "node",
       "request": "launch",
-      "name": "Launch Program",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
+      "name": "Tools Server",
+      "runtimeArgs": ["-r", "ts-node/register"],
+      "program": "${workspaceFolder}/packages/tools/src/index.ts",
+      "cwd": "${workspaceFolder}/packages/tools",
+      "console": "integratedTerminal",
+      "env": {
+        "PORT": "3001"
+      }
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "UI (Chrome)",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/packages/ui",
+      "preLaunchTask": "start-vite"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Tools Server (built)",
       "program": "${workspaceFolder}/packages/tools/dist/index.js",
-      "outFiles": [
-        "${workspaceFolder}/**/*.js"
-      ]
+      "cwd": "${workspaceFolder}/packages/tools",
+      "console": "integratedTerminal",
+      "env": {
+        "PORT": "3001"
+      },
+      "preLaunchTask": "build-tools"
+    },
+  ],
+  "compounds": [
+    {
+      "name": "Full (Tools + UI)",
+      "configurations": ["Tools Server", "UI (Chrome)"]
     }
   ]
 }

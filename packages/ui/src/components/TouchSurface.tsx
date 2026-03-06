@@ -1,10 +1,16 @@
 import { useRef, useState, ReactNode, WheelEvent, PointerEvent } from 'react'
 import type { SessionClient } from '../api/client'
 
+// Approximate logical screen dimensions for coordinate mapping (iPhone-ish)
+const LOGICAL_WIDTH = 393
+const LOGICAL_HEIGHT = 852
+
 interface TouchSurfaceProps {
   sessionId: string
   api: SessionClient
   children: ReactNode
+  inspectMode?: boolean
+  onInspectClick?: (x: number, y: number) => void
 }
 
 function normalize(
@@ -22,6 +28,8 @@ export default function TouchSurface({
   sessionId,
   api,
   children,
+  inspectMode,
+  onInspectClick,
 }: TouchSurfaceProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [pressing, setPressing] = useState(false)
@@ -32,8 +40,18 @@ export default function TouchSurface({
   }
 
   function onPointerDown(e: PointerEvent<HTMLDivElement>) {
-    // Only primary button
     if (e.button !== 0) return
+
+    if (inspectMode && onInspectClick) {
+      const rect = ref.current!.getBoundingClientRect()
+      const { x, y } = normalize(e.clientX, e.clientY, rect)
+      onInspectClick(
+        Math.round(x * LOGICAL_WIDTH),
+        Math.round(y * LOGICAL_HEIGHT)
+      )
+      return
+    }
+
     e.currentTarget.setPointerCapture(e.pointerId)
     setPressing(true)
     const pt = getPoint(e)
@@ -41,19 +59,20 @@ export default function TouchSurface({
   }
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
-    if (!pressing) return
+    if (!pressing || inspectMode) return
     const pt = getPoint(e)
     api.touch(sessionId, 'Move', [pt]).catch(() => {})
   }
 
   function onPointerUp(e: PointerEvent<HTMLDivElement>) {
-    if (!pressing) return
+    if (!pressing || inspectMode) return
     setPressing(false)
     const pt = getPoint(e)
     api.touch(sessionId, 'Up', [pt]).catch(() => {})
   }
 
   function onWheel(e: WheelEvent<HTMLDivElement>) {
+    if (inspectMode) return
     e.preventDefault()
     const rect = ref.current!.getBoundingClientRect()
     const { x, y } = normalize(e.clientX, e.clientY, rect)
@@ -69,7 +88,11 @@ export default function TouchSurface({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onWheel={onWheel}
-      style={{ cursor: 'crosshair', touchAction: 'none', userSelect: 'none' }}
+      style={{
+        cursor: inspectMode ? 'crosshair' : 'default',
+        touchAction: 'none',
+        userSelect: 'none',
+      }}
     >
       {children}
     </div>

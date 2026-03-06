@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import { activateWithLicenseKey } from "../license";
+import { activateWithLicenseKey } from "../../license";
 
 const zodSchema = z.object({
   licenseKey: z
