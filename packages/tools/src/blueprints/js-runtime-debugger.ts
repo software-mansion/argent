@@ -3,15 +3,15 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@radon-lite/registry";
-import { discoverMetro } from "../metro/discovery";
-import { selectTarget } from "../metro/target-selection";
-import { CDPClient, type ConsoleAPICalledParams } from "../metro/cdp-client";
-import { createSourceResolver, type SourceResolver } from "../metro/source-resolver";
-import { SourceMapsRegistry } from "../metro/source-maps";
+import { discoverMetro } from "../debugger/discovery";
+import { selectTarget } from "../debugger/target-selection";
+import { CDPClient, type ConsoleAPICalledParams } from "../debugger/cdp-client";
+import { createSourceResolver, type SourceResolver } from "../debugger/source-resolver";
+import { SourceMapsRegistry } from "../debugger/source-maps";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 
-export const METRO_DEBUGGER_NAMESPACE = "MetroDebugger";
+export const JS_RUNTIME_DEBUGGER_NAMESPACE = "JsRuntimeDebugger";
 
 export interface ConsoleLogEntry {
   id: number;
@@ -80,7 +80,7 @@ function createConsoleLogServer(
   });
 }
 
-export interface MetroDebuggerApi {
+export interface JsRuntimeDebuggerApi {
   port: number;
   projectRoot: string;
   deviceName: string;
@@ -93,14 +93,14 @@ export interface MetroDebuggerApi {
   consoleSocketUrl: string;
 }
 
-export const metroDebuggerBlueprint: ServiceBlueprint<
-  MetroDebuggerApi,
+export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
+  JsRuntimeDebuggerApi,
   string
 > = {
-  namespace: METRO_DEBUGGER_NAMESPACE,
+  namespace: JS_RUNTIME_DEBUGGER_NAMESPACE,
 
   getURN(port: string) {
-    return `${METRO_DEBUGGER_NAMESPACE}:${port}`;
+    return `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${port}`;
   },
 
   async factory(_deps, payload, options?) {
@@ -163,7 +163,7 @@ export const metroDebuggerBlueprint: ServiceBlueprint<
 
     const consoleServer = await createConsoleLogServer(consoleEvents, consoleLogs);
 
-    const api: MetroDebuggerApi = {
+    const api: JsRuntimeDebuggerApi = {
       port,
       projectRoot: metro.projectRoot,
       deviceName: selected.deviceName,

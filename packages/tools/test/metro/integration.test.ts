@@ -1,16 +1,16 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 import { Registry } from "@radon-lite/registry";
-import { metroDebuggerBlueprint } from "../../src/blueprints/metro-debugger";
-import { metroConnectTool } from "../../src/tools/metro-connect";
-import { metroStatusTool } from "../../src/tools/metro-status";
-import { metroEvaluateTool } from "../../src/tools/metro-evaluate";
-import { metroSetBreakpointTool } from "../../src/tools/metro-set-breakpoint";
-import { metroRemoveBreakpointTool } from "../../src/tools/metro-remove-breakpoint";
-import { metroPauseTool } from "../../src/tools/metro-pause";
-import { metroResumeTool } from "../../src/tools/metro-resume";
-import { metroStepTool } from "../../src/tools/metro-step";
+import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
+import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
+import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";
+import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
+import { debuggerSetBreakpointTool } from "../../src/tools/debugger/debugger-set-breakpoint";
+import { debuggerRemoveBreakpointTool } from "../../src/tools/debugger/debugger-remove-breakpoint";
+import { debuggerPauseTool } from "../../src/tools/debugger/debugger-pause";
+import { debuggerResumeTool } from "../../src/tools/debugger/debugger-resume";
+import { debuggerStepTool } from "../../src/tools/debugger/debugger-step";
 
 /**
  * Integration test using a mock Metro HTTP + CDP WebSocket server.
@@ -159,15 +159,15 @@ beforeAll(async () => {
   });
 
   registry = new Registry();
-  registry.registerBlueprint(metroDebuggerBlueprint);
-  registry.registerTool(metroConnectTool);
-  registry.registerTool(metroStatusTool);
-  registry.registerTool(metroEvaluateTool);
-  registry.registerTool(metroSetBreakpointTool);
-  registry.registerTool(metroRemoveBreakpointTool);
-  registry.registerTool(metroPauseTool);
-  registry.registerTool(metroResumeTool);
-  registry.registerTool(metroStepTool);
+  registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerTool(debuggerConnectTool);
+  registry.registerTool(debuggerStatusTool);
+  registry.registerTool(debuggerEvaluateTool);
+  registry.registerTool(debuggerSetBreakpointTool);
+  registry.registerTool(debuggerRemoveBreakpointTool);
+  registry.registerTool(debuggerPauseTool);
+  registry.registerTool(debuggerResumeTool);
+  registry.registerTool(debuggerStepTool);
 });
 
 afterAll(async () => {
@@ -180,9 +180,9 @@ afterAll(async () => {
   });
 });
 
-describe("MetroDebugger integration (mock server)", () => {
-  it("metro-connect discovers, connects, and returns info", async () => {
-    const result = (await registry.invokeTool("metro-connect", {
+describe("JsRuntimeDebugger integration (mock server)", () => {
+  it("debugger-connect discovers, connects, and returns info", async () => {
+    const result = (await registry.invokeTool("debugger-connect", {
       port: mockPort,
     })) as Record<string, unknown>;
 
@@ -192,8 +192,8 @@ describe("MetroDebugger integration (mock server)", () => {
     expect(result.isNewDebugger).toBe(true);
   });
 
-  it("metro-status returns connection info and loaded scripts", async () => {
-    const result = (await registry.invokeTool("metro-status", {
+  it("debugger-status returns connection info and loaded scripts", async () => {
+    const result = (await registry.invokeTool("debugger-status", {
       port: mockPort,
     })) as Record<string, unknown>;
 
@@ -203,8 +203,8 @@ describe("MetroDebugger integration (mock server)", () => {
     expect(result.enabledDomains).toContain("Debugger");
   });
 
-  it("metro-evaluate executes JS and returns result", async () => {
-    const result = (await registry.invokeTool("metro-evaluate", {
+  it("debugger-evaluate executes JS and returns result", async () => {
+    const result = (await registry.invokeTool("debugger-evaluate", {
       port: mockPort,
       expression: "1 + 1",
     })) as { result: unknown };
@@ -212,8 +212,8 @@ describe("MetroDebugger integration (mock server)", () => {
     expect(result.result).toBe("eval-result-42");
   });
 
-  it("metro-set-breakpoint sets a breakpoint by URL regex", async () => {
-    const result = (await registry.invokeTool("metro-set-breakpoint", {
+  it("debugger-set-breakpoint sets a breakpoint by URL regex", async () => {
+    const result = (await registry.invokeTool("debugger-set-breakpoint", {
       port: mockPort,
       file: "App.tsx",
       line: 21,
@@ -224,8 +224,8 @@ describe("MetroDebugger integration (mock server)", () => {
     expect(result.locations).toHaveLength(1);
   });
 
-  it("metro-remove-breakpoint removes a breakpoint", async () => {
-    const result = (await registry.invokeTool("metro-remove-breakpoint", {
+  it("debugger-remove-breakpoint removes a breakpoint", async () => {
+    const result = (await registry.invokeTool("debugger-remove-breakpoint", {
       port: mockPort,
       breakpointId: "bp:20:.*App\\.tsx$",
     })) as { removed: boolean };
@@ -233,24 +233,24 @@ describe("MetroDebugger integration (mock server)", () => {
     expect(result.removed).toBe(true);
   });
 
-  it("metro-pause sends Debugger.pause", async () => {
-    const result = (await registry.invokeTool("metro-pause", {
+  it("debugger-pause sends Debugger.pause", async () => {
+    const result = (await registry.invokeTool("debugger-pause", {
       port: mockPort,
     })) as { paused: boolean };
 
     expect(result.paused).toBe(true);
   });
 
-  it("metro-resume sends Debugger.resume", async () => {
-    const result = (await registry.invokeTool("metro-resume", {
+  it("debugger-resume sends Debugger.resume", async () => {
+    const result = (await registry.invokeTool("debugger-resume", {
       port: mockPort,
     })) as { resumed: boolean };
 
     expect(result.resumed).toBe(true);
   });
 
-  it("metro-step sends step command", async () => {
-    const result = (await registry.invokeTool("metro-step", {
+  it("debugger-step sends step command", async () => {
+    const result = (await registry.invokeTool("debugger-step", {
       port: mockPort,
       action: "stepOver",
     })) as { action: string; sent: boolean };

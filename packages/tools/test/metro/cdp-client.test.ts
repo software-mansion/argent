@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
-import { CDPClient } from "../../src/metro/cdp-client";
+import { CDPClient } from "../../src/debugger/cdp-client";
 
 let wss: WebSocketServer;
 let port: number;

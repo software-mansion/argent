@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   parseDebugStack,
   normalizeBundleUrl,
-} from "../../src/metro/source-resolver";
+} from "../../src/debugger/source-resolver";
 
 describe("parseDebugStack", () => {
   it("parses stack frames correctly", () => {

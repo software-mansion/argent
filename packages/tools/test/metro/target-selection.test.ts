@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { selectTarget } from "../../src/metro/target-selection";
-import type { CDPTarget } from "../../src/metro/discovery";
+import { selectTarget } from "../../src/debugger/target-selection";
+import type { CDPTarget } from "../../src/debugger/discovery";
 
 function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
   return {

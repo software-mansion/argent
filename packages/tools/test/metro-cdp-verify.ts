@@ -7,9 +7,9 @@
  * Runs through CDP verification steps and reports results.
  */
 
-import { discoverMetro } from "../src/metro/discovery";
-import { selectTarget } from "../src/metro/target-selection";
-import { CDPClient } from "../src/metro/cdp-client";
+import { discoverMetro } from "../src/debugger/discovery";
+import { selectTarget } from "../src/debugger/target-selection";
+import { CDPClient } from "../src/debugger/cdp-client";
 
 const port = parseInt(process.env.METRO_PORT ?? "8081", 10);
 

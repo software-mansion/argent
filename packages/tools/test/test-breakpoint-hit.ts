@@ -3,7 +3,7 @@
  * Strategy: set a breakpoint, evaluate code that hits it, check for pause event.
  */
 import WebSocket from "ws";
-import { SourceMapsRegistry } from "../src/metro/source-maps";
+import { SourceMapsRegistry } from "../src/debugger/source-maps";
 
 const PROJECT_ROOT = "/Users/pawel/Desktop/metro_test/test_app";
 

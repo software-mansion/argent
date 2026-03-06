@@ -1,8 +1,8 @@
 import { z } from "zod";
 import * as crypto from "node:crypto";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
-import { makeInspectScript } from "../../metro/scripts/inspect-at-point";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import { makeInspectScript } from "../../debugger/scripts/inspect-at-point";
 
 interface InspectItem {
   name: string;
@@ -20,20 +20,20 @@ const zodSchema = z.object({
     .describe("Lines of source context to include around the component definition"),
 });
 
-export const metroInspectElementTool: ToolDefinition<
+export const debuggerInspectElementTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { x: number; y: number; items: InspectItem[] } | { error: string }
 > = {
-  id: "metro-inspect-element",
+  id: "debugger-inspect-element",
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).
 Returns each component in the hierarchy with its source file:line and a code fragment.
 Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
     const requestId = crypto.randomUUID();
     const script = makeInspectScript(params.x, params.y, requestId);
 

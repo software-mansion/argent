@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
-import { COMPONENT_TREE_SCRIPT } from "../../metro/scripts/component-tree";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import { COMPONENT_TREE_SCRIPT } from "../../debugger/scripts/component-tree";
 
 interface ComponentEntry {
   id: number;
@@ -16,19 +16,19 @@ const zodSchema = z.object({
   port: z.number().default(8081).describe("Metro server port"),
 });
 
-export const metroComponentTreeTool: ToolDefinition<
+export const debuggerComponentTreeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { components: ComponentEntry[] } | { error: string }
 > = {
-  id: "metro-component-tree",
+  id: "debugger-component-tree",
   description: `Return the full React component tree with names, depth, and native bounding rectangles.
 Each entry has: id, name, depth, rect (x/y/w/h or null), isHost (native vs composite), parentIdx.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
     const raw = await api.cdp.evaluate(COMPONENT_TREE_SCRIPT);
 
     if (typeof raw !== "string") {

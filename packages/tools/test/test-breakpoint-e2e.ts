@@ -4,7 +4,7 @@
  */
 import WebSocket from "ws";
 import { SourceMapConsumer } from "source-map-js";
-import { SourceMapsRegistry } from "../src/metro/source-maps";
+import { SourceMapsRegistry } from "../src/debugger/source-maps";
 
 const PROJECT_ROOT = "/Users/pawel/Desktop/metro_test/test_app";
 

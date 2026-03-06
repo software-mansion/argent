@@ -1,12 +1,12 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
   port: z.number().default(8081).describe("Metro server port"),
 });
 
-export const metroStatusTool: ToolDefinition<
+export const debuggerStatusTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     port: number;
@@ -19,16 +19,16 @@ export const metroStatusTool: ToolDefinition<
     sourceMapReady: boolean;
   }
 > = {
-  id: "metro-status",
-  description: `Get Metro debugger connection status and diagnostic info.
-Connects to Metro if not already connected (idempotent with metro-connect).
+  id: "debugger-status",
+  description: `Get JS runtime debugger connection status and diagnostic info.
+Connects to the debugger if not already connected (idempotent with debugger-connect).
 Includes source map readiness status for breakpoint resolution.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
     await api.sourceMaps.waitForPending();
     return {
       port: api.port,

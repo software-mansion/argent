@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 interface StepLocation {
   functionName: string;
@@ -21,20 +21,20 @@ const zodSchema = z.object({
     ),
 });
 
-export const metroStepTool: ToolDefinition<
+export const debuggerStepTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { action: string; sent: boolean; location?: StepLocation }
 > = {
-  id: "metro-step",
+  id: "debugger-step",
   description: `Perform a step operation while paused at a breakpoint.
-Requires the debugger to be paused (via metro-pause or a breakpoint hit).
+Requires the debugger to be paused (via debugger-pause or a breakpoint hit).
 Returns the new location after stepping with source-mapped file info.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
 
     const pausedPromise = new Promise<Record<string, unknown> | null>(
       (resolve) => {

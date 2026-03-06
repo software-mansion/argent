@@ -1,23 +1,23 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
   port: z.number().default(8081).describe("Metro server port"),
 });
 
-export const metroResumeTool: ToolDefinition<
+export const debuggerResumeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { resumed: boolean }
 > = {
-  id: "metro-resume",
+  id: "debugger-resume",
   description: `Resume JavaScript execution after a pause or breakpoint hit.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
     await api.cdp.send("Debugger.resume");
     return { resumed: true };
   },

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 interface CallFrameInfo {
   functionName: string;
@@ -16,19 +16,19 @@ const zodSchema = z.object({
   port: z.number().default(8081).describe("Metro server port"),
 });
 
-export const metroPauseTool: ToolDefinition<
+export const debuggerPauseTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { paused: boolean; reason?: string; topFrames?: CallFrameInfo[] }
 > = {
-  id: "metro-pause",
+  id: "debugger-pause",
   description: `Pause JavaScript execution in the React Native app. The app UI will freeze until resumed.
 Returns the pause reason and top call frames with source-mapped locations.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
 
     const pausedPromise = new Promise<Record<string, unknown> | null>(
       (resolve) => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi } from "../../blueprints/metro-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
   port: z.number().default(8081).describe("Metro server port"),
@@ -14,7 +14,7 @@ const zodSchema = z.object({
   condition: z.string().optional().describe("Conditional breakpoint expression"),
 });
 
-export const metroSetBreakpointTool: ToolDefinition<
+export const debuggerSetBreakpointTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     breakpointId: string;
@@ -24,17 +24,17 @@ export const metroSetBreakpointTool: ToolDefinition<
     generatedColumn?: number;
   }
 > = {
-  id: "metro-set-breakpoint",
+  id: "debugger-set-breakpoint",
   description: `Set a breakpoint at a file:line in the app's source code.
 Uses source maps to resolve the original source position to the correct
 generated position in the Metro bundle, then calls Debugger.setBreakpointByUrl.
 Returns the breakpointId (needed for removal) and resolved locations.`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
 
     const filePath = params.file.replace(/\\/g, "/").replace(/^\/+/, "");
 

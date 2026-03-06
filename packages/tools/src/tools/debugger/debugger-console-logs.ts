@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@radon-lite/registry";
-import type { MetroDebuggerApi, ConsoleLogEntry } from "../../blueprints/metro-debugger";
+import type { JsRuntimeDebuggerApi, ConsoleLogEntry } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
   port: z.number().default(8081).describe("Metro server port"),
@@ -15,21 +15,21 @@ const zodSchema = z.object({
     .describe("Only return logs with id strictly greater than this value"),
 });
 
-export const metroConsoleLogsTool: ToolDefinition<
+export const debuggerConsoleLogsTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { logs: ConsoleLogEntry[]; total: number }
 > = {
-  id: "metro-console-logs",
+  id: "debugger-console-logs",
   description: `Read console logs from the React Native app runtime.
 Returns the most recent N logs, or all buffered logs if count is "all".
 Pass sinceId to only receive logs newer than a known cursor.
-The app must be connected via metro-connect first (auto-connects if needed).`,
+The app must be connected via debugger-connect first (auto-connects if needed).`,
   zodSchema,
   services: (params) => ({
-    metroDebugger: `MetroDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.metroDebugger as MetroDebuggerApi;
+    const api = services.debugger as JsRuntimeDebuggerApi;
 
     let logs = api.consoleLogs;
 

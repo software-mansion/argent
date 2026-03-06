@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { discoverMetro } from "../../src/metro/discovery";
+import { discoverMetro } from "../../src/debugger/discovery";
 
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);

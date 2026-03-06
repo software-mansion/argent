@@ -131,7 +131,7 @@ function createConsoleLogStream(base: string, port: number): ConsoleLogStream {
 
   let ws: WebSocket | null = null
 
-  req<{ url: string }>('POST', `${base}/tools/metro-console-listen`, { port })
+  req<{ url: string }>('POST', `${base}/tools/debugger-console-listen`, { port })
     .then(({ url }) => {
       ws = new WebSocket(url)
       ws.onmessage = (event) => {
@@ -184,40 +184,40 @@ export function createClient(toolsUrl: string) {
     // ── Metro tools ──
 
     metroConnect: (port = 8081) =>
-      req<MetroConnectionInfo>('POST', `${base}/tools/metro-connect`, { port }),
+      req<MetroConnectionInfo>('POST', `${base}/tools/debugger-connect`, { port }),
 
     metroStatus: (port = 8081) =>
-      req<MetroStatusInfo>('POST', `${base}/tools/metro-status`, { port }),
+      req<MetroStatusInfo>('POST', `${base}/tools/debugger-status`, { port }),
 
     metroEvaluate: (expression: string, port = 8081) =>
-      req<{ result: unknown }>('POST', `${base}/tools/metro-evaluate`, { port, expression }),
+      req<{ result: unknown }>('POST', `${base}/tools/debugger-evaluate`, { port, expression }),
 
     metroSetBreakpoint: (file: string, line: number, port = 8081, condition?: string) =>
-      req<BreakpointResult>('POST', `${base}/tools/metro-set-breakpoint`, { port, file, line, condition }),
+      req<BreakpointResult>('POST', `${base}/tools/debugger-set-breakpoint`, { port, file, line, condition }),
 
     metroRemoveBreakpoint: (breakpointId: string, port = 8081) =>
-      req<{ removed: boolean }>('POST', `${base}/tools/metro-remove-breakpoint`, { port, breakpointId }),
+      req<{ removed: boolean }>('POST', `${base}/tools/debugger-remove-breakpoint`, { port, breakpointId }),
 
     metroPause: (port = 8081) =>
-      req<{ paused: boolean }>('POST', `${base}/tools/metro-pause`, { port }),
+      req<{ paused: boolean }>('POST', `${base}/tools/debugger-pause`, { port }),
 
     metroResume: (port = 8081) =>
-      req<{ resumed: boolean }>('POST', `${base}/tools/metro-resume`, { port }),
+      req<{ resumed: boolean }>('POST', `${base}/tools/debugger-resume`, { port }),
 
     metroStep: (action: 'stepOver' | 'stepInto' | 'stepOut', port = 8081) =>
-      req<{ action: string; sent: boolean }>('POST', `${base}/tools/metro-step`, { port, action }),
+      req<{ action: string; sent: boolean }>('POST', `${base}/tools/debugger-step`, { port, action }),
 
     metroComponentTree: (port = 8081) =>
-      req<{ components: ComponentEntry[] } | { error: string }>('POST', `${base}/tools/metro-component-tree`, { port }),
+      req<{ components: ComponentEntry[] } | { error: string }>('POST', `${base}/tools/debugger-component-tree`, { port }),
 
     metroInspectElement: (x: number, y: number, port = 8081, contextLines = 3) =>
       req<{ x: number; y: number; items: InspectItem[] } | { error: string }>(
-        'POST', `${base}/tools/metro-inspect-element`, { port, x, y, contextLines }
+        'POST', `${base}/tools/debugger-inspect-element`, { port, x, y, contextLines }
       ),
 
     metroConsoleLogs: (count: number | 'all' = 'all', port = 8081, sinceId?: number) =>
       req<{ logs: ConsoleLogEntry[]; total: number }>(
-        'POST', `${base}/tools/metro-console-logs`, { port, count, sinceId }
+        'POST', `${base}/tools/debugger-console-logs`, { port, count, sinceId }
       ),
 
     metroConsoleStream: (port = 8081): ConsoleLogStream =>
