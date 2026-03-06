@@ -124,7 +124,7 @@ npm run dev     # ts-node (no build needed)
 5. `curl -X POST http://localhost:3000/sessions/<id>/screenshot` → PNG URL
 6. `curl -X POST http://localhost:3000/sessions/<id>/replay -d '{"durations":[5]}'` → .mp4 URL
 
-## packages/tools — Tool List (10 tools)
+## packages/tool-server — Tool List (10 tools)
 - `list-simulators`, `boot-simulator`, `simulator-server` (original 3)
 - `screenshot` (outputHint: "image" — requires Pro JWT)
 - `tap`, `swipe`, `gesture`, `button`, `paste`, `rotate` (interaction tools via WebSocket)

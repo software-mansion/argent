@@ -80,10 +80,10 @@ Paste it into [editor.swagger.io](https://editor.swagger.io) for interactive doc
 
 ## Tools server and registry
 
-The **tools** package (`packages/tools`) exposes an HTTP API for listing and invoking tools (list-simulators, boot-simulator, simulator-server). It is backed by the in-repo **registry** (`packages/registry`), a dependency-aware service lifecycle manager: the simulator-server process is modeled as a URN-scoped service (one instance per simulator UDID), and tools declare their service dependencies; the registry resolves and starts services on demand. Start the tools server from the tools package:
+The **tool-server** package (`packages/tool-server`) exposes an HTTP API for listing and invoking tools (list-simulators, boot-simulator, simulator-server). It is backed by the in-repo **registry** (`packages/registry`), a dependency-aware service lifecycle manager: the simulator-server process is modeled as a URN-scoped service (one instance per simulator UDID), and tools declare their service dependencies; the registry resolves and starts services on demand. Start the tools server from the tool-server package:
 
 ```bash
-cd packages/tools && npm run build && npm start
+cd packages/tool-server && npm run build && npm start
 ```
 
 Default port is 3001. `GET /tools` lists tools with input schemas; `POST /tools/:name` invokes a tool with a JSON body. On shutdown, the server calls `registry.dispose()` to tear down all running simulator-server processes.
@@ -97,13 +97,13 @@ To run the full app (tools API + web UI) from the terminal:
 ```bash
 npm install
 cd packages/registry && npm run build
-cd ../tools && npm run build
+cd ../tool-server && npm run build
 ```
 
 **2. Start the tools server** (terminal 1). It serves the API at **http://localhost:3001**:
 
 ```bash
-cd packages/tools && npm start
+cd packages/tool-server && npm start
 ```
 
 **3. Start the frontend** (terminal 2). Vite serves the UI at **http://localhost:5173**:

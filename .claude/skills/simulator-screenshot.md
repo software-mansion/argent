@@ -28,7 +28,7 @@ Take a screenshot of the iOS simulator screen and display it.
   ```
   via the `simulator-server` tool, then retry.
 - **No booted simulator**: Run `boot-simulator` first.
-- **Tools server not running**: `cd packages/tools && npm start`
+- **Tools server not running**: `cd packages/tool-server && npm start`
 
 ## Notes
 
