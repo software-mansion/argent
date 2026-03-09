@@ -83,7 +83,10 @@ Call profiler-start first, then exercise the app, then call this.`,
         var compiler = false;
         for (var i = 0; i < commits.length; i++) {
           var c = commits[i];
-          heat[c.commitIndex] = (heat[c.commitIndex] || 0) + (c.selfDuration || 0);
+          var cd = c.commitDuration || 0;
+          if (!(c.commitIndex in heat) || cd > heat[c.commitIndex]) {
+            heat[c.commitIndex] = cd;
+          }
           if (c.isCompilerOptimized) compiler = true;
         }
         return JSON.stringify({ heat: heat, anyCompilerOptimized: compiler });

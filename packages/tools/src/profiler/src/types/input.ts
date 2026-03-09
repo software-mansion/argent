@@ -40,6 +40,7 @@ export interface DevToolsFiberCommit {
   componentName: string;
   actualDuration: number;       // ms
   selfDuration: number;         // ms
+  commitDuration: number;       // ms — root.current.actualDuration (total wall time for this commit)
   didRender: boolean;
   changeDescription: DevToolsChangeDescription | null;
   hookTypes?: string[] | null;  // fiber._debugHookTypes — available in dev builds

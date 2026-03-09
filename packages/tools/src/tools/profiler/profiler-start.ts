@@ -46,6 +46,8 @@ const COMMIT_CAPTURE_SCRIPT = `
   hook.onCommitFiberRoot = function(rendererID, root, priorityLevel) {
     var ts = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     var idx = commitIndex++;
+    var commitDur = (root && root.current && typeof root.current.actualDuration === 'number')
+      ? root.current.actualDuration : 0;
     var stack = root && root.current ? [root.current] : [];
     while (stack.length > 0) {
       var fiber = stack.pop();
@@ -104,6 +106,7 @@ const COMMIT_CAPTURE_SCRIPT = `
             componentName: name,
             actualDuration: fiber.actualDuration,
             selfDuration: fiber.selfBaseDuration || 0,
+            commitDuration: commitDur,
             didRender: fiber.actualDuration > 0,
             changeDescription: cd,
             hookTypes: hookTypes,

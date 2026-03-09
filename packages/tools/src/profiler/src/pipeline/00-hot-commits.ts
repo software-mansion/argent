@@ -37,11 +37,7 @@ export function buildHotCommitSummaries(
   const summaries: HotCommitSummary[] = [];
 
   for (const [commitIndex, entries] of byCommit) {
-    // Compute totalRenderMs = sum of selfDuration across all entries in this commit
-    let totalRenderMs = 0;
-    for (const e of entries) {
-      totalRenderMs += e.selfDuration ?? 0;
-    }
+    const totalRenderMs = entries[0]?.commitDuration ?? 0;
 
     const isMargin = !hotSet.has(commitIndex);
     const tier: 'hot' | 'warm' | null = isMargin
