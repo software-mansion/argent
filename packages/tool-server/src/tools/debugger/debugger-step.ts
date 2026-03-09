@@ -13,7 +13,7 @@ interface StepLocation {
 }
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
   action: z
     .enum(["stepOver", "stepInto", "stepOut"])
     .describe(

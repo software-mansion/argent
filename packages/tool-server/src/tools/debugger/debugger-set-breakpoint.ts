@@ -3,14 +3,14 @@ import type { ToolDefinition } from "@radon-lite/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
   file: z
     .string()
     .describe(
       "Source file path relative to project root (e.g. 'App.tsx' or 'src/screens/Home.tsx')"
     ),
-  line: z.number().describe("Line number (1-based)"),
-  column: z.number().optional().describe("Column number (0-based)"),
+  line: z.coerce.number().describe("Line number (1-based)"),
+  column: z.coerce.number().optional().describe("Column number (0-based)"),
   condition: z.string().optional().describe("Conditional breakpoint expression"),
 });
 

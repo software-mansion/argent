@@ -3,7 +3,7 @@ import type { ToolDefinition } from "@radon-lite/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
 });
 
 export const debuggerConnectTool: ToolDefinition<

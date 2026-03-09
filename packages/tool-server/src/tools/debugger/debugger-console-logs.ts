@@ -3,13 +3,13 @@ import type { ToolDefinition } from "@radon-lite/registry";
 import type { JsRuntimeDebuggerApi, ConsoleLogEntry } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
   count: z
-    .union([z.number().int().positive(), z.literal("all")])
+    .union([z.coerce.number().int().positive(), z.literal("all")])
     .default("all")
     .describe('Number of recent console logs to return, or "all" for every buffered log'),
   sinceId: z
-    .number()
+    .coerce.number()
     .int()
     .optional()
     .describe("Only return logs with id strictly greater than this value"),

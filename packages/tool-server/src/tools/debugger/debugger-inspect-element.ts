@@ -11,11 +11,11 @@ interface InspectItem {
 }
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
-  x: z.number().describe("Logical X coordinate on device screen"),
-  y: z.number().describe("Logical Y coordinate on device screen"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
+  x: z.coerce.number().describe("Logical X coordinate on device screen"),
+  y: z.coerce.number().describe("Logical Y coordinate on device screen"),
   contextLines: z
-    .number()
+    .coerce.number()
     .default(3)
     .describe("Lines of source context to include around the component definition"),
 });
