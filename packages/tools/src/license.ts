@@ -15,10 +15,13 @@ export const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
 const REFRESH_META_DIR = path.join(os.homedir(), ".radon-lite");
 const LAST_REFRESH_FILE = path.join(REFRESH_META_DIR, "last-token-refresh");
 
-// Binary lives at workspace root (four levels up from dist/ at runtime, or three from src/ via ts-node)
+// Binary lives at workspace root (three levels up from dist/ at runtime).
+// When bundled by esbuild, __dirname is dist/ — use RADON_SIMULATOR_SERVER_DIR env var instead.
 function getBinaryPath(): string {
-  // __dirname is packages/tools/dist at runtime, packages/tools/src in ts-node
-  return path.join(__dirname, "..", "..", "..", "simulator-server");
+  const BINARY_DIR =
+    process.env.RADON_SIMULATOR_SERVER_DIR ??
+    path.join(__dirname, "..", "..", "..");
+  return path.join(BINARY_DIR, "simulator-server");
 }
 
 // ── Storage ──────────────────────────────────────────────────────────────────
@@ -42,13 +45,17 @@ export async function readToken(): Promise<string | null> {
 }
 
 export async function saveToken(token: string): Promise<void> {
-  await execFileAsync("security", [
-    "add-generic-password",
-    "-U",
-    "-s", KEYCHAIN_SERVICE,
-    "-a", KEYCHAIN_ACCOUNT,
-    "-w", token,
-  ]);
+  try {
+    await execFileAsync("security", [
+      "add-generic-password",
+      "-U",
+      "-s", KEYCHAIN_SERVICE,
+      "-a", KEYCHAIN_ACCOUNT,
+      "-w", token,
+    ]);
+  } catch (err) {
+    console.error("[radon-lite] Failed to save token to keychain:", err);
+  }
 }
 
 export async function removeToken(): Promise<void> {
@@ -310,7 +317,6 @@ export async function activateWithSSO(
       ),
     ]);
   } catch (err) {
-    callbackServer.close();
     return { success: false, error: (err as Error).message };
   } finally {
     callbackServer.close();
