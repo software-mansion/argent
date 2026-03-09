@@ -33,8 +33,8 @@ Short guide to what was added in the Metro Debugger pull request, how to use it,
 
 ### 3. VS Code
 
-- `**.vscode/launch.json`**: “Tools Server”, “Tools Server (built)”, “UI (Chrome)”, compound “Full (Tools + UI)”.
-- `**.vscode/tasks.json`**: `start-vite`, `build-tools` for pre-launch.
+- **`.vscode/launch.json`**: “Tools Server”, “Tools Server (built)”, “UI (Chrome)”, compound “Full (Tools + UI)”.
+- **`.vscode/tasks.json`**: `start-vite`, `build-tools` for pre-launch.
 
 ---
 
@@ -110,5 +110,5 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
   - Tells the agent to use `mcp__radon-lite__debugger-`* for Metro/React Native debugging.
   - Describes the workflow: connect → set breakpoints by file/line → run app → on pause use step/resume, inspect element, or evaluate.
   - Mentions that breakpoints use source file and line and that the agent should not fabricate bundle URLs.
-- Place the skill file in your skills package (e.g. `packages/skills/skills/metro-debugger.md`) or in `.claude/skills/`, and reference it in your agent configuration so the model has access to it.
+- Place the skill file in your skills package (e.g. `packages/skills/skills/metro-debugger.md` — create it if needed) or in `.claude/skills/`, and reference it in your agent configuration so the model has access to it. Current skills in this repo include `simulator-setup.md`, `simulator-interact.md`, `simulator-screenshot.md`, `test-ui-flow.md`; a dedicated Metro debugger skill can be added the same way.
 
