@@ -15,6 +15,10 @@ Take a screenshot of the iOS simulator screen and display it.
    ```json
    { "udid": "<UDID>", "rotation": "LandscapeLeft" }
    ```
+   With a Pro JWT token (required for screenshot to work):
+   ```json
+   { "udid": "<UDID>", "token": "<JWT>" }
+   ```
 
 3. **The MCP adapter automatically**:
    - Fetches the PNG from the returned URL
