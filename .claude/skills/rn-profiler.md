@@ -3,6 +3,10 @@
 Profile a React Native app running on Hermes to identify re-render performance issues.
 Produces an `IssueReport` with ranked findings, CPU hotspots, and actionable source-level fixes.
 
+## Prerequisites
+
+**Plan mode check:** This workflow requires executing tools on the device. If you are currently in plan mode, inform the user that profiling cannot run in plan mode and ask them to exit plan mode first (e.g. "Profiling requires running tools on the simulator — please exit plan mode so I can start the session."). Do not attempt to call any profiler tools while in plan mode.
+
 ## Tool Overview
 
 | Tool | What it does |
