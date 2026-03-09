@@ -74,37 +74,40 @@ Call profiler-start first, then exercise the app, then call this.`,
       api.totalReactCommits = 0;
       api.anyCompilerOptimized = false;
     } else if (hookInstalled && commitCount > 0) {
-      // Step 2: Fetch raw commits in chunks to avoid CDP message size limits.
-      // Throws on any chunk failure to prevent partial / silent data loss.
-      const CHUNK_SIZE = 500;
-      const rawCommits: DevToolsFiberCommit[] = [];
-
-      for (let start = 0; start < commitCount; start += CHUNK_SIZE) {
-        const end = start + CHUNK_SIZE;
-        const chunkResult = (await cdp.send("Runtime.evaluate", {
-          expression: `JSON.stringify(globalThis.__RN_DEVTOOLS_MCP_COMMITS__.slice(${start}, ${end}))`,
-          returnByValue: true,
-          timeout: 30000,
-        })) as { result?: { value?: string } };
-
-        const chunkStr = chunkResult?.result?.value;
-        if (!chunkStr) {
-          throw new Error(`Failed to fetch commit chunk [${start}, ${end}): no value returned`);
+      // === Pass 1: Compute heat map + compiler flag on-device ===
+      // A single lightweight CDP call iterates all commits in-place and returns
+      // only aggregated data (~50KB), avoiding transfer of the full dataset.
+      const heatScript = `(function() {
+        var commits = globalThis.__RN_DEVTOOLS_MCP_COMMITS__;
+        var heat = {};
+        var compiler = false;
+        for (var i = 0; i < commits.length; i++) {
+          var c = commits[i];
+          heat[c.commitIndex] = (heat[c.commitIndex] || 0) + (c.selfDuration || 0);
+          if (c.isCompilerOptimized) compiler = true;
         }
-        for (const entry of JSON.parse(chunkStr) as DevToolsFiberCommit[]) {
-          rawCommits.push(entry);
-        }
+        return JSON.stringify({ heat: heat, anyCompilerOptimized: compiler });
+      })()`;
+
+      const heatResult = (await cdp.send("Runtime.evaluate", {
+        expression: heatScript,
+        returnByValue: true,
+        timeout: 30000,
+      })) as { result?: { value?: string } };
+
+      const heatStr = heatResult?.result?.value;
+      if (!heatStr) {
+        throw new Error("Failed to compute heat map on device: no value returned");
       }
 
-      // Step 3: All processing runs in Node.js (not inside the JS runtime).
+      const { heat, anyCompilerOptimized: compilerFromHeat } = JSON.parse(heatStr) as {
+        heat: Record<string, number>;
+        anyCompilerOptimized: boolean;
+      };
 
-      // 1a. Scan all commits for compiler detection
-      let anyCompilerOptimized = false;
-      for (const entry of rawCommits) {
-        if (entry.isCompilerOptimized) { anyCompilerOptimized = true; break; }
-      }
+      let anyCompilerOptimized = compilerFromHeat;
 
-      // 1b. Fallback: scan live fiber tree for memoCache if not found in commits.
+      // Fallback: scan live fiber tree for memoCache if not found in commits.
       // This catches compiler-optimized components whose per-fiber detection failed
       // (e.g. React 18 vs 19 memoCache path differences). Non-fatal.
       if (!anyCompilerOptimized) {
@@ -146,15 +149,15 @@ Call profiler-start first, then exercise the app, then call this.`,
         }
       }
 
-      // 2. Compute heat per commitIndex (sum of selfDuration)
+      // Build commitHeat map from on-device result
       const commitHeat = new Map<number, number>();
-      for (const entry of rawCommits) {
-        commitHeat.set(entry.commitIndex, (commitHeat.get(entry.commitIndex) ?? 0) + (entry.selfDuration ?? 0));
+      for (const [key, value] of Object.entries(heat)) {
+        commitHeat.set(Number(key), value);
       }
       const allKeys = [...commitHeat.keys()];
       const totalCommits = allKeys.length;
 
-      // 3. Absolute floor — only commits >= 16ms are "interesting"
+      // Absolute floor — only commits >= 16ms are "interesting"
       const ABSOLUTE_FLOOR_MS = 16;
       const interestingKeys = allKeys.filter(k => (commitHeat.get(k) ?? 0) >= ABSOLUTE_FLOOR_MS);
 
@@ -163,23 +166,38 @@ Call profiler-start first, then exercise the app, then call this.`,
       totalReactCommits = totalCommits;
 
       if (interestingKeys.length === 0) {
-        // 4. All-clear: nothing exceeds the floor — allCommits stays empty
+        // All-clear: nothing exceeds the floor — skip Pass 2 entirely
         api.hotCommitIndices = [];
       } else {
-        // 5-6. All interesting commits are "hot" (absolute floor already applied)
+        // Compute hot + ±1 margin sets
         const hotSet = new Set(interestingKeys);
-
-        // 7. Add ±1 margin
         const marginSet = new Set<number>();
         for (const ci of interestingKeys) {
           if (commitHeat.has(ci - 1) && !hotSet.has(ci - 1)) marginSet.add(ci - 1);
           if (commitHeat.has(ci + 1) && !hotSet.has(ci + 1)) marginSet.add(ci + 1);
         }
+        const keepSet = new Set([...hotSet, ...marginSet]);
 
-        // 8. Filter to hot + margin set only
-        for (const entry of rawCommits) {
-          if (hotSet.has(entry.commitIndex) || marginSet.has(entry.commitIndex)) {
-            allCommits.push(entry);
+        // === Pass 2: Chunked filtered fetch (only hot+margin commits) ===
+        // Each chunk is parsed and filtered immediately; only matching entries
+        // are retained, so peak memory is O(CHUNK_SIZE + filtered_commits).
+        const CHUNK_SIZE = 500;
+        for (let start = 0; start < commitCount; start += CHUNK_SIZE) {
+          const end = start + CHUNK_SIZE;
+          const chunkResult = (await cdp.send("Runtime.evaluate", {
+            expression: `JSON.stringify(globalThis.__RN_DEVTOOLS_MCP_COMMITS__.slice(${start}, ${end}))`,
+            returnByValue: true,
+            timeout: 30000,
+          })) as { result?: { value?: string } };
+
+          const chunkStr = chunkResult?.result?.value;
+          if (!chunkStr) {
+            throw new Error(`Failed to fetch commit chunk [${start}, ${end}): no value returned`);
+          }
+          for (const entry of JSON.parse(chunkStr) as DevToolsFiberCommit[]) {
+            if (keepSet.has(entry.commitIndex)) {
+              allCommits.push(entry);
+            }
           }
         }
         api.hotCommitIndices = [...interestingKeys];
