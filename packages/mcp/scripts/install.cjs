@@ -23,7 +23,6 @@ const entry = {
   command: "node",
   args: [distEntry],
   env: {
-    RADON_TOOLS_URL: "http://localhost:3001",
     RADON_MCP_LOG: logFile,
   },
 };

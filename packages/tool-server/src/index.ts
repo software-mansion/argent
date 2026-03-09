@@ -8,10 +8,12 @@ attachRegistryLogger(registry);
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const app = createHttpApp(registry);
 
-const server = app.listen(PORT, () => {
-  console.log(`Tools server listening on http://localhost:${PORT}`);
-  console.log(`  GET  http://localhost:${PORT}/tools`);
-  console.log(`  POST http://localhost:${PORT}/tools/:name`);
+const server = app.listen(PORT, "127.0.0.1", () => {
+  const addr = server.address();
+  const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
+  process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
+  console.log(`  GET  http://127.0.0.1:${boundPort}/tools`);
+  console.log(`  POST http://127.0.0.1:${boundPort}/tools/:name`);
 });
 
 // Validate stored token on startup
@@ -23,6 +25,8 @@ validateStoredToken().then((valid) => {
       "  No valid license found. Tools will prompt for activation on first use."
     );
   }
+}).catch((err) => {
+  console.error("  License validation error:", err);
 });
 
 const shutdown = async () => {
@@ -32,3 +36,12 @@ const shutdown = async () => {
 };
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
+
+// When stdout is piped to a parent that stops reading (e.g. the MCP launcher after
+// it captures the startup line), writes via console.log emit EPIPE. Ignore those.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code !== "EPIPE") throw err;
+});
+process.stderr.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code !== "EPIPE") throw err;
+});

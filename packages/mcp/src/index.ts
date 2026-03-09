@@ -8,8 +8,19 @@ import {
   CallToolRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
+import { ensureToolsServer } from "./launcher.js";
 
-const TOOLS_URL = process.env.RADON_TOOLS_URL ?? "http://localhost:3001";
+let TOOLS_URL: string;
+if (process.env.RADON_TOOLS_URL) {
+  TOOLS_URL = process.env.RADON_TOOLS_URL;
+} else {
+  try {
+    TOOLS_URL = await ensureToolsServer();
+  } catch (err) {
+    process.stderr.write(`[argent] Failed to start tools server: ${err}\n`);
+    process.exit(1);
+  }
+}
 
 const LOG_FILE = process.env.RADON_MCP_LOG ?? `${homedir()}/.radon-lite/mcp-calls.log`;
 let logDirReady = false;
@@ -76,7 +87,7 @@ async function toMcpContent(result: unknown, outputHint?: string) {
 }
 
 const server = new Server(
-  { name: "radon-lite", version: "0.1.0" },
+  { name: "argent", version: "0.1.0" },
   {
     capabilities: { tools: {} },
     instructions:
