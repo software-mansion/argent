@@ -35,6 +35,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Action | Tool | When to use |
 |--------|------|-------------|
 | Open an app | `launch-app` | **Always — never tap home-screen icons** |
+| Restart an app | `restart-app` | App reinstallation needed, reconnection to metro needed |
 | Open a URL/scheme | `open-url` | Web pages, deep links, URL schemes |
 | Single tap | `tap` | Buttons, links, checkboxes |
 | Scroll/swipe | `swipe` | Straight-line scroll or swipe |
