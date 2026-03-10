@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type {
-  JsRuntimeDebuggerApi,
-  NetworkLogEntry,
-} from "../../blueprints/js-runtime-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import {
+  NETWORK_INTERCEPTOR_SCRIPT,
+  makeNetworkDetailReadScript,
+} from "../../utils/debugger/scripts/network-interceptor";
 
 /**
  * Header names (lowercase) that should be redacted to avoid leaking secrets.
@@ -29,8 +30,9 @@ function isSensitiveHeader(name: string): boolean {
 }
 
 function redactHeaders(
-  headers: Record<string, string>
+  headers: Record<string, string> | undefined,
 ): Record<string, string> {
+  if (!headers) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     result[key] = isSensitiveHeader(key) ? "[REDACTED]" : value;
@@ -46,15 +48,42 @@ const zodSchema = z.object({
   requestId: z
     .string()
     .describe(
-      "The requestId from debugger-network-logs to get full details for"
+      "The requestId from debugger-network-logs to get full details for",
     ),
   includeBody: z
     .boolean()
     .default(true)
     .describe(
-      "Whether to attempt fetching the response body via CDP (Network.getResponseBody). Defaults to true."
+      "Whether to include the response body (if captured). Defaults to true.",
     ),
 });
+
+interface RawEntry {
+  id: number;
+  requestId: string;
+  state: string;
+  request?: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    postData?: string;
+  };
+  response?: {
+    url: string;
+    status: number;
+    statusText: string;
+    headers: Record<string, string>;
+    mimeType: string;
+  };
+  resourceType?: string;
+  encodedDataLength?: number;
+  timestamp?: number;
+  wallTime?: number;
+  durationMs?: number;
+  errorText?: string;
+  initiator?: { type: string; url?: string; lineNumber?: number };
+  responseBody?: string;
+}
 
 interface NetworkRequestDetails {
   requestId: string;
@@ -93,11 +122,19 @@ Large response bodies are truncated. Use this after debugger-network-logs to ins
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    const entry = api.networkLogsById.get(params.requestId);
 
-    if (!entry) {
-      return `No network request found with requestId "${params.requestId}". Use debugger-network-logs to list available requests.`;
+    // Ensure the interceptor is installed (idempotent).
+    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+
+    const script = makeNetworkDetailReadScript(params.requestId, api.port);
+    const raw = await api.cdp.evaluate(script);
+    const data = JSON.parse(raw as string) as RawEntry | { error: string };
+
+    if ("error" in data) {
+      return `${data.error}. Use debugger-network-logs to list available requests.`;
     }
+
+    const entry = data as RawEntry;
 
     const details: NetworkRequestDetails = {
       requestId: entry.requestId,
@@ -126,24 +163,12 @@ Large response bodies are truncated. Use this after debugger-network-logs to ins
         mimeType: entry.response.mimeType,
       };
 
-      // Try to fetch the response body via CDP if requested and the request is done.
-      if (params.includeBody && entry.state === "finished") {
-        try {
-          const bodyResult = (await api.cdp.send("Network.getResponseBody", {
-            requestId: entry.requestId,
-          })) as { body?: string; base64Encoded?: boolean } | undefined;
-
-          if (bodyResult?.body != null) {
-            const body = bodyResult.body;
-            if (body.length > MAX_BODY_SIZE) {
-              resp.body = `[TRUNCATED — original size: ${body.length} chars, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}…`;
-            } else {
-              resp.body = body;
-            }
-          }
-        } catch {
-          // Network.getResponseBody may not be available or may fail for streamed/binary responses.
-          // That's fine — we just omit the body.
+      if (params.includeBody && entry.responseBody != null) {
+        const body = entry.responseBody;
+        if (body.length > MAX_BODY_SIZE) {
+          resp.body = `[TRUNCATED — original size: ${body.length} chars, MIME: ${entry.response.mimeType}]\n${body.slice(0, MAX_BODY_SIZE)}...`;
+        } else {
+          resp.body = body;
         }
       }
 

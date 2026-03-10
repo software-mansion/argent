@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type {
-  JsRuntimeDebuggerApi,
-  NetworkLogEntry,
-} from "../../blueprints/js-runtime-debugger";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import {
+  NETWORK_INTERCEPTOR_SCRIPT,
+  makeNetworkLogReadScript,
+} from "../../utils/debugger/scripts/network-interceptor";
 
 const ITEMS_PER_PAGE = 50;
 
@@ -13,11 +14,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatEntry(entry: NetworkLogEntry): string {
+interface LogEntry {
+  id: number;
+  requestId: string;
+  state: string;
+  request?: { url: string; method: string };
+  response?: { status: number; statusText: string; mimeType: string };
+  resourceType?: string;
+  encodedDataLength?: number;
+  timestamp?: number;
+  durationMs?: number;
+  errorText?: string;
+}
+
+function formatEntry(entry: LogEntry): string {
   const method = entry.request?.method ?? "???";
   const url = entry.request?.url ?? "unknown";
 
-  // Show just the pathname (or hostname if no path)
   let name: string;
   try {
     const parsed = new URL(url);
@@ -38,8 +51,7 @@ function formatEntry(entry: NetworkLogEntry): string {
   const type = entry.resourceType ?? "";
   const size =
     entry.encodedDataLength != null ? formatBytes(entry.encodedDataLength) : "";
-  const duration =
-    entry.durationMs != null ? `${entry.durationMs} ms` : "";
+  const duration = entry.durationMs != null ? `${entry.durationMs} ms` : "";
 
   return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
 }
@@ -63,34 +75,65 @@ export const debuggerNetworkLogsTool: ToolDefinition<
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to debugger-network-request for full details.
 The app must be connected via debugger-connect first (auto-connects if needed).
-Note: Network capture requires the CDP Network domain to be supported by the runtime.`,
+Network interception is injected into the JS runtime — it captures fetch() and XMLHttpRequest calls.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    const logs = api.networkLogs;
 
-    if (logs.length === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network capture starts when the debugger connects.";
+    // Ensure the interceptor is installed (idempotent).
+    await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
+
+    // First get the total count for pagination.
+    const countScript = `(function() {
+      var log = globalThis.__radon_network_log;
+      if (!log) return JSON.stringify({ total: 0 });
+      var total = 0;
+      for (var i = 0; i < log.length; i++) {
+        var e = log[i];
+        if (e.request && e.request.url) {
+          var u = e.request.url;
+          if (u.indexOf('://localhost:${api.port}') !== -1 || u.indexOf('://127.0.0.1:${api.port}') !== -1) continue;
+        }
+        total++;
+      }
+      return JSON.stringify({ total: total });
+    })()`;
+
+    const countResult = await api.cdp.evaluate(countScript);
+    const { total } = JSON.parse(countResult as string);
+
+    if (total === 0) {
+      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() and XMLHttpRequest calls.";
     }
 
-    const pageCount = Math.ceil(logs.length / ITEMS_PER_PAGE);
+    const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
     const pageIndex =
       params.pageIndex === "latest"
         ? pageCount - 1
         : (params.pageIndex as number);
 
     if (pageIndex < 0 || pageIndex >= pageCount) {
-      return `Page index out of range. Valid range: 0-${pageCount - 1} (${pageCount} pages, ${logs.length} total requests).`;
+      return `Page index out of range. Valid range: 0-${pageCount - 1} (${pageCount} pages, ${total} total requests).`;
     }
 
     const start = pageIndex * ITEMS_PER_PAGE;
-    const end = Math.min(start + ITEMS_PER_PAGE, logs.length);
+    const readScript = makeNetworkLogReadScript(start, ITEMS_PER_PAGE, api.port);
+    const raw = await api.cdp.evaluate(readScript);
+    const data = JSON.parse(raw as string) as {
+      entries: LogEntry[];
+      total: number;
+      interceptorInstalled: boolean;
+    };
 
-    const lines = logs.slice(start, end).map(formatEntry);
+    if (!data.interceptorInstalled) {
+      return "Network interceptor not installed. Try reconnecting with debugger-connect.";
+    }
 
-    return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${logs.length} total) ===\n\n${lines.join("\n")}`;
+    const lines = data.entries.map(formatEntry);
+
+    return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${data.total} total) ===\n\n${lines.join("\n")}`;
   },
 };
