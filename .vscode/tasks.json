@@ -4,7 +4,7 @@
     {
       "label": "start-vite",
       "type": "shell",
-      "command": "npm run dev -w @radon-lite/ui",
+      "command": "npm run dev -w @argent/ui",
       "options": {
         "cwd": "${workspaceFolder}",
         "env": {}

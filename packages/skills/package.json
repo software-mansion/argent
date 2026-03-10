@@ -1,7 +1,8 @@
 {
-  "name": "@radon-lite/skills",
+  "name": "@argent/skills",
   "version": "0.1.0",
-  "description": "Claude Code skills for iOS simulator interaction via radon-lite",
+  "type": "module",
+  "description": "Claude Code skills for iOS simulator interaction via argent",
   "scripts": {
     "install-skills": "node scripts/install.js"
   },

@@ -1,5 +1,5 @@
 {
-  "name": "@radon-lite/vscode",
+  "name": "@argent/vscode",
   "version": "0.1.0",
   "private": true,
   "engines": {

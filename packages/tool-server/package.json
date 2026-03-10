@@ -1,10 +1,10 @@
 {
-  "name": "@radon-lite/tool-server",
+  "name": "@argent/tool-server",
   "version": "0.1.0",
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "vitest run",
@@ -13,9 +13,11 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@radon-lite/registry": "file:../registry",
+    "@argent/registry": "file:../registry",
     "express": "^4.19.2",
     "source-map-js": "^1.2.1",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-typescript": "^0.23.2",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
   },

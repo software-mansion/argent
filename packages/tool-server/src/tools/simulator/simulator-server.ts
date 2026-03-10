@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 
 const zodSchema = z.object({

@@ -1,24 +1,19 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
 });
 
-/**
- * Metro (React Native CLI) exposes a /reload endpoint that sends a reload command
- * to all connected apps over the packager connection (same as pressing "r" in
- * the Metro terminal). See react-native-community/cli#574.
- */
 export const debuggerReloadMetroTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { reloaded: boolean; port: number }
+  { reloaded: boolean; port: number; method: "cdp" | "http" }
 > = {
   id: "debugger-reload-metro",
-  description: `Ask the Metro server currently in use to reload all connected apps.
-Calls Metro's HTTP /reload endpoint — equivalent to pressing "r" in the Metro terminal.
-All simulators/devices connected to this Metro will reload their JS bundle. Use after code changes or to get a clean app state without restarting the app process.`,
+  description: `Ask the Metro server currently in use to reload the connected app's JS bundle.
+Equivalent to pressing "r" in the Metro terminal. Use after code changes or to get a clean app state without restarting the native process.
+Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Bridgeless), then falls back to Metro's HTTP /reload endpoint for older setups.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -26,14 +21,26 @@ All simulators/devices connected to this Metro will reload their JS bundle. Use 
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
+
+    // Primary: CDP Page.reload — works reliably with RN 0.76+ (Fusebox/Bridgeless).
+    // Triggers a full JS execution context teardown and restart without touching the native shell.
+    try {
+      await api.cdp.send("Page.reload");
+      return { reloaded: true, port, method: "cdp" };
+    } catch {
+      // Fall through to HTTP fallback
+    }
+
+    // Fallback: Metro's HTTP /reload endpoint (RN CLI classic, older Expo setups).
+    // Not always present — Expo SDK 52+ / RN 0.76+ may not expose it.
     const res = await fetch(`http://127.0.0.1:${port}/reload`, {
       method: "POST",
     });
     if (!res.ok) {
       throw new Error(
-        `Metro /reload failed: ${res.status} ${res.statusText}. Is Metro running and does it support /reload?`
+        `Failed to reload: CDP Page.reload unsupported and Metro HTTP /reload returned ${res.status} ${res.statusText}.`
       );
     }
-    return { reloaded: true, port };
+    return { reloaded: true, port, method: "http" };
   },
 };

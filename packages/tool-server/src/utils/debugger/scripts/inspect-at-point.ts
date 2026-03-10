@@ -7,6 +7,16 @@
  * fiber tree via .return pointers. This is more robust than searching globally
  * by name — it correctly resolves fibers when multiple components share a name
  * (e.g. several <Button /> instances in different parents).
+ *
+ * Supports both Fabric (new architecture) and Paper (old architecture).
+ * On Fabric, host fibers have stateNode.node (shadow node) and the stateNode
+ * itself serves as the public instance for getInspectorDataForViewAtPoint.
+ * On Paper, host fibers have stateNode.canonical with nativeTag and publicInstance.
+ *
+ * Source resolution: tries _debugStack first (bundled frame needing symbolication),
+ * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
+ * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
+ * with `original: true` since they already contain the real source path.
  */
 export function makeInspectScript(
   x: number,
@@ -19,7 +29,16 @@ export function makeInspectScript(
   var roots = hook.getFiberRoots(1);
   var root = Array.from(roots)[0];
 
-  function findHostSN(f,d){if(!f||d>30)return null;var sn=f.stateNode;if(sn&&typeof sn==='object'&&sn.canonical)return sn;return findHostSN(f.child,d+1)||null;}
+  var useFabric = typeof nativeFabricUIManager !== 'undefined';
+
+  function findHostFiber(f, d) {
+    if (!f || d > 30) return null;
+    if (typeof f.type === 'string' && f.stateNode) {
+      if (useFabric && f.stateNode.node) return f;
+      if (!useFabric && f.stateNode.canonical) return f;
+    }
+    return findHostFiber(f.child, d + 1) || null;
+  }
 
   function getCompName(f) {
     var t = f.type;
@@ -43,11 +62,23 @@ export function makeInspectScript(
     return m ? { fn: m[1]||'anon', file: m[2], line: parseInt(m[3]), col: parseInt(m[4]) } : null;
   }
 
-  var sn = findHostSN(root.current.child, 0);
-  if (!sn) { __radon_lite_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
+  function getFrame(fiber) {
+    var frame = parseFrame(fiber._debugStack);
+    if (frame) return frame;
+    var ds = fiber._debugSource;
+    if (ds && ds.fileName) {
+      return { fn: 'component', file: ds.fileName, line: ds.lineNumber || 0, col: ds.columnNumber || 0, original: true };
+    }
+    return null;
+  }
+
+  var hostFiber = findHostFiber(root.current.child, 0);
+  if (!hostFiber) { __radon_lite_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
+
+  var inspectRef = hostFiber.stateNode.canonical.publicInstance;
 
   renderer.rendererConfig.getInspectorDataForViewAtPoint(
-    sn.canonical.publicInstance, ${Math.round(x)}, ${Math.round(y)},
+    inspectRef, ${Math.round(x)}, ${Math.round(y)},
     function(data) {
       var items = [];
       var fiber = data.closestInstance;
@@ -58,7 +89,7 @@ export function makeInspectScript(
         while (f && depth < 200) {
           var name = getCompName(f);
           if (name) {
-            items.push({ name: name, frame: parseFrame(f._debugStack) });
+            items.push({ name: name, frame: getFrame(f) });
           }
           f = f.return;
           depth++;

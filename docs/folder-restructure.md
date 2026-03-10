@@ -7,7 +7,7 @@ This document summarizes the changes in this PR for anyone acknowledging or revi
 ## 1. Package rename: `tools` → `tool-server`
 
 - `packages/tools` has been renamed to `packages/tool-server`.
-- Package name: `@radon-lite/tools` → `@radon-lite/tool-server`.
+- Package name: `@argent/tools` → `@argent/tool-server`.
 - All references across the repo (README, launch configs, skills, MCP README) have been updated to use `tool-server` and `packages/tool-server`.
 
 ---
@@ -17,7 +17,7 @@ This document summarizes the changes in this PR for anyone acknowledging or revi
 ### Files made redundant (deleted)
 
 - `packages/tools/src/activation-tui.ts` — Removed, as it was unused. Can be brought back if needed.
-- `packages/tools/src/simulator-registry.ts` — Removed. Contained the old ad-hoc process and WebSocket registry for simulator-server instances. Replaced by the registry package’s blueprint-based lifecycle: the **SimulatorServer** blueprint and `@radon-lite/registry` now manage per-UDID simulator-server processes and their resolution for tools.
+- `packages/tools/src/simulator-registry.ts` — Removed. Contained the old ad-hoc process and WebSocket registry for simulator-server instances. Replaced by the registry package’s blueprint-based lifecycle: the **SimulatorServer** blueprint and `@argent/registry` now manage per-UDID simulator-server processes and their resolution for tools.
 - `**packages/tools/src/setup-registry.ts`** — Removed from package root. Its logic was moved to `**packages/tool-server/src/utils/setup-registry.ts**` (see structure changes below).
 - `**packages/tools/tsconfig.tsbuildinfo**` — Build artifact; removed with the package.
 
@@ -73,7 +73,7 @@ This document summarizes the changes in this PR for anyone acknowledging or revi
     - **UI (Chrome)** — Launches Chrome against Vite dev server (port 5173), with preLaunchTask `start-vite`.
   - **Compound:** “Full (Tools + UI)” launches both Tools Server and UI (Chrome).
 - `.vscode/tasks.json` (new):
-  - `**start-vite`** — Runs `npm run dev -w @radon-lite/ui` as a background task (problem matcher for Vite “Local:” URL).
+  - `**start-vite`** — Runs `npm run dev -w @argent/ui` as a background task (problem matcher for Vite “Local:” URL).
   - `**build-tools**` — Runs root `npm run build` (used by “Tools Server (built)”).
 
 ---
@@ -87,7 +87,7 @@ This document summarizes the changes in this PR for anyone acknowledging or revi
 
 ## 7. Dependencies (package-lock.json)
 
-- Workspace mapping: `@radon-lite/tools` → `@radon-lite/tool-server` (and `packages/tools` → `packages/tool-server`).
+- Workspace mapping: `@argent/tools` → `@argent/tool-server` (and `packages/tools` → `packages/tool-server`).
 - **@clack/prompts** (and **@clack/core**) bumped from 0.4.1/0.9.1 to **1.1.0** (used by tool-server).
 - **concurrently** and its dependency tree added at the root (chalk, rxjs, shell-quote, tree-kill, yargs, etc.).
 - **packages/tools** is now listed as **extraneous** in the lockfile (package directory renamed to tool-server; old name may still exist on disk).

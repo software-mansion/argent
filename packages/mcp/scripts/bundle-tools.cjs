@@ -12,6 +12,8 @@ const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const BIN_SRC = path.resolve(WORKSPACE_ROOT, "simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
+const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
+const SKILLS_DEST = path.resolve(__dirname, "../skills");
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
@@ -24,7 +26,7 @@ esbuild.buildSync({
   target: "node22",
   format: "cjs",
   outfile: OUT_FILE,
-  alias: { "@radon-lite/registry": REGISTRY_ENTRY },
+  alias: { "@argent/registry": REGISTRY_ENTRY },
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
@@ -39,4 +41,15 @@ if (fs.existsSync(BIN_SRC)) {
   console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
 } else {
   console.warn(`⚠ simulator-server binary not found at ${BIN_SRC} — skipping copy`);
+}
+
+// Copy skills into the package so they ship on npm.
+// Mirrors the full directory structure from packages/skills/skills/
+// (e.g. metro-debugger/SKILL.md, metro-debugger/references/source-maps.md, …)
+if (fs.existsSync(SKILLS_SRC)) {
+  fs.cpSync(SKILLS_SRC, SKILLS_DEST, { recursive: true });
+  const count = fs.readdirSync(SKILLS_SRC, { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+  console.log(`✓ Copied ${count} skill(s) → ${path.relative(process.cwd(), SKILLS_DEST)}`);
+} else {
+  console.warn(`⚠ Skills source not found at ${SKILLS_SRC} — skipping copy`);
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
-import { Registry } from "@radon-lite/registry";
+import { Registry } from "@argent/registry";
 import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debugger";
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";

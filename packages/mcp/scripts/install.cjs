@@ -16,7 +16,7 @@ if (!fs.existsSync(distEntry)) {
   process.exit(1);
 }
 
-const logFile = path.join(os.homedir(), ".radon-lite", "mcp-calls.log");
+const logFile = path.join(os.homedir(), ".argent", "mcp-calls.log");
 
 const entry = {
   type: "stdio",
@@ -49,11 +49,11 @@ function addPermissions(configPath) {
   const config = readJson(configPath);
   if (!config.permissions) config.permissions = {};
   if (!config.permissions.allow) config.permissions.allow = [];
-  const rule = "mcp__radon-lite";
+  const rule = "mcp__argent";
   if (!config.permissions.allow.includes(rule)) {
     config.permissions.allow.push(rule);
     writeJson(configPath, config);
-    console.log("✓ Granted permissions for all radon-lite MCP tools");
+    console.log("✓ Granted permissions for all argent MCP tools");
   } else {
     console.log("  (permissions already granted)");
   }
@@ -63,22 +63,34 @@ if (userScope) {
   const userConfigPath = path.join(os.homedir(), ".claude.json");
   const config = readJson(userConfigPath);
   if (!config.mcpServers) config.mcpServers = {};
-  config.mcpServers["radon-lite"] = entry;
+  config.mcpServers["argent"] = entry;
   writeJson(userConfigPath, config);
-  console.log("✓ Installed radon-lite MCP server (user scope)");
+  console.log("✓ Installed argent MCP server (user scope)");
   if (allowPermissions) {
     const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
     addPermissions(userSettingsPath);
   }
 } else {
-  const projectConfigPath = path.resolve(__dirname, "../../../.claude/mcp.json");
-  const config = readJson(projectConfigPath);
-  if (!config.mcpServers) config.mcpServers = {};
-  config.mcpServers["radon-lite"] = entry;
-  writeJson(projectConfigPath, config);
-  console.log("✓ Installed radon-lite MCP server (project scope)");
+  const projectRoot = process.env.npm_config_local_prefix ?? process.cwd();
+
+  // Claude Code
+  const claudeConfigPath = path.join(projectRoot, ".claude", "mcp.json");
+  const claudeConfig = readJson(claudeConfigPath);
+  if (!claudeConfig.mcpServers) claudeConfig.mcpServers = {};
+  claudeConfig.mcpServers["argent"] = entry;
+  writeJson(claudeConfigPath, claudeConfig);
+  console.log("✓ Installed argent MCP server in .claude/mcp.json");
+
+  // Cursor
+  const cursorConfigPath = path.join(projectRoot, ".cursor", "mcp.json");
+  const cursorConfig = readJson(cursorConfigPath);
+  if (!cursorConfig.mcpServers) cursorConfig.mcpServers = {};
+  cursorConfig.mcpServers["argent"] = entry;
+  writeJson(cursorConfigPath, cursorConfig);
+  console.log("✓ Installed argent MCP server in .cursor/mcp.json");
+
   if (allowPermissions) {
-    const settingsPath = path.resolve(__dirname, "../../../.claude/settings.json");
+    const settingsPath = path.join(projectRoot, ".claude", "settings.json");
     addPermissions(settingsPath);
   }
 }

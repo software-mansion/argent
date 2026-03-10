@@ -1,6 +1,6 @@
 import { z } from "zod";
 import * as crypto from "node:crypto";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point";
 
@@ -18,6 +18,12 @@ const zodSchema = z.object({
     .coerce.number()
     .default(3)
     .describe("Lines of source context to include around the component definition"),
+  resolveSourceMaps: z
+    .boolean()
+    .default(true)
+    .describe(
+      "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without symbolication or source reading."
+    ),
 });
 
 export const debuggerInspectElementTool: ToolDefinition<
@@ -27,7 +33,8 @@ export const debuggerInspectElementTool: ToolDefinition<
   id: "debugger-inspect-element",
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).
 Returns each component in the hierarchy with its source file:line and a code fragment.
-Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.`,
+Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
+Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -47,7 +54,13 @@ Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.`,
 
     const rawItems = (raw.items ?? []) as Array<{
       name: string;
-      frame: { fn: string; file: string; line: number; col: number } | null;
+      frame: {
+        fn: string;
+        file: string;
+        line: number;
+        col: number;
+        original?: boolean;
+      } | null;
     }>;
 
     const items: InspectItem[] = await Promise.all(
@@ -56,18 +69,36 @@ Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.`,
         let code: string | null = null;
 
         if (item.frame?.file) {
-          const resolved = await api.sourceResolver.symbolicate(
-            item.frame.file,
-            item.frame.line,
-            item.frame.col,
-            item.frame.fn
-          );
-          if (resolved) {
-            source = resolved;
+          if (item.frame.original) {
+            source = {
+              file: item.frame.file,
+              line: item.frame.line,
+              column: item.frame.col,
+            };
             code = await api.sourceResolver.readSourceFragment(
-              resolved,
+              source,
               params.contextLines
             );
+          } else if (params.resolveSourceMaps) {
+            const resolved = await api.sourceResolver.symbolicate(
+              item.frame.file,
+              item.frame.line,
+              item.frame.col,
+              item.frame.fn
+            );
+            if (resolved) {
+              source = resolved;
+              code = await api.sourceResolver.readSourceFragment(
+                resolved,
+                params.contextLines
+              );
+            }
+          } else {
+            source = {
+              file: item.frame.file,
+              line: item.frame.line,
+              column: item.frame.col,
+            };
           }
         }
 

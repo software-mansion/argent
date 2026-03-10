@@ -9,10 +9,10 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 const PORTAL_URL = "https://portal.ide.swmansion.com";
-const KEYCHAIN_SERVICE = "radon-lite";
+const KEYCHAIN_SERVICE = "argent";
 const KEYCHAIN_ACCOUNT = "license-token";
 export const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
-const REFRESH_META_DIR = path.join(os.homedir(), ".radon-lite");
+const REFRESH_META_DIR = path.join(os.homedir(), ".argent");
 const LAST_REFRESH_FILE = path.join(REFRESH_META_DIR, "last-token-refresh");
 
 // Binary lives at workspace root (three levels up from dist/ at runtime).
@@ -20,7 +20,7 @@ const LAST_REFRESH_FILE = path.join(REFRESH_META_DIR, "last-token-refresh");
 function getBinaryPath(): string {
   const BINARY_DIR =
     process.env.RADON_SIMULATOR_SERVER_DIR ??
-    path.join(__dirname, "..", "..", "..");
+    path.join(__dirname, "..", "..", "..", "..");
   return path.join(BINARY_DIR, "simulator-server");
 }
 
@@ -31,8 +31,10 @@ export async function readToken(): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("security", [
       "find-generic-password",
-      "-s", KEYCHAIN_SERVICE,
-      "-a", KEYCHAIN_ACCOUNT,
+      "-s",
+      KEYCHAIN_SERVICE,
+      "-a",
+      KEYCHAIN_ACCOUNT,
       "-w",
     ]);
     const token = stdout.trim();
@@ -49,12 +51,15 @@ export async function saveToken(token: string): Promise<void> {
     await execFileAsync("security", [
       "add-generic-password",
       "-U",
-      "-s", KEYCHAIN_SERVICE,
-      "-a", KEYCHAIN_ACCOUNT,
-      "-w", token,
+      "-s",
+      KEYCHAIN_SERVICE,
+      "-a",
+      KEYCHAIN_ACCOUNT,
+      "-w",
+      token,
     ]);
   } catch (err) {
-    console.error("[radon-lite] Failed to save token to keychain:", err);
+    console.error("[argent] Failed to save token to keychain:", err);
   }
 }
 
@@ -62,8 +67,10 @@ export async function removeToken(): Promise<void> {
   try {
     await execFileAsync("security", [
       "delete-generic-password",
-      "-s", KEYCHAIN_SERVICE,
-      "-a", KEYCHAIN_ACCOUNT,
+      "-s",
+      KEYCHAIN_SERVICE,
+      "-a",
+      KEYCHAIN_ACCOUNT,
     ]);
   } catch {
     // not found — that's fine
@@ -99,7 +106,7 @@ async function writeLastRefreshAt(timestamp = Date.now()): Promise<void> {
 // ── JWT decode (no subprocess) ────────────────────────────────────────────────
 
 export function decodeJWTPayload(
-  token: string
+  token: string,
 ): { cp_plan?: string; exp?: number } | null {
   try {
     const parts = token.split(".");
@@ -120,11 +127,7 @@ export async function verifyToken(token: string): Promise<
   | { valid: true; plan: string }
   | {
       valid: false;
-      reason:
-        | "corrupted"
-        | "expired"
-        | "fingerprint_mismatch"
-        | "unknown";
+      reason: "corrupted" | "expired" | "fingerprint_mismatch" | "unknown";
     }
 > {
   try {
@@ -159,7 +162,7 @@ export async function getFingerprint(): Promise<string> {
 
 async function portalPost(
   endpoint: string,
-  body: Record<string, string>
+  body: Record<string, string>,
 ): Promise<{ code: string; token?: string }> {
   const url = `${PORTAL_URL}${endpoint}`;
   const response = await fetch(url, {
@@ -183,8 +186,10 @@ export async function saveTokenIfValid(token: string): Promise<boolean> {
 
 export async function activateWithLicenseKey(
   licenseKey: string,
-  name = os.hostname()
-): Promise<{ success: true; plan: string } | { success: false; error: string }> {
+  name = os.hostname(),
+): Promise<
+  { success: true; plan: string } | { success: false; error: string }
+> {
   let fingerprint: string;
   try {
     fingerprint = await getFingerprint();
@@ -194,24 +199,40 @@ export async function activateWithLicenseKey(
 
   let data: { code: string; token?: string };
   try {
-    data = await portalPost("/api/create-token", { fingerprint, name, licenseKey });
+    data = await portalPost("/api/create-token", {
+      fingerprint,
+      name,
+      licenseKey,
+    });
   } catch {
-    return { success: false, error: "Network error contacting activation portal" };
+    return {
+      success: false,
+      error: "Network error contacting activation portal",
+    };
   }
 
   if (data.code === "E001") {
     return { success: false, error: "License key not found" };
   }
   if (data.code === "E002") {
-    return { success: false, error: "No active subscription for this license key" };
+    return {
+      success: false,
+      error: "No active subscription for this license key",
+    };
   }
   if (data.code !== "E000" || !data.token) {
-    return { success: false, error: `Unexpected portal response: ${data.code}` };
+    return {
+      success: false,
+      error: `Unexpected portal response: ${data.code}`,
+    };
   }
 
   const saved = await saveTokenIfValid(data.token);
   if (!saved) {
-    return { success: false, error: "Portal returned a token that failed local validation" };
+    return {
+      success: false,
+      error: "Portal returned a token that failed local validation",
+    };
   }
 
   await writeLastRefreshAt();
@@ -222,11 +243,15 @@ export async function activateWithLicenseKey(
 // ── SSO (PKCE) activation ─────────────────────────────────────────────────────
 
 function base64url(buf: Buffer): string {
-  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  return buf
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
 }
 
 export async function activateWithSSO(
-  name = os.hostname()
+  name = os.hostname(),
 ): Promise<
   | { success: true; plan: string }
   | { success: false; error: string; ssoUrl?: string }
@@ -241,7 +266,7 @@ export async function activateWithSSO(
   // PKCE
   const codeVerifier = base64url(crypto.randomBytes(32));
   const codeChallenge = base64url(
-    crypto.createHash("sha256").update(codeVerifier).digest()
+    crypto.createHash("sha256").update(codeVerifier).digest(),
   );
   const state = base64url(crypto.randomBytes(16));
 
@@ -266,9 +291,11 @@ export async function activateWithSSO(
         res.writeHead(400).end("Invalid callback");
         return;
       }
-      res.writeHead(200, { "Content-Type": "text/html" }).end(
-        "<html><body><h2>Activation complete — return to your terminal.</h2></body></html>"
-      );
+      res
+        .writeHead(200, { "Content-Type": "text/html" })
+        .end(
+          "<html><body><h2>Activation complete — return to your terminal.</h2></body></html>",
+        );
       callbackResolve!(code);
     } catch (err) {
       res.writeHead(500).end();
@@ -303,7 +330,11 @@ export async function activateWithSSO(
 
   if (!browserOpened) {
     callbackServer.close();
-    return { success: false, error: "Could not open browser automatically", ssoUrl };
+    return {
+      success: false,
+      error: "Could not open browser automatically",
+      ssoUrl,
+    };
   }
 
   // Race: callback vs 5-minute timeout
@@ -313,7 +344,10 @@ export async function activateWithSSO(
     code = await Promise.race([
       callbackPromise,
       new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error("SSO timed out (5 minutes)")), timeoutMs)
+        setTimeout(
+          () => rej(new Error("SSO timed out (5 minutes)")),
+          timeoutMs,
+        ),
       ),
     ]);
   } catch (err) {
@@ -341,7 +375,10 @@ export async function activateWithSSO(
 
   const saved = await saveTokenIfValid(data.token);
   if (!saved) {
-    return { success: false, error: "Portal returned a token that failed local validation" };
+    return {
+      success: false,
+      error: "Portal returned a token that failed local validation",
+    };
   }
 
   await writeLastRefreshAt();

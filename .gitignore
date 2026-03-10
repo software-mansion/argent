@@ -1,6 +1,13 @@
 node_modules/
 dist/
 *.log
+*.tsbuildinfo
 packages/*/dist/
 packages/*/node_modules/
 **/*tsconfig.tsbuildinfo
+*.tgz
+.DS_Store
+1export
+
+
+.claude/**/MEMORY.md

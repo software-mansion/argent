@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
 interface CallFrameInfo {

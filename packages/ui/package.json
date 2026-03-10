@@ -1,11 +1,11 @@
 {
-  "name": "@radon-lite/ui",
+  "name": "@argent/ui",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.json && vite build",
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
