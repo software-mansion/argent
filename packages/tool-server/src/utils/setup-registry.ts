@@ -22,6 +22,7 @@ import { debuggerSetBreakpointTool } from "../tools/debugger/debugger-set-breakp
 import { debuggerRemoveBreakpointTool } from "../tools/debugger/debugger-remove-breakpoint";
 import { debuggerPauseTool } from "../tools/debugger/debugger-pause";
 import { debuggerResumeTool } from "../tools/debugger/debugger-resume";
+import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
 import { debuggerStepTool } from "../tools/debugger/debugger-step";
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
@@ -60,6 +61,7 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerRemoveBreakpointTool);
   registry.registerTool(debuggerPauseTool);
   registry.registerTool(debuggerResumeTool);
+  registry.registerTool(debuggerReloadMetroTool);
   registry.registerTool(debuggerStepTool);
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
