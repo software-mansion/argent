@@ -2,6 +2,9 @@ import express, { Request, Response, NextFunction } from "express";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { readToken } from "./utils/license";
+import { createIdleTimer } from "./utils/idle-timer";
+
+// ── License gate ────────────────────────────────────────────────────
 
 const LICENSE_EXEMPT_TOOLS = new Set([
   "activate-license-key",
@@ -36,6 +39,8 @@ async function licenseGate(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// ── HTTP app ────────────────────────────────────────────────────────
+
 export interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
@@ -57,22 +62,10 @@ export function createHttpApp(
   const app = express();
   app.use(express.json());
 
-  let lastActivityAt = Date.now();
-  const idleTimeoutMs = options?.idleTimeoutMs ?? 0;
-  let idleTimer: ReturnType<typeof setInterval> | null = null;
-
-  if (idleTimeoutMs > 0 && options?.onIdle) {
-    const onIdle = options.onIdle;
-    idleTimer = setInterval(() => {
-      if (Date.now() - lastActivityAt >= idleTimeoutMs) {
-        console.log(
-          `[argent] No activity for ${Math.round(idleTimeoutMs / 60_000)}min — shutting down`,
-        );
-        onIdle();
-      }
-    }, 60_000);
-    idleTimer.unref();
-  }
+  const idleTimer = createIdleTimer(
+    options?.idleTimeoutMs ?? 0,
+    options?.onIdle,
+  );
 
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -120,7 +113,7 @@ export function createHttpApp(
   });
 
   app.post("/tools/:name", (req, _res, next) => {
-    lastActivityAt = Date.now();
+    idleTimer.touch();
     next();
   }, licenseGate, async (req: Request, res: Response) => {
     const name = req.params.name!;
@@ -171,12 +164,7 @@ export function createHttpApp(
 
   return {
     app,
-    dispose: () => {
-      if (idleTimer) {
-        clearInterval(idleTimer);
-        idleTimer = null;
-      }
-    },
-    getLastActivityAt: () => lastActivityAt,
+    dispose: () => idleTimer.dispose(),
+    getLastActivityAt: () => idleTimer.getLastActivityAt(),
   };
 }
