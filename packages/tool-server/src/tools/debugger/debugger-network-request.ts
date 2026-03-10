@@ -51,7 +51,7 @@ const zodSchema = z.object({
       "The requestId from view-network-logs to get full details for",
     ),
   includeBody: z
-    .boolean()
+    .coerce.boolean()
     .default(true)
     .describe(
       "Whether to include the response body (if captured). Defaults to true.",
