@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
@@ -66,7 +66,7 @@ const zodSchema = z.object({
     ),
 });
 
-export const debuggerNetworkLogsTool: ToolDefinition<
+export const networkLogsTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   string
 > = {
@@ -74,14 +74,13 @@ export const debuggerNetworkLogsTool: ToolDefinition<
   description: `View captured network (HTTP) requests from the running React Native app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-The app must be connected via debugger-connect first (auto-connects if needed).
-Network interception is injected into the JS runtime — it captures fetch() and XMLHttpRequest calls.`,
+Network interception is injected into the JS runtime — it captures fetch() calls.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    inspector: `NetworkInspector:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.debugger as JsRuntimeDebuggerApi;
+    const api = services.inspector as NetworkInspectorApi;
 
     // Ensure the interceptor is installed (idempotent).
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
@@ -94,7 +93,7 @@ Network interception is injected into the JS runtime — it captures fetch() and
     const { total } = JSON.parse(countRaw as string) as { total: number };
 
     if (total === 0) {
-      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() and XMLHttpRequest calls.";
+      return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() calls.";
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
@@ -117,7 +116,7 @@ Network interception is injected into the JS runtime — it captures fetch() and
     };
 
     if (!data.interceptorInstalled) {
-      return "Network interceptor not installed. Try reconnecting with debugger-connect.";
+      return "Network interceptor not installed. Try reconnecting with network-inspector-connect.";
     }
 
     const lines = data.entries.map(formatEntry);

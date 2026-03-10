@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkDetailReadScript,
@@ -8,7 +8,6 @@ import {
 
 /**
  * Header names (lowercase) that should be redacted to avoid leaking secrets.
- * Matches the same set as Radon IDE's redactSensitiveHeaders.
  */
 const SENSITIVE_HEADER_PATTERNS = [
   "auth",
@@ -108,7 +107,7 @@ interface NetworkRequestDetails {
   initiator?: { type: string; url?: string; lineNumber?: number };
 }
 
-export const debuggerNetworkRequestTool: ToolDefinition<
+export const networkRequestTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   NetworkRequestDetails | string
 > = {
@@ -118,10 +117,10 @@ Returns request/response headers (sensitive headers redacted), status, timing, a
 Large response bodies are truncated. Use this after view-network-logs to inspect individual requests.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    inspector: `NetworkInspector:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.debugger as JsRuntimeDebuggerApi;
+    const api = services.inspector as NetworkInspectorApi;
 
     // Ensure the interceptor is installed (idempotent).
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
