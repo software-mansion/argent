@@ -35,6 +35,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Action | Tool | When to use |
 |--------|------|-------------|
 | Open an app | `launch-app` | **Always — never tap home-screen icons** |
+| Restart an app | `restart-app` | App reinstallation needed, reconnection to metro needed |
 | Open a URL/scheme | `open-url` | Web pages, deep links, URL schemes |
 | Single tap | `tap` | Buttons, links, checkboxes |
 | Scroll/swipe | `swipe` | Straight-line scroll or swipe |
@@ -114,10 +115,17 @@ Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow
 ```
 Orientations: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
+## Visual Context
+
+Interaction tools (`tap`, `swipe`, `gesture`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`) **automatically attach a screenshot** of the simulator to their response. You get the current screen after each action without calling `screenshot` separately.
+
+- **Use the explicit `screenshot` tool** only when you need to see the screen without performing an action first (e.g. initial state before any interaction, or checking state after a delay).
+- **If the auto-attached screenshot does not show the settled UI** (e.g. mid-animation, transitional frame, or loading state): retake by calling the `screenshot` tool once. Only retake when you can tell from the image that the final state is not yet visible.
+
 ## Best Practices
 
 1. **Start every task with `launch-app` or `open-url`** — never hunt for icons on the home screen.
-2. **Take a screenshot before and after interactions** to verify the result.
+2. **You receive a screenshot after each interaction automatically** — call `screenshot` when you need to see the screen without performing an action first, or when the auto-screenshot clearly does not show the final state.
 3. **Use `swipe` for lists and scroll views**, not `gesture`, unless you need non-linear movement.
 4. **Tap a text field before typing** — both `paste` and `keyboard` require focus. Try `paste` first; fall back to `keyboard` if the field doesn't respond.
 5. **Wait for animations** — after `tap` or `button`, give the app ~300ms to react before the next action.
