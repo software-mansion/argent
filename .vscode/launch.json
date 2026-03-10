@@ -5,12 +5,16 @@
       "type": "node",
       "request": "launch",
       "name": "Tools Server",
-      "runtimeArgs": ["-r", "ts-node/register"],
+      "runtimeArgs": [
+        "-r",
+        "ts-node/register"
+      ],
       "program": "${workspaceFolder}/packages/tool-server/src/index.ts",
       "cwd": "${workspaceFolder}/packages/tool-server",
       "console": "integratedTerminal",
       "env": {
-        "PORT": "3001"
+        "PORT": "3001",
+        "RADON_SIMULATOR_SERVER_DIR": "/Users/pawel/Desktop/radon-lite/packages/mcp/bin"
       }
     },
     {
@@ -32,7 +36,7 @@
         "PORT": "3001"
       },
       "preLaunchTask": "build-tools"
-    },
+    }
   ],
   "compounds": [
     {
