@@ -5,14 +5,8 @@ import {
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
 import { selectTarget } from "../utils/debugger/target-selection";
-import {
-  CDPClient,
-  type ConsoleAPICalledParams,
-} from "../utils/debugger/cdp-client";
-import {
-  createSourceResolver,
-  type SourceResolver,
-} from "../utils/debugger/source-resolver";
+import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
+import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
@@ -124,7 +118,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       sourceMaps.registerFromScriptParsed(
         script.url,
         script.scriptId,
-        script.sourceMapURL,
+        script.sourceMapURL
       );
     });
 
@@ -167,10 +161,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       consoleEvents.emit("log", entry);
     });
 
-    const consoleServer = await createConsoleLogServer(
-      consoleEvents,
-      consoleLogs,
-    );
+    const consoleServer = await createConsoleLogServer(consoleEvents, consoleLogs);
 
     const api: JsRuntimeDebuggerApi = {
       port,
