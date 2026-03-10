@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "npm run build:mcp && npm run build:tools-bundle",
-    "build:mcp": "tsc",
+    "build:mcp": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:tools-bundle": "node scripts/bundle-tools.cjs",
     "dev": "node --loader ts-node/esm src/index.ts",
     "observe": "node scripts/observe.cjs",
