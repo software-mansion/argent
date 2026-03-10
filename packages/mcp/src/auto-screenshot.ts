@@ -24,16 +24,16 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
  * +1 000 ms over baseline research values to cover slow devices/transitions.
  */
 export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
-  "launch-app": 1700,
-  "restart-app": 1700,
-  "open-url": 1700,
-  swipe: 1450,
-  gesture: 1450,
-  tap: 1300,
-  button: 1300,
-  keyboard: 1300,
-  rotate: 1350,
-  describe: 1000,
+  "launch-app": 3000,
+  "restart-app": 3000,
+  "open-url": 2000,
+  swipe: 1500,
+  gesture: 1500,
+  tap: 1500,
+  button: 1500,
+  keyboard: 300,
+  rotate: 1000,
+  describe: 100,
 };
 
 const DEFAULT_DELAY_MS = 1400;
