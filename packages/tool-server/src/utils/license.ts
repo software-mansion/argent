@@ -20,7 +20,7 @@ const LAST_REFRESH_FILE = path.join(REFRESH_META_DIR, "last-token-refresh");
 function getBinaryPath(): string {
   const BINARY_DIR =
     process.env.RADON_SIMULATOR_SERVER_DIR ??
-    path.join(__dirname, "..", "..", "..");
+    path.join(__dirname, "..", "..", "..", "..");
   return path.join(BINARY_DIR, "simulator-server");
 }
 

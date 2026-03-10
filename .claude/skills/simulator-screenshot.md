@@ -19,6 +19,10 @@ Call `screenshot` when you need to see the simulator screen **without performing
    ```json
    { "udid": "<UDID>", "rotation": "LandscapeLeft" }
    ```
+   With a Pro JWT token (required for screenshot to work):
+   ```json
+   { "udid": "<UDID>", "token": "<JWT>" }
+   ```
 
 3. **The MCP adapter automatically**:
    - Fetches the PNG from the returned URL
