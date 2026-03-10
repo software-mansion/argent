@@ -2,6 +2,10 @@
 
 Take a screenshot of the iOS simulator screen and display it.
 
+## When to Use
+
+Call `screenshot` when you need to see the simulator screen **without performing an action first** — e.g. to capture the initial state, or to check state after a delay. After calling interaction tools (`tap`, `swipe`, `launch-app`, etc.), you already receive a screenshot in that tool's response; no separate call is needed unless the auto-attached image shows a transitional or loading frame.
+
 ## Steps
 
 1. **Get the simulator UDID** — use `list-simulators` if you don't have it already.

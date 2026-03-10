@@ -12,6 +12,8 @@
     "build:mcp": "tsc",
     "build:tools-bundle": "node scripts/bundle-tools.cjs",
     "dev": "node --loader ts-node/esm src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "observe": "node scripts/observe.cjs",
     "benchmark": "node scripts/benchmark.cjs"
   },
@@ -25,6 +27,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "esbuild": "^0.27.3",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.18"
   }
 }

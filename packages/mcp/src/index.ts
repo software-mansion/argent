@@ -9,6 +9,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer } from "./launcher.js";
+import {
+  autoScreenshotEnabled,
+  getUdidFromArgs,
+  shouldAutoScreenshot,
+  getAutoScreenshotDelayMs,
+  normalizeToolName,
+} from "./auto-screenshot.js";
 
 let TOOLS_URL: string;
 if (process.env.RADON_TOOLS_URL) {
@@ -96,7 +103,12 @@ const server = new Server(
       "'No Radon Lite license found', call the activate-sso tool first — it opens a " +
       "browser on the user's machine for sign-in and returns { success: true, plan }. " +
       "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
-      "Alternatively, call activate-license-key with the user's license key.",
+      "Alternatively, call activate-license-key with the user's license key. " +
+      "After each simulator interaction (tap, swipe, launch-app, etc.) you automatically " +
+      "receive a screenshot of the simulator in the same tool response. Use the screenshot " +
+      "tool only when you need a screenshot without performing an action first (e.g. initial " +
+      "state), or when the auto-attached screenshot does not show the settled UI (e.g. mid-" +
+      "animation or loading frame) — in that case, retake by calling screenshot explicitly.",
   }
 );
 
@@ -121,7 +133,41 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       params.arguments
     );
     await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false, result });
-    return { content: await toMcpContent(result, outputHint) };
+
+    let content = await toMcpContent(result, outputHint);
+
+    const udid = getUdidFromArgs(params.arguments);
+    if (
+      autoScreenshotEnabled() &&
+      udid &&
+      shouldAutoScreenshot(params.name)
+    ) {
+      const delayMs = getAutoScreenshotDelayMs(params.name);
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+
+      try {
+        const screenshotResult = await callTool("screenshot", { udid });
+        const screenshotContent = await toMcpContent(
+          screenshotResult.result,
+          "image"
+        );
+        content = [
+          ...content,
+          { type: "text" as const, text: "--- Screen after action ---" },
+          ...screenshotContent,
+        ];
+      } catch (ssErr) {
+        content = [
+          ...content,
+          {
+            type: "text" as const,
+            text: `(Auto-screenshot skipped: ${ssErr instanceof Error ? ssErr.message : String(ssErr)})`,
+          },
+        ];
+      }
+    }
+
+    return { content };
   } catch (err) {
     await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: true, error: String(err instanceof Error ? err.message : err) });
     return {
