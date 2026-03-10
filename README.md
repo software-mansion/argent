@@ -8,16 +8,16 @@ Two HTTP surfaces: **simulator-server** is a native binary (repo root, arm64 mac
 - Node.js 18+
 - The `simulator-server` binary at the **repo root** (arm64 macOS)
 
-## Quick start (tools server)
+## Quick start (tools server only)
 
 From the repo root:
 
 ```bash
 npm install
-npm run build -w @argent/registry && npm run dev -w @argent/tool-server
+npm run start:tool-server
 ```
 
-The tools server runs at **http://localhost:3001**. List tools and invoke them:
+This builds the registry dependency and starts the tools server with ts-node (live TypeScript, no build step for tool-server itself). It runs at **http://localhost:3001**. List tools and invoke them:
 
 ```bash
 # List tools and their schemas
@@ -27,7 +27,7 @@ curl http://localhost:3001/tools
 curl -X POST http://localhost:3001/tools/list-simulators -H "Content-Type: application/json" -d '{}'
 ```
 
-For the full app (tools API + web UI), see **Running the app with frontend** below.
+For the full app (tools API + web UI), see **Running the full app** below.
 
 ## Tools server and registry
 
@@ -35,31 +35,32 @@ The **tool-server** package (`packages/tool-server`) exposes an HTTP API for lis
 
 Default port is 3001. `GET /tools` lists tools with input schemas; `POST /tools/:name` invokes a tool with a JSON body. On shutdown, the server calls `registry.dispose()` to tear down all running simulator-server processes.
 
-## Running the app with frontend
+## Running the full app (tools API + web UI)
 
-To run the full app (tools API + web UI) from the terminal:
-
-**1. Install and build (once):**
+The simplest way — one command from the repo root:
 
 ```bash
 npm install
-cd packages/registry && npm run build
-cd ../tool-server && npm run build
+npm run start
 ```
 
-**2. Start the tools server** (terminal 1). It serves the API at **http://localhost:3001**:
+This builds the registry, then launches both the tools server (ts-node, port 3001) and the UI dev server (Vite, port 5173) concurrently via `concurrently`.
+
+If you prefer separate terminals (e.g. to see logs independently):
+
+**Terminal 1 — tools server** (API at **http://localhost:3001**):
 
 ```bash
-cd packages/tool-server && npm start
+npm run start:tool-server
 ```
 
-**3. Start the frontend** (terminal 2). Vite serves the UI at **http://localhost:5173**:
+**Terminal 2 — frontend** (Vite at **http://localhost:5173**):
 
 ```bash
-cd packages/ui && npm run dev
+npm run start:ui
 ```
 
-**4. Open the app** in a browser:
+**Open the app** in a browser:
 
 - Go to **http://localhost:5173**
 - On the Connect screen, the default server URL is **http://localhost:3001** (or use `?serverUrl=http://localhost:3001` in the URL). Click **Connect**.
@@ -129,6 +130,49 @@ An OpenAPI spec for the simulator-server API is not yet in the repo.
 
 ## Development
 
+### Dev setup (run once)
+
 ```bash
-npm run dev   # in packages/tool-server: run with ts-node, no build step needed
+npm install
+```
+
+### Running in dev mode
+
+```bash
+# Full app (tool-server + UI, single command):
+npm run start
+
+# Or individually:
+npm run start:tool-server   # builds registry, starts tool-server with ts-node
+npm run start:ui             # starts Vite dev server for the UI
+```
+
+The tool-server runs via ts-node so you get live TypeScript without a manual build step for tool-server itself. However, the `@argent/registry` package **must** be built first (the `start` and `start:tool-server` scripts handle this automatically).
+
+### Building all packages
+
+```bash
+npm run build   # tsc --build using project references (registry, tool-server, mcp, ui, vscode)
+```
+
+### Running tests
+
+```bash
+npm test -w @argent/registry       # registry unit tests (vitest)
+npm test -w @argent/tool-server    # tool-server tests (vitest)
+npm test -w @argent/ui             # UI tests (vitest)
+```
+
+### MCP package
+
+The `packages/mcp` directory (`argent` on npm) is the MCP bridge that AI assistants (Claude, Cursor) use to talk to the tools server. To build it:
+
+```bash
+npm run build -w argent   # compiles MCP TypeScript + bundles tool-server into a single CJS file
+```
+
+To pack it for distribution:
+
+```bash
+npm run pack:mcp   # builds and creates argent-<version>.tgz in the repo root
 ```
