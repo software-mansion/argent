@@ -1,4 +1,4 @@
-# radon-lite
+# argent
 
 Two HTTP surfaces: **simulator-server** is a native binary (repo root, arm64 macOS) that runs per simulator on a port (e.g. 3000) and handles device I/O — touch, key, button, rotate, paste, scroll, MJPEG stream, screenshot, recording, replay. The **tools server** is a Node app (port 3001) that lists and invokes tools (list-simulators, boot-simulator, simulator-server, launch-app, etc.); it starts simulator-server processes on demand.
 
@@ -14,7 +14,7 @@ From the repo root:
 
 ```bash
 npm install
-npm run build -w @radon-lite/registry && npm run dev -w @radon-lite/tool-server
+npm run build -w @argent/registry && npm run dev -w @argent/tool-server
 ```
 
 The tools server runs at **http://localhost:3001**. List tools and invoke them:

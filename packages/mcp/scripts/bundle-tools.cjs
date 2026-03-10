@@ -26,7 +26,7 @@ esbuild.buildSync({
   target: "node22",
   format: "cjs",
   outfile: OUT_FILE,
-  alias: { "@radon-lite/registry": REGISTRY_ENTRY },
+  alias: { "@argent/registry": REGISTRY_ENTRY },
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);

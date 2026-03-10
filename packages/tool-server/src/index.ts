@@ -1,4 +1,4 @@
-import { attachRegistryLogger } from "@radon-lite/registry";
+import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { validateStoredToken } from "./utils/license";

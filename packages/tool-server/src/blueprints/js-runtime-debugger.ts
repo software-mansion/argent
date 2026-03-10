@@ -2,7 +2,7 @@ import {
   TypedEventEmitter,
   type ServiceBlueprint,
   type ServiceEvents,
-} from "@radon-lite/registry";
+} from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
 import { selectTarget } from "../utils/debugger/target-selection";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";

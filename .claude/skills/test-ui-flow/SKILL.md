@@ -1,3 +1,8 @@
+---
+name: test-ui-flow
+description: Autonomously test an iOS app UI by running interact-screenshot-verify loops using argent simulator tools. Use when testing a UI flow, verifying login works, testing navigation, or running an end-to-end UI test scenario.
+---
+
 # Test UI Flow
 
 Autonomously test an iOS app UI by orchestrating interact → verify loops, with automatic screenshots after each action.
@@ -6,9 +11,10 @@ Autonomously test an iOS app UI by orchestrating interact → verify loops, with
 
 1. **Setup**: Ensure tools server is running and simulator is booted.
 2. **Baseline screenshot**: Call `screenshot` to see the current UI state (no action was performed yet).
-3. **Interact**: Perform the action (tap, swipe, type, etc.) — you receive a screenshot in the response automatically.
-4. **Verify**: Use the screenshot returned with the action to confirm the expected result appeared. If the image shows a transitional or loading state, retake with the `screenshot` tool.
-5. **Repeat** for each step of the flow.
+3. **Find component to interact**: If not sure where to tap use `describe` tool (or `debugger-component-tree` tool for ReactNative apps only) to retrieve the locations.  
+4. **Interact**: Perform the action (tap, swipe, type, etc.) — you receive a screenshot in the response automatically.
+5. **Verify**: Use the screenshot returned with the action to confirm the expected result appeared. If the image shows a transitional or loading state, retake with the `screenshot` tool.
+6. **Repeat** for each step of the flow.
 
 ## Template
 

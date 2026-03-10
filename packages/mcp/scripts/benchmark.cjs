@@ -185,7 +185,7 @@ function saveReport(prompt, withMcp, withoutMcp) {
 console.log(`\n${CYAN}Running WITH MCP...${RESET}`);
 let withMcp;
 try {
-  withMcp = runClaude(["--allowedTools", "mcp__radon-lite__*"]);
+  withMcp = runClaude(["--allowedTools", "mcp__argent__*"]);
 } catch (err) {
   console.error(`${"\x1b[31m"}WITH MCP run failed:${RESET}`, err.message);
   process.exit(1);

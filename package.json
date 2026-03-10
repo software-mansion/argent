@@ -1,12 +1,12 @@
 {
-  "name": "radon-lite-workspace",
+  "name": "argent-workspace",
   "private": true,
   "workspaces": ["packages/*"],
   "scripts": {
     "build": "tsc --build",
-    "start": "npm run build -w @radon-lite/registry && concurrently -n ui,tool-server \"npm run dev -w @radon-lite/ui\" \"npm run dev -w @radon-lite/tool-server\"",
-    "start:ui": "npm run dev -w @radon-lite/ui",
-    "start:tool-server": "npm run build -w @radon-lite/registry && npm run dev -w @radon-lite/tool-server",
+    "start": "npm run build -w @argent/registry && concurrently -n ui,tool-server \"npm run dev -w @argent/ui\" \"npm run dev -w @argent/tool-server\"",
+    "start:ui": "npm run dev -w @argent/ui",
+    "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "pack:mcp": "npm run build -w argent && npm pack -w argent --pack-destination ."
   },
   "devDependencies": {

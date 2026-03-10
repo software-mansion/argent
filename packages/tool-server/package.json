@@ -1,5 +1,5 @@
 {
-  "name": "@radon-lite/tool-server",
+  "name": "@argent/tool-server",
   "version": "0.1.0",
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.1.0",
-    "@radon-lite/registry": "file:../registry",
+    "@argent/registry": "file:../registry",
     "express": "^4.19.2",
     "source-map-js": "^1.2.1",
     "tree-sitter": "^0.21.1",

@@ -1,4 +1,4 @@
-import { Registry } from "@radon-lite/registry";
+import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { profilerSessionBlueprint } from "../blueprints/profiler-session";
