@@ -42,6 +42,9 @@ import { profilerCpuSummaryTool } from "../tools/profiler/profiler-cpu-summary";
 import { profilerReactRendersTool } from "../tools/profiler/profiler-react-renders";
 import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
 import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
+import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
+import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
+import { stopMetroTool } from "../tools/simulator/stop-metro";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -90,6 +93,11 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerReactRendersTool);
   registry.registerTool(profilerFiberTreeTool);
   registry.registerTool(profilerConsoleLogsTool);
+
+  // Cleanup tools (close over registry for direct service disposal)
+  registry.registerTool(createStopSimulatorServerTool(registry));
+  registry.registerTool(createStopAllSimulatorServersTool(registry));
+  registry.registerTool(stopMetroTool);
 
   return registry;
 }

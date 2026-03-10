@@ -8,6 +8,9 @@ const LICENSE_EXEMPT_TOOLS = new Set([
   "activate-sso",
   "get-license-status",
   "remove-license",
+  "stop-simulator-server",
+  "stop-all-simulator-servers",
+  "stop-metro",
 ]);
 
 async function licenseGate(req: Request, res: Response, next: NextFunction) {
@@ -33,9 +36,43 @@ async function licenseGate(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-export function createHttpApp(registry: Registry): express.Application {
+export interface HttpAppOptions {
+  idleTimeoutMs?: number;
+  onIdle?: () => void;
+  onShutdown?: () => void;
+}
+
+export interface HttpAppHandle {
+  app: express.Application;
+  /** Clears the idle timer. Call on server shutdown. */
+  dispose: () => void;
+  /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
+  getLastActivityAt: () => number;
+}
+
+export function createHttpApp(
+  registry: Registry,
+  options?: HttpAppOptions,
+): HttpAppHandle {
   const app = express();
   app.use(express.json());
+
+  let lastActivityAt = Date.now();
+  const idleTimeoutMs = options?.idleTimeoutMs ?? 0;
+  let idleTimer: ReturnType<typeof setInterval> | null = null;
+
+  if (idleTimeoutMs > 0 && options?.onIdle) {
+    const onIdle = options.onIdle;
+    idleTimer = setInterval(() => {
+      if (Date.now() - lastActivityAt >= idleTimeoutMs) {
+        console.log(
+          `[argent] No activity for ${Math.round(idleTimeoutMs / 60_000)}min — shutting down`,
+        );
+        onIdle();
+      }
+    }, 60_000);
+    idleTimer.unref();
+  }
 
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -82,7 +119,10 @@ export function createHttpApp(registry: Registry): express.Application {
     res.json({ tools });
   });
 
-  app.post("/tools/:name", licenseGate, async (req: Request, res: Response) => {
+  app.post("/tools/:name", (req, _res, next) => {
+    lastActivityAt = Date.now();
+    next();
+  }, licenseGate, async (req: Request, res: Response) => {
     const name = req.params.name!;
 
     const def = registry.getTool(name);
@@ -121,5 +161,22 @@ export function createHttpApp(registry: Registry): express.Application {
     }
   });
 
-  return app;
+  if (options?.onShutdown) {
+    const onShutdown = options.onShutdown;
+    app.post("/shutdown", (_req: Request, res: Response) => {
+      res.json({ ok: true });
+      onShutdown();
+    });
+  }
+
+  return {
+    app,
+    dispose: () => {
+      if (idleTimer) {
+        clearInterval(idleTimer);
+        idleTimer = null;
+      }
+    },
+    getLastActivityAt: () => lastActivityAt,
+  };
 }

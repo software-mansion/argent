@@ -6,14 +6,35 @@ import { validateStoredToken } from "./utils/license";
 const registry = createRegistry();
 attachRegistryLogger(registry);
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
-const app = createHttpApp(registry);
 
-const server = app.listen(PORT, "127.0.0.1", () => {
+const idleMinutes = parseInt(
+  process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? "30",
+  10,
+);
+const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
+
+const shutdown = async () => {
+  httpHandle.dispose();
+  await registry.dispose();
+  server.close();
+  process.exit(0);
+};
+
+const httpHandle = createHttpApp(registry, {
+  idleTimeoutMs,
+  onIdle: shutdown,
+  onShutdown: shutdown,
+});
+
+const server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
   const addr = server.address();
   const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
   process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
   console.log(`  GET  http://127.0.0.1:${boundPort}/tools`);
   console.log(`  POST http://127.0.0.1:${boundPort}/tools/:name`);
+  if (idleTimeoutMs > 0) {
+    console.log(`  Idle timeout: ${idleMinutes}min`);
+  }
 });
 
 // Validate stored token on startup
@@ -29,11 +50,6 @@ validateStoredToken().then((valid) => {
   console.error("  License validation error:", err);
 });
 
-const shutdown = async () => {
-  await registry.dispose();
-  server.close();
-  process.exit(0);
-};
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
