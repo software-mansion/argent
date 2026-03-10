@@ -22,8 +22,16 @@ export const bootSimulatorTool: ToolDefinition<{ udid: string }> = {
         throw err;
       }
     });
-    const openPromise = execFileAsync("open", ["-a", "Simulator", "--args", "-CurrentDeviceUDID", params.udid]);
-    await Promise.all([bootPromise, openPromise]);
+    await bootPromise;
+    // Write the preference before opening so it applies to both fresh launches and
+    // already-running instances. `open --args` is ignored when the app is already running.
+    await execFileAsync("defaults", [
+      "write",
+      "com.apple.iphonesimulator",
+      "CurrentDeviceUDID",
+      params.udid,
+    ]);
+    await execFileAsync("open", ["-a", "Simulator.app"]);
     return { udid: params.udid, booted: true };
   },
 };
