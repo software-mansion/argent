@@ -12,6 +12,11 @@
  * On Fabric, host fibers have stateNode.node (shadow node) and the stateNode
  * itself serves as the public instance for getInspectorDataForViewAtPoint.
  * On Paper, host fibers have stateNode.canonical with nativeTag and publicInstance.
+ *
+ * Source resolution: tries _debugStack first (bundled frame needing symbolication),
+ * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
+ * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
+ * with `original: true` since they already contain the real source path.
  */
 export function makeInspectScript(
   x: number,
@@ -57,6 +62,16 @@ export function makeInspectScript(
     return m ? { fn: m[1]||'anon', file: m[2], line: parseInt(m[3]), col: parseInt(m[4]) } : null;
   }
 
+  function getFrame(fiber) {
+    var frame = parseFrame(fiber._debugStack);
+    if (frame) return frame;
+    var ds = fiber._debugSource;
+    if (ds && ds.fileName) {
+      return { fn: 'component', file: ds.fileName, line: ds.lineNumber || 0, col: ds.columnNumber || 0, original: true };
+    }
+    return null;
+  }
+
   var hostFiber = findHostFiber(root.current.child, 0);
   if (!hostFiber) { __radon_lite_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
 
@@ -74,7 +89,7 @@ export function makeInspectScript(
         while (f && depth < 200) {
           var name = getCompName(f);
           if (name) {
-            items.push({ name: name, frame: parseFrame(f._debugStack) });
+            items.push({ name: name, frame: getFrame(f) });
           }
           f = f.return;
           depth++;

@@ -54,7 +54,13 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
 
     const rawItems = (raw.items ?? []) as Array<{
       name: string;
-      frame: { fn: string; file: string; line: number; col: number } | null;
+      frame: {
+        fn: string;
+        file: string;
+        line: number;
+        col: number;
+        original?: boolean;
+      } | null;
     }>;
 
     const items: InspectItem[] = await Promise.all(
@@ -63,7 +69,17 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
         let code: string | null = null;
 
         if (item.frame?.file) {
-          if (params.resolveSourceMaps) {
+          if (item.frame.original) {
+            source = {
+              file: item.frame.file,
+              line: item.frame.line,
+              column: item.frame.col,
+            };
+            code = await api.sourceResolver.readSourceFragment(
+              source,
+              params.contextLines
+            );
+          } else if (params.resolveSourceMaps) {
             const resolved = await api.sourceResolver.symbolicate(
               item.frame.file,
               item.frame.line,
