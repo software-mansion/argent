@@ -1,0 +1,197 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import {
+  AUTO_SCREENSHOT_TOOLS,
+  AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
+  autoScreenshotEnabled,
+  getUdidFromArgs,
+  normalizeToolName,
+  shouldAutoScreenshot,
+  getAutoScreenshotDelayMs,
+} from "../src/auto-screenshot.js";
+
+// ---------------------------------------------------------------------------
+// normalizeToolName
+// ---------------------------------------------------------------------------
+describe("normalizeToolName", () => {
+  it("returns name unchanged when no prefix", () => {
+    expect(normalizeToolName("tap")).toBe("tap");
+  });
+
+  it("strips mcp__radon-lite__ prefix", () => {
+    expect(normalizeToolName("mcp__radon-lite__tap")).toBe("tap");
+  });
+
+  it("strips any prefix ending with __", () => {
+    expect(normalizeToolName("prefix__other__swipe")).toBe("swipe");
+  });
+
+  it("handles tool names with hyphens", () => {
+    expect(normalizeToolName("mcp__radon-lite__launch-app")).toBe("launch-app");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getUdidFromArgs
+// ---------------------------------------------------------------------------
+describe("getUdidFromArgs", () => {
+  it("returns udid from a valid args object", () => {
+    expect(getUdidFromArgs({ udid: "ABCD-1234" })).toBe("ABCD-1234");
+  });
+
+  it("returns undefined when args is undefined", () => {
+    expect(getUdidFromArgs(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined when args is null", () => {
+    expect(getUdidFromArgs(null)).toBeUndefined();
+  });
+
+  it("returns undefined when args has no udid", () => {
+    expect(getUdidFromArgs({ x: 0.5, y: 0.5 })).toBeUndefined();
+  });
+
+  it("returns undefined when udid is not a string", () => {
+    expect(getUdidFromArgs({ udid: 42 })).toBeUndefined();
+  });
+
+  it("returns undefined for non-object args", () => {
+    expect(getUdidFromArgs("string-arg")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// shouldAutoScreenshot
+// ---------------------------------------------------------------------------
+describe("shouldAutoScreenshot", () => {
+  it("returns true for every tool in AUTO_SCREENSHOT_TOOLS", () => {
+    for (const tool of AUTO_SCREENSHOT_TOOLS) {
+      expect(shouldAutoScreenshot(tool)).toBe(true);
+    }
+  });
+
+  it("returns true for prefixed tool names", () => {
+    expect(shouldAutoScreenshot("mcp__radon-lite__tap")).toBe(true);
+    expect(shouldAutoScreenshot("mcp__radon-lite__launch-app")).toBe(true);
+  });
+
+  it("returns false for screenshot", () => {
+    expect(shouldAutoScreenshot("screenshot")).toBe(false);
+  });
+
+  it("returns false for prefixed screenshot", () => {
+    expect(shouldAutoScreenshot("mcp__radon-lite__screenshot")).toBe(false);
+  });
+
+  it("returns false for excluded tools", () => {
+    expect(shouldAutoScreenshot("list-simulators")).toBe(false);
+    expect(shouldAutoScreenshot("boot-simulator")).toBe(false);
+    expect(shouldAutoScreenshot("simulator-server")).toBe(false);
+    expect(shouldAutoScreenshot("activate-sso")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// autoScreenshotEnabled
+// ---------------------------------------------------------------------------
+describe("autoScreenshotEnabled", () => {
+  const original = process.env.RADON_AUTO_SCREENSHOT;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.RADON_AUTO_SCREENSHOT;
+    else process.env.RADON_AUTO_SCREENSHOT = original;
+  });
+
+  it("returns true when env var is unset", () => {
+    delete process.env.RADON_AUTO_SCREENSHOT;
+    expect(autoScreenshotEnabled()).toBe(true);
+  });
+
+  it("returns true when env var is empty string", () => {
+    process.env.RADON_AUTO_SCREENSHOT = "";
+    expect(autoScreenshotEnabled()).toBe(true);
+  });
+
+  it('returns true when env var is "1"', () => {
+    process.env.RADON_AUTO_SCREENSHOT = "1";
+    expect(autoScreenshotEnabled()).toBe(true);
+  });
+
+  it('returns true when env var is "true" (case-insensitive)', () => {
+    process.env.RADON_AUTO_SCREENSHOT = "True";
+    expect(autoScreenshotEnabled()).toBe(true);
+  });
+
+  it('returns false when env var is "0"', () => {
+    process.env.RADON_AUTO_SCREENSHOT = "0";
+    expect(autoScreenshotEnabled()).toBe(false);
+  });
+
+  it('returns false when env var is "false"', () => {
+    process.env.RADON_AUTO_SCREENSHOT = "false";
+    expect(autoScreenshotEnabled()).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAutoScreenshotDelayMs
+// ---------------------------------------------------------------------------
+describe("getAutoScreenshotDelayMs", () => {
+  const original = process.env.RADON_AUTO_SCREENSHOT_DELAY_MS;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.RADON_AUTO_SCREENSHOT_DELAY_MS;
+    else process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = original;
+  });
+
+  it("returns configured delay for each tool in the delay map", () => {
+    for (const [tool, expected] of Object.entries(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      expect(getAutoScreenshotDelayMs(tool)).toBe(expected);
+    }
+  });
+
+  it("returns default 1400ms for an unknown tool", () => {
+    expect(getAutoScreenshotDelayMs("some-new-tool")).toBe(1400);
+  });
+
+  it("normalizes prefixed tool names", () => {
+    expect(getAutoScreenshotDelayMs("mcp__radon-lite__tap")).toBe(
+      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["tap"]
+    );
+    expect(getAutoScreenshotDelayMs("mcp__radon-lite__launch-app")).toBe(
+      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["launch-app"]
+    );
+  });
+
+  it("uses env override as a floor", () => {
+    process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "2000";
+    expect(getAutoScreenshotDelayMs("describe")).toBe(2000); // 1000 < 2000 → 2000
+    expect(getAutoScreenshotDelayMs("launch-app")).toBe(2000); // 1700 < 2000 → 2000
+  });
+
+  it("does not lower delay below the per-tool value", () => {
+    process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "500";
+    expect(getAutoScreenshotDelayMs("launch-app")).toBe(1700); // 1700 > 500 → 1700
+  });
+
+  it("ignores non-numeric env override", () => {
+    process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "abc";
+    expect(getAutoScreenshotDelayMs("tap")).toBe(1300);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUTO_SCREENSHOT_TOOLS consistency
+// ---------------------------------------------------------------------------
+describe("AUTO_SCREENSHOT_TOOLS and delay map consistency", () => {
+  it("every tool in the allow-list has a corresponding delay", () => {
+    for (const tool of AUTO_SCREENSHOT_TOOLS) {
+      expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL).toHaveProperty(tool);
+    }
+  });
+
+  it("every tool in the delay map is in the allow-list", () => {
+    for (const tool of Object.keys(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
+      expect(AUTO_SCREENSHOT_TOOLS.has(tool)).toBe(true);
+    }
+  });
+});

@@ -60,6 +60,9 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 ```
 Coordinates: `0.0` = left/top, `1.0` = right/bottom.
 
+#### Important tapping behaviour
+- Before tapping at the bottom of the screen when interacting with react-native apps, make sure that **windows such as "Open Debugger to View Warnings are not present**. Clicking those will break the debugger connection, if one has been made. You can verify it by taking the screenshot if you do not have access to one. If there is the banner and you do not want to click it - close it with the X icon on it.
+
 ### swipe — Straight-line gesture
 ```json
 { "udid": "<UDID>", "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }
@@ -100,7 +103,7 @@ Orientations: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown
 
 ## Visual Context
 
-Interaction tools (`tap`, `swipe`, `gesture`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`) **automatically attach a screenshot** of the simulator to their response. You get the current screen after each action without calling `screenshot` separately.
+Interaction tools (`tap`, `swipe`, `gesture`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`) **automatically attach a screenshot** of the simulator to their response. You get the current screen after each action without calling `screenshot` separately.
 
 - **Use the explicit `screenshot` tool** only when you need to see the screen without performing an action first (e.g. initial state before any interaction, or checking state after a delay).
 - **If the auto-attached screenshot does not show the settled UI** (e.g. mid-animation, transitional frame, or loading state): retake by calling the `screenshot` tool once. Only retake when you can tell from the image that the final state is not yet visible.

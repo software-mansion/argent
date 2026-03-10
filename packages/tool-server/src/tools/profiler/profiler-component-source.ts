@@ -5,7 +5,7 @@ import { PROFILER_SESSION_NAMESPACE } from "../../blueprints/profiler-session";
 import { buildAstIndexWithDiagnostics } from "../../utils/profiler/pipeline/06-resolve/ast-index";
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
   component_name: z.string().describe("Name of the React component to look up"),
   project_root: z.string().describe("Absolute path to the RN project root"),
 });
