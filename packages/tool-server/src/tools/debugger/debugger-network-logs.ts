@@ -86,24 +86,12 @@ Network interception is injected into the JS runtime — it captures fetch() and
     // Ensure the interceptor is installed (idempotent).
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
 
-    // First get the total count for pagination.
-    const countScript = `(function() {
-      var log = globalThis.__radon_network_log;
-      if (!log) return JSON.stringify({ total: 0 });
-      var total = 0;
-      for (var i = 0; i < log.length; i++) {
-        var e = log[i];
-        if (e.request && e.request.url) {
-          var u = e.request.url;
-          if (u.indexOf('://localhost:${api.port}') !== -1 || u.indexOf('://127.0.0.1:${api.port}') !== -1) continue;
-        }
-        total++;
-      }
-      return JSON.stringify({ total: total });
-    })()`;
-
-    const countResult = await api.cdp.evaluate(countScript);
-    const { total } = JSON.parse(countResult as string);
+    // First get the total count for pagination by running the read script with a
+    // zero-length slice — same filtering logic, no duplication.
+    const countRaw = await api.cdp.evaluate(
+      makeNetworkLogReadScript(0, 0, api.port),
+    );
+    const { total } = JSON.parse(countRaw as string) as { total: number };
 
     if (total === 0) {
       return "No network traffic captured. Make sure the app is running and making HTTP requests. Network interception is active — it captures fetch() and XMLHttpRequest calls.";

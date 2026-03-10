@@ -126,7 +126,7 @@ Large response bodies are truncated. Use this after view-network-logs to inspect
     // Ensure the interceptor is installed (idempotent).
     await api.cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(() => {});
 
-    const script = makeNetworkDetailReadScript(params.requestId, api.port);
+    const script = makeNetworkDetailReadScript(params.requestId);
     const raw = await api.cdp.evaluate(script);
     const data = JSON.parse(raw as string) as RawEntry | { error: string };
 

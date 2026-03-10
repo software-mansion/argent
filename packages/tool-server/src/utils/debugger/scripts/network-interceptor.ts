@@ -167,10 +167,7 @@ export function makeNetworkLogReadScript(
 /**
  * Script to read a single network request's full details from the JS runtime.
  */
-export function makeNetworkDetailReadScript(
-  requestId: string,
-  metroPort: number,
-): string {
+export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
   var byId = globalThis.__radon_network_by_id;
   if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
