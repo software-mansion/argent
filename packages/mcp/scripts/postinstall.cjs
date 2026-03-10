@@ -72,12 +72,7 @@ function addPermission(settingsPath, rule) {
 /** @param {string} srcDir @param {string} destDir */
 function copySkills(srcDir, destDir) {
   if (!fs.existsSync(srcDir)) return;
-  fs.mkdirSync(destDir, { recursive: true });
-  for (const file of fs.readdirSync(srcDir)) {
-    if (file.endsWith(".md")) {
-      fs.copyFileSync(path.join(srcDir, file), path.join(destDir, file));
-    }
-  }
+  fs.cpSync(srcDir, destDir, { recursive: true });
 }
 
 const results = [];

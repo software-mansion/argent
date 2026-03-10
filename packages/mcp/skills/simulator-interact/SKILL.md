@@ -1,6 +1,11 @@
+---
+name: simulator-interact
+description: Interact with a running iOS simulator using argent MCP tools. Use when tapping UI elements, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, or performing any gesture on the simulator.
+---
+
 # Simulator Interaction
 
-## ⚠️ Critical: MCP Tools Only
+## Critical: MCP Tools Only
 
 **ONLY use `mcp__argent__*` MCP tools for all simulator interactions.**
 - Never use `Bash`, `curl`, or direct HTTP calls to `http://localhost:3001`
@@ -64,29 +69,7 @@ Swipe **down** (`fromY < toY`) to scroll content **up**.
 Optional: `"durationMs": 500` for a slower swipe.
 
 ### gesture — Custom touch sequence
-```json
-{
-  "udid": "<UDID>",
-  "events": [
-    { "type": "Down", "x": 0.5, "y": 0.5 },
-    { "type": "Up",   "x": 0.5, "y": 0.5, "delayMs": 800 }
-  ]
-}
-```
-
-**Long press** (800ms hold):
-```json
-[{"type":"Down","x":0.5,"y":0.5}, {"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
-```
-
-**Pinch out** (zoom in):
-```json
-[
-  {"type":"Down","x":0.4,"y":0.5,"x2":0.6,"y2":0.5},
-  {"type":"Move","x":0.2,"y":0.5,"x2":0.8,"y2":0.5},
-  {"type":"Up",  "x":0.2,"y":0.5,"x2":0.8,"y2":0.5}
-]
-```
+For long-press, pinch, and drag-and-drop sequences, see `references/gesture-examples.md`.
 
 ### button — Hardware button press
 ```json
@@ -117,7 +100,7 @@ Orientations: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown
 
 ## Visual Context
 
-Interaction tools (`tap`, `swipe`, `gesture`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`) **automatically attach a screenshot** of the simulator to their response. You get the current screen after each action without calling `screenshot` separately.
+Interaction tools (`tap`, `swipe`, `gesture`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`) **automatically attach a screenshot** of the simulator to their response. You get the current screen after each action without calling `screenshot` separately.
 
 - **Use the explicit `screenshot` tool** only when you need to see the screen without performing an action first (e.g. initial state before any interaction, or checking state after a delay).
 - **If the auto-attached screenshot does not show the settled UI** (e.g. mid-animation, transitional frame, or loading state): retake by calling the `screenshot` tool once. Only retake when you can tell from the image that the final state is not yet visible.

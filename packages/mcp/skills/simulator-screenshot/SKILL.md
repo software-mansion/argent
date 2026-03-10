@@ -1,6 +1,9 @@
-# Simulator Screenshot
+---
+name: simulator-screenshot
+description: Take a screenshot of an iOS simulator screen using argent. Use when capturing the initial screen state, checking state after a delay, or when no interaction tool was just called.
+---
 
-Take a screenshot of the iOS simulator screen and display it.
+# Simulator Screenshot
 
 ## When to Use
 
@@ -11,7 +14,6 @@ Call `screenshot` when you need to see the simulator screen **without performing
 1. **Get the simulator UDID** — use `list-simulators` if you don't have it already.
 
 2. **Take a screenshot**
-   Use the `screenshot` tool:
    ```json
    { "udid": "<UDID>" }
    ```
@@ -20,17 +22,15 @@ Call `screenshot` when you need to see the simulator screen **without performing
    { "udid": "<UDID>", "rotation": "LandscapeLeft" }
    ```
 
-3. **The MCP adapter automatically**:
-   - Fetches the PNG from the returned URL
-   - Returns it as an inline image so you can see it directly
+3. The MCP adapter automatically fetches the PNG from the returned URL and returns it as an inline image.
 
 ## Troubleshooting
 
-- **Screenshot times out**: The simulator-server likely has no token. Restart it:
+- **Screenshot times out**: The simulator-server likely has no token. Restart it via the `simulator-server` tool:
   ```json
   { "udid": "<UDID>", "token": "<JWT>" }
   ```
-  via the `simulator-server` tool, then retry.
+  Then retry.
 - **No booted simulator**: Run `boot-simulator` first.
 - **Tools server not running**: `cd packages/tool-server && npm start`
 
