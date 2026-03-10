@@ -42,6 +42,8 @@ import { profilerCpuSummaryTool } from "../tools/profiler/profiler-cpu-summary";
 import { profilerReactRendersTool } from "../tools/profiler/profiler-react-renders";
 import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
 import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
+import { getLibraryDescriptionTool } from "../tools/ai/get-library-description";
+import { queryDocumentationTool } from "../tools/ai/query-documentation";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -90,6 +92,8 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerReactRendersTool);
   registry.registerTool(profilerFiberTreeTool);
   registry.registerTool(profilerConsoleLogsTool);
+  registry.registerTool(getLibraryDescriptionTool);
+  registry.registerTool(queryDocumentationTool);
 
   return registry;
 }
