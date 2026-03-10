@@ -43,15 +43,13 @@ if (fs.existsSync(BIN_SRC)) {
   console.warn(`⚠ simulator-server binary not found at ${BIN_SRC} — skipping copy`);
 }
 
-// Copy skill files into the package so they ship on npm
-fs.mkdirSync(SKILLS_DEST, { recursive: true });
+// Copy skills into the package so they ship on npm.
+// Mirrors the full directory structure from packages/skills/skills/
+// (e.g. metro-debugger/SKILL.md, metro-debugger/references/source-maps.md, …)
 if (fs.existsSync(SKILLS_SRC)) {
-  for (const file of fs.readdirSync(SKILLS_SRC)) {
-    if (file.endsWith(".md")) {
-      fs.copyFileSync(path.join(SKILLS_SRC, file), path.join(SKILLS_DEST, file));
-    }
-  }
-  console.log(`✓ Copied skill files → ${path.relative(process.cwd(), SKILLS_DEST)}`);
+  fs.cpSync(SKILLS_SRC, SKILLS_DEST, { recursive: true });
+  const count = fs.readdirSync(SKILLS_SRC, { withFileTypes: true }).filter((e) => e.isDirectory()).length;
+  console.log(`✓ Copied ${count} skill(s) → ${path.relative(process.cwd(), SKILLS_DEST)}`);
 } else {
   console.warn(`⚠ Skills source not found at ${SKILLS_SRC} — skipping copy`);
 }
