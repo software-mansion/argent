@@ -24,6 +24,53 @@ export interface ConsoleAPICalledParams {
   stackTrace?: Record<string, unknown>;
 }
 
+// ── Network domain types ──
+
+export interface NetworkRequestData {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  postData?: string;
+}
+
+export interface NetworkResponseData {
+  url: string;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  mimeType: string;
+}
+
+export interface NetworkRequestWillBeSentParams {
+  requestId: string;
+  request: NetworkRequestData;
+  timestamp: number;
+  wallTime: number;
+  type?: string;
+  initiator?: { type: string; url?: string; lineNumber?: number };
+}
+
+export interface NetworkResponseReceivedParams {
+  requestId: string;
+  response: NetworkResponseData;
+  timestamp: number;
+  type?: string;
+}
+
+export interface NetworkLoadingFinishedParams {
+  requestId: string;
+  timestamp: number;
+  encodedDataLength: number;
+}
+
+export interface NetworkLoadingFailedParams {
+  requestId: string;
+  timestamp: number;
+  type?: string;
+  errorText: string;
+  canceled?: boolean;
+}
+
 export type CDPClientEvents = {
   connected: () => void;
   disconnected: (error?: Error) => void;
@@ -32,6 +79,10 @@ export type CDPClientEvents = {
   scriptParsed: (script: ScriptInfo) => void;
   paused: (params: Record<string, unknown>) => void;
   consoleAPICalled: (params: ConsoleAPICalledParams) => void;
+  networkRequestWillBeSent: (params: NetworkRequestWillBeSentParams) => void;
+  networkResponseReceived: (params: NetworkResponseReceivedParams) => void;
+  networkLoadingFinished: (params: NetworkLoadingFinishedParams) => void;
+  networkLoadingFailed: (params: NetworkLoadingFailedParams) => void;
 };
 
 interface PendingRequest {
@@ -282,6 +333,34 @@ export class CDPClient {
 
     if (method === "Debugger.paused") {
       this.events.emit("paused", params);
+    }
+
+    if (method === "Network.requestWillBeSent") {
+      this.events.emit(
+        "networkRequestWillBeSent",
+        params as unknown as NetworkRequestWillBeSentParams
+      );
+    }
+
+    if (method === "Network.responseReceived") {
+      this.events.emit(
+        "networkResponseReceived",
+        params as unknown as NetworkResponseReceivedParams
+      );
+    }
+
+    if (method === "Network.loadingFinished") {
+      this.events.emit(
+        "networkLoadingFinished",
+        params as unknown as NetworkLoadingFinishedParams
+      );
+    }
+
+    if (method === "Network.loadingFailed") {
+      this.events.emit(
+        "networkLoadingFailed",
+        params as unknown as NetworkLoadingFailedParams
+      );
     }
 
     this.events.emit("event", method, params);

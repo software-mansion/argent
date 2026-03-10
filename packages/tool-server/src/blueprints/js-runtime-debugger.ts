@@ -5,8 +5,16 @@ import {
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
 import { selectTarget } from "../utils/debugger/target-selection";
-import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
-import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
+import {
+  CDPClient,
+  type ConsoleAPICalledParams,
+  type NetworkRequestData,
+  type NetworkResponseData,
+} from "../utils/debugger/cdp-client";
+import {
+  createSourceResolver,
+  type SourceResolver,
+} from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
@@ -25,7 +33,38 @@ export type ConsoleLogEvents = {
   log: (entry: ConsoleLogEntry) => void;
 };
 
+// ── Network log types ──
+
+export type NetworkLogState = "pending" | "finished" | "failed";
+
+export interface NetworkLogEntry {
+  /** Monotonically increasing id within this session */
+  id: number;
+  requestId: string;
+  state: NetworkLogState;
+  request?: NetworkRequestData;
+  response?: NetworkResponseData;
+  /** Resource type reported by CDP (XHR, Fetch, Script, Image, etc.) */
+  resourceType?: string;
+  /** Encoded response body size in bytes (from loadingFinished) */
+  encodedDataLength?: number;
+  /** CDP timestamp when request was sent */
+  timestamp?: number;
+  /** Wall-clock time when request was sent */
+  wallTime?: number;
+  /** Duration in ms (loadingFinished.timestamp - requestWillBeSent.timestamp) */
+  durationMs?: number;
+  /** Error text if the request failed */
+  errorText?: string;
+  initiator?: { type: string; url?: string; lineNumber?: number };
+}
+
+export type NetworkLogEvents = {
+  entry: (entry: NetworkLogEntry) => void;
+};
+
 const MAX_LOG_BUFFER = 1000;
+const MAX_NETWORK_LOG_BUFFER = 2000;
 
 function formatConsoleArgs(params: ConsoleAPICalledParams): string {
   return params.args
@@ -91,6 +130,9 @@ export interface JsRuntimeDebuggerApi {
   consoleLogs: ConsoleLogEntry[];
   consoleEvents: TypedEventEmitter<ConsoleLogEvents>;
   consoleSocketUrl: string;
+  networkLogs: NetworkLogEntry[];
+  networkLogsById: Map<string, NetworkLogEntry>;
+  networkEvents: TypedEventEmitter<NetworkLogEvents>;
 }
 
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
@@ -118,7 +160,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       sourceMaps.registerFromScriptParsed(
         script.url,
         script.scriptId,
-        script.sourceMapURL
+        script.sourceMapURL,
       );
     });
 
@@ -133,6 +175,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       .catch(ignore);
     await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
     await cdp.addBinding("__radon_lite_callback");
+
+    // Enable Network domain — best-effort; not all runtimes support it.
+    await cdp.send("Network.enable").catch(ignore);
 
     await sourceMaps.waitForPending();
 
@@ -161,7 +206,96 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       consoleEvents.emit("log", entry);
     });
 
-    const consoleServer = await createConsoleLogServer(consoleEvents, consoleLogs);
+    const consoleServer = await createConsoleLogServer(
+      consoleEvents,
+      consoleLogs,
+    );
+
+    // ── Network log capture ──
+    const networkLogs: NetworkLogEntry[] = [];
+    const networkLogsById = new Map<string, NetworkLogEntry>();
+    const networkEvents = new TypedEventEmitter<NetworkLogEvents>();
+    let nextNetworkLogId = 0;
+
+    function getOrCreateNetworkEntry(requestId: string): NetworkLogEntry {
+      let entry = networkLogsById.get(requestId);
+      if (!entry) {
+        entry = {
+          id: nextNetworkLogId++,
+          requestId,
+          state: "pending",
+        };
+        networkLogs.push(entry);
+        networkLogsById.set(requestId, entry);
+        if (networkLogs.length > MAX_NETWORK_LOG_BUFFER) {
+          const removed = networkLogs.splice(
+            0,
+            networkLogs.length - MAX_NETWORK_LOG_BUFFER,
+          );
+          for (const r of removed) {
+            networkLogsById.delete(r.requestId);
+          }
+        }
+      }
+      return entry;
+    }
+
+    cdp.events.on("networkRequestWillBeSent", (params) => {
+      // Filter out requests to the Metro server itself (hot-reload, bundle fetches).
+      try {
+        const url = new URL(params.request.url);
+        if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+          const urlPort = parseInt(url.port, 10);
+          if (urlPort === port) return;
+        }
+      } catch {
+        // Not a valid URL — let it through.
+      }
+
+      const entry = getOrCreateNetworkEntry(params.requestId);
+      entry.request = params.request;
+      entry.timestamp = params.timestamp;
+      entry.wallTime = params.wallTime;
+      entry.resourceType = params.type;
+      entry.initiator = params.initiator;
+      networkEvents.emit("entry", entry);
+    });
+
+    cdp.events.on("networkResponseReceived", (params) => {
+      const entry = networkLogsById.get(params.requestId);
+      if (!entry) return;
+      entry.response = params.response;
+      if (!entry.resourceType && params.type) {
+        entry.resourceType = params.type;
+      }
+      networkEvents.emit("entry", entry);
+    });
+
+    cdp.events.on("networkLoadingFinished", (params) => {
+      const entry = networkLogsById.get(params.requestId);
+      if (!entry) return;
+      entry.state = "finished";
+      entry.encodedDataLength = params.encodedDataLength;
+      if (entry.timestamp != null) {
+        entry.durationMs = Math.round(
+          (params.timestamp - entry.timestamp) * 1000,
+        );
+      }
+      networkEvents.emit("entry", entry);
+    });
+
+    cdp.events.on("networkLoadingFailed", (params) => {
+      const entry = networkLogsById.get(params.requestId);
+      if (!entry) return;
+      entry.state = "failed";
+      entry.errorText = params.errorText;
+      if (entry.timestamp != null) {
+        entry.durationMs = Math.round(
+          (params.timestamp - entry.timestamp) * 1000,
+        );
+      }
+      networkEvents.emit("entry", entry);
+    });
 
     const api: JsRuntimeDebuggerApi = {
       port,
@@ -174,6 +308,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       consoleLogs,
       consoleEvents,
       consoleSocketUrl: consoleServer.url,
+      networkLogs,
+      networkLogsById,
+      networkEvents,
     };
 
     const events = new TypedEventEmitter<ServiceEvents>();
