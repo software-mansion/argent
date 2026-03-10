@@ -16,7 +16,7 @@ import { renderProfilingReport } from "../../utils/profiler/pipeline/05-render";
 import { getDebugDir } from "../../utils/profiler/debug/dump";
 
 const annotationSchema = z.object({
-  offsetMs: z
+  offsetMs: z.coerce
     .number()
     .describe(
       "Milliseconds since profiling started (Date.now() - profileStartWallMs)",
@@ -25,7 +25,7 @@ const annotationSchema = z.object({
 });
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
   project_root: z
     .string()
     .describe(
