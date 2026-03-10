@@ -2,7 +2,7 @@ import {
   TypedEventEmitter,
   type ServiceBlueprint,
   type ServiceEvents,
-} from "@radon-lite/registry";
+} from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import type {

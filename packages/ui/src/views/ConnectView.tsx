@@ -18,7 +18,7 @@ export default function ConnectView({ onConnect }: ConnectViewProps) {
     <div className="flex flex-col items-center justify-center flex-1 p-8 gap-6">
       <div className="text-center">
         <h1 className="text-xl font-semibold text-rl-fg mb-1">Radon Lite</h1>
-        <p className="text-sm text-rl-fg-muted">Enter the address of your radon-lite server</p>
+        <p className="text-sm text-rl-fg-muted">Enter the address of your argent server</p>
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-full max-w-sm">

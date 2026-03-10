@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import { activateWithLicenseKey } from "../../utils/license";
 
 const zodSchema = z.object({
@@ -22,7 +22,7 @@ export const activateLicenseKeyTool: ToolDefinition<
 > = {
   id: "activate-license-key",
   description:
-    "Activate Radon Lite with a license key. Stores the resulting JWT token locally for all future tool calls. Returns { success, plan } on success or { success: false, error } on failure.",
+    "Activate Argent with a license key. Stores the resulting JWT token locally for all future tool calls. Returns { success, plan } on success or { success: false, error } on failure.",
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

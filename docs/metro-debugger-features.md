@@ -80,34 +80,34 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
 - The **tools server** exposes:
   - `GET http://localhost:3001/tools` — list tools (name, description, inputSchema).
   - `POST http://localhost:3001/tools/:name` — invoke a tool with JSON body.
-- The **@radon-lite/mcp** package is a bridge: it fetches the tool list from the tools server and proxies **all** registered tools to the MCP server. So *every tool registered in the registry (including all `debugger-` tools) is already available to MCP** — no code changes in the MCP package are required.
-- In Cursor/Claude, the MCP server typically exposes these as `mcp__radon-lite__<tool-id>`, e.g.:
-  - `mcp__radon-lite__debugger-connect`
-  - `mcp__radon-lite__debugger-set-breakpoint`
-  - `mcp__radon-lite__debugger-inspect-element`
+- The **@argent/mcp** package is a bridge: it fetches the tool list from the tools server and proxies **all** registered tools to the MCP server. So *every tool registered in the registry (including all `debugger-` tools) is already available to MCP** — no code changes in the MCP package are required.
+- In Cursor/Claude, the MCP server typically exposes these as `mcp__argent__<tool-id>`, e.g.:
+  - `mcp__argent__debugger-connect`
+  - `mcp__argent__debugger-set-breakpoint`
+  - `mcp__argent__debugger-inspect-element`
   - etc.
 - **What you need to do**:
   1. Run the tools server (e.g. port 3001) and ensure MCP is configured to use `RADON_TOOLS_URL=http://localhost:3001` (or the same URL your client uses).
   2. In your **agent permissions / allow list**, add the debugger tools you want the agent to call, e.g.:
-    - `mcp__radon-lite__debugger-connect`
-    - `mcp__radon-lite__debugger-status`
-    - `mcp__radon-lite__debugger-evaluate`
-    - `mcp__radon-lite__debugger-set-breakpoint`
-    - `mcp__radon-lite__debugger-remove-breakpoint`
-    - `mcp__radon-lite__debugger-pause`
-    - `mcp__radon-lite__debugger-resume`
-    - `mcp__radon-lite__debugger-step`
-    - `mcp__radon-lite__debugger-component-tree`
-    - `mcp__radon-lite__debugger-inspect-element`
-    - `mcp__radon-lite__debugger-console-logs`
-    - `mcp__radon-lite__debugger-console-listen`
-  3. License: debugger tools are **not** in the license-exempt list; a valid Radon Lite license (e.g. via `activate-sso` or `activate-license-key`) is required for MCP calls to these tools.
+    - `mcp__argent__debugger-connect`
+    - `mcp__argent__debugger-status`
+    - `mcp__argent__debugger-evaluate`
+    - `mcp__argent__debugger-set-breakpoint`
+    - `mcp__argent__debugger-remove-breakpoint`
+    - `mcp__argent__debugger-pause`
+    - `mcp__argent__debugger-resume`
+    - `mcp__argent__debugger-step`
+    - `mcp__argent__debugger-component-tree`
+    - `mcp__argent__debugger-inspect-element`
+    - `mcp__argent__debugger-console-logs`
+    - `mcp__argent__debugger-console-listen`
+  3. License: debugger tools are **not** in the license-exempt list; a valid Argent license (e.g. via `activate-sso` or `activate-license-key`) is required for MCP calls to these tools.
 
 ### Skills (e.g. Cursor / Claude skills)
 
 - **Skills** are instructions or docs that tell an agent *when* and *how* to use tools (e.g. “use MCP tools only for simulator”, “call debugger-connect before setting breakpoints”).
 - You can add a **Metro debugger skill** that:
-  - Tells the agent to use `mcp__radon-lite__debugger-`* for Metro/React Native debugging.
+  - Tells the agent to use `mcp__argent__debugger-`* for Metro/React Native debugging.
   - Describes the workflow: connect → set breakpoints by file/line → run app → on pause use step/resume, inspect element, or evaluate.
   - Mentions that breakpoints use source file and line and that the agent should not fabricate bundle URLs.
 - Place the skill file in your skills package (e.g. `packages/skills/skills/metro-debugger.md` — create it if needed) or in `.claude/skills/`, and reference it in your agent configuration so the model has access to it. Current skills in this repo include `simulator-setup.md`, `simulator-interact.md`, `simulator-screenshot.md`, `test-ui-flow.md`; a dedicated Metro debugger skill can be added the same way.

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import { PROFILER_SESSION_NAMESPACE } from "../../blueprints/profiler-session";
 import { buildAstIndexWithDiagnostics } from "../../utils/profiler/pipeline/06-resolve/ast-index";
 

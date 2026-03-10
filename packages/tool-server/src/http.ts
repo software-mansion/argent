@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
-import type { Registry } from "@radon-lite/registry";
-import { ToolNotFoundError } from "@radon-lite/registry";
+import type { Registry } from "@argent/registry";
+import { ToolNotFoundError } from "@argent/registry";
 import { readToken } from "./utils/license";
 
 const LICENSE_EXEMPT_TOOLS = new Set([
@@ -23,7 +23,7 @@ async function licenseGate(req: Request, res: Response, next: NextFunction) {
   if (!token) {
     res.status(402).json({
       error:
-        "No Radon Lite license found. Call the activate-sso tool to open a browser sign-in flow, or activate-license-key if you have a license key.",
+        "No Argent license found. Call the activate-sso tool to open a browser sign-in flow, or activate-license-key if you have a license key.",
     });
     return;
   }

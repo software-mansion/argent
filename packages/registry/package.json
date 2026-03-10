@@ -1,5 +1,5 @@
 {
-  "name": "@radon-lite/registry",
+  "name": "@argent/registry",
   "version": "0.1.0",
   "description": "Dependency-aware service lifecycle manager with stateless tool invocation",
   "main": "dist/index.js",

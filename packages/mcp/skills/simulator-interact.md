@@ -2,7 +2,7 @@
 
 ## ⚠️ Critical: MCP Tools Only
 
-**ONLY use `mcp__radon-lite__*` MCP tools for all simulator interactions.**
+**ONLY use `mcp__argent__*` MCP tools for all simulator interactions.**
 - Never use `Bash`, `curl`, or direct HTTP calls to `http://localhost:3001`
 - Never use the `simulator-server` binary directly
 - Do NOT delegate simulator tasks to sub-agents — sub-agents may not have MCP tool permissions

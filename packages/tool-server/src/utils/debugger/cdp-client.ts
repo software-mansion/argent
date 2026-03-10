@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { TypedEventEmitter } from "@radon-lite/registry";
+import { TypedEventEmitter } from "@argent/registry";
 import * as crypto from "node:crypto";
 
 export interface ScriptInfo {

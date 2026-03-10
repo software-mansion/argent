@@ -4,7 +4,7 @@ Set up and connect to an iOS simulator using MCP tools only.
 
 ## ⚠️ IMPORTANT: MCP Tools Only
 
-**All simulator interactions MUST go through `mcp__radon-lite__*` MCP tools.**
+**All simulator interactions MUST go through `mcp__argent__*` MCP tools.**
 - Never use `curl`, `Bash`, or the `simulator-server` binary directly
 - Never call `http://localhost:3001` directly
 - Never delegate simulator tasks to sub-agents (they may lack MCP tool permissions)

@@ -1,7 +1,7 @@
 // DEAD FOR NOW PASTE DOES NOT WORK (FILIP)
 
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 import { sendCommand } from "../../utils/simulator-client";
 

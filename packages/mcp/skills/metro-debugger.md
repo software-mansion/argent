@@ -2,7 +2,7 @@
 
 ## Critical: MCP Tools Only
 
-**Prefer usage of `mcp__radon-lite__debugger-*` MCP tools for Metro and debugger actions.** When recovering connectivity, you may also use simulator tools `mcp__radon-lite__restart-app` and `mcp__radon-lite__launch-app`. You can `curl` the metro server when needed to get information, which tools delivered with MCP server do not provide.
+**Prefer usage of `mcp__argent__debugger-*` MCP tools for Metro and debugger actions.** When recovering connectivity, you may also use simulator tools `mcp__argent__restart-app` and `mcp__argent__launch-app`. You can `curl` the metro server when needed to get information, which tools delivered with MCP server do not provide.
 
 - When delegating to a sub-agent, ensure it has permission to use the MCP server.
 
@@ -30,35 +30,35 @@ All debugger tools accept `port` (default 8081). Call `debugger-connect` first, 
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__radon-lite__debugger-connect` | Connect to Metro CDP. Returns projectRoot, deviceName, connected. Call first or let other tools auto-connect. |
-| `mcp__radon-lite__debugger-status` | Same as connect plus loadedScripts, sourceMapReady. **Use for diagnostics when something fails.** |
+| `mcp__argent__debugger-connect` | Connect to Metro CDP. Returns projectRoot, deviceName, connected. Call first or let other tools auto-connect. |
+| `mcp__argent__debugger-status` | Same as connect plus loadedScripts, sourceMapReady. **Use for diagnostics when something fails.** |
 
 ### Recovery and reload
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__radon-lite__debugger-reload-metro` | Ask Metro to reload all connected apps (like pressing "r" in the Metro terminal). Use when already connected and you want to reload JS without killing the app. **Requires at least one CDP target** — it does not fix "no CDP targets". |
-| `mcp__radon-lite__restart-app` | Simulator only. Terminate and relaunch the app by UDID and bundleId. Use when the app is not connected to Metro so that after relaunch it connects; then retry `debugger-connect` or `debugger-status`. |
+| `mcp__argent__debugger-reload-metro` | Ask Metro to reload all connected apps (like pressing "r" in the Metro terminal). Use when already connected and you want to reload JS without killing the app. **Requires at least one CDP target** — it does not fix "no CDP targets". |
+| `mcp__argent__restart-app` | Simulator only. Terminate and relaunch the app by UDID and bundleId. Use when the app is not connected to Metro so that after relaunch it connects; then retry `debugger-connect` or `debugger-status`. |
 
 ### Breakpoints and execution
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__radon-lite__debugger-set-breakpoint` | Set breakpoint by **source** file and line (optional condition). Source maps resolve to bundle. |
-| `mcp__radon-lite__debugger-remove-breakpoint` | Remove breakpoint by breakpointId. |
-| `mcp__radon-lite__debugger-pause` | Pause JS execution. |
-| `mcp__radon-lite__debugger-resume` | Resume after pause or breakpoint. |
-| `mcp__radon-lite__debugger-step` | Step over / step into / step out when paused. |
+| `mcp__argent__debugger-set-breakpoint` | Set breakpoint by **source** file and line (optional condition). Source maps resolve to bundle. |
+| `mcp__argent__debugger-remove-breakpoint` | Remove breakpoint by breakpointId. |
+| `mcp__argent__debugger-pause` | Pause JS execution. |
+| `mcp__argent__debugger-resume` | Resume after pause or breakpoint. |
+| `mcp__argent__debugger-step` | Step over / step into / step out when paused. |
 
 ### Inspection and console
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__radon-lite__debugger-component-tree` | Full React fiber tree (names, depth, bounding rects). |
-| `mcp__radon-lite__debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. Accepts `resolveSourceMaps` (default true) — see **Source Resolution for inspect-element** below. |
-| `mcp__radon-lite__debugger-console-logs` | Get console messages. |
-| `mcp__radon-lite__debugger-console-listen` | Stream console messages. |
-| `mcp__radon-lite__debugger-evaluate` | Run a JS expression in the app runtime. |
+| `mcp__argent__debugger-component-tree` | Full React fiber tree (names, depth, bounding rects). |
+| `mcp__argent__debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. Accepts `resolveSourceMaps` (default true) — see **Source Resolution for inspect-element** below. |
+| `mcp__argent__debugger-console-logs` | Get console messages. |
+| `mcp__argent__debugger-console-listen` | Stream console messages. |
+| `mcp__argent__debugger-evaluate` | Run a JS expression in the app runtime. |
 
 ## Source Resolution for `inspect-element`
 

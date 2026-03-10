@@ -98,9 +98,9 @@ const server = new Server(
   {
     capabilities: { tools: {} },
     instructions:
-      "Radon Lite — iOS Simulator Control. " +
+      "Argent — iOS Simulator Control. " +
       "Most tools require a valid license. If any tool returns an error containing " +
-      "'No Radon Lite license found', call the activate-sso tool first — it opens a " +
+      "'No Argent license found', call the activate-sso tool first — it opens a " +
       "browser on the user's machine for sign-in and returns { success: true, plan }. " +
       "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
       "Alternatively, call activate-license-key with the user's license key.",

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import { activateWithSSO } from "../../utils/license";
 
 const zodSchema = z.object({
@@ -17,7 +17,7 @@ export const activateSsoTool: ToolDefinition<
   id: "activate-sso",
   description:
     "Call this tool when a license_required error is returned by any other tool. " +
-    "Activates Radon Lite via SSO (PKCE browser flow): opens a browser window on the " +
+    "Activates Argent via SSO (PKCE browser flow): opens a browser window on the " +
     "user's machine for sign-in. Returns { success: true, plan } on success. " +
     "If the browser cannot be opened, returns { success: false, ssoUrl } — show that " +
     "URL to the user. Stores the resulting JWT token locally for all future calls.",

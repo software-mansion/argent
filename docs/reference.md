@@ -1,4 +1,4 @@
-# Radon Lite — Dictionary
+# Argent — Dictionary
 
 Reference for modules, concepts, and features in the codebase. Use this as a quick guide into how the repo is structured and how the tooling we provide works.
 
@@ -8,18 +8,18 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 
 | Package                     | Purpose                                                                                                                                                                                                                                                                                                                                                                                |
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **@radon-lite/registry**    | Core library: dependency-aware service lifecycle and stateless tool invocation. Defines registry, blueprints, tools, URNs, and errors. No HTTP or simulator logic. Services defined through blueprints govern the long-running tasks and allow for tool interaction (such as: managing the running simulator server, connecting to existing metro session and plugging into debugger). |
-| **@radon-lite/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@radon-lite/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                     |
-| **@radon-lite/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Radon Lite tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                      |
-| **@radon-lite/ui**          | Web UI for simulator control and Metro debugging. Calls the tools server over HTTP and maintains WebSocket sessions to simulator-server for touch/gestures.                                                                                                                                                                                                                            |
-| **@radon-lite/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Radon Lite tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                              |
-| **@radon-lite/vscode**      | VS Code extension (minimal; contributes launch configs and tasks for Tools Server and UI).                                                                                                                                                                                                                                                                                             |
+| **@argent/registry**    | Core library: dependency-aware service lifecycle and stateless tool invocation. Defines registry, blueprints, tools, URNs, and errors. No HTTP or simulator logic. Services defined through blueprints govern the long-running tasks and allow for tool interaction (such as: managing the running simulator server, connecting to existing metro session and plugging into debugger). |
+| **@argent/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@argent/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                     |
+| **@argent/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Argent tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                      |
+| **@argent/ui**          | Web UI for simulator control and Metro debugging. Calls the tools server over HTTP and maintains WebSocket sessions to simulator-server for touch/gestures.                                                                                                                                                                                                                            |
+| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                              |
+| **@argent/vscode**      | VS Code extension (minimal; contributes launch configs and tasks for Tools Server and UI).                                                                                                                                                                                                                                                                                             |
 
 ---
 
 ## Registry (tool / services registry)
 
-(from `@radon-lite/registry`)
+(from `@argent/registry`)
 
 The single central object that coordinates **tools** and **services**:
 
@@ -48,7 +48,7 @@ The tool-server creates one Registry in `packages/tool-server/src/utils/setup-re
 
 ## Tool server
 
-The **tool server** is the Node/Express process in `@radon-lite/tool-server` (default port 3001). It is the only place that **owns and configures** the registry in this repo.
+The **tool server** is the Node/Express process in `@argent/tool-server` (default port 3001). It is the only place that **owns and configures** the registry in this repo.
 
 - **Setup** — On startup (`packages/tool-server/src/index.ts`): it creates a registry via `createRegistry()`, attaches the registry logger, builds the HTTP app with `createHttpApp(registry)`, and starts listening.
 
@@ -87,7 +87,7 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 - **Service / service instance**  
   Created by a blueprint’s factory. Has `api` (object given to tools), `dispose()`, and `events` (e.g. `terminated`). The Registry resolves a URN to a service instance (creating it on first use) and passes `api` into tools as resolved “services”.
 - **URN**  
-  Identifies a service instance, e.g. `SimulatorServer:ABC-123`, `JsRuntimeDebugger:8081`. Format: `namespace:payload` (payload may contain colons). Parsed by `parseURN` in `@radon-lite/registry`.
+  Identifies a service instance, e.g. `SimulatorServer:ABC-123`, `JsRuntimeDebugger:8081`. Format: `namespace:payload` (payload may contain colons). Parsed by `parseURN` in `@argent/registry`.
 
 ---
 
@@ -106,7 +106,7 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 ## License and activation
 
 - **License**  
-  Stored in macOS Keychain (service `radon-lite`, account `license-token`). Used by the tools server HTTP layer to gate non–license tools (402 if missing). License tools (`activate-`\*, `get-license-status`, `remove-license`) are exempt.
+  Stored in macOS Keychain (service `argent`, account `license-token`). Used by the tools server HTTP layer to gate non–license tools (402 if missing). License tools (`activate-`\*, `get-license-status`, `remove-license`) are exempt.
 - **activate-sso / activate-license-key**  
   Tools that obtain and store a JWT (SSO via browser or license key). Optional `token` in tool params can be passed through to the SimulatorServer blueprint for Pro features (e.g. screenshot/recording).
 
@@ -123,13 +123,13 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 
 ## MCP
 
-The `@radon-lite/mcp` package runs an MCP server that lists tools from `RADON_TOOLS_URL` and forwards `CallTool` to `POST /tools/:name`. So “all tools registered in the Registry” are exposed to MCP (including debugger and simulator tools). Image-capable tools use `outputHint: "image"` so the bridge can return inline base64 images.
+The `@argent/mcp` package runs an MCP server that lists tools from `RADON_TOOLS_URL` and forwards `CallTool` to `POST /tools/:name`. So “all tools registered in the Registry” are exposed to MCP (including debugger and simulator tools). Image-capable tools use `outputHint: "image"` so the bridge can return inline base64 images.
 
 ---
 
 ## Skills
 
-Markdown files that instruct an agent when and how to use Radon Lite tools (e.g. simulator setup, interaction, screenshots, Metro debugging). Lives under `packages/skills/skills/`. The `radon-skills` CLI installs them into the user’s skills directory (e.g. Cursor/Claude). They do not implement tools; they describe usage.
+Markdown files that instruct an agent when and how to use Argent tools (e.g. simulator setup, interaction, screenshots, Metro debugging). Lives under `packages/skills/skills/`. The `radon-skills` CLI installs them into the user’s skills directory (e.g. Cursor/Claude). They do not implement tools; they describe usage.
 
 ---
 

@@ -6,7 +6,7 @@ import {
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
-} from "@radon-lite/registry";
+} from "@argent/registry";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@radon-lite/registry";
+import type { ToolDefinition } from "@argent/registry";
 import { removeToken } from "../../utils/license";
 
 const zodSchema = z.object({});
@@ -10,7 +10,7 @@ export const removeLicenseTool: ToolDefinition<
 > = {
   id: "remove-license",
   description:
-    "Removes the stored Radon Lite license token from the Keychain. Useful for testing the activation flow. After calling this tool, gated tools will return a 402 until activate-sso or activate-license-key is called again.",
+    "Removes the stored Argent license token from the Keychain. Useful for testing the activation flow. After calling this tool, gated tools will return a 402 until activate-sso or activate-license-key is called again.",
   zodSchema,
   services: () => ({}),
   async execute() {
