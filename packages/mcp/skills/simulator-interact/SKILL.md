@@ -60,6 +60,9 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 ```
 Coordinates: `0.0` = left/top, `1.0` = right/bottom.
 
+#### Important tapping behaviour
+- Before tapping at the bottom of the screen when interacting with react-native apps, make sure that **windows such as "Open Debugger to View Warnings are not present**. Clicking those will break the debugger connection, if one has been made. You can verify it by taking the screenshot if you do not have access to one. If there is the banner and you do not want to click it - close it with the X icon on it.
+
 ### swipe — Straight-line gesture
 ```json
 { "udid": "<UDID>", "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }
