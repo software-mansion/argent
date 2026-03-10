@@ -70,10 +70,10 @@ export const debuggerNetworkLogsTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   string
 > = {
-  id: "debugger-network-logs",
+  id: "view-network-logs",
   description: `View captured network (HTTP) requests from the running React Native app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
-Each entry includes a requestId that can be passed to debugger-network-request for full details.
+Each entry includes a requestId that can be passed to view-network-request-details for full details.
 The app must be connected via debugger-connect first (auto-connects if needed).
 Network interception is injected into the JS runtime — it captures fetch() and XMLHttpRequest calls.`,
   zodSchema,

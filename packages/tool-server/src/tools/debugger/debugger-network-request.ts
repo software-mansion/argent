@@ -48,7 +48,7 @@ const zodSchema = z.object({
   requestId: z
     .string()
     .describe(
-      "The requestId from debugger-network-logs to get full details for",
+      "The requestId from view-network-logs to get full details for",
     ),
   includeBody: z
     .boolean()
@@ -112,10 +112,10 @@ export const debuggerNetworkRequestTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   NetworkRequestDetails | string
 > = {
-  id: "debugger-network-request",
-  description: `Get full details of a specific network request by its requestId (from debugger-network-logs).
+  id: "view-network-request-details",
+  description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
-Large response bodies are truncated. Use this after debugger-network-logs to inspect individual requests.`,
+Large response bodies are truncated. Use this after view-network-logs to inspect individual requests.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -131,7 +131,7 @@ Large response bodies are truncated. Use this after debugger-network-logs to ins
     const data = JSON.parse(raw as string) as RawEntry | { error: string };
 
     if ("error" in data) {
-      return `${data.error}. Use debugger-network-logs to list available requests.`;
+      return `${data.error}. Use view-network-logs to list available requests.`;
     }
 
     const entry = data as RawEntry;

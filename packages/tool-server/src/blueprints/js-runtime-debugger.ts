@@ -175,7 +175,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
 
     // Inject the JS-level network interceptor (monkey-patches fetch).
     // Network logs are stored in the JS runtime and read on-demand by the
-    // debugger-network-logs and debugger-network-request tools via Runtime.evaluate.
+    // view-network-logs and view-network-request-details tools via Runtime.evaluate.
     // Best-effort — if the runtime doesn't support eval (unlikely), tools will install it later.
     await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(ignore);
 
