@@ -12,7 +12,7 @@ const PORTAL_URL = "https://portal.ide.swmansion.com";
 const KEYCHAIN_SERVICE = "radon-lite";
 const KEYCHAIN_ACCOUNT = "license-token";
 export const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
-const REFRESH_META_DIR = path.join(os.homedir(), ".radon-lite");
+const REFRESH_META_DIR = path.join(os.homedir(), ".argent");
 const LAST_REFRESH_FILE = path.join(REFRESH_META_DIR, "last-token-refresh");
 
 // Binary lives at workspace root (three levels up from dist/ at runtime).

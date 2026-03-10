@@ -1,13 +1,13 @@
 # Test UI Flow
 
-Autonomously test an iOS app UI by orchestrating screenshot → interact → screenshot loops.
+Autonomously test an iOS app UI by orchestrating interact → verify loops, with automatic screenshots after each action.
 
 ## Workflow
 
 1. **Setup**: Ensure tools server is running and simulator is booted.
-2. **Baseline screenshot**: See the current UI state.
-3. **Interact**: Perform the action (tap, swipe, type, etc.).
-4. **Verify screenshot**: Confirm the expected result appeared.
+2. **Baseline screenshot**: Call `screenshot` to see the current UI state (no action was performed yet).
+3. **Interact**: Perform the action (tap, swipe, type, etc.) — you receive a screenshot in the response automatically.
+4. **Verify**: Use the screenshot returned with the action to confirm the expected result appeared. If the image shows a transitional or loading state, retake with the `screenshot` tool.
 5. **Repeat** for each step of the flow.
 
 ## Template
@@ -16,12 +16,10 @@ Autonomously test an iOS app UI by orchestrating screenshot → interact → scr
 Goal: Test [feature name]
 
 Steps:
-1. Take a screenshot to see the current state
-2. [Navigate / tap / type to reach starting point]
-3. Take a screenshot to confirm starting state
-4. [Perform the action to test]
-5. Take a screenshot to verify the result
-6. Report: ✓ passed / ✗ failed with details
+1. Take a screenshot to see the current state (baseline — no action yet)
+2. [Navigate / tap / type to reach starting point] → verify with the auto-returned screenshot
+3. [Perform the action to test] → verify with the auto-returned screenshot
+4. Report: ✓ passed / ✗ failed with details
 ```
 
 ## Example: Test login flow
@@ -50,9 +48,9 @@ Steps:
 
 ## Tips
 
-- **Always screenshot before and after** each significant action
+- **You get a screenshot after each action automatically** — call `screenshot` for the initial view or when no action was just performed
 - **Use `gesture` for long-press** context menus — hold 800ms then release
 - **Use `paste` not key-by-key** for text entry — it's faster and more reliable
-- **Check for loading states** — take an extra screenshot if the app might be loading
+- **Check for loading states** — if the auto-screenshot shows a loading or transitional frame, retake with `screenshot`
 - **Report clearly**: state what you expected, what you saw, and the verdict
 - **Coordinate estimation**: use 0.5,0.5 for center; top-third ≈ 0.2, bottom-third ≈ 0.8

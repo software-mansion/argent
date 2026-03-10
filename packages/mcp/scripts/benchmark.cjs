@@ -151,7 +151,7 @@ function printReport(prompt, withMcp, withoutMcp) {
  * @param {any} withoutMcp
  */
 function saveReport(prompt, withMcp, withoutMcp) {
-  const dir = path.join(os.homedir(), ".radon-lite");
+  const dir = path.join(os.homedir(), ".argent");
   fs.mkdirSync(dir, { recursive: true });
 
   const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
