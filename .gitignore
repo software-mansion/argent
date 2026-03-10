@@ -9,3 +9,4 @@ tsconfig.tsbuildinfo
 1export
 
 
+.claude/**/MEMORY.md
