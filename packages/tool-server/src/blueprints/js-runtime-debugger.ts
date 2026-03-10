@@ -14,6 +14,7 @@ import {
   type SourceResolver,
 } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
+import { NETWORK_INTERCEPTOR_SCRIPT } from "../utils/debugger/scripts/network-interceptor";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 
@@ -171,6 +172,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       consoleEvents,
       consoleLogs,
     );
+
+    // Inject the JS-level network interceptor (monkey-patches fetch).
+    // Network logs are stored in the JS runtime and read on-demand by the
+    // view-network-logs and view-network-request-details tools via Runtime.evaluate.
+    // Best-effort — if the runtime doesn't support eval (unlikely), tools will install it later.
+    await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(ignore);
 
     const api: JsRuntimeDebuggerApi = {
       port,
