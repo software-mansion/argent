@@ -1,12 +1,15 @@
+---
+name: simulator-setup
+description: Set up and connect to an iOS simulator using argent MCP tools. Use when starting a new session, booting a simulator, connecting to a simulator UDID, or before any simulator interaction task.
+---
+
 # Simulator Setup
 
-Set up and connect to an iOS simulator using MCP tools only.
+## Critical: MCP Tools Only
 
-## ⚠️ IMPORTANT: MCP Tools Only
-
-**All simulator interactions MUST go through `mcp__radon-lite__*` MCP tools.**
+**All simulator interactions MUST go through `mcp__argent__*` MCP tools.**
 - Never use `curl`, `Bash`, or the `simulator-server` binary directly
-- Never call `http://localhost:3001` directly
+- Never call the tool-server, used by the MCP, directly
 - Never delegate simulator tasks to sub-agents (they may lack MCP tool permissions)
 
 ## Steps
