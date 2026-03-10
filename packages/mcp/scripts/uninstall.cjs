@@ -30,13 +30,13 @@ function removePermissions(configPath) {
   const config = readJson(configPath);
   const allow = config?.permissions?.allow;
   if (!Array.isArray(allow)) return;
-  const idx = allow.indexOf("mcp__radon-lite");
+  const idx = allow.indexOf("mcp__argent");
   if (idx === -1) return;
   allow.splice(idx, 1);
   if (allow.length === 0) delete config.permissions.allow;
   if (Object.keys(config.permissions).length === 0) delete config.permissions;
   writeJson(configPath, config);
-  console.log("✓ Removed permissions for radon-lite MCP tools");
+  console.log("✓ Removed permissions for argent MCP tools");
 }
 
 if (userScope) {
@@ -46,33 +46,48 @@ if (userScope) {
     process.exit(0);
   }
   const config = readJson(userConfigPath);
-  if (!config.mcpServers || !config.mcpServers["radon-lite"]) {
+  if (!config.mcpServers || !config.mcpServers["argent"]) {
     console.log("(not found, nothing to do)");
     process.exit(0);
   }
-  delete config.mcpServers["radon-lite"];
+  delete config.mcpServers["argent"];
   writeJson(userConfigPath, config);
-  console.log("✓ Uninstalled radon-lite MCP server");
+  console.log("✓ Uninstalled argent MCP server");
   if (allowPermissions) {
     const userSettingsPath = path.join(os.homedir(), ".claude", "settings.json");
     removePermissions(userSettingsPath);
   }
 } else {
-  const projectConfigPath = path.resolve(__dirname, "../../../.claude/mcp.json");
-  if (!fs.existsSync(projectConfigPath)) {
-    console.log("(not found, nothing to do)");
-    process.exit(0);
+  const projectRoot = process.env.npm_config_local_prefix ?? process.cwd();
+
+  // Claude Code
+  const claudeConfigPath = path.join(projectRoot, ".claude", "mcp.json");
+  if (fs.existsSync(claudeConfigPath)) {
+    const config = readJson(claudeConfigPath);
+    if (config.mcpServers?.["argent"]) {
+      delete config.mcpServers["argent"];
+      writeJson(claudeConfigPath, config);
+      console.log("✓ Uninstalled argent MCP server from .claude/mcp.json");
+    } else {
+      console.log("  (.claude/mcp.json — not found, nothing to do)");
+    }
   }
-  const config = readJson(projectConfigPath);
-  if (!config.mcpServers || !config.mcpServers["radon-lite"]) {
-    console.log("(not found, nothing to do)");
-    process.exit(0);
+
+  // Cursor
+  const cursorConfigPath = path.join(projectRoot, ".cursor", "mcp.json");
+  if (fs.existsSync(cursorConfigPath)) {
+    const config = readJson(cursorConfigPath);
+    if (config.mcpServers?.["argent"]) {
+      delete config.mcpServers["argent"];
+      writeJson(cursorConfigPath, config);
+      console.log("✓ Uninstalled argent MCP server from .cursor/mcp.json");
+    } else {
+      console.log("  (.cursor/mcp.json — not found, nothing to do)");
+    }
   }
-  delete config.mcpServers["radon-lite"];
-  writeJson(projectConfigPath, config);
-  console.log("✓ Uninstalled radon-lite MCP server");
+
   if (allowPermissions) {
-    const settingsPath = path.resolve(__dirname, "../../../.claude/settings.json");
+    const settingsPath = path.join(projectRoot, ".claude", "settings.json");
     removePermissions(settingsPath);
   }
 }

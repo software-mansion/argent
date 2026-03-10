@@ -22,7 +22,7 @@ if (process.env.RADON_TOOLS_URL) {
   }
 }
 
-const LOG_FILE = process.env.RADON_MCP_LOG ?? `${homedir()}/.radon-lite/mcp-calls.log`;
+const LOG_FILE = process.env.RADON_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
 let logDirReady = false;
 
 async function spyLog(entry: Record<string, unknown>) {

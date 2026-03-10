@@ -6,12 +6,12 @@ import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 
-const STATE_DIR = path.join(homedir(), ".radon-lite");
-const STATE_FILE = path.join(STATE_DIR, "tools-server.json");
-const LOG_FILE = path.join(STATE_DIR, "tools-server.log");
+const STATE_DIR = path.join(homedir(), ".argent");
+const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
+const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
 // __dirname in ESM (compiled from TS) will be dist/
-const BUNDLE_PATH = path.join(import.meta.dirname, "tools-server.cjs");
+const BUNDLE_PATH = path.join(import.meta.dirname, "tool-server.cjs");
 const BINARY_DIR = path.join(import.meta.dirname, "..", "bin");
 
 interface ToolsServerState {
@@ -122,7 +122,7 @@ function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> 
     child.on("exit", (code) => {
       rl.close();
       settle(() =>
-        reject(new Error(`tools-server exited with code ${code} before becoming ready`))
+        reject(new Error(`tool-server exited with code ${code} before becoming ready`))
       );
     });
 

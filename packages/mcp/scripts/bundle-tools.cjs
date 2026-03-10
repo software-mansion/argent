@@ -12,6 +12,8 @@ const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const BIN_SRC = path.resolve(WORKSPACE_ROOT, "simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
+const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
+const SKILLS_DEST = path.resolve(__dirname, "../skills");
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
@@ -39,4 +41,17 @@ if (fs.existsSync(BIN_SRC)) {
   console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
 } else {
   console.warn(`⚠ simulator-server binary not found at ${BIN_SRC} — skipping copy`);
+}
+
+// Copy skill files into the package so they ship on npm
+fs.mkdirSync(SKILLS_DEST, { recursive: true });
+if (fs.existsSync(SKILLS_SRC)) {
+  for (const file of fs.readdirSync(SKILLS_SRC)) {
+    if (file.endsWith(".md")) {
+      fs.copyFileSync(path.join(SKILLS_SRC, file), path.join(SKILLS_DEST, file));
+    }
+  }
+  console.log(`✓ Copied skill files → ${path.relative(process.cwd(), SKILLS_DEST)}`);
+} else {
+  console.warn(`⚠ Skills source not found at ${SKILLS_SRC} — skipping copy`);
 }

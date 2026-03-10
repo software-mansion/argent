@@ -7,7 +7,7 @@ const path = require("path");
 const os = require("os");
 const readline = require("readline");
 
-const LOG_FILE = process.env.RADON_MCP_LOG ?? path.join(os.homedir(), ".radon-lite", "mcp-calls.log");
+const LOG_FILE = process.env.RADON_MCP_LOG ?? path.join(os.homedir(), ".argent", "mcp-calls.log");
 
 // Ensure log file exists
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
