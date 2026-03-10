@@ -6,8 +6,8 @@
       "request": "launch",
       "name": "Tools Server",
       "runtimeArgs": ["-r", "ts-node/register"],
-      "program": "${workspaceFolder}/packages/tools/src/index.ts",
-      "cwd": "${workspaceFolder}/packages/tools",
+      "program": "${workspaceFolder}/packages/tool-server/src/index.ts",
+      "cwd": "${workspaceFolder}/packages/tool-server",
       "console": "integratedTerminal",
       "env": {
         "PORT": "3001"
@@ -25,8 +25,8 @@
       "type": "node",
       "request": "launch",
       "name": "Tools Server (built)",
-      "program": "${workspaceFolder}/packages/tools/dist/index.js",
-      "cwd": "${workspaceFolder}/packages/tools",
+      "program": "${workspaceFolder}/packages/tool-server/dist/index.js",
+      "cwd": "${workspaceFolder}/packages/tool-server",
       "console": "integratedTerminal",
       "env": {
         "PORT": "3001"

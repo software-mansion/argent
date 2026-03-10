@@ -4,7 +4,7 @@ dist/
 *.tsbuildinfo
 packages/*/dist/
 packages/*/node_modules/
-
+tsconfig.tsbuildinfo
 .DS_Store
 1export
 
