@@ -1,6 +1,7 @@
 import { Registry } from "@radon-lite/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
+import { profilerSessionBlueprint } from "../blueprints/profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
 import { simulatorServerTool } from "../tools/simulator/simulator-server";
@@ -33,12 +34,21 @@ import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
 import { getLicenseStatusTool } from "../tools/license/get-license-status";
 import { removeLicenseTool } from "../tools/license/remove-license";
+import { profilerStartTool } from "../tools/profiler/profiler-start";
+import { profilerStopTool } from "../tools/profiler/profiler-stop";
+import { profilerAnalyzeTool } from "../tools/profiler/profiler-analyze";
+import { profilerComponentSourceTool } from "../tools/profiler/profiler-component-source";
+import { profilerCpuSummaryTool } from "../tools/profiler/profiler-cpu-summary";
+import { profilerReactRendersTool } from "../tools/profiler/profiler-react-renders";
+import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
+import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerBlueprint(profilerSessionBlueprint);
 
   registry.registerTool(listSimulatorsTool);
   registry.registerTool(bootSimulatorTool);
@@ -72,6 +82,14 @@ export function createRegistry(): Registry {
   registry.registerTool(activateSsoTool);
   registry.registerTool(getLicenseStatusTool);
   registry.registerTool(removeLicenseTool);
+  registry.registerTool(profilerStartTool);
+  registry.registerTool(profilerStopTool);
+  registry.registerTool(profilerAnalyzeTool);
+  registry.registerTool(profilerComponentSourceTool);
+  registry.registerTool(profilerCpuSummaryTool);
+  registry.registerTool(profilerReactRendersTool);
+  registry.registerTool(profilerFiberTreeTool);
+  registry.registerTool(profilerConsoleLogsTool);
 
   return registry;
 }

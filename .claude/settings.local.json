@@ -24,7 +24,14 @@
       "mcp__radon-lite__rotate",
       "mcp__radon-lite__activate-sso",
       "mcp__radon-lite__activate-license-key",
-      "mcp__radon-lite__remove-license"
+      "mcp__radon-lite__remove-license",
+      "mcp__radon-lite__profiler-start",
+      "mcp__radon-lite__profiler-stop",
+      "mcp__radon-lite__profiler-analyze",
+      "mcp__radon-lite__profiler-component-source",
+      "mcp__radon-lite__profiler-cpu-summary",
+      "mcp__radon-lite__profiler-react-renders",
+      "mcp__radon-lite__profiler-fiber-tree"
     ]
   }
 }

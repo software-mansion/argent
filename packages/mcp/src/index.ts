@@ -22,7 +22,8 @@ if (process.env.RADON_TOOLS_URL) {
   }
 }
 
-const LOG_FILE = process.env.RADON_MCP_LOG ?? `${homedir()}/.radon-lite/mcp-calls.log`;
+const LOG_FILE =
+  process.env.RADON_MCP_LOG ?? `${homedir()}/.radon-lite/mcp-calls.log`;
 let logDirReady = false;
 
 async function spyLog(entry: Record<string, unknown>) {
@@ -32,7 +33,9 @@ async function spyLog(entry: Record<string, unknown>) {
       logDirReady = true;
     }
     await appendFile(LOG_FILE, JSON.stringify(entry) + "\n");
-  } catch { /* non-fatal */ }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 type ToolMeta = {
@@ -50,7 +53,7 @@ async function fetchTools(): Promise<ToolMeta[]> {
 
 async function callTool(
   name: string,
-  args: unknown
+  args: unknown,
 ): Promise<{ result: unknown; outputHint?: string }> {
   const tools = await fetchTools();
   const meta = tools.find((t) => t.name === name);
@@ -59,7 +62,11 @@ async function callTool(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(args ?? {}),
   });
-  const json = (await res.json()) as { data?: unknown; error?: string; message?: string };
+  const json = (await res.json()) as {
+    data?: unknown;
+    error?: string;
+    message?: string;
+  };
   if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
   return { result: json.data, outputHint: meta?.outputHint };
 }
@@ -97,12 +104,16 @@ const server = new Server(
       "browser on the user's machine for sign-in and returns { success: true, plan }. " +
       "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
       "Alternatively, call activate-license-key with the user's license key.",
-  }
+  },
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = await fetchTools();
-  await spyLog({ ts: new Date().toISOString(), event: "list_tools", count: tools.length });
+  await spyLog({
+    ts: new Date().toISOString(),
+    event: "list_tools",
+    count: tools.length,
+  });
   return {
     tools: tools.map((t) => ({
       name: t.name,
@@ -114,16 +125,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   const t0 = Date.now();
-  await spyLog({ ts: new Date().toISOString(), event: "tool_called", name: params.name, args: params.arguments });
+  await spyLog({
+    ts: new Date().toISOString(),
+    event: "tool_called",
+    name: params.name,
+    args: params.arguments,
+  });
   try {
     const { result, outputHint } = await callTool(
       params.name,
-      params.arguments
+      params.arguments,
     );
-    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false, result });
+    await spyLog({
+      ts: new Date().toISOString(),
+      event: "tool_result",
+      name: params.name,
+      durationMs: Date.now() - t0,
+      isError: false,
+      result,
+    });
     return { content: await toMcpContent(result, outputHint) };
   } catch (err) {
-    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: true, error: String(err instanceof Error ? err.message : err) });
+    await spyLog({
+      ts: new Date().toISOString(),
+      event: "tool_result",
+      name: params.name,
+      durationMs: Date.now() - t0,
+      isError: true,
+      error: String(err instanceof Error ? err.message : err),
+    });
     return {
       isError: true,
       content: [
