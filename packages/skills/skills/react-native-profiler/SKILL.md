@@ -75,5 +75,6 @@ After applying a fix, re-profile to confirm the improvement: repeat Step 1 → u
 - **Re-run after fixes**: Apply fix → `profiler-start` → reproduce → `profiler-stop` → `profiler-analyze` to confirm `totalRenderMs` dropped.
 - **`excluded` is informational**: Components in `animatedSubtrees` and `recyclerChildren` re-render by design — correctly suppressed.
 - **Strict Mode**: React Strict Mode double-invokes renders. The pipeline halves `normalizedRenderCount` automatically when detected.
+- **Debugger Connection**: If the debugger connection is interrupted (closed), the started profiling will also close, making the `profiler-stop` command unsuccessful. When you encounter errors, check the debugger status and try to restart the profiling flow.
 
 For diagnostic tool usage (live render stats, fiber tree, CPU summary, console logs), see `references/diagnostic-tools.md`.
