@@ -110,7 +110,11 @@ const server = new Server(
       "'No Argent license found', call the activate-sso tool first — it opens a " +
       "browser on the user's machine for sign-in and returns { success: true, plan }. " +
       "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
-      "Alternatively, call activate-license-key with the user's license key.",
+      "Alternatively, call activate-license-key with the user's license key. " +
+      "When your session ends or the user says they are done, call " +
+      "stop-all-simulator-servers to clean up running simulators. " +
+      "If the user started Metro separately, ask whether they would like you to " +
+      "call stop-metro (specify the port if it is not 8081).",
   },
 );
 
@@ -201,3 +205,12 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
 });
 
 await server.connect(new StdioServerTransport());
+
+// When ARGENT_AUTO_SHUTDOWN is set and Cursor closes stdin (session end),
+// tell the tools-server to shut down so simulator processes are cleaned up.
+if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
+  process.stdin.on("close", () => {
+    fetch(`${TOOLS_URL}/shutdown`, { method: "POST" }).catch(() => {});
+    setTimeout(() => process.exit(0), 5_000);
+  });
+}

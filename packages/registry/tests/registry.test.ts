@@ -191,6 +191,77 @@ describe('Registry -- Service Tests (blueprint-based)', () => {
   });
 });
 
+describe('Registry -- disposeService', () => {
+  it('tears down a single running service to IDLE', async () => {
+    const registry = new Registry();
+    const { blueprint: aBlueprint } = createStaticBlueprint('A');
+    const { blueprint: bBlueprint } = createStaticBlueprint('B');
+    registry.registerBlueprint(aBlueprint);
+    registry.registerBlueprint(bBlueprint);
+
+    await registry.resolveService(staticUrn('A'));
+    await registry.resolveService(staticUrn('B'));
+
+    await registry.disposeService(staticUrn('A'));
+
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.IDLE);
+    expect(registry.getServiceState(staticUrn('B'))).toBe(ServiceState.RUNNING);
+  });
+
+  it('cascades teardown to dependents', async () => {
+    const registry = new Registry();
+    const { blueprint: bBlueprint } = createStaticBlueprint('B');
+    const { blueprint: aBlueprint } = createStaticBlueprint('A', {
+      deps: ['B'],
+    });
+    registry.registerBlueprint(bBlueprint);
+    registry.registerBlueprint(aBlueprint);
+
+    await registry.resolveService(staticUrn('A'));
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.RUNNING);
+    expect(registry.getServiceState(staticUrn('B'))).toBe(ServiceState.RUNNING);
+
+    await registry.disposeService(staticUrn('B'));
+
+    expect(registry.getServiceState(staticUrn('B'))).toBe(ServiceState.IDLE);
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.IDLE);
+  });
+
+  it('throws ServiceNotFoundError for unknown URN', async () => {
+    const registry = new Registry();
+    await expect(
+      registry.disposeService('nonexistent:urn')
+    ).rejects.toThrow(ServiceNotFoundError);
+  });
+
+  it('is a no-op for already-IDLE service', async () => {
+    const registry = new Registry();
+    const { blueprint } = createStaticBlueprint('A');
+    registry.registerBlueprint(blueprint);
+
+    await registry.resolveService(staticUrn('A'));
+    await registry.dispose();
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.IDLE);
+
+    await registry.disposeService(staticUrn('A'));
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.IDLE);
+  });
+
+  it('allows re-resolving a service after disposeService', async () => {
+    const registry = new Registry();
+    const { blueprint } = createStaticBlueprint('A');
+    registry.registerBlueprint(blueprint);
+
+    await registry.resolveService(staticUrn('A'));
+    await registry.disposeService(staticUrn('A'));
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.IDLE);
+
+    const api = await registry.resolveService(staticUrn('A'));
+    expect(api).toBeDefined();
+    expect(registry.getServiceState(staticUrn('A'))).toBe(ServiceState.RUNNING);
+  });
+});
+
 describe('Registry -- Tool Tests', () => {
   it('starts required services when tool is invoked', async () => {
     const registry = new Registry();
