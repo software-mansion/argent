@@ -1,5 +1,12 @@
 {
   "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "projectPath",
+      "type": "promptString",
+      "description": "Path to the project folder to open in a new window and install agent packages + skills in"
+    }
+  ],
   "tasks": [
     {
       "label": "start-vite",
@@ -37,6 +44,19 @@
       },
       "problemMatcher": ["$tsc"],
       "group": "build"
+    },
+    {
+      "label": "setup-dev-in-project",
+      "type": "shell",
+      "command": "node \"${workspaceFolder}/scripts/setup-dev-in-project.cjs\" \"${input:projectPath}\"",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      }
     }
   ]
 }
