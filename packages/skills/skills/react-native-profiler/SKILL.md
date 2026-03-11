@@ -1,5 +1,5 @@
 ---
-name: rn-profiler
+name: react-native-profiler
 description: Profile a React Native app on Hermes to identify re-render performance issues. Use when profiling performance, finding slow components, diagnosing re-renders, checking CPU hotspots, or producing a ranked issue report with source-level fixes.
 ---
 
