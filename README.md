@@ -16,7 +16,6 @@ The tools server spawns simulator-server processes on demand. The UI and MCP bri
 | `@argent/mcp`         | `packages/mcp`         | MCP bridge — exposes all tools to AI assistants (Claude, Cursor) via Model Context Protocol.           |
 | `@argent/ui`          | `packages/ui`          | Web UI for simulator control and Metro debugging.                                                      |
 | `@argent/skills`      | `packages/skills`      | Markdown skill files that instruct AI agents when/how to use Argent tools.                             |
-| `@argent/vscode`      | `packages/vscode`      | VS Code extension (launch configs and tasks).                                                          |
 
 ## Requirements
 
@@ -60,6 +59,33 @@ curl http://localhost:3001/tools                        # list tools
 curl -X POST http://localhost:3001/tools/list-simulators \
   -H "Content-Type: application/json" -d '{}'           # invoke a tool
 ```
+
+## Installing in a project
+
+To set up argent in another project so AI assistants (Claude, Cursor) can use it:
+
+```bash
+node scripts/setup-project.cjs /path/to/project
+```
+
+This builds and packs argent, installs it as a local dependency, copies skills to `.claude/skills/`, and registers the MCP server in both `.claude/mcp.json` and `.cursor/mcp.json`. Existing configs are merged, not overwritten.
+
+To install globally instead (configures `~/.claude.json` at the user level):
+
+```bash
+node scripts/setup-project.cjs --global
+```
+
+### VS Code launch configs
+
+| Config                        | What it does                                                                                                           |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Install Argent in Project** | Prompts for a folder path, then builds, installs, and configures argent in that project.                               |
+| **Argent Agent Debug**        | Same as above but also opens the project in a new VS Code window and launches the tools server with debugger attached. |
+| **Tools Server**              | Runs the tool-server with ts-node on port 3001.                                                                        |
+| **Tools Server (built)**      | Builds first, then runs the compiled tool-server.                                                                      |
+| **UI (Chrome)**               | Opens the Vite UI in Chrome.                                                                                           |
+| **Full (Tools + UI)**         | Compound — starts both Tools Server and UI.                                                                            |
 
 ## Building and testing
 
