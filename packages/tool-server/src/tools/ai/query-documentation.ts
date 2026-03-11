@@ -1,8 +1,9 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { InvokeToolOptions, ToolDefinition } from "@argent/registry";
 
 const RADON_AI_URL = "https://radon-ai-backend.swmansion.com/";
 const PLACEHOLDER_CALL_ID = "3241";
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const zodSchema = z.object({
   text: z
@@ -20,8 +21,13 @@ export const queryDocumentationTool: ToolDefinition<
     "Search React Native documentation and return relevant excerpts or answers. Useful for looking up API references, component props, hooks, and guides. Requires an active Argent license.",
   zodSchema,
   services: () => ({}),
-  async execute(_services, params) {
+  async execute(_services, params, options?: InvokeToolOptions) {
     const url = new URL("/api/tool_calls/", RADON_AI_URL);
+
+    const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    const signal = options?.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
 
     let response: Response;
     try {
@@ -40,6 +46,7 @@ export const queryDocumentationTool: ToolDefinition<
             },
           ],
         }),
+        signal,
       });
     } catch (cause) {
       throw new Error("Network failure contacting Radon AI backend", { cause: cause as Error });
