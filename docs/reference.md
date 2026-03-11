@@ -112,6 +112,27 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 
 ---
 
+## macOS Accessibility permission (describe tool)
+
+The `describe` tool uses the macOS Accessibility API (`AXUIElement`) via the `simulator-server` binary to read the iOS Simulator's UI element tree. This requires the binary to be granted Accessibility access in System Settings.
+
+**Why it's needed:** The `simulator-server` binary calls `AXIsProcessTrusted()` before querying the accessibility tree. If not trusted, the `/api/ui/describe` endpoint returns `{"error":"accessibility_not_trusted"}`.
+
+**Can it be auto-granted?** No. Apple requires explicit user consent for Accessibility permissions. There is no API to programmatically grant this — `AXIsProcessTrustedWithOptions` can only check and optionally prompt, and `tccutil` can only reset (not grant) permissions. Modifying TCC.db directly requires SIP to be disabled.
+
+**How it's handled:** When `httpDescribe()` in `simulator-client.ts` receives the `accessibility_not_trusted` error, it:
+1. Opens System Settings directly to the Accessibility pane (`x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility`).
+2. Opens Finder revealing the `simulator-server` binary (`open -R <path>`) so the user can easily locate and drag it.
+3. Throws a detailed error with step-by-step instructions including the exact binary path.
+
+Both `open` calls are fire-and-forget — if they fail (e.g. different macOS version), the error message still contains all the information for manual steps.
+
+**Binary identification:** macOS identifies unsigned binaries by their absolute path. The binary is at `<argent_package>/bin/simulator-server` (resolved via `RADON_SIMULATOR_SERVER_DIR` env var set by the MCP launcher, or fallback path from `__dirname`). If the package is updated and the binary changes, the user may need to re-toggle the permission.
+
+**No restart needed:** After granting permission, the next `describe` call works immediately — `AXIsProcessTrusted()` is checked at runtime on each call.
+
+---
+
 ## Metro / debugger / js-debugger
 
 - **JsRuntimeDebugger**  

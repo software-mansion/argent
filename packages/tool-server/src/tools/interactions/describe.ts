@@ -19,8 +19,10 @@ normalized [0,1] frame coordinates (same space as the tap/swipe tools).
 Use this to find exact tap targets: \`frame.x + frame.width/2\` gives the tap X,
 \`frame.y + frame.height/2\` gives the tap Y.
 
-Only supported on iOS simulators. Requires macOS Accessibility permission granted
-to the simulator-server process (System Settings → Privacy & Security → Accessibility).`,
+Only supported on iOS simulators. On first use, macOS may require granting
+Accessibility permission to the simulator-server binary. If this happens,
+the tool will automatically open System Settings and Finder with step-by-step
+instructions — follow them and retry.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
