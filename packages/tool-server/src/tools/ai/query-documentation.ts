@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { InvokeToolOptions, ToolDefinition } from "@argent/registry";
+import { activateWithSSO, readToken } from "../../utils/license";
 
 const RADON_AI_URL = "https://radon-ai-backend.swmansion.com/";
 const PLACEHOLDER_CALL_ID = "3241";
@@ -17,6 +18,32 @@ const zodSchema = z.object({
     .describe("JWT license token (injected automatically)"),
 });
 
+const QUERY_DOCS_URL = new URL("/api/tool_calls/", RADON_AI_URL);
+
+async function fetchDocumentation(
+  text: string,
+  token: string | null,
+  signal?: AbortSignal,
+) {
+  return fetch(QUERY_DOCS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token ?? ""}`,
+    },
+    body: JSON.stringify({
+      tool_calls: [
+        {
+          name: "query_documentation",
+          id: PLACEHOLDER_CALL_ID,
+          args: { text },
+        },
+      ],
+    }),
+    signal,
+  });
+}
+
 export const queryDocumentationTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { content: string }
@@ -27,32 +54,19 @@ export const queryDocumentationTool: ToolDefinition<
   zodSchema,
   services: () => ({}),
   async execute(_services, params, options?: InvokeToolOptions) {
-    const url = new URL("/api/tool_calls/", RADON_AI_URL);
-
     const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
     const signal = options?.signal
       ? AbortSignal.any([options.signal, timeoutSignal])
       : timeoutSignal;
 
     let response: Response;
+
     try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${params.token ?? ""}`,
-        },
-        body: JSON.stringify({
-          tool_calls: [
-            {
-              name: "query_documentation",
-              id: PLACEHOLDER_CALL_ID,
-              args: { text: params.text },
-            },
-          ],
-        }),
+      response = await fetchDocumentation(
+        params.text,
+        params.token ?? (await readToken()),
         signal,
-      });
+      );
     } catch (cause) {
       throw new Error("Network failure contacting Radon AI backend", {
         cause: cause as Error,
@@ -60,14 +74,21 @@ export const queryDocumentationTool: ToolDefinition<
     }
 
     if (response.status === 401) {
-      throw new Error(
-        "Authorization failed. Make sure your Argent license is active (use activate-sso or activate-license-key).",
-      );
+      const ssoResult = await activateWithSSO();
+      if (ssoResult.success) {
+        const newToken = await readToken();
+        response = await fetchDocumentation(params.text, newToken, signal);
+      } else {
+        // SSO Login aborted, failed to open, either way the following response is universal to all these cases.
+        throw new Error(
+          `Argent license required. Login or activate your license to continue. Open ${ssoResult.ssoUrl} to sign in to your account.`,
+        );
+      }
     }
 
     if (!response.ok) {
       throw new Error(
-        `Radon AI backend responded with status ${response.status}`,
+        `Radon AI backend responded with status ${response.status}.`,
       );
     }
 
