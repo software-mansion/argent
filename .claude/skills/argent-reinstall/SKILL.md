@@ -25,6 +25,29 @@ Run both commands sequentially from the repo root (`/<path-to-argent>/argent`):
 
    This replaces the global installation at `/$(npm root -g)/argent/`.
 
+3. **Restart the daemon**
+
+   Find and kill the running argent processes:
+
+   ```
+   ps aux | grep -E 'argent' | grep -v grep
+   ```
+
+   Only kill daemon processes — ignore anything from VSCode, local dev builds, simulators, or other user executables. The target processes look like:
+   - `node /.../argent/dist/index.js`
+   - `node /.../argent/dist/tool-server.cjs`
+
+   There can be many more processes with similar `/.../argent/` path.
+   Note that `...` is the output of `npm root -g`.
+
+   Kill them by PID:
+
+   ```
+   kill <pid1> <pid2> ...
+   ```
+
+   The MCP client will automatically restart the daemon on the next tool call using the newly installed version.
+
 ## Notes
 
 - The MCP server entry point is `node /$(npm root -g)/argent/dist/index.js`
