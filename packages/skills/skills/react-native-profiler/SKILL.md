@@ -80,7 +80,7 @@ For standalone diagnostic tools (live render stats, fiber tree, CPU summary, con
 
 | Skill                  | When to use                                                  |
 | ---------------------- | ------------------------------------------------------------ |
-| `run-react-native-app` | Starting the app, Metro setup, build issues                  |
+| `react-native-app-workflow` | Starting the app, Metro setup, build issues                  |
 | `metro-debugger`       | Breakpoints, stepping, console logs, JS evaluation           |
 | `simulator-setup`      | Booting and connecting a simulator                           |
 | `simulator-screenshot` | Capturing the simulator screen                               |

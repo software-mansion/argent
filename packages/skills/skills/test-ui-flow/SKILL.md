@@ -68,5 +68,5 @@ Steps:
 | `simulator-interact`   | Detailed tool usage for tapping, swiping, typing |
 | `simulator-screenshot` | Screenshot-specific options and troubleshooting  |
 | `simulator-setup`      | Booting and connecting a simulator               |
-| `run-react-native-app` | Starting the app, Metro, build issues            |
+| `react-native-app-workflow` | Starting the app, Metro, build issues            |
 | `metro-debugger`       | Breakpoints, console logs, JS evaluation         |

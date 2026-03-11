@@ -30,4 +30,4 @@ All simulator interactions go through argent MCP tools — DO NOT use `curl`, `B
 | ---------------------- | ------------------------------------------------------------ |
 | `simulator-interact`   | Tapping, swiping, typing on the simulator                    |
 | `simulator-screenshot` | Capturing the simulator screen                               |
-| `run-react-native-app` | Starting the app, Metro, build issues                        |
+| `react-native-app-workflow` | Starting the app, Metro, build issues                        |

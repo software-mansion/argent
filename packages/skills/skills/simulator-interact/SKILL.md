@@ -113,6 +113,6 @@ Use the explicit `screenshot` tool only when:
 | ---------------------- | ------------------------------------------------------------ |
 | `simulator-setup`      | Booting and connecting a simulator                           |
 | `simulator-screenshot` | Capturing screenshots without an interaction                 |
-| `run-react-native-app` | Starting the app, Metro, build issues                        |
+| `react-native-app-workflow` | Starting the app, Metro, build issues                        |
 | `metro-debugger`       | Breakpoints, stepping, console logs, JS evaluation           |
 | `test-ui-flow`         | Interactive UI testing with screenshot verification          |
