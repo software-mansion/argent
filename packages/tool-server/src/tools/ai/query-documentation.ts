@@ -8,8 +8,13 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const zodSchema = z.object({
   text: z
     .string()
-    .describe("The query or question to search the React Native documentation for"),
-  token: z.string().optional().describe("JWT license token (injected automatically)"),
+    .describe(
+      "The query or question to search the React Native documentation for",
+    ),
+  token: z
+    .string()
+    .optional()
+    .describe("JWT license token (injected automatically)"),
 });
 
 export const queryDocumentationTool: ToolDefinition<
@@ -18,7 +23,7 @@ export const queryDocumentationTool: ToolDefinition<
 > = {
   id: "query-documentation",
   description:
-    "Search React Native documentation and return relevant excerpts or answers. Useful for looking up API references, component props, hooks, and guides. Requires an active Argent license.",
+    "Search React Native documentation and return relevant excerpts or answers. Useful for looking up API references, component props, hooks, and guides.",
   zodSchema,
   services: () => ({}),
   async execute(_services, params, options?: InvokeToolOptions) {
@@ -49,20 +54,26 @@ export const queryDocumentationTool: ToolDefinition<
         signal,
       });
     } catch (cause) {
-      throw new Error("Network failure contacting Radon AI backend", { cause: cause as Error });
+      throw new Error("Network failure contacting Radon AI backend", {
+        cause: cause as Error,
+      });
     }
 
     if (response.status === 401) {
       throw new Error(
-        "Authorization failed. Make sure your Argent license is active (use activate-sso or activate-license-key)."
+        "Authorization failed. Make sure your Argent license is active (use activate-sso or activate-license-key).",
       );
     }
 
     if (!response.ok) {
-      throw new Error(`Radon AI backend responded with status ${response.status}`);
+      throw new Error(
+        `Radon AI backend responded with status ${response.status}`,
+      );
     }
 
-    const result = await response.json() as { tool_results: { content: string }[] };
+    const result = (await response.json()) as {
+      tool_results: { content: string }[];
+    };
 
     if (!result.tool_results?.length) {
       throw new Error("Radon AI backend returned an empty response");
