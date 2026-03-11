@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -22,10 +23,16 @@ Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Br
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
 
+    const disableLogBox = () =>
+      new Promise<void>((resolve) => setTimeout(resolve, 2000)).then(() =>
+        api.cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(() => {})
+      );
+
     // Primary: CDP Page.reload — works reliably with RN 0.76+ (Fusebox/Bridgeless).
     // Triggers a full JS execution context teardown and restart without touching the native shell.
     try {
       await api.cdp.send("Page.reload");
+      disableLogBox();
       return { reloaded: true, port, method: "cdp" };
     } catch {
       // Fall through to HTTP fallback
@@ -41,6 +48,7 @@ Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Br
         `Failed to reload: CDP Page.reload unsupported and Metro HTTP /reload returned ${res.status} ${res.statusText}.`
       );
     }
+    disableLogBox();
     return { reloaded: true, port, method: "http" };
   },
 };
