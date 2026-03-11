@@ -52,7 +52,7 @@ The **tool server** is the Node/Express process in `@argent/tool-server` (defaul
 
 - **Setup** — On startup (`packages/tool-server/src/index.ts`): it creates a registry via `createRegistry()`, attaches the registry logger, builds the HTTP app with `createHttpApp(registry)`, and starts listening.
 
-`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the two blueprints (SimulatorServer, JsRuntimeDebugger) and all tools (simulator, interactions, debugger, license), then returns it. No services are started at this point.
+`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the two blueprints (SimulatorServer, JsRuntimeDebugger) and all tools (simulator, interactions, debugger, license, documentation), then returns it. No services are started at this point.
 
 **Interaction with the registry** — Every request that needs the registry uses that one instance:
 
@@ -100,6 +100,7 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
   - **Interactions:** `tap`, `swipe`, `gesture`, `button`, `keyboard`, `paste`, `screenshot`, `describe`.
   - **Debugger (Metro/CDP):** `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`.
   - **License:** `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
+  - **Documentation:** `query-documentation`.
 
 ---
 
