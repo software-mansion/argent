@@ -23,7 +23,7 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 
 The single central object that coordinates **tools** and **services**:
 
-- **Blueprints** — Templates for context-aware services (e.g. `SimulatorServer`, `JsRuntimeDebugger`). Each blueprint has a namespace, `getURN(context)`, optional dependencies, and a `factory` that creates a service instance. The registry does **not** start any services at startup; it only stores these templates.
+- **Blueprints** — Templates for context-aware services (e.g. `SimulatorServer`, `JsRuntimeDebugger`, `ProfilerSession`). Each blueprint has a namespace, `getURN(context)`, optional dependencies, and a `factory` that creates a service instance. The registry does **not** start any services at startup; it only stores these templates.
 - **Services** — Long-running instances (e.g. a simulator-server process, a Metro CDP connection) created **on demand** and identified by **URN** (e.g. `SimulatorServer:<udid>`, `JsRuntimeDebugger:8081`). When something asks for a service by URN, the registry:
   - calls `resolveService(urn)`
   - if there is an instance for the URN, it reuses it, otherwise...
@@ -52,7 +52,7 @@ The **tool server** is the Node/Express process in `@argent/tool-server` (defaul
 
 - **Setup** — On startup (`packages/tool-server/src/index.ts`): it creates a registry via `createRegistry()`, attaches the registry logger, builds the HTTP app with `createHttpApp(registry)`, and starts listening.
 
-`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the two blueprints (SimulatorServer, JsRuntimeDebugger) and all tools (simulator, interactions, debugger, license), then returns it. No services are started at this point.
+`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the three blueprints (SimulatorServer, JsRuntimeDebugger, ProfilerSession) and all tools (simulator, interactions, debugger, profiler, license), then returns it. No services are started at this point.
 
 **Interaction with the registry** — Every request that needs the registry uses that one instance:
 
@@ -80,10 +80,10 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 
 - **Blueprint** (`ServiceBlueprint`)  
   A template for creating **context-aware** service instances. It has:
-  - `namespace` (e.g. `SimulatorServer`, `JsRuntimeDebugger`).
+  - `namespace` (e.g. `SimulatorServer`, `JsRuntimeDebugger`, `ProfilerSession`).
   - `getURN(context)` → URN string (e.g. `SimulatorServer:udid`).
   - Optional `getDependencies(context)` → alias → URN.
-  - `factory(deps, context, options)` → creates the service instance (e.g. spawns simulator-server, or connects to Metro CDP).
+  - `factory(deps, context, options)` → creates the service instance (e.g. spawns simulator-server, connects to Metro CDP, or sets up a Hermes profiling session).
 - **Service / service instance**  
   Created by a blueprint’s factory. Has `api` (object given to tools), `dispose()`, and `events` (e.g. `terminated`). The Registry resolves a URN to a service instance (creating it on first use) and passes `api` into tools as resolved “services”.
 - **URN**  
@@ -96,9 +96,10 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 - **Tool** (`ToolDefinition`)  
   A single invocable operation: `id`, `description`, optional `zodSchema` / `inputSchema`, optional `outputHint`, `services(params)` (returns alias → URN or `{ urn, options }`), and `execute(services, params, options)`. The Registry resolves the URNs to APIs, then calls `execute`. Tools are registered with `registry.registerTool(...)` in `setup-registry.ts`.
 - **Tool categories in this repo** (all registered in `packages/tool-server/src/utils/setup-registry.ts`)
-  - **Simulator lifecycle:** `list-simulators`, `boot-simulator`, `simulator-server`, `launch-app`, `open-url`, `rotate`.
+  - **Simulator lifecycle:** `list-simulators`, `boot-simulator`, `simulator-server`, `launch-app`, `open-url`, `rotate`, `restart-app`, `reinstall-app`, `stop-simulator-server`, `stop-all-simulator-servers`, `stop-metro`.
   - **Interactions:** `tap`, `swipe`, `gesture`, `button`, `keyboard`, `paste`, `screenshot`, `describe`.
-  - **Debugger (Metro/CDP):** `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`.
+  - **Debugger (Metro/CDP):** `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`, `debugger-reload-metro`.
+  - **Profiler:** `profiler-start`, `profiler-stop`, `profiler-analyze`, `profiler-component-source`, `profiler-cpu-summary`, `profiler-react-renders`, `profiler-fiber-tree`, `profiler-console-logs`.
   - **License:** `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
 
 ---
@@ -138,7 +139,24 @@ Both `open` calls are fire-and-forget — if they fail (e.g. different macOS ver
 - **JsRuntimeDebugger**  
   Blueprint that connects to a Metro dev server (default port 8081) via Chrome DevTools Protocol (CDP). One instance per port (URN like `JsRuntimeDebugger:8081`). Exposes CDP client, source maps, source resolver, console logs, and a small WebSocket server for console log streaming.
 - **debugger-\*** tools  
-  All Metro/CDP tools (connect, status, evaluate, breakpoints, pause/resume/step, component tree, inspect element, console logs/listen). They resolve `JsRuntimeDebugger:port` and use its API. See `docs/metro-debugger-features.md` for usage and MCP/skills integration.
+  All Metro/CDP tools (connect, status, evaluate, breakpoints, pause/resume/step, component tree, inspect element, console logs/listen, reload-metro). They resolve `JsRuntimeDebugger:port` and use its API. See `docs/metro-debugger-features.md` for usage and MCP/skills integration.
+
+---
+
+## Profiler
+
+- **ProfilerSession**  
+  Blueprint that depends on `JsRuntimeDebugger` (URN `ProfilerSession:port`). On creation it enables the CDP `Profiler` domain, injects a fiber root tracker script for React commit capture, and detects the RN architecture (bridge vs bridgeless) and Hermes version. Holds the raw `cpuProfile` and `commitTree` after a profiling run, plus script source entries for source map resolution.
+- **profiler-\*** tools  
+  Performance profiling tools that resolve `ProfilerSession:port`:
+  - `profiler-start` — Start CPU profiling + React commit capture on the Hermes runtime.
+  - `profiler-stop` — Stop CPU profiling and collect the `cpuProfile` + React commit tree.
+  - `profiler-analyze` — Analyze stored profiling data and return a markdown performance report.
+  - `profiler-component-source` — AST lookup via tree-sitter: returns file path, line number, memoization status, and 50 lines of source for a named React component.
+  - `profiler-cpu-summary` — Raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
+  - `profiler-react-renders` — Walk the live React fiber tree to collect component render counts and durations.
+  - `profiler-fiber-tree` — Walk the React fiber tree and return a JSON representation of the component hierarchy.
+  - `profiler-console-logs` — Return console log entries captured from the connected React Native app.
 
 ---
 

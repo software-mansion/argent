@@ -106,9 +106,13 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
 ### Skills (e.g. Cursor / Claude skills)
 
 - **Skills** are instructions or docs that tell an agent *when* and *how* to use tools (e.g. “use MCP tools only for simulator”, “call debugger-connect before setting breakpoints”).
-- You can add a **Metro debugger skill** that:
-  - Tells the agent to use `mcp__argent__debugger-`* for Metro/React Native debugging.
-  - Describes the workflow: connect → set breakpoints by file/line → run app → on pause use step/resume, inspect element, or evaluate.
-  - Mentions that breakpoints use source file and line and that the agent should not fabricate bundle URLs.
-- Place the skill file in your skills package (e.g. `packages/skills/skills/metro-debugger.md` — create it if needed) or in `.claude/skills/`, and reference it in your agent configuration so the model has access to it. Current skills in this repo include `simulator-setup.md`, `simulator-interact.md`, `simulator-screenshot.md`, `test-ui-flow.md`; a dedicated Metro debugger skill can be added the same way.
+- Current skills in this repo (`packages/skills/skills/`):
+  - `simulator-setup` — Boot a simulator and start the simulator-server.
+  - `simulator-interact` — Tap, swipe, gestures, keyboard, and other device interactions.
+  - `simulator-screenshot` — When to call `screenshot` explicitly vs rely on auto-screenshots.
+  - `test-ui-flow` — Interact-screenshot-verify loop template.
+  - `metro-debugger` — CDP debugging workflow: connect, breakpoints, inspect, console.
+  - `react-native-app-workflow` — Full RN development lifecycle (start, debug, build, test).
+  - `react-native-profiler` — Performance profiling with `profiler-start` / `profiler-stop` / `profiler-analyze`.
+- Skills are installed into the user's skills directory via the `radon-skills` CLI and referenced in the agent configuration so the model has access to them.
 
