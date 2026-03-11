@@ -1,5 +1,5 @@
 ---
-name: react-native-ios-autonomous-dev
+name: react-native-app-workflow
 description: Step-by-step workflows for developing or debugging React Native apps with iOS simulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
