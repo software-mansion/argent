@@ -14,6 +14,11 @@ const LICENSE_EXEMPT_TOOLS = new Set([
   "stop-simulator-server",
   "stop-all-simulator-servers",
   "stop-metro",
+  "flow_start",
+  "flow_add_step",
+  "flow_insert_echo",
+  "flow_finish",
+  "run_flow",
 ]);
 
 async function licenseGate(req: Request, res: Response, next: NextFunction) {
