@@ -6,12 +6,12 @@ import {
 } from "../../blueprints/js-runtime-debugger";
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
   level: z
     .enum(["log", "warn", "error", "all"])
     .default("all")
     .describe("Filter log entries by level (default: all)"),
-  limit: z
+  limit: z.coerce
     .number()
     .int()
     .positive()

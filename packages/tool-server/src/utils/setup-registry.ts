@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
+import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { profilerSessionBlueprint } from "../blueprints/profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
@@ -29,6 +30,8 @@ import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { debuggerConsoleLogsTool } from "../tools/debugger/debugger-console-logs";
 import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
+import { networkLogsTool } from "../tools/network/network-logs";
+import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
 import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
@@ -49,6 +52,7 @@ export function createRegistry(): Registry {
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(profilerSessionBlueprint);
 
   registry.registerTool(listSimulatorsTool);
@@ -78,6 +82,8 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(debuggerConsoleLogsTool);
   registry.registerTool(debuggerConsoleListenTool);
+  registry.registerTool(networkLogsTool);
+  registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);
   registry.registerTool(activateLicenseKeyTool);
   registry.registerTool(activateSsoTool);

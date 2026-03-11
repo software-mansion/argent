@@ -1,134 +1,124 @@
-# argent
+# Argent
 
-Two HTTP surfaces: **simulator-server** is a native binary (repo root, arm64 macOS) that runs per simulator on a port (e.g. 3000) and handles device I/O — touch, key, button, rotate, paste, scroll, MJPEG stream, screenshot, recording, replay. The **tools server** is a Node app (port 3001) that lists and invokes tools (list-simulators, boot-simulator, simulator-server, launch-app, etc.); it starts simulator-server processes on demand.
+Argent has two HTTP surfaces:
+
+- **Tools server** — Node/Express app (port 3001) that lists and invokes tools via a registry. Manages simulator lifecycle, debugger connections, and all tool logic.
+- **Simulator server** — Native arm64 macOS binary (repo root) that runs one process per simulator. Handles device I/O: touch, keys, buttons, rotation, paste, scroll, MJPEG stream, screenshots, recording.
+
+The tools server spawns simulator-server processes on demand. The UI and MCP bridge both talk to the tools server; the tools server talks to simulator-server instances.
+
+## Packages
+
+| Package               | Path                   | Purpose                                                                                                |
+| --------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| `@argent/registry`    | `packages/registry`    | Core library: dependency-aware service lifecycle, blueprints, tools, URNs. No HTTP or simulator logic. |
+| `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (`GET /tools`, `POST /tools/:name`). Registers all blueprints and tools.    |
+| `@argent/mcp`         | `packages/mcp`         | MCP bridge — exposes all tools to AI assistants (Claude, Cursor) via Model Context Protocol.           |
+| `@argent/ui`          | `packages/ui`          | Web UI for simulator control and Metro debugging.                                                      |
+| `@argent/skills`      | `packages/skills`      | Markdown skill files that instruct AI agents when/how to use Argent tools.                             |
+| `@argent/vscode`      | `packages/vscode`      | VS Code extension (launch configs and tasks).                                                          |
 
 ## Requirements
 
 - macOS with Xcode installed (for `xcrun simctl`)
 - Node.js 18+
-- The `simulator-server` binary at the **repo root** (arm64 macOS)
+- The `simulator-server` binary at the repo root (arm64 macOS)
 
-## Quick start (tools server)
-
-From the repo root:
+## Getting started
 
 ```bash
 npm install
-npm run build -w @argent/registry && npm run dev -w @argent/tool-server
 ```
 
-The tools server runs at **http://localhost:3001**. List tools and invoke them:
+### Run the full app (tools server + UI)
 
 ```bash
-# List tools and their schemas
-curl http://localhost:3001/tools
-
-# Example: list booted simulators
-curl -X POST http://localhost:3001/tools/list-simulators -H "Content-Type: application/json" -d '{}'
+npm run start
 ```
 
-For the full app (tools API + web UI), see **Running the app with frontend** below.
+This builds the registry, then starts both the tools server (port 3001) and the Vite UI dev server (port 5173) concurrently.
 
-## Tools server and registry
+Open **http://localhost:5173**, connect to the tools server (default URL is pre-filled), pick a simulator, boot it, and start a session.
 
-The **tool-server** package (`packages/tool-server`) exposes an HTTP API for listing and invoking tools (list-simulators, boot-simulator, simulator-server, launch-app, etc.). It is backed by the in-repo **registry** (`packages/registry`), a dependency-aware service lifecycle manager: the simulator-server process is modeled as a URN-scoped service (one instance per simulator UDID), and tools declare their service dependencies; the registry resolves and starts services on demand.
-
-Default port is 3001. `GET /tools` lists tools with input schemas; `POST /tools/:name` invokes a tool with a JSON body. On shutdown, the server calls `registry.dispose()` to tear down all running simulator-server processes.
-
-## Running the app with frontend
-
-To run the full app (tools API + web UI) from the terminal:
-
-**1. Install and build (once):**
+To run them in separate terminals instead:
 
 ```bash
-npm install
-cd packages/registry && npm run build
-cd ../tool-server && npm run build
+npm run start:tool-server   # API at http://localhost:3001
+npm run start:ui             # UI  at http://localhost:5173
 ```
 
-**2. Start the tools server** (terminal 1). It serves the API at **http://localhost:3001**:
+### Run tools server only (no UI)
 
 ```bash
-cd packages/tool-server && npm start
+npm run start:tool-server
 ```
 
-**3. Start the frontend** (terminal 2). Vite serves the UI at **http://localhost:5173**:
+Test it:
 
 ```bash
-cd packages/ui && npm run dev
+curl http://localhost:3001/tools                        # list tools
+curl -X POST http://localhost:3001/tools/list-simulators \
+  -H "Content-Type: application/json" -d '{}'           # invoke a tool
 ```
 
-**4. Open the app** in a browser:
-
-- Go to **http://localhost:5173**
-- On the Connect screen, the default server URL is **http://localhost:3001** (or use `?serverUrl=http://localhost:3001` in the URL). Click **Connect**.
-- Pick a simulator (list will load from the tools server), boot it if needed, then start the session to get the stream and controls.
-
-The UI talks to the tools server for listing simulators, booting, and starting the simulator-server process; the session then uses the returned `apiUrl` / `streamUrl` for touch, stream, etc.
-
-## Simulator-server API (native binary)
-
-The **simulator-server** binary is normally started by the tools server when you invoke the `simulator-server` tool. When running, it listens on a port (e.g. 3000) and exposes a REST API for that simulator.
-
-### Options (when run standalone)
-
-| Flag | Env var | Default | Description |
-|------|---------|---------|-------------|
-| `--port N` | `PORT` | `3000` | Port to listen on |
-| `--replay` / `--no-replay` | `REPLAY` | `true` | Enable rolling replay buffer |
-| `--show-touches` / `--no-show-touches` | `SHOW_TOUCHES` | `true` | Show touch pointer overlay |
+## Building and testing
 
 ```bash
-# Examples
-PORT=8080 ./simulator-server ios --id <UDID>
-./simulator-server ios --id <UDID> --port 8080 --no-replay
+npm run build                          # tsc --build (all packages)
+npm test -w @argent/registry           # registry unit tests (vitest)
+npm test -w @argent/tool-server        # tool-server tests (vitest)
 ```
 
-### Token (Pro features)
+### MCP package
 
-Screenshot, screen recording, and replay require a Pro/Team/Enterprise JWT.
+```bash
+npm run build -w argent                # compile + bundle into single CJS file
+npm run pack:mcp                       # build and create argent-<version>.tgz
+```
 
-1. Get your machine fingerprint:
-   ```bash
-   curl http://localhost:3000/fingerprint
-   ```
-2. Activate your license key:
-   ```bash
-   curl -X POST http://localhost:3000/token/activate \
-     -H "Content-Type: application/json" \
-     -d '{"licenseKey": "<your-key>"}'
-   ```
-3. Pass the returned token when creating a session (`token` field), or update it later via `PUT /sessions/:id/token`.
+## Simulator server API
 
-Free-tier endpoints (touch, key, button, rotate, paste, scroll, MJPEG stream) work without a token.
+The simulator-server binary is normally spawned by the tools server. To run it standalone:
+
+```bash
+./simulator-server ios --id <UDID>                          # defaults: port 3000, replay on, touch overlay on
+./simulator-server ios --id <UDID> --port 8080 --no-replay  # custom port, replay off
+```
+
+| Flag                                   | Env var        | Default | Description           |
+| -------------------------------------- | -------------- | ------- | --------------------- |
+| `--port N`                             | `PORT`         | `3000`  | Listen port           |
+| `--replay` / `--no-replay`             | `REPLAY`       | `true`  | Rolling replay buffer |
+| `--show-touches` / `--no-show-touches` | `SHOW_TOUCHES` | `true`  | Touch pointer overlay |
+
+### License (Pro features)
+
+Screenshot, recording, and replay require a Pro/Team/Enterprise JWT. Free-tier endpoints (touch, keys, buttons, rotate, paste, scroll, MJPEG stream) work without one.
+
+```bash
+curl http://localhost:3000/fingerprint                    # 1. get machine fingerprint
+curl -X POST http://localhost:3000/token/activate \
+  -H "Content-Type: application/json" \
+  -d '{"licenseKey": "<your-key>"}'                       # 2. activate license
+# 3. pass returned token when creating a session, or PUT /sessions/:id/token
+```
 
 ### Quick reference (curl)
 
 ```bash
-# Find a booted simulator
-curl http://localhost:3000/simulators/running
+curl http://localhost:3000/simulators/running              # list running simulators
 
-# Create a session (use the UDID from above)
 curl -X POST http://localhost:3000/sessions \
   -H "Content-Type: application/json" \
-  -d '{"udid": "<UDID>", "token": "<JWT>"}'
+  -d '{"udid": "<UDID>", "token": "<JWT>"}'               # create session
 
-# Open the streamUrl in a browser for a live MJPEG feed
+curl -X POST http://localhost:3000/sessions/<id>/screenshot  # screenshot (Pro)
 
-# Take a screenshot (Pro)
-curl -X POST http://localhost:3000/sessions/<id>/screenshot
-
-# Tap the screen (normalized 0–1 coords)
 curl -X POST http://localhost:3000/sessions/<id>/input/touch \
   -H "Content-Type: application/json" \
-  -d '{"type": "Down", "points": [{"x": 0.5, "y": 0.5}]}'
+  -d '{"type":"Down","points":[{"x":0.5,"y":0.5}]}'       # tap (normalized 0-1)
 ```
 
-An OpenAPI spec for the simulator-server API is not yet in the repo.
+## Further reading
 
-## Development
-
-```bash
-npm run dev   # in packages/tool-server: run with ts-node, no build step needed
-```
+See [`docs/reference.md`](docs/reference.md) for a detailed breakdown of the registry, blueprints, services, tools, and how they all connect.

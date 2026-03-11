@@ -11,7 +11,7 @@ import type {
 } from "../../utils/profiler/types/input";
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
+  port: z.coerce.number().default(8081).describe("Metro server port"),
 });
 
 export const profilerStopTool: ToolDefinition<

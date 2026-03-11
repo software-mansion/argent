@@ -9,6 +9,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer } from "./launcher.js";
+import {
+  autoScreenshotEnabled,
+  getUdidFromArgs,
+  shouldAutoScreenshot,
+  getAutoScreenshotDelayMs,
+  normalizeToolName,
+} from "./auto-screenshot.js";
 
 let TOOLS_URL: string;
 if (process.env.RADON_TOOLS_URL) {
@@ -136,15 +143,42 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       params.name,
       params.arguments,
     );
-    await spyLog({
-      ts: new Date().toISOString(),
-      event: "tool_result",
-      name: params.name,
-      durationMs: Date.now() - t0,
-      isError: false,
-      result,
-    });
-    return { content: await toMcpContent(result, outputHint) };
+    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false, result });
+
+    let content = await toMcpContent(result, outputHint);
+
+    const udid = getUdidFromArgs(params.arguments);
+    if (
+      autoScreenshotEnabled() &&
+      udid &&
+      shouldAutoScreenshot(params.name)
+    ) {
+      const delayMs = getAutoScreenshotDelayMs(params.name);
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+
+      try {
+        const screenshotResult = await callTool("screenshot", { udid });
+        const screenshotContent = await toMcpContent(
+          screenshotResult.result,
+          "image"
+        );
+        content = [
+          ...content,
+          { type: "text" as const, text: "--- Screen after action ---" },
+          ...screenshotContent,
+        ];
+      } catch (ssErr) {
+        content = [
+          ...content,
+          {
+            type: "text" as const,
+            text: `(Auto-screenshot skipped: ${ssErr instanceof Error ? ssErr.message : String(ssErr)})`,
+          },
+        ];
+      }
+    }
+
+    return { content };
   } catch (err) {
     await spyLog({
       ts: new Date().toISOString(),

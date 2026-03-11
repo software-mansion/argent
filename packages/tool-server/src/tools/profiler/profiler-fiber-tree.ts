@@ -89,8 +89,8 @@ function buildFiberTreeScript(maxDepth: number, filter: string): string {
 }
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
-  max_depth: z
+  port: z.coerce.number().default(8081).describe("Metro server port"),
+  max_depth: z.coerce
     .number()
     .int()
     .positive()

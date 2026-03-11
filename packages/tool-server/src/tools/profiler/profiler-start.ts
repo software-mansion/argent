@@ -124,8 +124,8 @@ const COMMIT_CAPTURE_SCRIPT = `
 `;
 
 const zodSchema = z.object({
-  port: z.number().default(8081).describe("Metro server port"),
-  sample_interval_us: z
+  port: z.coerce.number().default(8081).describe("Metro server port"),
+  sample_interval_us: z.coerce
     .number()
     .int()
     .positive()
