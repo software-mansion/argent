@@ -144,6 +144,16 @@ export class Registry {
     };
   }
 
+  /**
+   * Tear down a single service by URN (and cascade to its dependents).
+   * After disposal the service returns to IDLE and can be re-resolved.
+   */
+  async disposeService(urn: URN): Promise<void> {
+    const node = this.services.get(urn);
+    if (!node) throw new ServiceNotFoundError(urn);
+    await this._teardown(urn);
+  }
+
   async dispose(): Promise<void> {
     for (const [urn, node] of this.services) {
       if (

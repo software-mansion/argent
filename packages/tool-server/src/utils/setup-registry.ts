@@ -1,7 +1,6 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
-import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { profilerSessionBlueprint } from "../blueprints/profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
@@ -30,8 +29,6 @@ import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { debuggerConsoleLogsTool } from "../tools/debugger/debugger-console-logs";
 import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
-import { networkLogsTool } from "../tools/network/network-logs";
-import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
 import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
@@ -46,13 +43,15 @@ import { profilerReactRendersTool } from "../tools/profiler/profiler-react-rende
 import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
 import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
 import { queryDocumentationTool } from "../tools/ai/query-documentation";
+import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
+import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
+import { stopMetroTool } from "../tools/simulator/stop-metro";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
-  registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(profilerSessionBlueprint);
 
   registry.registerTool(listSimulatorsTool);
@@ -82,8 +81,6 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(debuggerConsoleLogsTool);
   registry.registerTool(debuggerConsoleListenTool);
-  registry.registerTool(networkLogsTool);
-  registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);
   registry.registerTool(activateLicenseKeyTool);
   registry.registerTool(activateSsoTool);
@@ -98,6 +95,11 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerFiberTreeTool);
   registry.registerTool(profilerConsoleLogsTool);
   registry.registerTool(queryDocumentationTool);
+
+  // Cleanup tools (close over registry for direct service disposal)
+  registry.registerTool(createStopSimulatorServerTool(registry));
+  registry.registerTool(createStopAllSimulatorServersTool(registry));
+  registry.registerTool(stopMetroTool);
 
   return registry;
 }

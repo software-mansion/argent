@@ -1,33 +1,33 @@
 ---
 name: simulator-setup
-description: Set up and connect to an iOS simulator using argent MCP tools. Use when starting a new session, booting a simulator, connecting to a simulator UDID, or before any simulator interaction task.
+description: Set up and connect to an iOS simulator using argent MCP tools. Use when starting a new session, booting a simulator, getting a simulator UDID, or before any simulator interaction task.
 ---
 
-# Simulator Setup
+## 1. Setup Steps
 
-## Critical: MCP Tools Only
-
-**All simulator interactions MUST go through `mcp__argent__*` MCP tools.**
-- Never use `curl`, `Bash`, or the `simulator-server` binary directly
-- Never call the tool-server, used by the MCP, directly
-- Never delegate simulator tasks to sub-agents (they may lack MCP tool permissions)
-
-## Steps
+All simulator interactions go through argent MCP tools — DO NOT use `curl`, `Bash`, or the `simulator-server` binary directly. If you delegate simulator tasks to sub-agents - make sure they have  MCP permissions.
 
 1. **Find a booted simulator**
-   Use the `list-simulators` MCP tool. Pick the first result — booted devices and iPhones are listed first.
+   Use `list-simulators`. Pick the first result — booted iPhones are listed first.
    If none are booted, use `boot-simulator` with the desired UDID.
 
 2. **Start simulator-server for the UDID**
-   Use the `simulator-server` MCP tool with the UDID (and optionally a JWT token for Pro features).
-   This returns `{ apiUrl, streamUrl }`.
+   Use the `simulator-server` tool with the UDID (optionally pass a JWT token for Pro features).
+   Returns `{ apiUrl, streamUrl }`.
 
 3. **Verify connection**
-   The `streamUrl` points to an MJPEG stream you can open in a browser.
-   All interaction tools (`tap`, `swipe`, `gesture`, etc.) will auto-start the server if needed.
+   All interaction tools (`tap`, `swipe`, `gesture`, etc.) auto-start the server if not already running.
 
-## Notes
+## 2. Notes
 
-- All tools auto-start `simulator-server` if not already running (without a token)
-- For screenshot/recording, pass a JWT token to `simulator-server` or `screenshot` directly
 - UDIDs look like: `A1B2C3D4-E5F6-7890-ABCD-EF1234567890`
+- For screenshots, pass a JWT token to `simulator-server` or `screenshot` directly.
+- The `streamUrl` points to an MJPEG stream viewable in a browser.
+
+## Related Skills
+
+| Skill                  | When to use                                                  |
+| ---------------------- | ------------------------------------------------------------ |
+| `simulator-interact`   | Tapping, swiping, typing on the simulator                    |
+| `simulator-screenshot` | Capturing the simulator screen                               |
+| `react-native-app-workflow` | Starting the app, Metro, build issues                        |

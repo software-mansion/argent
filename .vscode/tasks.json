@@ -4,7 +4,7 @@
     {
       "id": "projectPath",
       "type": "promptString",
-      "description": "Path to the project folder to open in a new window and install agent packages + skills in"
+      "description": "Absolute path to the target project folder"
     }
   ],
   "tasks": [

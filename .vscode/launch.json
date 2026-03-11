@@ -36,6 +36,15 @@
     {
       "type": "node",
       "request": "launch",
+      "name": "Install Argent in Project",
+      "program": "${workspaceFolder}/scripts/setup-project.cjs",
+      "args": ["${input:projectPath}"],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "type": "node",
+      "request": "launch",
       "name": "Argent Agent Debug",
       "runtimeArgs": ["-r", "ts-node/register"],
       "program": "${workspaceFolder}/packages/tool-server/src/index.ts",
