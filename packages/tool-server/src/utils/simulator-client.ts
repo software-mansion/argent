@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { exec } from "node:child_process";
 import * as path from "node:path";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
+import { toSimulatorNetworkError } from "./format-error";
 
 const connections = new Map<string, WebSocket>();
 let cmdId = 0;
@@ -56,6 +57,46 @@ function revealBinaryInFinder(binaryPath: string): void {
 }
 
 /**
+ * POST to a simulator-server endpoint, handling network errors and non-JSON
+ * responses uniformly.  Callers handle domain-specific response validation.
+ */
+async function simulatorPost<T>(
+  toolLabel: string,
+  api: SimulatorServerApi,
+  endpoint: string,
+  reqBody: unknown,
+  signal?: AbortSignal,
+  fallbackHint?: string,
+): Promise<{ res: Response; body: T }> {
+  let res: Response;
+  try {
+    res = await fetch(`${api.apiUrl}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+      signal,
+    });
+  } catch (err) {
+    throw toSimulatorNetworkError(toolLabel, err, api.apiUrl, fallbackHint);
+  }
+
+  let body: T;
+  try {
+    body = (await res.json()) as T;
+  } catch {
+    throw new Error(
+      `${toolLabel} failed: simulator-server returned non-JSON response (HTTP ${res.status}). ` +
+      `The server may be in a bad state. Restart the simulator-server and retry.`
+    );
+  }
+
+  return { res, body };
+}
+
+const DESCRIBE_FALLBACK =
+  "Fallback: use the screenshot tool to visually inspect the screen instead.";
+
+/**
  * Fetch the iOS accessibility element tree via the simulator-server HTTP API.
  * Returns normalized [0,1] frame coordinates matching the touch coordinate space.
  */
@@ -63,13 +104,9 @@ export async function httpDescribe(
   api: SimulatorServerApi,
   signal?: AbortSignal
 ): Promise<unknown> {
-  const res = await fetch(`${api.apiUrl}/api/ui/describe`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-    signal,
-  });
-  const body = (await res.json()) as { error?: string } & Record<string, unknown>;
+  const { res, body } = await simulatorPost<{ error?: string } & Record<string, unknown>>(
+    "Describe", api, "/api/ui/describe", {}, signal, DESCRIBE_FALLBACK,
+  );
 
   if (body.error === "accessibility_not_trusted") {
     const binaryPath = getSimulatorServerBinaryPath();
@@ -91,7 +128,14 @@ export async function httpDescribe(
     );
   }
 
-  if (!res.ok || body.error) throw new Error(body.error ?? `describe ${res.status}`);
+  if (!res.ok || body.error) {
+    const serverMsg = body.error ?? `HTTP ${res.status}`;
+    throw new Error(
+      `Describe failed: ${serverMsg}. ` +
+      `Verify the simulator is booted and an app is running. ${DESCRIBE_FALLBACK}`
+    );
+  }
+
   return body;
 }
 
@@ -103,20 +147,22 @@ export async function httpScreenshot(
   rotation?: string,
   signal?: AbortSignal
 ): Promise<{ url: string; path: string }> {
-  const res = await fetch(`${api.apiUrl}/api/screenshot`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(rotation ? { rotation } : {}),
-    signal,
-  });
-  const body = (await res.json()) as {
-    url?: string;
-    path?: string;
-    error?: string;
-  };
-  if (!res.ok) throw new Error(body.error ?? `screenshot ${res.status}`);
+  const { res, body } = await simulatorPost<{ url?: string; path?: string; error?: string }>(
+    "Screenshot", api, "/api/screenshot", rotation ? { rotation } : {}, signal,
+  );
+
+  if (!res.ok) {
+    const serverMsg = body.error ?? `HTTP ${res.status}`;
+    throw new Error(
+      `Screenshot failed: ${serverMsg}. ` +
+      `Ensure the simulator is booted and the simulator-server is running.`
+    );
+  }
   if (body.url == null || body.path == null) {
-    throw new Error("screenshot response missing url or path");
+    throw new Error(
+      "Screenshot failed: server response missing url or path. " +
+      "The simulator-server may be misconfigured. Try restarting it."
+    );
   }
   return { url: body.url, path: body.path };
 }
