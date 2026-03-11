@@ -8,6 +8,6 @@ packages/*/node_modules/
 *.tgz
 .DS_Store
 1export
-
+packages/mcp/skills/
 
 .claude/**/MEMORY.md

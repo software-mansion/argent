@@ -33,6 +33,19 @@
       },
       "preLaunchTask": "build-tools"
     },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Argent Agent Debug",
+      "runtimeArgs": ["-r", "ts-node/register"],
+      "program": "${workspaceFolder}/packages/tool-server/src/index.ts",
+      "cwd": "${workspaceFolder}/packages/tool-server",
+      "console": "integratedTerminal",
+      "env": {
+        "PORT": "3001"
+      },
+      "preLaunchTask": "setup-dev-in-project"
+    }
   ],
   "compounds": [
     {
