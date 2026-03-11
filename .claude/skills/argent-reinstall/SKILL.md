@@ -5,52 +5,19 @@ description: Rebuild and reinstall the Argent MCP server globally after making c
 
 # Argent Global Reinstall
 
-## Steps
+## Script
 
-Run both commands sequentially from the repo root (`/<path-to-argent>/argent`):
+Run the reinstall script from the repo root:
 
-1. **Pack**
+```
+bash scripts/reinstall-argent.sh
+```
 
-   ```
-   npm run pack:mcp
-   ```
-
-   This builds the tool-server (`tsc`), bundles it (`bundle-tools.cjs`), and produces `argent-0.1.0.tgz` in the repo root.
-
-2. **Install globally**
-
-   ```
-   npm install -g ./argent-0.1.0.tgz
-   ```
-
-   This replaces the global installation at `/$(npm root -g)/argent/`.
-
-3. **Restart the daemon**
-
-   Find and kill the running argent processes:
-
-   ```
-   ps aux | grep -E 'argent' | grep -v grep
-   ```
-
-   Only kill daemon processes — ignore anything from VSCode, local dev builds, simulators, or other user executables. The target processes look like:
-   - `node /.../argent/dist/index.js`
-   - `node /.../argent/dist/tool-server.cjs`
-
-   There can be many more processes with similar `/.../argent/` path.
-   Note that `...` is the output of `npm root -g`.
-
-   Kill them by PID:
-
-   ```
-   kill <pid1> <pid2> ...
-   ```
-
-   The MCP client will automatically restart the daemon on the next tool call using the newly installed version.
+This script kills any running Argent processes (scoped to the global install path to avoid false positives), then packs and installs globally.
 
 ## Notes
 
 - The MCP server entry point is `node /$(npm root -g)/argent/dist/index.js`
 - The global install is consumed by ClaudeCode via `/Users/<user>/.claude/settings.json` or OpenCode via `/Users/<user>/.config/opencode/opencode.json`
-- After reinstalling, the MCP daemon must be restarted for changes to take effect (restart the OpenCode session or reload the MCP server)
-- If the build fails, fix TypeScript errors first — `npm run build` inside `packages/tool-server` gives faster feedback than the full pack
+- After reinstalling, the MCP daemon will be automatically restarted on the next tool call
+- If the build fails, fix TypeScript errors first — run `npm run build` inside `packages/tool-server` for faster feedback
