@@ -5,16 +5,22 @@ description: Step-by-step workflows for developing or debugging React Native app
 
 ## 1. Starting the React Native App
 
-### 1.1 Explore Configuration
+### 1.1 Explore Configuration (MANDATORY — Do This First)
 
-Before starting, gather project context:
+**Before running commands**, read and understand the project's build and run configuration. Do NOT default to `npx react-native start` or `npx react-native run-ios` without first checking for custom scripts and workflows.
 
 | Action                | Command / Location                                                                                                                      |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | Check if React Native | Check for `package.json` with `react-native` dependency; look for `index.js` or `App.js` at root.                                       |
-| Metro config          | Read `metro.config.js` (or `metro.config.json`, or `metro` in `package.json`). Default RN projects extend `@react-native/metro-config`. |
-| Scripts               | In `package.json`: `start`, `run-ios`, `run-android`. Note any custom scripts (e.g. `start:local`, flavors).                            |
+| **Read user scripts** | **In `package.json`: read ALL scripts.** Look for `start`, `run-ios`, `run-android`, but also custom scripts like `start:local`, `start:dev`, `ios`, `build:ios`, flavors, etc. **Custom scripts take priority over default commands.** |
+| Metro config          | Read `metro.config.js` (or `metro.config.json`, or `metro` in `package.json`). Default RN projects extend `@react-native/metro-config`. Note any custom port, watchFolders, or other non-default configuration.  |
 | iOS entry             | `ios/` folder with `.xcworkspace` (CocoaPods) or `.xcodeproj`. Prefer opening `.xcworkspace` for builds.                                |
+| Monorepo / workspaces | Check for `workspaces` in root `package.json`, `turbo.json`, `nx.json`, or `lerna.json`. In monorepos the app may not be at the repo root. |
+| Build config files    | Look for `Makefile`, `Fastfile`, `Brewfile`, `.env` files, or README build instructions that describe the project-specific workflow.    |
+
+**If the project structure is convoluted and would bloat the context or it is not obvious which scripts/configuration to use, ask the user before proceeding.**
+
+**Remember the workflow:** Once you discover the project's build/run workflow (custom scripts, ports, env vars, etc.), save this information as a Cursor rule or note it for future sessions so you don't need to re-discover it each time.
 
 **Checklist before start:**
 
@@ -26,7 +32,7 @@ Before starting, gather project context:
 
 1. Check whether metro is already running on port found in configuration and if it is - do not start another server. Refer to point 2.1.
 
-1. **Prefer starting Metro explicitly** (more reliable than relying on auto-start from `run-ios`):
+1. **Use the project's custom start script if one exists** (e.g. `npm run start:local`, `yarn start:dev`). Fall back to default commands if no custom scripts are defined:
 
    ```bash
    npx react-native start
@@ -41,6 +47,8 @@ Before starting, gather project context:
 ### 1.3 Run the iOS App
 
 In a **separate** terminal (Metro keeps running in the first):
+
+**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `yarn ios:debug`). Only fall back to the default if no custom scripts are defined:
 
 ```bash
 npx react-native run-ios
@@ -136,7 +144,25 @@ After code or config changes, the app must load the new bundle:
 
 5. **Open in Xcode for detailed errors**: Open `ios/*.xcworkspace` in Xcode and build from there; read the full error in the Report navigator.
 
-### 3.2 When to Reinstall vs Refresh
+### 3.2 When to Ask the User
+
+**After 2-3 failed build or run attempts, STOP and ask the user for guidance.** The user may know about:
+- Required environment variables or `.env` files not checked into version control
+- Specific Xcode version, SDK, or signing requirements
+- Custom build configurations or schemes
+- Monorepo-specific setup steps not documented in standard places
+- Required external services or dependencies
+
+If the project structure is convoluted (monorepo, custom tooling, non-standard scripts) and the correct build approach is not obvious from `package.json` and project files, **ask the user early** rather than guessing.
+
+### 3.3 Saving Build Workflow for Later
+
+Once you discover the correct build/run workflow for a project, **save it for future sessions**. This is especially valuable for projects with non-standard setups. Consider creating a Cursor rule that captures:
+- The commands to start Metro (custom script, port, env vars)
+- The commands to build and run the app (scheme, configuration, simulator)
+- Any required environment setup (`.env` files, signing, etc.)
+
+### 3.4 When to Reinstall vs Refresh
 
 | Situation                                             | Action                                                                                                   |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -146,7 +172,7 @@ After code or config changes, the app must load the new bundle:
 | App needs reinstalling from .app path                 | Use `reinstall-app` tool with bundle ID and .app path.                                                   |
 | Persistent native build errors                        | Full clean + reinstall (step 3 above).                                                                   |
 
-### 3.3 iOS Simulator Control
+### 3.5 iOS Simulator Control
 
 | Action                    | Tool / Command                                                            |
 | ------------------------- | ------------------------------------------------------------------------- |
@@ -179,19 +205,24 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `metro-debugger` skill.
 
-### 4.2 Dev Menu (iOS Simulator)
+### 4.2 iOS System Popups
 
-- Open: **Cmd+Ctrl+Z** (or Cmd+D depending on setup).
-- Use for: Reload, Debug with Chrome/DevTools, Enable Fast Refresh, Inspect Element.
+iOS system-level popups (permission dialogs, network alerts, tracking consent, etc.) appear over the app and are **not part of the React Native view hierarchy**. 
 
-### 4.3 Logs
+If these cannot be tapped easly, use the `keyboard` tool with `key: "enter"` — this confirms the default button on the popup.
+
+### 4.3 Do not try to use the DevMenu in React Native apps by default.
+
+Use the tools provided by tool server instead.
+
+### 4.4 Logs
 
 | Log type        | Tool / Command                                                                                |
 | --------------- | --------------------------------------------------------------------------------------------- |
 | JS console logs | `debugger-console-logs` tool (captured logs) or `debugger-console-listen` tool (real-time)     |
 | iOS native logs | `npx react-native log-ios` or Xcode console when running from Xcode                          |
 
-### 4.4 Debugging with Breakpoints
+### 4.5 Debugging with Breakpoints
 
 For stepping through code with breakpoints, use the debugger tools:
 

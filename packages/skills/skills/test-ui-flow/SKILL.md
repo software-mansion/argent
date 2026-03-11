@@ -8,10 +8,14 @@ description: Autonomously test an iOS app UI by running interact-screenshot-veri
 All interactions go through argent MCP tools. Ensure the simulator is booted before starting.
 
 1. **Baseline screenshot**: Call `screenshot` to see the current UI state.
-2. **Find target**: If unsure where to tap, use `describe` (or `debugger-component-tree` for React Native apps) to get element locations.
+2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
+   - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps. To use it, resolve the `react-native-app-workflow` skill for setup.
+   - **Any iOS app**: use `describe` — it returns the accessibility element tree with normalized frame coordinates.
+   - **Fallback**: use `screenshot` to estimate where the desired component is
 3. **Interact**: Perform the action (`tap`, `swipe`, `paste`, etc.) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with `screenshot`.
-5. **Repeat** for each step in the flow.
+5. **If a tap misses**: Do NOT retry the same coordinates more than twice. Call the discovery tool again to verify the element position and recalculate. Elements may have shifted due to animations, keyboard appearance, or state changes.
+6. **Repeat** for each step in the flow.
 
 ## 2. Template
 
@@ -55,8 +59,11 @@ Steps:
 ## Tips
 
 - **Call `screenshot` only for baseline or when no action was just performed** — actions return screenshots automatically.
+- **Use discovery tools before tapping** — `describe` for any iOS app, `debugger-component-tree` for React Native. You may use screenshot as heuristics if these tools are not helpful
+- **Don't loop on failed taps** — after 2 failed attempts, re-check element positions with a discovery tool.
 - **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
 - **Use `gesture` for long-press** context menus (800ms hold).
+- **iOS system popups** (permission dialogs, alerts not part of the app) — if cannot be tapped easly, dismiss with `keyboard` tool using `key: "enter"`.
 - **Check for loading states** — retake with `screenshot` if the auto-screenshot shows a transitional frame.
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.

@@ -114,7 +114,16 @@ const server = new Server(
       "When your session ends or the user says they are done, call " +
       "stop-all-simulator-servers to clean up running simulators. " +
       "If the user started Metro separately, ask whether they would like you to " +
-      "call stop-metro (specify the port if it is not 8081).",
+      "call stop-metro (specify the port if it is not 8081). " +
+      "IMPORTANT — React Native apps: When you detect the target app is a React Native app " +
+      "(react-native in package.json, metro.config.js present, etc.), resolve the " +
+      "react-native-app-workflow skill and use debugger-component-tree " +
+      "to find element positions before tapping. " +
+      "IMPORTANT — Finding tap targets: Before tapping, use describe (any iOS app) or " +
+      "debugger-component-tree (React Native apps) to get exact element coordinates. " +
+      "If a tap fails after 2 attempts, stop retrying and use a discovery tool to verify positions. " +
+      "IMPORTANT — iOS system popups: Permission dialogs and other OS-level popups can be " +
+      "dismissed by pressing Enter via the keyboard tool — this is more reliable than tapping.",
   },
 );
 
