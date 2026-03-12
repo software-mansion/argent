@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
 import type { ToolDefinition } from "@argent/registry";
-import { PROFILER_SESSION_NAMESPACE } from "../../blueprints/profiler-session";
-import { buildAstIndexWithDiagnostics } from "../../utils/profiler/pipeline/06-resolve/ast-index";
+import { REACT_PROFILER_SESSION_NAMESPACE } from "../../../blueprints/react-profiler-session";
+import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -10,17 +10,17 @@ const zodSchema = z.object({
   project_root: z.string().describe("Absolute path to the RN project root"),
 });
 
-export const profilerComponentSourceTool: ToolDefinition<
+export const reactProfilerComponentSourceTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   Record<string, unknown>
 > = {
-  id: "profiler-component-source",
+  id: "react-profiler-component-source",
   description: `AST lookup via tree-sitter: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
-Call per-finding after profiler-analyze to inspect source before proposing a fix.
+Call per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not in user-owned code (e.g. node_modules).`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);

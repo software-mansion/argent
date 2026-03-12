@@ -107,7 +107,7 @@ export interface TagOutput {
   recordingMs: number;
 }
 
-// Final pipeline output (returned by pipeline/index.ts, consumed by profiler-analyze.ts)
+// Final pipeline output (returned by pipeline/index.ts, consumed by react-profiler-analyze.ts)
 export interface PipelineOutput {
   hotCommitSummaries: HotCommitSummary[];
   componentFindings: ComponentFinding[];

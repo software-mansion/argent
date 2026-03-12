@@ -8,9 +8,9 @@ import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import type {
   HermesCpuProfile,
   DevToolsCommitTree,
-} from "../utils/profiler/types/input";
+} from "../utils/react-profiler/types/input";
 
-export const PROFILER_SESSION_NAMESPACE = "ProfilerSession";
+export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
 /**
  * Injected once on connect — tracks fiber root commits for get_react_renders
@@ -55,7 +55,7 @@ export interface ScriptSourceEntry {
   sourceMapURL: string;
 }
 
-export interface ProfilerSessionApi {
+export interface ReactProfilerSessionApi {
   port: number;
   cdp: CDPClient;
   projectRoot: string;
@@ -71,14 +71,14 @@ export interface ProfilerSessionApi {
   profileStartWallMs: number | null;
 }
 
-export const profilerSessionBlueprint: ServiceBlueprint<
-  ProfilerSessionApi,
+export const reactProfilerSessionBlueprint: ServiceBlueprint<
+  ReactProfilerSessionApi,
   string
 > = {
-  namespace: PROFILER_SESSION_NAMESPACE,
+  namespace: REACT_PROFILER_SESSION_NAMESPACE,
 
   getURN(port: string) {
-    return `${PROFILER_SESSION_NAMESPACE}:${port}`;
+    return `${REACT_PROFILER_SESSION_NAMESPACE}:${port}`;
   },
 
   getDependencies(port: string) {
@@ -90,7 +90,7 @@ export const profilerSessionBlueprint: ServiceBlueprint<
     const cdp = debuggerApi.cdp;
     const ignore = () => {};
 
-    const state: ProfilerSessionApi = {
+    const state: ReactProfilerSessionApi = {
       port: debuggerApi.port,
       cdp,
       projectRoot: debuggerApi.projectRoot,

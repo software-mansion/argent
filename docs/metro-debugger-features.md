@@ -113,6 +113,6 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
   - `test-ui-flow` — Interact-screenshot-verify loop template.
   - `metro-debugger` — CDP debugging workflow: connect, breakpoints, inspect, console.
   - `react-native-app-workflow` — Full RN development lifecycle (start, debug, build, test).
-  - `react-native-profiler` — Performance profiling with `profiler-start` / `profiler-stop` / `profiler-analyze`.
+  - `react-native-profiler` — Performance profiling with `react-profiler-start` / `react-profiler-stop` / `react-profiler-analyze`.
 - Skills are installed into the user's skills directory via the `radon-skills` CLI and referenced in the agent configuration so the model has access to them.
 

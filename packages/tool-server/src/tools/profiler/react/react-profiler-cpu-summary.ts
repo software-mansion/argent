@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  PROFILER_SESSION_NAMESPACE,
-  type ProfilerSessionApi,
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
   getCachedProfilerData,
-} from "../../blueprints/profiler-session";
-import type { HermesProfileNode } from "../../utils/profiler/types/input";
+} from "../../../blueprints/react-profiler-session";
+import type { HermesProfileNode } from "../../../utils/react-profiler/types/input";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -115,30 +115,30 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
   return [header, sep, ...rows].join("\n");
 }
 
-export const profilerCpuSummaryTool: ToolDefinition<
+export const reactProfilerCpuSummaryTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   string
 > = {
-  id: "profiler-cpu-summary",
+  id: "react-profiler-cpu-summary",
   description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
 FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.
-Use profiler-analyze instead; it covers all React rendering performance analysis.
-Only call profiler-cpu-summary when you specifically need to investigate JS CPU hotspots
+Use react-profiler-analyze instead; it covers all React rendering performance analysis.
+Only call react-profiler-cpu-summary when you specifically need to investigate JS CPU hotspots
 that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
-Call profiler-stop first. Reads directly from the stored cpuProfile.`,
+Call react-profiler-stop first. Reads directly from the stored cpuProfile.`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.profilerSession as ProfilerSessionApi;
+    const api = services.profilerSession as ReactProfilerSessionApi;
 
     let cpuProfile = api.cpuProfile;
     if (!cpuProfile) {
       const cached = getCachedProfilerData(api.port);
       if (!cached) {
         throw new Error(
-          "No CPU profile stored. Call profiler-start, exercise the app, then profiler-stop.",
+          "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",
         );
       }
       cpuProfile = cached.cpuProfile;

@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  PROFILER_SESSION_NAMESPACE,
+  REACT_PROFILER_SESSION_NAMESPACE,
   FIBER_ROOT_TRACKER_SCRIPT,
-  type ProfilerSessionApi,
-} from "../../blueprints/profiler-session";
+  type ReactProfilerSessionApi,
+} from "../../../blueprints/react-profiler-session";
 
 const HOOK_NOT_PRESENT_ERRORS = new Set([
   "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
@@ -13,7 +13,7 @@ const HOOK_NOT_PRESENT_ERRORS = new Set([
 
 const HOOK_MISSING_MESSAGE =
   "React DevTools hook not present. Ensure the app is in development mode. " +
-  "Try calling profiler-start first to re-inject the hook.";
+  "Try calling react-profiler-start first to re-inject the hook.";
 
 function buildFiberTreeScript(maxDepth: number, filter: string): string {
   return `
@@ -102,19 +102,19 @@ const zodSchema = z.object({
     .describe("Regex string to filter component names"),
 });
 
-export const profilerFiberTreeTool: ToolDefinition<
+export const reactProfilerFiberTreeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   unknown
 > = {
-  id: "profiler-fiber-tree",
+  id: "react-profiler-fiber-tree",
   description: `Walk the React fiber tree and return a JSON representation of the component hierarchy.
 Use to trace ancestry when a finding is a library component, or to check for useMemoCache hook (confirms React Compiler is active on a component).`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.profilerSession as ProfilerSessionApi;
+    const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
     const script = buildFiberTreeScript(params.max_depth, params.filter ?? "");
 

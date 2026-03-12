@@ -1,19 +1,19 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  PROFILER_SESSION_NAMESPACE,
-  type ProfilerSessionApi,
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
   getCachedProfilerData,
-} from "../../blueprints/profiler-session";
+} from "../../../blueprints/react-profiler-session";
 import type {
   RawProfilingInput,
   HermesCpuProfile,
   DevToolsCommitTree,
-} from "../../utils/profiler/types/input";
-import { runPipeline } from "../../utils/profiler/pipeline/index";
-import { buildAstIndexWithDiagnostics } from "../../utils/profiler/pipeline/06-resolve/ast-index";
-import { renderProfilingReport } from "../../utils/profiler/pipeline/05-render";
-import { getDebugDir } from "../../utils/profiler/debug/dump";
+} from "../../../utils/react-profiler/types/input";
+import { runPipeline } from "../../../utils/react-profiler/pipeline/index";
+import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
+import { renderProfilingReport } from "../../../utils/react-profiler/pipeline/05-render";
+import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
@@ -45,29 +45,29 @@ const zodSchema = z.object({
     .describe(
       "Optional list of user actions with their time offset from profiling start. " +
         "Compute offsetMs = Date.now() - profileStartWallMs at the time of each action. " +
-        "profileStartWallMs is returned by profiler-start as started_at (wall clock).",
+        "profileStartWallMs is returned by react-profiler-start as started_at (wall clock).",
     ),
 });
 
-export const profilerAnalyzeTool: ToolDefinition<
+export const reactProfilerAnalyzeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   Record<string, unknown>
 > = {
-  id: "profiler-analyze",
+  id: "react-profiler-analyze",
   description: `Analyze stored profiling data and return a markdown performance report.
 Returns { report, reportFile, hotCommitsTotal, hotCommitsShown }.
 The report is structured around hot React commits (≥16ms absolute floor) with per-commit
 render cascades, root cause identification, and a top components table.
-Requires profiler-stop to have been called first.
+Requires react-profiler-stop to have been called first.
 Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
 the user action that preceded them. Compute offsetMs = Date.now() - profileStartWallMs
-at each action time (profileStartWallMs is Date.now() captured at profiler-start time).`,
+at each action time (profileStartWallMs is Date.now() captured at react-profiler-start time).`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.profilerSession as ProfilerSessionApi;
+    const api = services.profilerSession as ReactProfilerSessionApi;
 
     let cpuProfile = api.cpuProfile as HermesCpuProfile | null;
     let commitTree: DevToolsCommitTree | null = api.commitTree;
@@ -80,7 +80,7 @@ at each action time (profileStartWallMs is Date.now() captured at profiler-start
       const cached = getCachedProfilerData(api.port);
       if (!cached) {
         throw new Error(
-          "No profiling data stored. Call profiler-start → exercise the app → profiler-stop first.",
+          "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first.",
         );
       }
       cpuProfile = cached.cpuProfile;
@@ -172,7 +172,7 @@ at each action time (profileStartWallMs is Date.now() captured at profiler-start
     // hotCommitIndices === [] means hook was installed but 0 commits — that's valid, not an error.
     if (commitTree === null || hotCommitIndices === null) {
       result["warning"] =
-        "No React commit data — the DevTools hook may not be present in this runtime, or the commit-capture script failed to inject (check profiler-start output for errors).";
+        "No React commit data — the DevTools hook may not be present in this runtime, or the commit-capture script failed to inject (check react-profiler-start output for errors).";
     }
 
     return result;

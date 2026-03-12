@@ -1,6 +1,6 @@
 /**
  * Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
- * and hot commit indices determined by profiler-stop.
+ * and hot commit indices determined by react-profiler-stop.
  *
  * Groups commits by commitIndex, marks hot vs margin using hotCommitIndices set,
  * identifies root cause component per commit using preprocess annotations,
@@ -50,7 +50,7 @@ export function buildHotCommitSummaries(
         ? "hot"
         : totalRenderMs >= ABSOLUTE_WARM_MS
           ? "warm"
-          : null; // defensive; floor already applied in profiler-stop
+          : null; // defensive; floor already applied in react-profiler-stop
 
     // Get commit timestamp from first entry
     const timestampMs = entries[0]?.timestamp ?? 0;

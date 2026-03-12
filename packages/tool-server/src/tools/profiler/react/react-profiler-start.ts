@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  PROFILER_SESSION_NAMESPACE,
-  type ProfilerSessionApi,
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
   clearCachedProfilerData,
-} from "../../blueprints/profiler-session";
+} from "../../../blueprints/react-profiler-session";
 
 const COMMIT_CAPTURE_SCRIPT = `
 (function() {
@@ -133,7 +133,7 @@ const zodSchema = z.object({
     .describe("CPU sampling interval in microseconds (default 100)"),
 });
 
-export const profilerStartTool: ToolDefinition<
+export const reactProfilerStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     started_at: string;
@@ -141,16 +141,16 @@ export const profilerStartTool: ToolDefinition<
     detected_architecture: string | null;
   }
 > = {
-  id: "profiler-start",
+  id: "react-profiler-start",
   description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
-Sets up the ProfilerSession (auto-connects to Metro if not already connected), then starts CPU sampling and injects the React fiber commit-capture hook.
-After starting, ask the user to perform the interaction to profile, then call profiler-stop.`,
+Sets up the ReactProfilerSession (auto-connects to Metro if not already connected), then starts CPU sampling and injects the React fiber commit-capture hook.
+After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.profilerSession as ProfilerSessionApi;
+    const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
     const ignore = () => {};
 

@@ -1,37 +1,37 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  PROFILER_SESSION_NAMESPACE,
-  type ProfilerSessionApi,
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
   cacheProfilerData,
-} from "../../blueprints/profiler-session";
+} from "../../../blueprints/react-profiler-session";
 import type {
   HermesCpuProfile,
   DevToolsFiberCommit,
-} from "../../utils/profiler/types/input";
+} from "../../../utils/react-profiler/types/input";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
 });
 
-export const profilerStopTool: ToolDefinition<
+export const reactProfilerStopTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   Record<string, unknown>
 > = {
-  id: "profiler-stop",
+  id: "react-profiler-stop",
   description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Stores results in the ProfilerSession for later use by profiler-analyze or profiler-cpu-summary.
-Call profiler-start first, then exercise the app, then call this.`,
+Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
+Call react-profiler-start first, then exercise the app, then call this.`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services) {
-    const api = services.profilerSession as ProfilerSessionApi;
+    const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
     if (!api.profilingActive) {
-      throw new Error("Profiling is not active. Call profiler-start first.");
+      throw new Error("Profiling is not active. Call react-profiler-start first.");
     }
 
     const result = (await cdp.send("Profiler.stop")) as {

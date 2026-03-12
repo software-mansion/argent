@@ -20,7 +20,7 @@ export async function runPipeline(
   const preprocessed = preprocess(input.commitTree.commits);
 
   // Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
-  // Uses hotCommitIndices from sessionMeta (pre-computed in profiler-stop)
+  // Uses hotCommitIndices from sessionMeta (pre-computed in react-profiler-stop)
   const hotCommitIndices = input.sessionMeta.hotCommitIndices ?? [];
   const hotCommitSummaries = buildHotCommitSummaries(
     preprocessed,
@@ -68,7 +68,7 @@ export async function runPipeline(
     allClear: input.sessionMeta.allClear ?? false,
     maxCommitMs: input.sessionMeta.maxCommitMs,
     anyRuntimeCompilerDetected: tagOutput.anyRuntimeCompilerDetected,
-    // Use stored total from profiler-stop when available (all-clear path has no commits to count)
+    // Use stored total from react-profiler-stop when available (all-clear path has no commits to count)
     reactCommits: input.sessionMeta.totalReactCommits ?? tagOutput.reactCommits,
     fiberRenders: tagOutput.fiberRenders,
     totalFirstMounts: tagOutput.totalFirstMounts,

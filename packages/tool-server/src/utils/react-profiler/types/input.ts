@@ -71,7 +71,7 @@ export interface RawProfilingInput {
     rnVersion: string;
     projectRoot: string;  // needed for AST resolution in stage 6
     detectedArchitecture?: 'bridge' | 'bridgeless';
-    anyCompilerOptimized?: boolean;  // pre-scanned in profiler-stop before hot filtering
+    anyCompilerOptimized?: boolean;  // pre-scanned in react-profiler-stop before hot filtering
     hotCommitIndices?: number[];     // commit indices selected as "interesting" (≥16ms absolute floor)
     allClear?: boolean;              // true if all commits were below 16ms floor
     maxCommitMs?: number;            // max commit heat when allClear=true

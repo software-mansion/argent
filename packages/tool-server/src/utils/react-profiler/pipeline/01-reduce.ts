@@ -5,7 +5,7 @@
  *        First-mount commits are stripped before statistics.
  *
  * anyRuntimeCompilerDetected is seeded from sessionMeta.anyCompilerOptimized (scanned
- * in profiler-stop before hot-commit filtering) so React Compiler detection works even
+ * in react-profiler-stop before hot-commit filtering) so React Compiler detection works even
  * when compiler-optimized components render fast and appear only in cold commits.
  *
  * totalCommits fix: counts unique commitIndex values (actual React reconciler

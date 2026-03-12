@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  PROFILER_SESSION_NAMESPACE,
+  REACT_PROFILER_SESSION_NAMESPACE,
   FIBER_ROOT_TRACKER_SCRIPT,
-  type ProfilerSessionApi,
-} from "../../blueprints/profiler-session";
+  type ReactProfilerSessionApi,
+} from "../../../blueprints/react-profiler-session";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -57,7 +57,7 @@ const HOOK_NOT_PRESENT_ERRORS = new Set([
 
 const HOOK_MISSING_MESSAGE =
   "React DevTools hook not present. Ensure the app is in development mode. " +
-  "Try calling profiler-start first to re-inject the hook.";
+  "Try calling react-profiler-start first to re-inject the hook.";
 
 type ParsedRenders =
   | Record<
@@ -99,19 +99,19 @@ const zodSchema = z.object({
     .describe("Number of top re-rendering components to return (default 20)"),
 });
 
-export const profilerReactRendersTool: ToolDefinition<
+export const reactProfilerRendersTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   string
 > = {
-  id: "profiler-react-renders",
+  id: "react-profiler-renders",
   description: `Walk the live React fiber tree to collect component render counts and durations.
 Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services, params) {
-    const api = services.profilerSession as ProfilerSessionApi;
+    const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
 
     type EvalResult = {

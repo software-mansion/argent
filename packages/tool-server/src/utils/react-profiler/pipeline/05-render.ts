@@ -2,7 +2,7 @@
  * Stage 05-render: Renders HotCommitSummary[] + ComponentFinding[] into markdown.
  *
  * Output is LLM-optimized: structured prose with emoji tier indicators.
- * Writes the full report to debugDir/profiler-report.md.
+ * Writes the full report to debugDir/react-profiler-report.md.
  * Returns a capped version (top 10 hot commits by totalRenderMs) for inline response.
  *
  * Annotation matching: for each commit, find the annotation with highest offsetMs
@@ -15,7 +15,7 @@ import type { HotCommitSummary, ComponentFinding } from "../types/output";
 import type { SessionContext } from "../types/pipeline";
 
 const MAX_INLINE_COMMITS = 10;
-const REPORT_FILENAME = "profiler-report.md";
+const REPORT_FILENAME = "react-profiler-report.md";
 
 export interface RenderInput {
   hotCommitSummaries: HotCommitSummary[];
@@ -132,8 +132,8 @@ function renderAllClear(input: RenderInput, maxMs: number): string {
     ``,
     `No performance hotspots found. Consider these proactive checks:`,
     ``,
-    `- Run \`profiler-component-source\` on your most-rendered components to verify memoization is in place.`,
-    `- Run \`profiler-react-renders\` for a live view of render counts — components with high counts may benefit from \`React.memo\`${input.sessionContext.reactCompilerEnabled ? " or compiler-compatible patterns" : ""}.`,
+    `- Run \`react-profiler-component-source\` on your most-rendered components to verify memoization is in place.`,
+    `- Run \`react-profiler-renders\` for a live view of render counts — components with high counts may benefit from \`React.memo\`${input.sessionContext.reactCompilerEnabled ? " or compiler-compatible patterns" : ""}.`,
     `- Re-profile under heavier load (longer interaction, more data) to catch issues that don't appear in short sessions.`,
   ];
   return lines.join("\n");
