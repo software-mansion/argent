@@ -23,7 +23,7 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 
 The single central object that coordinates **tools** and **services**:
 
-- **Blueprints** — Templates for context-aware services (e.g. `SimulatorServer`, `JsRuntimeDebugger`, `ProfilerSession`). Each blueprint has a namespace, `getURN(context)`, optional dependencies, and a `factory` that creates a service instance. The registry does **not** start any services at startup; it only stores these templates.
+- **Blueprints** — Templates for context-aware services (e.g. `SimulatorServer`, `JsRuntimeDebugger`, `ReactProfilerSession`, `IosInstrumentsSession`). Each blueprint has a namespace, `getURN(context)`, optional dependencies, and a `factory` that creates a service instance. The registry does **not** start any services at startup; it only stores these templates.
 - **Services** — Long-running instances (e.g. a simulator-server process, a Metro CDP connection) created **on demand** and identified by **URN** (e.g. `SimulatorServer:<udid>`, `JsRuntimeDebugger:8081`). When something asks for a service by URN, the registry:
   - calls `resolveService(urn)`
   - if there is an instance for the URN, it reuses it, otherwise...
@@ -52,7 +52,7 @@ The **tool server** is the Node/Express process in `@argent/tool-server` (defaul
 
 - **Setup** — On startup (`packages/tool-server/src/index.ts`): it creates a registry via `createRegistry()`, attaches the registry logger, builds the HTTP app with `createHttpApp(registry)`, and starts listening.
 
-`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the three blueprints (SimulatorServer, JsRuntimeDebugger, ProfilerSession) and all tools (simulator, interactions, debugger, profiler, license), then returns it. No services are started at this point.
+`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the four blueprints (SimulatorServer, JsRuntimeDebugger, ReactProfilerSession, IosInstrumentsSession) and all tools (simulator, interactions, debugger, react-profiler, ios-instruments, license), then returns it. No services are started at this point.
 
 **Interaction with the registry** — Every request that needs the registry uses that one instance:
 

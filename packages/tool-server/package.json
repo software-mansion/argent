@@ -4,7 +4,7 @@
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
-    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc && cp src/utils/ios-instruments/Argent.tracetemplate dist/utils/ios-instruments/",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "vitest run",

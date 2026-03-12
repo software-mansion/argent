@@ -1,0 +1,208 @@
+import { z } from "zod";
+import { spawn, execSync } from "child_process";
+import * as path from "path";
+import type { ToolDefinition } from "@argent/registry";
+import {
+  IOS_INSTRUMENTS_SESSION_NAMESPACE,
+  type IosInstrumentsSessionApi,
+} from "../../../blueprints/ios-instruments-session";
+import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+
+const DEFAULT_TEMPLATE_PATH = path.resolve(
+  __dirname,
+  "../../../utils/ios-instruments/Argent.tracetemplate",
+);
+
+const zodSchema = z.object({
+  device_id: z.string().describe("iOS Simulator or device UDID"),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the user's project root directory. Output files will be saved to <project_root>/rn-devtools-debug/.",
+    ),
+  app_process: z
+    .string()
+    .optional()
+    .describe(
+      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running).",
+    ),
+  template_path: z
+    .string()
+    .optional()
+    .describe(
+      "Path to an Instruments .tracetemplate file (defaults to bundled Argent template)",
+    ),
+});
+
+interface AppInfo {
+  CFBundleExecutable: string;
+  CFBundleIdentifier: string;
+  CFBundleDisplayName?: string;
+  ApplicationType: string;
+}
+
+function detectRunningApp(udid: string): string {
+  // 1. Get running UIKitApplication processes
+  const launchctlOutput = execSync(
+    `xcrun simctl spawn ${udid} launchctl list`,
+    { encoding: "utf-8" },
+  );
+
+  const runningBundleIds = new Set<string>();
+  for (const line of launchctlOutput.split("\n")) {
+    const match = line.match(/UIKitApplication:([^\[]+)/);
+    if (match) {
+      runningBundleIds.add(match[1]);
+    }
+  }
+
+  if (runningBundleIds.size === 0) {
+    throw new Error(
+      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry.",
+    );
+  }
+
+  // 2. Get installed app metadata
+  const listAppsOutput = execSync(
+    `xcrun simctl listapps ${udid} | plutil -convert json -o - -`,
+    { encoding: "utf-8" },
+  );
+
+  const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
+
+  console.log("✨✨✨ installedApps", installedApps);
+
+  // 3. Cross-reference: running user apps
+  const runningUserApps: AppInfo[] = [];
+  for (const [, appInfo] of Object.entries(installedApps)) {
+    if (
+      appInfo.ApplicationType === "User" &&
+      runningBundleIds.has(appInfo.CFBundleIdentifier)
+    ) {
+      runningUserApps.push(appInfo);
+    }
+  }
+  console.log("✨✨✨ runningUserApps", runningUserApps);
+
+  if (runningUserApps.length === 0) {
+    throw new Error(
+      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry.",
+    );
+  }
+
+  if (runningUserApps.length > 1) {
+    const appList = runningUserApps
+      .map(
+        (a) =>
+          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`,
+      )
+      .join("\n");
+    throw new Error(
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`,
+    );
+  }
+
+  console.log(
+    "✨✨✨ runningUserApps[0].CFBundleExecutable",
+    runningUserApps[0].CFBundleExecutable,
+  );
+  return runningUserApps[0].CFBundleExecutable;
+}
+
+export const iosInstrumentsStartTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
+  { status: "recording"; pid: number; traceFile: string }
+> = {
+  id: "ios-instruments-start",
+  description: `Start iOS Instruments profiling via xctrace on a booted simulator or connected device.
+Auto-detects the running app process unless app_process is explicitly provided.
+After starting, let the user interact with the app, then call ios-instruments-stop.`,
+  zodSchema,
+  services: (params) => ({
+    session: `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${params.device_id}`,
+  }),
+  async execute(services, params) {
+    const api = services.session as IosInstrumentsSessionApi;
+
+    if (api.profilingActive) {
+      throw new Error(
+        `An iOS profiling session is already running (PID: ${api.xctracePid}).`,
+      );
+    }
+
+    const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
+    const appProcess = params.app_process ?? detectRunningApp(params.device_id);
+
+    const debugDir = await getDebugDir(params.project_root);
+    const timestamp = new Date()
+      .toISOString()
+      .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
+      .slice(0, 15);
+    const outputFile = path.join(
+      debugDir,
+      `ios-instruments-${timestamp}.trace`,
+    );
+
+    api.appProcess = appProcess;
+    api.traceFile = outputFile;
+
+    return new Promise((resolve, reject) => {
+      const xctraceProcess = spawn("xctrace", [
+        "record",
+        "--template",
+        templatePath,
+        "--device",
+        params.device_id,
+        "--attach",
+        appProcess,
+        "--output",
+        outputFile,
+      ]);
+
+      api.xctracePid = xctraceProcess.pid ?? null;
+      console.log("✨✨✨ xctrace spawned, PID:", xctraceProcess.pid);
+
+      xctraceProcess.stdout.on("data", (data: Buffer) => {
+        const output = data.toString();
+        console.log("✨✨✨ xctrace STDOUT:", JSON.stringify(output));
+
+        if (
+          output.includes("Ctrl-C to stop") ||
+          output.includes("Starting recording")
+        ) {
+          console.log("✨✨✨ xctrace recording detected! Resolving...");
+          api.profilingActive = true;
+          if (api.xctracePid) {
+            resolve({
+              status: "recording",
+              pid: api.xctracePid,
+              traceFile: outputFile,
+            });
+          }
+        }
+      });
+
+      xctraceProcess.stderr.on("data", (data: Buffer) => {
+        const errorOutput = data.toString();
+        console.log("✨✨✨ xctrace STDERR:", JSON.stringify(errorOutput));
+        if (
+          errorOutput.includes("Target failed to run") ||
+          errorOutput.includes("failed with errors")
+        ) {
+          api.xctracePid = null;
+          reject(new Error(`Failed to attach to iOS process: ${errorOutput}`));
+        }
+      });
+
+      xctraceProcess.on("close", (code: number | null) => {
+        console.log("✨✨✨ xctrace process CLOSED with code:", code);
+      });
+
+      xctraceProcess.on("error", (err: Error) => {
+        console.log("✨✨✨ xctrace process ERROR:", err.message);
+        api.xctracePid = null;
+        reject(new Error(`Failed to start xctrace: ${err.message}`));
+      });
+    });
+  },
+};

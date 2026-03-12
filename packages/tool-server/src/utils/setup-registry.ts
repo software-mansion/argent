@@ -1,7 +1,7 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
-import { profilerSessionBlueprint } from "../blueprints/profiler-session";
+import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
 import { simulatorServerTool } from "../tools/simulator/simulator-server";
@@ -34,14 +34,17 @@ import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
 import { getLicenseStatusTool } from "../tools/license/get-license-status";
 import { removeLicenseTool } from "../tools/license/remove-license";
-import { profilerStartTool } from "../tools/profiler/profiler-start";
-import { profilerStopTool } from "../tools/profiler/profiler-stop";
-import { profilerAnalyzeTool } from "../tools/profiler/profiler-analyze";
-import { profilerComponentSourceTool } from "../tools/profiler/profiler-component-source";
-import { profilerCpuSummaryTool } from "../tools/profiler/profiler-cpu-summary";
-import { profilerReactRendersTool } from "../tools/profiler/profiler-react-renders";
-import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
-import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
+import { reactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
+import { reactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
+import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
+import { reactProfilerComponentSourceTool } from "../tools/profiler/react/react-profiler-component-source";
+import { reactProfilerCpuSummaryTool } from "../tools/profiler/react/react-profiler-cpu-summary";
+import { reactProfilerRendersTool } from "../tools/profiler/react/react-profiler-renders";
+import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profiler-fiber-tree";
+import { iosInstrumentsStartTool } from "../tools/profiler/ios-instruments/ios-instruments-start";
+import { iosInstrumentsStopTool } from "../tools/profiler/ios-instruments/ios-instruments-stop";
+import { iosInstrumentsAnalyzeTool } from "../tools/profiler/ios-instruments/ios-instruments-analyze";
+import { iosInstrumentsSessionBlueprint } from "../blueprints/ios-instruments-session";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
@@ -51,7 +54,8 @@ export function createRegistry(): Registry {
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
-  registry.registerBlueprint(profilerSessionBlueprint);
+  registry.registerBlueprint(reactProfilerSessionBlueprint);
+  registry.registerBlueprint(iosInstrumentsSessionBlueprint);
 
   registry.registerTool(listSimulatorsTool);
   registry.registerTool(bootSimulatorTool);
@@ -85,14 +89,16 @@ export function createRegistry(): Registry {
   registry.registerTool(activateSsoTool);
   registry.registerTool(getLicenseStatusTool);
   registry.registerTool(removeLicenseTool);
-  registry.registerTool(profilerStartTool);
-  registry.registerTool(profilerStopTool);
-  registry.registerTool(profilerAnalyzeTool);
-  registry.registerTool(profilerComponentSourceTool);
-  registry.registerTool(profilerCpuSummaryTool);
-  registry.registerTool(profilerReactRendersTool);
-  registry.registerTool(profilerFiberTreeTool);
-  registry.registerTool(profilerConsoleLogsTool);
+  registry.registerTool(reactProfilerStartTool);
+  registry.registerTool(reactProfilerStopTool);
+  registry.registerTool(reactProfilerAnalyzeTool);
+  registry.registerTool(reactProfilerComponentSourceTool);
+  registry.registerTool(reactProfilerCpuSummaryTool);
+  registry.registerTool(reactProfilerRendersTool);
+  registry.registerTool(reactProfilerFiberTreeTool);
+  registry.registerTool(iosInstrumentsStartTool);
+  registry.registerTool(iosInstrumentsStopTool);
+  registry.registerTool(iosInstrumentsAnalyzeTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
