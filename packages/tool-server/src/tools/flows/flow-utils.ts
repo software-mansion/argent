@@ -27,6 +27,28 @@ export async function getFlowPath(name: string): Promise<string> {
   return path.join(dir, `${name}.flow`);
 }
 
+// ── Active flow state ────────────────────────────────────────────────
+
+let activeFlowName: string | null = null;
+
+/** Set the active flow name (called by flow_start). */
+export function setActiveFlow(name: string): void {
+  activeFlowName = name;
+}
+
+/** Get the active flow name, or throw if none is recording. */
+export function getActiveFlow(): string {
+  if (!activeFlowName) {
+    throw new Error("No active flow. Call flow_start first.");
+  }
+  return activeFlowName;
+}
+
+/** Clear the active flow (called by flow_finish). */
+export function clearActiveFlow(): void {
+  activeFlowName = null;
+}
+
 // ── Flow line types ──────────────────────────────────────────────────
 
 export type FlowStep =
