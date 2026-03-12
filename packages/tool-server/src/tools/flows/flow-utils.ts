@@ -3,11 +3,11 @@ import { promisify } from "node:util";
 import * as path from "node:path";
 
 const execFileAsync = promisify(execFile);
+const FLOWS_DIR_NAME = ".argent";
 
-export const FLOWS_DIR_NAME = ".argent";
+// ── Paths ────────────────────────────────────────────────────────────
 
-/** Returns the git root of the current working directory, or throws. */
-export async function getGitRoot(): Promise<string> {
+async function getGitRoot(): Promise<string> {
   const { stdout } = await execFileAsync("git", [
     "rev-parse",
     "--show-toplevel",
@@ -15,13 +15,11 @@ export async function getGitRoot(): Promise<string> {
   return stdout.trim();
 }
 
-/** Returns the path to the .argent/ flows directory inside the git root. */
 export async function getFlowsDir(): Promise<string> {
   const root = await getGitRoot();
   return path.join(root, FLOWS_DIR_NAME);
 }
 
-/** Returns the full path for a named flow file. */
 export async function getFlowPath(name: string): Promise<string> {
   const dir = await getFlowsDir();
   return path.join(dir, `${name}.flow`);
@@ -31,12 +29,10 @@ export async function getFlowPath(name: string): Promise<string> {
 
 let activeFlowName: string | null = null;
 
-/** Set the active flow name (called by flow_start). */
 export function setActiveFlow(name: string): void {
   activeFlowName = name;
 }
 
-/** Get the active flow name, or throw if none is recording. */
 export function getActiveFlow(): string {
   if (!activeFlowName) {
     throw new Error("No active flow. Call flow_start first.");
@@ -44,18 +40,16 @@ export function getActiveFlow(): string {
   return activeFlowName;
 }
 
-/** Clear the active flow (called by flow_finish). */
 export function clearActiveFlow(): void {
   activeFlowName = null;
 }
 
-// ── Flow line types ──────────────────────────────────────────────────
+// ── Serialisation ────────────────────────────────────────────────────
 
 export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown> }
   | { kind: "echo"; message: string };
 
-/** Serialise a single step to a line in the flow file. */
 export function serializeStep(step: FlowStep): string {
   if (step.kind === "echo") {
     return `echo:${step.message}`;
@@ -63,8 +57,7 @@ export function serializeStep(step: FlowStep): string {
   return `tool:${step.name} ${JSON.stringify(step.args)}`;
 }
 
-/** Parse a single line from a flow file into a FlowStep. */
-export function parseLine(line: string): FlowStep {
+function parseLine(line: string): FlowStep {
   if (line.startsWith("echo:")) {
     return { kind: "echo", message: line.slice(5) };
   }
@@ -81,7 +74,6 @@ export function parseLine(line: string): FlowStep {
   throw new Error(`Unrecognised flow line: ${line}`);
 }
 
-/** Parse all non-empty lines of a flow file. */
 export function parseFlow(content: string): FlowStep[] {
   return content
     .split("\n")

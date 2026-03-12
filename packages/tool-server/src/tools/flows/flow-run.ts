@@ -7,7 +7,7 @@ const zodSchema = z.object({
   name: z.string().describe("Name of the flow to run (e.g. \"settings-explore\")"),
 });
 
-export type StepResult =
+type StepResult =
   | { step: number; kind: "echo"; message: string }
   | { step: number; kind: "tool"; tool: string; result: unknown }
   | { step: number; kind: "tool"; tool: string; error: string };
