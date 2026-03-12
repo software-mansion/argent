@@ -43,6 +43,17 @@ if (fs.existsSync(BIN_SRC)) {
   console.warn(`⚠ simulator-server binary not found at ${BIN_SRC} — skipping copy`);
 }
 
+// Copy Argent.tracetemplate so ios-instruments-start can find it at runtime.
+const TRACE_TEMPLATE_SRC = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/utils/ios-instruments/Argent.tracetemplate");
+const TRACE_TEMPLATE_DEST = path.resolve(__dirname, "../dist/Argent.tracetemplate");
+
+if (fs.existsSync(TRACE_TEMPLATE_SRC)) {
+  fs.copyFileSync(TRACE_TEMPLATE_SRC, TRACE_TEMPLATE_DEST);
+  console.log(`✓ Copied Argent.tracetemplate → ${path.relative(process.cwd(), TRACE_TEMPLATE_DEST)}`);
+} else {
+  console.warn(`⚠ Argent.tracetemplate not found at ${TRACE_TEMPLATE_SRC} — skipping copy`);
+}
+
 // Copy skills into the package so they ship on npm.
 // Mirrors the full directory structure from packages/skills/skills/
 // (e.g. metro-debugger/SKILL.md, metro-debugger/references/source-maps.md, …)

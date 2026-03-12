@@ -10,7 +10,7 @@ import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(
   __dirname,
-  "../../../utils/ios-instruments/Argent.tracetemplate",
+  "Argent.tracetemplate",
 );
 
 const zodSchema = z.object({
