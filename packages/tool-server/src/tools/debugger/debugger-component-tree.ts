@@ -152,7 +152,9 @@ export const debuggerComponentTreeTool: ToolDefinition<
 Each visible component is listed with its name, text content, and normalized
 tap coordinates in [0,1] space (same coordinate space as the tap/swipe tools).
 
-Use this to understand what is on screen and to find tap targets:
+This is the preferred element discovery tool for React Native apps. More information in react-native-app-workflow skill.
+
+Workflow:
   1. Call this tool to get the component tree.
   2. Find the desired element by name, text, testID, or accessibilityLabel.
   3. Use the (tap: x,y) coordinates directly with the tap tool.

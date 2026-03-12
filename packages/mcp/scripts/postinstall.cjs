@@ -3,7 +3,7 @@
 "use strict";
 
 // Runs automatically after `npm install argent`.
-// Writes MCP server config for Claude Code and Cursor, copies skill files.
+// Writes MCP server config for Claude Code, Cursor, and VS Code (Claude extension), copies skill files.
 // Set ARGENT_SKIP_POSTINSTALL=1 to opt out entirely.
 
 if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {
@@ -91,6 +91,14 @@ try {
   results.push("✓ Registered MCP server in .cursor/mcp.json");
 } catch (err) {
   results.push(`⚠ Could not write .cursor/mcp.json: ${err}`);
+}
+
+// VS Code Claude extension — .mcp.json (project-scoped, read by Claude Code in VS Code)
+try {
+  registerMcpServer(path.join(projectRoot, ".mcp.json"), "argent");
+  results.push("✓ Registered MCP server in .mcp.json");
+} catch (err) {
+  results.push(`⚠ Could not write .mcp.json: ${err}`);
 }
 
 // Claude Code permissions — .claude/settings.json

@@ -100,13 +100,17 @@ export class Registry {
       this.events.emit('toolCompleted', id, duration);
       return result as TResult;
     } catch (error) {
+      const originalMsg = error instanceof Error ? error.message : String(error);
+
       const wrappedError =
         error instanceof ServiceInitializationError ||
         error instanceof ServiceNotFoundError
-          ? new ToolExecutionError(id, 'Service dependency failed', {
-              cause: error,
-            })
-          : new ToolExecutionError(id, 'Execution failed', {
+          ? new ToolExecutionError(
+              id,
+              `Service dependency failed: ${originalMsg}`,
+              { cause: error }
+            )
+          : new ToolExecutionError(id, originalMsg, {
               cause:
                 error instanceof Error ? error : new Error(String(error)),
             });
@@ -268,15 +272,11 @@ export class Registry {
       node.initPromise = null;
 
       if (error instanceof ServiceInitializationError) {
-        throw new ServiceInitializationError(
-          urn,
-          'Dependency failure',
-          { cause: error }
-        );
+        throw error;
       }
       throw new ServiceInitializationError(
         urn,
-        'Factory execution failed',
+        error instanceof Error ? error.message : String(error),
         {
           cause: error instanceof Error ? error : new Error(String(error)),
         }

@@ -3,6 +3,7 @@ import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { readToken } from "./utils/license";
 import { createIdleTimer } from "./utils/idle-timer";
+import { formatErrorForAgent } from "./utils/format-error";
 
 // ── License gate ────────────────────────────────────────────────────
 
@@ -154,8 +155,7 @@ export function createHttpApp(
         res.status(404).json({ error: err.message });
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: message });
+      res.status(500).json({ error: formatErrorForAgent(err) });
     }
   });
 
