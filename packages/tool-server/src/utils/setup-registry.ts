@@ -46,7 +46,7 @@ import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
 import { flowStartTool } from "../tools/flows/flow-start";
-import { flowAddStepTool } from "../tools/flows/flow-add-step";
+import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
 import { flowFinishTool } from "../tools/flows/flow-finish";
 import { createRunFlowTool } from "../tools/flows/flow-run";
@@ -106,7 +106,7 @@ export function createRegistry(): Registry {
 
   // Flow tools
   registry.registerTool(flowStartTool);
-  registry.registerTool(flowAddStepTool);
+  registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
   registry.registerTool(flowFinishTool);
   registry.registerTool(createRunFlowTool(registry));
