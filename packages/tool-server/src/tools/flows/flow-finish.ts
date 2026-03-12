@@ -4,7 +4,7 @@ import type { ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z.string().describe("Flow name to finalise"),
+  flow: z.string().describe("Flow name to finalise (e.g. \"settings-explore\")"),
 });
 
 export const flowFinishTool: ToolDefinition<
@@ -20,7 +20,7 @@ You can still hand-edit the .flow file afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    const filePath = await getFlowPath(params.name);
+    const filePath = await getFlowPath(params.flow);
     const flowFile = await fs.readFile(filePath, "utf8");
     const steps = parseFlow(flowFile);
 

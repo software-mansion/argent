@@ -4,8 +4,8 @@ import type { ToolDefinition } from "@argent/registry";
 import { getFlowPath, serializeStep } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z.string().describe("Flow name to append to"),
-  comment: z.string().describe("Message to echo when the flow runs"),
+  flow: z.string().describe("Flow name to append to (e.g. \"settings-explore\")"),
+  message: z.string().describe("Message to echo when the flow is replayed"),
 });
 
 export const flowInsertEchoTool: ToolDefinition<
@@ -20,8 +20,8 @@ Returns the current contents of the flow file after appending.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    const filePath = await getFlowPath(params.name);
-    const line = serializeStep({ kind: "echo", message: params.comment });
+    const filePath = await getFlowPath(params.flow);
+    const line = serializeStep({ kind: "echo", message: params.message });
     await fs.appendFile(filePath, line + "\n", "utf8");
 
     const flowFile = await fs.readFile(filePath, "utf8");

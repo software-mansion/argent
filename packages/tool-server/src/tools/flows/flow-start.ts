@@ -4,7 +4,7 @@ import type { ToolDefinition } from "@argent/registry";
 import { getFlowsDir, getFlowPath } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z.string().describe("Flow name (used as the filename, no extension)"),
+  flow: z.string().describe("Flow name (used as the filename, e.g. \"settings-explore\")"),
 });
 
 export const flowStartTool: ToolDefinition<
@@ -26,7 +26,7 @@ afterwards to remove or reorder lines.`,
     const dir = await getFlowsDir();
     await fs.mkdir(dir, { recursive: true });
 
-    const filePath = await getFlowPath(params.name);
+    const filePath = await getFlowPath(params.flow);
     // Overwrite / create fresh
     await fs.writeFile(filePath, "", "utf8");
 

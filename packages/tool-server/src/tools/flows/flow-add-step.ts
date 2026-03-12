@@ -4,12 +4,12 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, serializeStep } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z.string().describe("Flow name to append to"),
-  command: z.string().describe("MCP tool name (e.g. \"tap\")"),
-  arguments: z
+  flow: z.string().describe("Flow name to append to (e.g. \"settings-explore\")"),
+  tool: z.string().describe("MCP tool to call (e.g. \"tap\", \"screenshot\", \"launch-app\")"),
+  args: z
     .record(z.unknown())
     .optional()
-    .describe("Arguments for the tool call as a JSON object"),
+    .describe('Tool arguments as a JSON object, e.g. {"udid": "...", "x": 0.5, "y": 0.3}'),
 });
 
 export function createFlowAddStepTool(
@@ -34,16 +34,16 @@ Returns the live tool result AND the current contents of the flow file.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const filePath = await getFlowPath(params.name);
-      const args = (params.arguments ?? {}) as Record<string, unknown>;
+      const filePath = await getFlowPath(params.flow);
+      const args = (params.args ?? {}) as Record<string, unknown>;
 
       // Execute the tool call live first
-      const toolResult = await registry.invokeTool(params.command, args);
+      const toolResult = await registry.invokeTool(params.tool, args);
 
       // Only record on success
       const line = serializeStep({
         kind: "tool",
-        name: params.command,
+        name: params.tool,
         args,
       });
       await fs.appendFile(filePath, line + "\n", "utf8");

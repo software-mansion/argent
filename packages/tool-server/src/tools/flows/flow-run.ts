@@ -4,7 +4,7 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow, type FlowStep } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z.string().describe("Name of the flow to run"),
+  flow: z.string().describe("Name of the flow to run (e.g. \"settings-explore\")"),
 });
 
 export type StepResult =
@@ -26,7 +26,7 @@ echo steps print a message. Returns the result of every step.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const filePath = await getFlowPath(params.name);
+      const filePath = await getFlowPath(params.flow);
       const content = await fs.readFile(filePath, "utf8");
       const steps = parseFlow(content);
 
@@ -52,7 +52,7 @@ echo steps print a message. Returns the result of every step.`,
         }
       }
 
-      return { flow: params.name, steps: steps.length, results };
+      return { flow: params.flow, steps: steps.length, results };
     },
   };
 }
