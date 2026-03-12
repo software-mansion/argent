@@ -17,7 +17,9 @@ export const tapTool: ToolDefinition<
 > = {
   id: "tap",
   description: `Tap the simulator screen at normalized coordinates (0.0=left/top, 1.0=right/bottom).
-Sends a Down event followed by an Up event at the same point.`,
+Sends a Down event followed by an Up event at the same point.
+
+Before tapping, determine the correct coordinates by using debugger-component-tree, describe or screenshot tools. More information in simualtor-interact skill`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

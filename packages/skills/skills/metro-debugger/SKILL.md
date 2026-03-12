@@ -44,7 +44,7 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 | Tool                       | Purpose                                                                                                                               |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects). Can be used to retrieve infomration where to tap on screen in react native apps |
+| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates). **Preferred tool for finding tap targets in React Native apps** — use if ensure where to tap in order to get accurate coordinates. |
 | `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                      |
 | `debugger-console-logs`    | Get console messages.                                                                                                                 |
 | `debugger-console-listen`  | Stream console messages in real-time.                                                                                                 |

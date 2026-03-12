@@ -8,6 +8,7 @@ import { selectTarget } from "../utils/debugger/target-selection";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
+import { DISABLE_LOGBOX_SCRIPT } from "../utils/debugger/scripts/disable-logbox";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 
@@ -134,23 +135,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
     await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
     await cdp.addBinding("__radon_lite_callback");
 
-    await cdp
-      .evaluate(
-        `(function() {
-          if (typeof __r !== 'function') return;
-          for (var i = 0; i < 5000; i++) {
-            try {
-              var mod = __r(i);
-              var LB = mod && (mod.LogBox || (mod.default && mod.default.ignoreAllLogs && mod.default));
-              if (LB && typeof LB.ignoreAllLogs === 'function') {
-                LB.ignoreAllLogs(true);
-                return;
-              }
-            } catch(e) {}
-          }
-        })()`
-      )
-      .catch(ignore);
+    await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(ignore);
 
     await sourceMaps.waitForPending();
 

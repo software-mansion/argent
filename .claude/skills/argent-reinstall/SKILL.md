@@ -5,29 +5,19 @@ description: Rebuild and reinstall the Argent MCP server globally after making c
 
 # Argent Global Reinstall
 
-## Steps
+## Script
 
-Run both commands sequentially from the repo root (`/<path-to-argent>/argent`):
+Run the reinstall script from the repo root:
 
-1. **Pack**
+```
+bash scripts/reinstall-argent.sh
+```
 
-   ```
-   npm run pack:mcp
-   ```
-
-   This builds the tool-server (`tsc`), bundles it (`bundle-tools.cjs`), and produces `argent-0.1.0.tgz` in the repo root.
-
-2. **Install globally**
-
-   ```
-   npm install -g ./argent-0.1.0.tgz
-   ```
-
-   This replaces the global installation at `/$(npm root -g)/argent/`.
+This script kills any running Argent processes (scoped to the global install path to avoid false positives), then packs and installs globally.
 
 ## Notes
 
 - The MCP server entry point is `node /$(npm root -g)/argent/dist/index.js`
 - The global install is consumed by ClaudeCode via `/Users/<user>/.claude/settings.json` or OpenCode via `/Users/<user>/.config/opencode/opencode.json`
-- After reinstalling, the MCP daemon must be restarted for changes to take effect (restart the OpenCode session or reload the MCP server)
-- If the build fails, fix TypeScript errors first — `npm run build` inside `packages/tool-server` gives faster feedback than the full pack
+- After reinstalling, the MCP daemon will be automatically restarted on the next tool call
+- If the build fails, fix TypeScript errors first — run `npm run build` inside `packages/tool-server` for faster feedback
