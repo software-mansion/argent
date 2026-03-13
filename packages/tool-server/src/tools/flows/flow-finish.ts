@@ -12,7 +12,7 @@ export const flowFinishTool: ToolDefinition<
   id: "flow-finish",
   description: `Finish recording the active flow. Returns a summary of all recorded steps.
 
-You can still hand-edit the .flow file afterwards to remove or reorder steps.`,
+You can still hand-edit the .yaml file afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {

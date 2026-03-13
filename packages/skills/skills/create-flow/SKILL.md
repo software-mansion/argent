@@ -5,7 +5,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.flow` file in the `.argent/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
+A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
 
 ## 2. Tools
 
@@ -52,8 +52,8 @@ For tools with no arguments, omit `args` entirely.
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
 - **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
 - **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish`. The active flow is tracked automatically after `flow-start`.
-- **Mistakes can be edited out.** If a step was recorded but shouldn't have been, tell the user they can edit the `.flow` file by hand to remove or reorder lines.
-- **Do NOT write to the `.flow` file directly.** Always use the flow tools.
+- **Mistakes can be edited out.** If a step was recorded but shouldn't have been, tell the user they can edit the `.yaml` file by hand to remove or reorder entries.
+- **Do NOT write to the `.yaml` file directly.** Always use the flow tools.
 
 ## 6. Example Session
 
@@ -70,18 +70,29 @@ flow-finish    {}
 
 ## 7. Flow File Format
 
-Each line is either:
-- `tool:<name> <json>` — a tool call
-- `echo:<message>` — a label
+Flow files use YAML. Each entry in the array is either:
+- `- echo: <message>` — a label
+- `- tool: <name>` with optional `args:` — a tool call
 
-Example `.flow` file:
-```
-echo:Launch Settings app
-tool:launch-app {"udid":"ABC","bundleId":"com.apple.Preferences"}
-echo:Tap General
-tool:tap {"udid":"ABC","x":0.5,"y":0.35}
-echo:Tap About
-tool:tap {"udid":"ABC","x":0.5,"y":0.17}
+Example `.yaml` file:
+```yaml
+- echo: Launch Settings app
+- tool: launch-app
+  args:
+    udid: ABC
+    bundleId: com.apple.Preferences
+- echo: Tap General
+- tool: tap
+  args:
+    udid: ABC
+    x: 0.5
+    y: 0.35
+- echo: Tap About
+- tool: tap
+  args:
+    udid: ABC
+    x: 0.5
+    y: 0.17
 ```
 
 ## Related Skills

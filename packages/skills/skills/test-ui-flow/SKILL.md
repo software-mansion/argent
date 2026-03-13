@@ -67,7 +67,7 @@ Steps:
 - **Check for loading states** — retake with `screenshot` if the auto-screenshot shows a transitional frame.
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
-- **Record for replay**: If a tested flow is likely to be repeated, use the `create-flow` skill to record it as a `.flow` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
+- **Record for replay**: If a tested flow is likely to be repeated, use the `create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
 
 ## Related Skills
 

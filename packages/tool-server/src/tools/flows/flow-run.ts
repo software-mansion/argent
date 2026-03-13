@@ -24,7 +24,8 @@ export function createRunFlowTool(
     id: "flow-execute",
     description: `Run a saved flow from the .argent/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
-echo steps print a message. Returns the result of every step, including images.`,
+echo steps print a message. Returns the result of every step, including images.
+Flows are stored as .yaml files.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

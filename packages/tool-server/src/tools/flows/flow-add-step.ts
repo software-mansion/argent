@@ -26,7 +26,7 @@ export function createFlowAddStepTool(
 The tool call is run immediately. If it succeeds the step is recorded; if it
 fails an error is returned and nothing is recorded.
 
-If a step was recorded by mistake, edit the .flow file by hand to remove it.`,
+If a step was recorded by mistake, edit the .yaml file by hand to remove it.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

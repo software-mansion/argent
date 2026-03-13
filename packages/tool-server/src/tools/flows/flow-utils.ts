@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as path from "node:path";
+import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 
 const execFileAsync = promisify(execFile);
 const FLOWS_DIR_NAME = ".argent";
@@ -22,7 +23,7 @@ export async function getFlowsDir(): Promise<string> {
 
 export async function getFlowPath(name: string): Promise<string> {
   const dir = await getFlowsDir();
-  return path.join(dir, `${name}.flow`);
+  return path.join(dir, `${name}.yaml`);
 }
 
 // ── Active flow state ────────────────────────────────────────────────
@@ -50,34 +51,43 @@ export type FlowStep =
   | { kind: "tool"; name: string; args: Record<string, unknown> }
   | { kind: "echo"; message: string };
 
-export function serializeStep(step: FlowStep): string {
+type YamlStep =
+  | { echo: string }
+  | { tool: string; args?: Record<string, unknown> };
+
+function toYamlStep(step: FlowStep): YamlStep {
   if (step.kind === "echo") {
-    return `echo:${step.message}`;
+    return { echo: step.message };
   }
-  return `tool:${step.name} ${JSON.stringify(step.args)}`;
+  const hasArgs = Object.keys(step.args).length > 0;
+  return hasArgs ? { tool: step.name, args: step.args } : { tool: step.name };
 }
 
-function parseLine(line: string): FlowStep {
-  if (line.startsWith("echo:")) {
-    return { kind: "echo", message: line.slice(5) };
+function fromYamlStep(raw: YamlStep): FlowStep {
+  if ("echo" in raw) {
+    return { kind: "echo", message: raw.echo };
   }
-  if (line.startsWith("tool:")) {
-    const rest = line.slice(5);
-    const spaceIdx = rest.indexOf(" ");
-    if (spaceIdx === -1) {
-      return { kind: "tool", name: rest, args: {} };
-    }
-    const name = rest.slice(0, spaceIdx);
-    const args = JSON.parse(rest.slice(spaceIdx + 1)) as Record<string, unknown>;
-    return { kind: "tool", name, args };
-  }
-  throw new Error(`Unrecognised flow line: ${line}`);
+  return { kind: "tool", name: raw.tool, args: raw.args ?? {} };
 }
 
+/** Serialize a single step as a YAML list item string (with trailing newline). */
+export function serializeStep(step: FlowStep): string {
+  return yamlStringify([toYamlStep(step)], { flowLevel: 2 }).trimEnd();
+}
+
+/** Parse a full YAML flow file into FlowStep[]. */
 export function parseFlow(content: string): FlowStep[] {
-  return content
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0)
-    .map(parseLine);
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return [];
+
+  const parsed = yamlParse(trimmed) as YamlStep[];
+  if (!Array.isArray(parsed)) {
+    throw new Error("Invalid flow file: expected a YAML array");
+  }
+
+  return parsed.map((raw) => {
+    if ("echo" in raw) return fromYamlStep(raw);
+    if ("tool" in raw) return fromYamlStep(raw);
+    throw new Error(`Unrecognised flow entry: ${JSON.stringify(raw)}`);
+  });
 }

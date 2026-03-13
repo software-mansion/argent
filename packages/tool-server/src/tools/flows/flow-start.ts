@@ -12,13 +12,13 @@ export const flowStartTool: ToolDefinition<
   { message: string; flowFile: string }
 > = {
   id: "flow-start",
-  description: `Start recording a new flow. Creates a .flow file in the .argent/ directory.
+  description: `Start recording a new flow. Creates a .yaml file in the .argent/ directory.
 
 After starting, use flow-add-step to append tool calls — each step is executed
 LIVE so you can verify it works before it gets recorded. Use flow-add-echo
 to add labels. Call flow-finish when done.
 
-If a recorded step turns out to be wrong, you can edit the .flow file by hand
+If a recorded step turns out to be wrong, you can edit the .yaml file by hand
 afterwards to remove or reorder lines.`,
   zodSchema,
   services: () => ({}),
