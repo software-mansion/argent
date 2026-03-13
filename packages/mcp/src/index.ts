@@ -10,6 +10,11 @@ import {
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer } from "./launcher.js";
 import {
+  toMcpContent,
+  flowRunToMcpContent,
+  type FlowExecuteResult,
+} from "./content.js";
+import {
   autoScreenshotEnabled,
   getUdidFromArgs,
   shouldAutoScreenshot,
@@ -75,72 +80,6 @@ async function callTool(
   };
   if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
   return { result: json.data, outputHint: meta?.outputHint };
-}
-
-/**
- * Unpack run_flow's structured step results into MCP content blocks.
- * Each step carries its own outputHint so toMcpContent handles images correctly.
- */
-async function flowRunToMcpContent(result: {
-  flow: string;
-  steps: {
-    kind: string;
-    tool?: string;
-    message?: string;
-    result?: unknown;
-    outputHint?: string;
-    error?: string;
-  }[];
-}) {
-  const blocks: { type: string; [k: string]: unknown }[] = [];
-  blocks.push({
-    type: "text",
-    text: `Running flow "${result.flow}" (${result.steps.length} steps)`,
-  });
-
-  for (let i = 0; i < result.steps.length; i++) {
-    const step = result.steps[i]!;
-    const num = i + 1;
-
-    if (step.kind === "echo") {
-      blocks.push({ type: "text", text: `[${num}] ${step.message}` });
-    } else if ("error" in step && step.error) {
-      blocks.push({
-        type: "text",
-        text: `[${num}] ${step.tool} ERROR: ${step.error}`,
-      });
-    } else {
-      blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint);
-      blocks.push(...stepContent);
-    }
-  }
-
-  blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
-  return blocks;
-}
-
-async function toMcpContent(result: unknown, outputHint?: string) {
-  if (
-    outputHint === "image" &&
-    result &&
-    typeof result === "object" &&
-    "url" in result
-  ) {
-    const imgRes = await fetch((result as { url: string }).url);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    const filePath = (result as { path?: string }).path ?? "";
-    return [
-      {
-        type: "image" as const,
-        data: buf.toString("base64"),
-        mimeType: "image/png" as const,
-      },
-      { type: "text" as const, text: `Saved: ${filePath}` },
-    ];
-  }
-
-  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
 }
 
 const server = new Server(
@@ -214,9 +153,7 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       typeof result === "object" &&
       "flow" in result &&
       "steps" in result
-        ? await flowRunToMcpContent(
-            result as Parameters<typeof flowRunToMcpContent>[0],
-          )
+        ? await flowRunToMcpContent(result as FlowExecuteResult)
         : await toMcpContent(result, outputHint);
 
     const udid = getUdidFromArgs(params.arguments);
