@@ -14,7 +14,7 @@ vi.mock("../../src/tools/flows/flow-utils", async (importOriginal) => {
     ...original,
     getFlowsDir: async () => path.join(tmpDir, ".argent"),
     getFlowPath: async (name: string) =>
-      path.join(tmpDir, ".argent", `${name}.flow`),
+      path.join(tmpDir, ".argent", `${name}.yaml`),
   };
 });
 
@@ -27,6 +27,7 @@ import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import {
   setActiveFlow,
   clearActiveFlow,
+  parseFlow,
 } from "../../src/tools/flows/flow-utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ function createMockRegistry(
 }
 
 async function readFlowFile(name: string): Promise<string> {
-  return fs.readFile(path.join(tmpDir, ".argent", `${name}.flow`), "utf8");
+  return fs.readFile(path.join(tmpDir, ".argent", `${name}.yaml`), "utf8");
 }
 
 // ── Setup / teardown ─────────────────────────────────────────────────
@@ -71,7 +72,7 @@ afterEach(async () => {
 // ── flow-start ───────────────────────────────────────────────────────
 
 describe("flow-start", () => {
-  it("creates the .argent dir and an empty .flow file", async () => {
+  it("creates the .argent dir and an empty .yaml file", async () => {
     const result = await flowStartTool.execute({}, { name: "test-flow" });
     expect(result.message).toContain("test-flow");
     expect(result.flowFile).toBe("");
@@ -104,7 +105,7 @@ describe("flow-start", () => {
 // ── flow-add-echo ────────────────────────────────────────────────────
 
 describe("flow-add-echo", () => {
-  it("appends an echo line to the flow file", async () => {
+  it("appends an echo entry to the flow file", async () => {
     await flowStartTool.execute({}, { name: "echo-test" });
     const result = await flowInsertEchoTool.execute(
       {},
@@ -112,10 +113,11 @@ describe("flow-add-echo", () => {
     );
 
     expect(result.message).toContain("echo-test");
-    expect(result.flowFile).toBe("echo:Hello world\n");
+    const parsed = parseFlow(result.flowFile);
+    expect(parsed).toEqual([{ kind: "echo", message: "Hello world" }]);
   });
 
-  it("appends multiple echo lines", async () => {
+  it("appends multiple echo entries", async () => {
     await flowStartTool.execute({}, { name: "multi-echo" });
     await flowInsertEchoTool.execute({}, { message: "First" });
     const result = await flowInsertEchoTool.execute(
@@ -123,7 +125,11 @@ describe("flow-add-echo", () => {
       { message: "Second" },
     );
 
-    expect(result.flowFile).toBe("echo:First\necho:Second\n");
+    const parsed = parseFlow(result.flowFile);
+    expect(parsed).toEqual([
+      { kind: "echo", message: "First" },
+      { kind: "echo", message: "Second" },
+    ]);
   });
 
   it("throws when no active flow", async () => {
@@ -149,7 +155,10 @@ describe("flow-add-step", () => {
     );
 
     expect(result.toolResult).toEqual({ tapped: true });
-    expect(result.flowFile).toBe('tool:tap {"x":0.5,"y":0.3}\n');
+    const parsed = parseFlow(result.flowFile);
+    expect(parsed).toEqual([
+      { kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } },
+    ]);
     expect(registry.invokeTool).toHaveBeenCalledWith("tap", {
       x: 0.5,
       y: 0.3,
@@ -181,7 +190,10 @@ describe("flow-add-step", () => {
     await tool.execute({}, { command: "screenshot" });
 
     const content = await readFlowFile("no-args");
-    expect(content).toBe("tool:screenshot {}\n");
+    const parsed = parseFlow(content);
+    expect(parsed).toEqual([
+      { kind: "tool", name: "screenshot", args: {} },
+    ]);
     expect(registry.invokeTool).toHaveBeenCalledWith("screenshot", {});
   });
 
@@ -209,7 +221,6 @@ describe("flow-finish", () => {
     expect(result.message).toContain("finish-test");
     expect(result.steps).toBe(1);
     expect(result.summary).toEqual(["1. echo: Step 1"]);
-    expect(result.flowFile).toBe("echo:Step 1\n");
 
     // Active flow should be cleared
     await expect(
@@ -293,12 +304,12 @@ describe("flow-execute", () => {
     });
     const runFlow = createRunFlowTool(registry);
 
-    // Manually write a flow file
+    // Manually write a flow file in YAML format
     const dir = path.join(tmpDir, ".argent");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(
-      path.join(dir, "error-test.flow"),
-      'tool:tap {"x":0.5}\necho:Should not reach\n',
+      path.join(dir, "error-test.yaml"),
+      "- tool: tap\n  args:\n    x: 0.5\n- echo: Should not reach\n",
     );
 
     const result = await runFlow.execute({}, { name: "error-test" });
@@ -332,8 +343,8 @@ describe("flow-execute", () => {
     const dir = path.join(tmpDir, ".argent");
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(
-      path.join(dir, "hint-test.flow"),
-      'tool:screenshot {"udid":"A"}\n',
+      path.join(dir, "hint-test.yaml"),
+      "- tool: screenshot\n  args:\n    udid: A\n",
     );
 
     const result = await runFlow.execute({}, { name: "hint-test" });

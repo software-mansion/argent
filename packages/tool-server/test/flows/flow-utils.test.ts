@@ -13,13 +13,13 @@ import {
 describe("serializeStep", () => {
   it("serializes an echo step", () => {
     expect(serializeStep({ kind: "echo", message: "Hello" })).toBe(
-      "echo:Hello",
+      "- echo: Hello",
     );
   });
 
   it("serializes an echo with special characters", () => {
     expect(serializeStep({ kind: "echo", message: "Step: tap x=0.5" })).toBe(
-      "echo:Step: tap x=0.5",
+      "- echo: \"Step: tap x=0.5\"",
     );
   });
 
@@ -29,45 +29,52 @@ describe("serializeStep", () => {
       name: "tap",
       args: { udid: "ABC", x: 0.5, y: 0.3 },
     };
-    expect(serializeStep(step)).toBe(
-      'tool:tap {"udid":"ABC","x":0.5,"y":0.3}',
-    );
+    const result = serializeStep(step);
+    expect(result).toContain("- tool: tap");
+    expect(result).toContain("  args:");
+    expect(result).toContain("    udid: ABC");
+    expect(result).toContain("    x: 0.5");
+    expect(result).toContain("    y: 0.3");
   });
 
-  it("serializes a tool step with empty args", () => {
+  it("serializes a tool step with empty args (omits args key)", () => {
     const step: FlowStep = { kind: "tool", name: "screenshot", args: {} };
-    expect(serializeStep(step)).toBe("tool:screenshot {}");
+    expect(serializeStep(step)).toBe("- tool: screenshot");
   });
 });
 
 // ── parseFlow ────────────────────────────────────────────────────────
 
 describe("parseFlow", () => {
-  it("parses echo lines", () => {
-    expect(parseFlow("echo:Hello\n")).toEqual([
+  it("parses echo entries", () => {
+    expect(parseFlow("- echo: Hello\n")).toEqual([
       { kind: "echo", message: "Hello" },
     ]);
   });
 
-  it("parses tool lines with args", () => {
-    const content = 'tool:tap {"x":0.5,"y":0.3}\n';
+  it("parses tool entries with args", () => {
+    const content = "- tool: tap\n  args:\n    x: 0.5\n    y: 0.3\n";
     expect(parseFlow(content)).toEqual([
       { kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } },
     ]);
   });
 
-  it("parses tool lines with no args (no space after name)", () => {
-    expect(parseFlow("tool:screenshot\n")).toEqual([
+  it("parses tool entries with no args", () => {
+    expect(parseFlow("- tool: screenshot\n")).toEqual([
       { kind: "tool", name: "screenshot", args: {} },
     ]);
   });
 
-  it("parses a multi-line flow", () => {
+  it("parses a multi-step flow", () => {
     const content = [
-      "echo:Step 1",
-      'tool:tap {"x":0.5}',
-      "echo:Step 2",
-      'tool:screenshot {"udid":"ABC"}',
+      "- echo: Step 1",
+      "- tool: tap",
+      "  args:",
+      "    x: 0.5",
+      "- echo: Step 2",
+      "- tool: screenshot",
+      "  args:",
+      "    udid: ABC",
     ].join("\n");
 
     expect(parseFlow(content)).toEqual([
@@ -78,24 +85,15 @@ describe("parseFlow", () => {
     ]);
   });
 
-  it("skips blank lines", () => {
-    const content = "echo:A\n\n\necho:B\n";
-    expect(parseFlow(content)).toHaveLength(2);
-  });
-
-  it("trims whitespace from lines", () => {
-    expect(parseFlow("  echo:Hello  \n")).toEqual([
-      { kind: "echo", message: "Hello" },
-    ]);
-  });
-
   it("returns empty array for empty content", () => {
     expect(parseFlow("")).toEqual([]);
     expect(parseFlow("\n\n")).toEqual([]);
   });
 
-  it("throws on unrecognised line prefix", () => {
-    expect(() => parseFlow("bogus:line")).toThrow("Unrecognised flow line");
+  it("throws on unrecognised entries", () => {
+    expect(() => parseFlow("- bogus: line\n")).toThrow(
+      "Unrecognised flow entry",
+    );
   });
 
   it("roundtrips: serialize then parse", () => {
@@ -105,7 +103,7 @@ describe("parseFlow", () => {
       { kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } },
       { kind: "echo", message: "Done" },
     ];
-    const serialized = steps.map(serializeStep).join("\n");
+    const serialized = steps.map(serializeStep).join("\n") + "\n";
     expect(parseFlow(serialized)).toEqual(steps);
   });
 });
