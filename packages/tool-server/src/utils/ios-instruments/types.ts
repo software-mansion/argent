@@ -49,8 +49,14 @@ export interface CpuHotspot {
   severity: "RED" | "YELLOW";
   /** Representative app call chain for this hotspot */
   topCallChain: string[];
+  /** Top 3 most frequent app call chains */
+  topCallChains: { chain: string[]; count: number }[];
   /** Whether this function was also seen during a UI hang window */
   duringHang: boolean;
+  /** Time range of samples in this hotspot (ms from trace start) */
+  timeRangeMs: { first: number; last: number };
+  /** Burst windows: clusters of activity separated by >500ms gaps */
+  burstWindows: { startMs: number; endMs: number; sampleCount: number }[];
 }
 
 export interface UiHang {

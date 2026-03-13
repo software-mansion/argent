@@ -172,6 +172,7 @@ After starting, let the user interact with the app, then call ios-instruments-st
         ) {
           console.log("✨✨✨ xctrace recording detected! Resolving...");
           api.profilingActive = true;
+          api.wallClockStartMs = Date.now();
           if (api.xctracePid) {
             resolve({
               status: "recording",

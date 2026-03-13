@@ -18,6 +18,14 @@ export interface HotCommitComponentEntry {
   isCompilerOptimized?: boolean;
 }
 
+export interface CpuCommitHotspot {
+  name: string;
+  selfMs: number;
+  totalMs: number;
+  url?: string;
+  lineNumber?: number;
+}
+
 export interface HotCommitSummary {
   commitIndex: number;
   timestampMs: number;    // performance.now() from device (absolute)
@@ -31,6 +39,7 @@ export interface HotCommitSummary {
   rootCauseChangedHookNames?: string[];
   components: HotCommitComponentEntry[];  // grouped by name, sorted by selfDurationMs DESC (capped at 15)
   totalComponentCount: number;            // total before cap (for "... and N more" display)
+  cpuHotspots?: CpuCommitHotspot[];       // top JS functions by self-time during this commit's time window
 }
 
 export interface ComponentFinding {

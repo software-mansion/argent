@@ -4,6 +4,7 @@ import { getDebugDir, writeDump } from "../debug/dump";
 import { detectSessionContext } from "./session-context";
 import { preprocess } from "./00-preprocess";
 import { buildHotCommitSummaries } from "./00-hot-commits";
+import { buildCpuSampleIndex, correlateCpuWithCommits } from "./00-cpu-correlate";
 import { reduce } from "./01-reduce";
 import { enrich } from "./02-enrich";
 import { tag } from "./03-tag";
@@ -22,9 +23,19 @@ export async function runPipeline(
   // Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
   // Uses hotCommitIndices from sessionMeta (pre-computed in react-profiler-stop)
   const hotCommitIndices = input.sessionMeta.hotCommitIndices ?? [];
-  const hotCommitSummaries = buildHotCommitSummaries(
+  const rawHotCommitSummaries = buildHotCommitSummaries(
     preprocessed,
     hotCommitIndices,
+  );
+
+  // Stage 00-cpu-correlate: Map Hermes CPU samples to hot commit time windows
+  const firstCommitTs = preprocessed.length > 0 ? preprocessed[0]!.timestamp : null;
+  const cpuSampleIndex = input.flamegraph
+    ? buildCpuSampleIndex(input.flamegraph, firstCommitTs)
+    : null;
+  const hotCommitSummaries = correlateCpuWithCommits(
+    rawHotCommitSummaries,
+    cpuSampleIndex,
   );
 
   // Stage 1: Reduce — O(n) over React commits
@@ -72,5 +83,6 @@ export async function runPipeline(
     reactCommits: input.sessionMeta.totalReactCommits ?? tagOutput.reactCommits,
     fiberRenders: tagOutput.fiberRenders,
     totalFirstMounts: tagOutput.totalFirstMounts,
+    cpuSampleIndex,
   };
 }

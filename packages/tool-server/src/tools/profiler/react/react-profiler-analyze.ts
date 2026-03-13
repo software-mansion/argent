@@ -125,6 +125,14 @@ at each action time (profileStartWallMs is Date.now() captured at react-profiler
 
     const pipelineOutput = await runPipeline(input);
 
+    // Cache the cpuSampleIndex for subsequent query tool calls
+    if (pipelineOutput.cpuSampleIndex) {
+      const snapshot = getCachedProfilerData(api.port);
+      if (snapshot) {
+        snapshot.cpuSampleIndex = pipelineOutput.cpuSampleIndex;
+      }
+    }
+
     // Enrich component findings with source locations via AST index
     try {
       const astIndex = await buildAstIndexWithDiagnostics(params.project_root);

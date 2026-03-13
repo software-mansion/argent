@@ -116,20 +116,52 @@ export function aggregateCpuHotspots(
 
     const [dominantFunction, thread] = key.split("|||");
 
-    // Find the most common call chain for this group
-    let topCallChain: string[] = [];
-    let maxCount = 0;
-    for (const { chain, count } of acc.chainCounts.values()) {
-      if (count > maxCount) {
-        maxCount = count;
-        topCallChain = chain;
-      }
-    }
+    // Find top 3 most common call chains
+    const sortedChains = [...acc.chainCounts.values()]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 3);
+    const topCallChain = sortedChains[0]?.chain ?? [];
+    const topCallChains = sortedChains.map(({ chain, count }) => ({ chain, count }));
 
     // Check if any sample in this group occurred during a hang
     const duringHang = acc.timestamps.some((ts) =>
       hangSampleTimestamps.has(ts),
     );
+
+    // Compute time range and burst windows from timestamps
+    const sortedTs = [...acc.timestamps].sort((a, b) => a - b);
+    const firstMs = sortedTs.length > 0 ? Math.round(sortedTs[0]! / 1_000_000) : 0;
+    const lastMs = sortedTs.length > 0 ? Math.round(sortedTs[sortedTs.length - 1]! / 1_000_000) : 0;
+
+    const BURST_GAP_MS = 500;
+    const burstWindows: { startMs: number; endMs: number; sampleCount: number }[] = [];
+    if (sortedTs.length > 0) {
+      let burstStartNs = sortedTs[0]!;
+      let burstEndNs = sortedTs[0]!;
+      let burstCount = 1;
+
+      for (let i = 1; i < sortedTs.length; i++) {
+        const gapMs = (sortedTs[i]! - burstEndNs) / 1_000_000;
+        if (gapMs > BURST_GAP_MS) {
+          burstWindows.push({
+            startMs: Math.round(burstStartNs / 1_000_000),
+            endMs: Math.round(burstEndNs / 1_000_000),
+            sampleCount: burstCount,
+          });
+          burstStartNs = sortedTs[i]!;
+          burstEndNs = sortedTs[i]!;
+          burstCount = 1;
+        } else {
+          burstEndNs = sortedTs[i]!;
+          burstCount++;
+        }
+      }
+      burstWindows.push({
+        startMs: Math.round(burstStartNs / 1_000_000),
+        endMs: Math.round(burstEndNs / 1_000_000),
+        sampleCount: burstCount,
+      });
+    }
 
     results.push({
       type: "ios_cpu_hotspot",
@@ -140,7 +172,10 @@ export function aggregateCpuHotspots(
       thread: thread!,
       severity: weightPercentage > 15 ? "RED" : "YELLOW",
       topCallChain,
+      topCallChains,
       duringHang,
+      timeRangeMs: { first: firstMs, last: lastMs },
+      burstWindows,
     });
   }
 

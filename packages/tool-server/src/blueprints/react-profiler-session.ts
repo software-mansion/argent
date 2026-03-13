@@ -9,6 +9,7 @@ import type {
   HermesCpuProfile,
   DevToolsCommitTree,
 } from "../utils/react-profiler/types/input";
+import type { CpuSampleIndex } from "../utils/react-profiler/pipeline/00-cpu-correlate";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
@@ -194,6 +195,7 @@ export interface ProfilerDataSnapshot {
   anyCompilerOptimized: boolean | null;
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
+  cpuSampleIndex?: CpuSampleIndex | null;
 }
 
 const profilerDataCache = new Map<number, ProfilerDataSnapshot>();

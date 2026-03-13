@@ -3,8 +3,21 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
+import type {
+  CpuSample,
+  UiHang,
+  MemoryLeak,
+  CpuHotspot,
+} from "../utils/ios-instruments/types";
 
 export const IOS_INSTRUMENTS_SESSION_NAMESPACE = "IosInstrumentsSession";
+
+export interface IosInstrumentsParsedData {
+  cpuSamples: CpuSample[];
+  uiHangs: UiHang[];
+  cpuHotspots: CpuHotspot[];
+  memoryLeaks: MemoryLeak[];
+}
 
 export interface IosInstrumentsSessionApi {
   deviceId: string;
@@ -13,6 +26,8 @@ export interface IosInstrumentsSessionApi {
   traceFile: string | null;
   exportedFiles: Record<string, string | null> | null;
   profilingActive: boolean;
+  wallClockStartMs: number | null;
+  parsedData: IosInstrumentsParsedData | null;
 }
 
 export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
@@ -33,6 +48,8 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
       traceFile: null,
       exportedFiles: null,
       profilingActive: false,
+      wallClockStartMs: null,
+      parsedData: null,
     };
 
     const events = new TypedEventEmitter<ServiceEvents>();

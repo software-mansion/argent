@@ -103,19 +103,50 @@ function renderFullReport(payload: ProfilerPayload): string {
   if (cpuHotspots.length > 0) {
     lines.push(``, `---`, ``, `## CPU Hotspots`, ``);
     lines.push(
-      `| # | Function | Thread | Weight (ms) | Weight % | Samples | Call Chain | During Hang? | Severity |`,
-      `|---|---|---|---|---|---|---|---|---|`,
+      `| # | Function | Thread | Weight (ms) | Weight % | Samples | During Hang? | Severity |`,
+      `|---|---|---|---|---|---|---|---|`,
     );
     cpuHotspots.forEach((b, i) => {
-      const chainStr =
-        b.topCallChain.length > 0
-          ? `\`${b.topCallChain.join(" > ")}\``
-          : "—";
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${b.dominantFunction}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${chainStr} | ${hangFlag} | ${severityEmoji(b.severity)} |`,
+        `| ${i + 1} | \`${b.dominantFunction}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`,
       );
     });
+
+    // Deep detail per hotspot
+    for (const b of cpuHotspots) {
+      lines.push(``);
+      lines.push(`### \`${b.dominantFunction}\` (${b.thread})`);
+      lines.push(``);
+
+      // Top call chains
+      if (b.topCallChains && b.topCallChains.length > 0) {
+        lines.push(`**Call chains:**`);
+        for (const { chain, count } of b.topCallChains) {
+          lines.push(`- (${count}×) \`${chain.join(" > ")}\``);
+        }
+        lines.push(``);
+      } else if (b.topCallChain.length > 0) {
+        lines.push(`**Call chain:** \`${b.topCallChain.join(" > ")}\``);
+        lines.push(``);
+      }
+
+      // Burst windows
+      if (b.burstWindows && b.burstWindows.length > 1) {
+        lines.push(`**Activity bursts:** ${b.burstWindows.length} clusters`);
+        for (const burst of b.burstWindows) {
+          const startSec = (burst.startMs / 1000).toFixed(1);
+          const endSec = (burst.endMs / 1000).toFixed(1);
+          lines.push(`- ${startSec}s → ${endSec}s (${burst.sampleCount} samples)`);
+        }
+        lines.push(``);
+      } else if (b.timeRangeMs) {
+        const startSec = (b.timeRangeMs.first / 1000).toFixed(1);
+        const endSec = (b.timeRangeMs.last / 1000).toFixed(1);
+        lines.push(`**Active range:** ${startSec}s → ${endSec}s`);
+        lines.push(``);
+      }
+    }
   }
 
   // UI Hangs section

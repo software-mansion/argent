@@ -34,7 +34,11 @@ Call ios-instruments-stop first to export the trace data.`,
       );
     }
 
-    const { bottlenecks } = await runIosInstrumentsPipeline(api.exportedFiles);
+    const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
+      await runIosInstrumentsPipeline(api.exportedFiles);
+
+    // Cache parsed data in session for subsequent query tool calls
+    api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
 
     const payload = {
       metadata: {

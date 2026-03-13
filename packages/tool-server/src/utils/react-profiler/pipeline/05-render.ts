@@ -314,6 +314,18 @@ function renderCommit(
     lines.push(`- _... and ${remaining} more_`);
   }
 
+  // CPU hotspots during this commit (from Hermes CPU profile correlation)
+  if (summary.cpuHotspots && summary.cpuHotspots.length > 0) {
+    lines.push("");
+    lines.push("**CPU during this commit:**");
+    for (const hs of summary.cpuHotspots) {
+      const loc = hs.url
+        ? ` (${shortenPath(hs.url)}${hs.lineNumber != null ? `:${hs.lineNumber}` : ""})`
+        : "";
+      lines.push(`- \`${hs.name}\` self=${hs.selfMs}ms total=${hs.totalMs}ms${loc}`);
+    }
+  }
+
   return lines;
 }
 

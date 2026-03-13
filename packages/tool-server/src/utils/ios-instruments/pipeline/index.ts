@@ -1,10 +1,14 @@
-import type { Bottleneck } from "../types";
+import type { Bottleneck, CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../types";
 import { parseCpuFile, parseHangsFile, parseLeaksFile } from "./xml-parser";
 import { correlateHangsWithCpu, aggregateLeaks } from "./01-correlate";
 import { aggregateCpuHotspots } from "./02-aggregate";
 
 export interface PipelineOutput {
   bottlenecks: Bottleneck[];
+  cpuSamples: CpuSample[];
+  uiHangs: UiHang[];
+  cpuHotspots: CpuHotspot[];
+  memoryLeaks: MemoryLeak[];
 }
 
 export async function runIosInstrumentsPipeline(
@@ -27,5 +31,5 @@ export async function runIosInstrumentsPipeline(
   // Combine all bottlenecks
   const bottlenecks: Bottleneck[] = [...cpuHotspots, ...uiHangs, ...memoryLeaks];
 
-  return { bottlenecks };
+  return { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
 }

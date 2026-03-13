@@ -119,4 +119,5 @@ export interface PipelineOutput {
   reactCommits: number;
   fiberRenders: number;
   totalFirstMounts: number;
+  cpuSampleIndex?: import('../pipeline/00-cpu-correlate.js').CpuSampleIndex | null;
 }
