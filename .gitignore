@@ -10,4 +10,6 @@ packages/*/node_modules/
 1export
 packages/mcp/skills/
 
-.claude/**/MEMORY.md
+# We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
+.claude/
+.cursor/
