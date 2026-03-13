@@ -21,7 +21,7 @@ export function createRunFlowTool(
   registry: Registry,
 ): ToolDefinition<z.infer<typeof zodSchema>, FlowRunResult> {
   return {
-    id: "run_flow",
+    id: "flow-execute",
     description: `Run a saved flow from the .argent/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
 echo steps print a message. Returns the result of every step, including images.`,

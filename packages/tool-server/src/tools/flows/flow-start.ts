@@ -11,12 +11,12 @@ export const flowStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { message: string; flowFile: string }
 > = {
-  id: "flow_start",
+  id: "flow-start",
   description: `Start recording a new flow. Creates a .flow file in the .argent/ directory.
 
-After starting, use flow_add_step to append tool calls — each step is executed
-LIVE so you can verify it works before it gets recorded. Use flow_insert_echo
-to add labels. Call flow_finish when done.
+After starting, use flow-add-step to append tool calls — each step is executed
+LIVE so you can verify it works before it gets recorded. Use flow-add-echo
+to add labels. Call flow-finish when done.
 
 If a recorded step turns out to be wrong, you can edit the .flow file by hand
 afterwards to remove or reorder lines.`,

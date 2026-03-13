@@ -11,7 +11,7 @@ export const flowInsertEchoTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { message: string; flowFile: string }
 > = {
-  id: "flow_insert_echo",
+  id: "flow-add-echo",
   description: `Append an echo step to the active flow. Echo steps print a message when
 the flow is replayed — useful as labels between tool calls.`,
   zodSchema,

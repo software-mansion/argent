@@ -9,7 +9,7 @@ export const flowFinishTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { message: string; path: string; steps: number; summary: string[]; flowFile: string }
 > = {
-  id: "flow_finish",
+  id: "flow-finish",
   description: `Finish recording the active flow. Returns a summary of all recorded steps.
 
 You can still hand-edit the .flow file afterwards to remove or reorder steps.`,

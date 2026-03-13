@@ -209,7 +209,7 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     });
 
     let content =
-      params.name === "run_flow" &&
+      params.name === "flow-execute" &&
       result &&
       typeof result === "object" &&
       "flow" in result &&

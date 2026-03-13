@@ -20,7 +20,7 @@ export function createFlowAddStepTool(
   { message: string; toolResult: unknown; flowFile: string }
 > {
   return {
-    id: "flow_add_step",
+    id: "flow-add-step",
     description: `Execute a tool call and record it as a step in the active flow.
 
 The tool call is run immediately. If it succeeds the step is recorded; if it
