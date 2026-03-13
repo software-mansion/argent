@@ -13,3 +13,4 @@ packages/mcp/skills/
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/
 .cursor/
+.mcp.json
