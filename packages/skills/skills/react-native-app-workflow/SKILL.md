@@ -244,28 +244,20 @@ For the full debugging workflow, refer to the `metro-debugger` skill.
 - **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
 - **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `test-ui-flow` skill.
 
-### 5.2 Ask User When Appropriate
+### 5.2 Running Tests (Typical)
 
-- **Which test suite to run** (unit only, E2E only, or both).
-- **Use existing CI/config** (e.g. "Should I use the same command you use in CI?").
-- **Simulator/device** for E2E (e.g. "Use iPhone 16 in Detox?").
-
-### 5.3 Running Tests (Typical)
-
-Ask the use whether he wants you to run the test manually, come up with you own tests, try to find new test cases.
-
-ONLY IF ASKED to run existing tests:
+If the user's intent is ambiguous (run existing tests, write new tests, or find missing coverage), clarify before proceeding.
 - **Jest**: `npm test` or `npx jest`.
 - **Detox (example)**:
   - Build: `detox build --configuration ios.sim.release` (or debug).
   - Run: `detox test --configuration ios.sim.release`.
   - Ensure simulator is booted and not used by another process.
 
-### 5.4 Agent Testing Checklist
+### 5.3 Agent Testing Checklist
 
 - [ ] Read `package.json` and test config (Jest, Detox, etc.).
 - [ ] If E2E: confirm simulator/device and build config.
-- [ ] If unclear: ask whether to use existing workflows or test manually by yourself
+- [ ] If unclear: clarify whether to use existing workflows or write new tests.
 
 ---
 

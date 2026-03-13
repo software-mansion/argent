@@ -11,7 +11,7 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 | Tool              | Purpose                                              |
 | ----------------- | ---------------------------------------------------- |
-| `flow-start`      | Start recording — takes a name, creates the file     |
+| `flow-start`      | Start recording — takes a name and executionPrerequisite, creates the file |
 | `flow-add-step`   | Execute a tool call live and record it if it succeeds |
 | `flow-add-echo`   | Add a label/comment that prints during replay        |
 | `flow-finish`     | Stop recording and get a summary                     |
@@ -19,7 +19,7 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ## 3. Workflow
 
-1. **Start**: Call `flow-start` with a descriptive name.
+1. **Start**: Call `flow-start` with a descriptive name and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
 4. **Finish**: Call `flow-finish` to stop recording.
@@ -52,13 +52,12 @@ For tools with no arguments, omit `args` entirely.
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
 - **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
 - **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish`. The active flow is tracked automatically after `flow-start`.
-- **Mistakes can be edited out.** If a step was recorded but shouldn't have been, tell the user they can edit the `.yaml` file by hand to remove or reorder entries.
-- **Do NOT write to the `.yaml` file directly.** Always use the flow tools.
+- **Mistakes can be edited out.** If a step was recorded by mistake, edit the `.yaml` file directly to remove or reorder entries.
 
 ## 6. Example Session
 
 ```
-flow-start     { name: "open-settings" }
+flow-start     { name: "open-settings", executionPrerequisite: "Simulator booted with app installed" }
 flow-add-echo  { message: "Launch Settings app" }
 flow-add-step  { command: "launch-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }
 flow-add-echo  { message: "Tap General" }
@@ -70,29 +69,32 @@ flow-finish    {}
 
 ## 7. Flow File Format
 
-Flow files use YAML. Each entry in the array is either:
+Flow files use YAML. The top-level is an object with `executionPrerequisite` (describes required state) and `steps` (array of actions):
+
 - `- echo: <message>` — a label
 - `- tool: <name>` with optional `args:` — a tool call
 
 Example `.yaml` file:
 ```yaml
-- echo: Launch Settings app
-- tool: launch-app
-  args:
-    udid: ABC
-    bundleId: com.apple.Preferences
-- echo: Tap General
-- tool: tap
-  args:
-    udid: ABC
-    x: 0.5
-    y: 0.35
-- echo: Tap About
-- tool: tap
-  args:
-    udid: ABC
-    x: 0.5
-    y: 0.17
+executionPrerequisite: Simulator booted with app installed
+steps:
+  - echo: Launch Settings app
+  - tool: launch-app
+    args:
+      udid: ABC
+      bundleId: com.apple.Preferences
+  - echo: Tap General
+  - tool: tap
+    args:
+      udid: ABC
+      x: 0.5
+      y: 0.35
+  - echo: Tap About
+  - tool: tap
+    args:
+      udid: ABC
+      x: 0.5
+      y: 0.17
 ```
 
 ## Related Skills
