@@ -14,7 +14,6 @@ import {
   getUdidFromArgs,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
-  normalizeToolName,
 } from "./auto-screenshot.js";
 
 let TOOLS_URL: string;
@@ -78,6 +77,49 @@ async function callTool(
   return { result: json.data, outputHint: meta?.outputHint };
 }
 
+/**
+ * Unpack run_flow's structured step results into MCP content blocks.
+ * Each step carries its own outputHint so toMcpContent handles images correctly.
+ */
+async function flowRunToMcpContent(result: {
+  flow: string;
+  steps: {
+    kind: string;
+    tool?: string;
+    message?: string;
+    result?: unknown;
+    outputHint?: string;
+    error?: string;
+  }[];
+}) {
+  const blocks: { type: string; [k: string]: unknown }[] = [];
+  blocks.push({
+    type: "text",
+    text: `Running flow "${result.flow}" (${result.steps.length} steps)`,
+  });
+
+  for (let i = 0; i < result.steps.length; i++) {
+    const step = result.steps[i]!;
+    const num = i + 1;
+
+    if (step.kind === "echo") {
+      blocks.push({ type: "text", text: `[${num}] ${step.message}` });
+    } else if ("error" in step && step.error) {
+      blocks.push({
+        type: "text",
+        text: `[${num}] ${step.tool} ERROR: ${step.error}`,
+      });
+    } else {
+      blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
+      const stepContent = await toMcpContent(step.result, step.outputHint);
+      blocks.push(...stepContent);
+    }
+  }
+
+  blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
+  return blocks;
+}
+
 async function toMcpContent(result: unknown, outputHint?: string) {
   if (
     outputHint === "image" &&
@@ -97,6 +139,7 @@ async function toMcpContent(result: unknown, outputHint?: string) {
       { type: "text" as const, text: `Saved: ${filePath}` },
     ];
   }
+
   return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
 }
 
@@ -156,16 +199,28 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       params.name,
       params.arguments,
     );
-    await spyLog({ ts: new Date().toISOString(), event: "tool_result", name: params.name, durationMs: Date.now() - t0, isError: false, result });
+    await spyLog({
+      ts: new Date().toISOString(),
+      event: "tool_result",
+      name: params.name,
+      durationMs: Date.now() - t0,
+      isError: false,
+      result,
+    });
 
-    let content = await toMcpContent(result, outputHint);
+    let content =
+      params.name === "run_flow" &&
+      result &&
+      typeof result === "object" &&
+      "flow" in result &&
+      "steps" in result
+        ? await flowRunToMcpContent(
+            result as Parameters<typeof flowRunToMcpContent>[0],
+          )
+        : await toMcpContent(result, outputHint);
 
     const udid = getUdidFromArgs(params.arguments);
-    if (
-      autoScreenshotEnabled() &&
-      udid &&
-      shouldAutoScreenshot(params.name)
-    ) {
+    if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
       const delayMs = getAutoScreenshotDelayMs(params.name);
       if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
 
@@ -173,7 +228,7 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         const screenshotResult = await callTool("screenshot", { udid });
         const screenshotContent = await toMcpContent(
           screenshotResult.result,
-          "image"
+          "image",
         );
         content = [
           ...content,

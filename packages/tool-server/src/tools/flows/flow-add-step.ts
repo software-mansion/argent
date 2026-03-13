@@ -6,9 +6,11 @@ import { getFlowPath, getActiveFlow, serializeStep } from "./flow-utils";
 const zodSchema = z.object({
   command: z.string().describe("MCP tool name (e.g. \"tap\", \"screenshot\", \"launch-app\")"),
   args: z
-    .record(z.unknown())
+    .string()
     .optional()
-    .describe('Tool arguments as a JSON object, e.g. {"udid": "...", "x": 0.5, "y": 0.3}'),
+    .describe(
+      'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.',
+    ),
 });
 
 export function createFlowAddStepTool(
@@ -30,12 +32,12 @@ If a step was recorded by mistake, edit the .flow file by hand to remove it.`,
     async execute(_services, params) {
       const flowName = getActiveFlow();
       const filePath = await getFlowPath(flowName);
-      const args = (params.args ?? {}) as Record<string, unknown>;
+      const args: Record<string, unknown> = params.args
+        ? JSON.parse(params.args)
+        : {};
 
-      // Execute the tool call live first
       const toolResult = await registry.invokeTool(params.command, args);
 
-      // Only record on success
       const line = serializeStep({
         kind: "tool",
         name: params.command,
