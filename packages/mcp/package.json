@@ -22,7 +22,9 @@
     "dist/",
     "bin/",
     "skills/",
+    "agents/",
     "rules/",
+    "agents/",
     "scripts/"
   ],
   "dependencies": {

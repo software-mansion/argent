@@ -1,5 +1,6 @@
 ---
 description: Argent iOS Simulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
+alwaysApply: true
 ---
 
 <description>
@@ -26,6 +27,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 - Before tapping anything, use a discovery tool to get exact coordinates:
   - `describe` — any iOS app (returns accessibility element tree)
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
+  - `screenshot` - as a fallback, if above fail or need additional context
 - Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a tap fails twice at the same coordinates, stop retrying. Re-run the discovery tool.
@@ -35,12 +37,14 @@ Argent MCP tools are the preferred form of interaction with the application.
   </core_rules>
 
 <react_native_detection>
-Treat a project as React Native when any of the following are present:
-`react-native` in package.json dependencies, `metro.config.js`, `App.js` / `App.tsx`
-at root, or `ios/Podfile` referencing react-native.
+Project type is determined by the `environment-inspector` subagent (see <subagents>).
+When the subagent result is available, use its `is_react_native` field as the authoritative
+source — do not re-inspect files manually.
 
-When React Native is detected: load `react-native-app-workflow` first, and use
-`debugger-component-tree` for all element discovery instead of `describe`.
+If the subagent has not run yet and project type is unknown, run it first before proceeding.
+
+When `is_react_native` is true: load `react-native-app-workflow` skill, and use
+`debugger-component-tree` for all element discovery where needed.
 </react_native_detection>
 
 <skill_routing>
@@ -133,6 +137,16 @@ When:
   profiler-react-renders, profiler-fiber-tree
   </skill_routing>
 
+<subagents>
+ENVIRONMENT INSPECTION AT SESSION START
+Use subagent: `environment-inspector`
+When:
+- Environment context of the project is not yet known
+- No "Project Environment" section exists in project memory / `MEMORY.md` or you lack information about basic setup workflows
+- Need to determine build commands, startup scripts, metro port, platform support, or QA tooling
+  If the subagent already ran this session (result in memory), use that context directly — do NOT re-run.
+</subagents>
+
 <important_usage_caveats>
 LICENSE
 Most tools require a Pro license. If any tool returns "No Argent license found":
@@ -159,14 +173,28 @@ Never guess positions from a screenshot alone.
   verify the element position and current screen state before trying a new coordinate.
 
 REACT NATIVE APPS
-When you detect the target app is a React Native app (react-native in package.json,
-metro.config.js present, App.js / App.tsx at root, or ios/Podfile referencing
-react-native): load the `react-native-app-workflow` skill and use
-`debugger-component-tree` for element discovery. Using `describe` can still be
-useful when there is, for example, modal in place.
+Use the `is_react_native` field from the `environment-inspector` subagent result to
+determine whether the project is React Native. When true: load the `react-native-app-workflow`
+skill and use `debugger-component-tree` for element discovery. Using `describe` can still be
+useful when there is, for example, a modal in place.
 
 IOS SYSTEM POPUPS
 Permission dialogs and other OS-level popups are not part of the app view hierarchy.
 If they cannot be tapped easily, dismiss them by pressing Enter via the `keyboard`
 tool (`key: "enter"`) — this confirms the default button and is more reliable than tapping.
+
+WORKSPACE INFORMATION RETRIEVAL
+The `gather-workspace-data` tool provides a structured snapshot used internally by the
+`environment-inspector` subagent. Retrieve workspace information according to this priority:
+
+1. **Project memory / `MEMORY.md` already has a "Project Environment" section** →
+   Use that context directly. Do NOT re-run the subagent or call the tool.
+2. **Subagent delegation is available** →
+   Run the `environment-inspector` subagent. Never call `gather-workspace-data` yourself;
+   the subagent calls it internally and fills in gaps through further inspection.
+3. **Subagent delegation is NOT available** →
+   Call `gather-workspace-data` directly as a first step, then fill in any gaps by
+   manually inspecting project files (package.json scripts, metro config, CI workflows, etc.).
+
+The main agent is responsible for persisting the subagent's JSON result to project memory.
 </important_usage_caveats>
