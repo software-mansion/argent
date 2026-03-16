@@ -142,6 +142,14 @@ if (fs.existsSync(skillsSrc)) {
   fs.cpSync(skillsSrc, skillsDest, { recursive: true });
 }
 
+// Rules
+const rulesSrc = path.join(root, "packages", "skills", "rules");
+const rulesDest = path.join(projectRoot, ".claude", "rules");
+if (fs.existsSync(rulesSrc)) {
+  fs.mkdirSync(rulesDest, { recursive: true });
+  fs.cpSync(rulesSrc, rulesDest, { recursive: true });
+}
+
 // MCP configs (merge — preserves other servers and .cursor/rules, etc.)
 registerMcp(path.join(projectRoot, ".claude", "mcp.json"), mcpEntry);
 registerMcp(path.join(projectRoot, ".cursor", "mcp.json"), mcpEntry);

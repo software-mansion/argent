@@ -1,5 +1,12 @@
 {
   "version": "0.2.0",
+  "inputs": [
+    {
+      "id": "projectPath",
+      "type": "promptString",
+      "description": "Path to the project where Argent should be installed"
+    }
+  ],
   "configurations": [
     {
       "type": "node",

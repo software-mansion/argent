@@ -23,6 +23,7 @@ if (!projectRoot) {
 
 const distEntry = path.resolve(__dirname, "..", "dist", "index.js");
 const skillsSrc = path.resolve(__dirname, "..", "skills");
+const agentsSrc = path.resolve(__dirname, "..", "agents");
 const logFile = path.join(os.homedir(), ".argent", "mcp-calls.log");
 
 const mcpEntry = {
@@ -103,7 +104,10 @@ try {
 
 // Claude Code permissions — .claude/settings.json
 try {
-  addPermission(path.join(projectRoot, ".claude", "settings.json"), "mcp__argent");
+  addPermission(
+    path.join(projectRoot, ".claude", "settings.json"),
+    "mcp__argent",
+  );
   results.push("✓ Added mcp__argent permission to .claude/settings.json");
 } catch (err) {
   results.push(`⚠ Could not update .claude/settings.json: ${err}`);
@@ -115,6 +119,28 @@ try {
   results.push("✓ Installed skill files to .claude/skills/");
 } catch (err) {
   results.push(`⚠ Could not install skill files: ${err}`);
+}
+
+// Agents — .claude/agents/
+try {
+  copySkills(agentsSrc, path.join(projectRoot, ".claude", "agents"));
+  results.push("✓ Installed agent files to .claude/agents/");
+} catch (err) {
+  results.push(`⚠ Could not install agent files: ${err}`);
+}
+
+// Rules — .claude/rules/
+try {
+  const rulesSrc = path.resolve(__dirname, "..", "rules");
+  const rulesClaudeDest = path.join(projectRoot, ".claude", "rules");
+  const rulesCursorDest = path.join(projectRoot, ".cursor", "rules");
+  if (fs.existsSync(rulesSrc)) {
+    fs.cpSync(rulesSrc, rulesClaudeDest, { recursive: true });
+    fs.cpSync(rulesSrc, rulesCursorDest, { recursive: true });
+    results.push("✓ Installed rule files to .claude/rules/ and .cursor/rules/");
+  }
+} catch (err) {
+  results.push(`⚠ Could not install rule files: ${err}`);
 }
 
 console.log("\nargent postinstall:");

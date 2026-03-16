@@ -5,7 +5,7 @@ description: Debug a React Native app via Metro CDP using argent debugger tools.
 
 ## 1. Prerequisites
 
-All debugging goes through argent MCP tools — only use `curl` or direct HTTP calls to Metro when the functionality is not exposed via our tool. When delegating to a sub-agent, ensure it has MCP tool permissions.
+Use `curl` or direct HTTP calls to Metro only when the functionality is not exposed via argent tools. When delegating to a sub-agent, ensure it has MCP tool permissions.
 
 The debugger requires:
 
