@@ -26,6 +26,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 - Before tapping anything, use a discovery tool to get exact coordinates:
   - `describe` — any iOS app (returns accessibility element tree)
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
+  - `screenshot` - as a fallback, if above fail or need additional context
 - Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a tap fails twice at the same coordinates, stop retrying. Re-run the discovery tool.
@@ -35,12 +36,14 @@ Argent MCP tools are the preferred form of interaction with the application.
   </core_rules>
 
 <react_native_detection>
-Treat a project as React Native when any of the following are present:
-`react-native` in package.json dependencies, `metro.config.js`, `App.js` / `App.tsx`
-at root, or `ios/Podfile` referencing react-native.
+Project type is determined by the `environment-inspector` subagent (see <subagents>).
+When the subagent result is available, use its `is_react_native` field as the authoritative
+source — do not re-inspect files manually.
 
-When React Native is detected: load `react-native-app-workflow` first, and use
-`debugger-component-tree` for all element discovery instead of `describe`.
+If the subagent has not run yet and project type is unknown, run it first before proceeding.
+
+When `is_react_native` is true: load `react-native-app-workflow` skill, and use
+`debugger-component-tree` for all element discovery where needed.
 </react_native_detection>
 
 <skill_routing>
@@ -169,11 +172,10 @@ Never guess positions from a screenshot alone.
   verify the element position and current screen state before trying a new coordinate.
 
 REACT NATIVE APPS
-When you detect the target app is a React Native app (react-native in package.json,
-metro.config.js present, App.js / App.tsx at root, or ios/Podfile referencing
-react-native): load the `react-native-app-workflow` skill and use
-`debugger-component-tree` for element discovery. Using `describe` can still be
-useful when there is, for example, modal in place.
+Use the `is_react_native` field from the `environment-inspector` subagent result to
+determine whether the project is React Native. When true: load the `react-native-app-workflow`
+skill and use `debugger-component-tree` for element discovery. Using `describe` can still be
+useful when there is, for example, a modal in place.
 
 IOS SYSTEM POPUPS
 Permission dialogs and other OS-level popups are not part of the app view hierarchy.

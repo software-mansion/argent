@@ -104,7 +104,10 @@ try {
 
 // Claude Code permissions — .claude/settings.json
 try {
-  addPermission(path.join(projectRoot, ".claude", "settings.json"), "mcp__argent");
+  addPermission(
+    path.join(projectRoot, ".claude", "settings.json"),
+    "mcp__argent",
+  );
   results.push("✓ Added mcp__argent permission to .claude/settings.json");
 } catch (err) {
   results.push(`⚠ Could not update .claude/settings.json: ${err}`);
@@ -129,10 +132,12 @@ try {
 // Rules — .claude/rules/
 try {
   const rulesSrc = path.resolve(__dirname, "..", "rules");
-  const rulesDest = path.join(projectRoot, ".claude", "rules");
+  const rulesClaudeDest = path.join(projectRoot, ".claude", "rules");
+  const rulesCursorDest = path.join(projectRoot, ".cursor", "rules");
   if (fs.existsSync(rulesSrc)) {
-    fs.cpSync(rulesSrc, rulesDest, { recursive: true });
-    results.push("✓ Installed rule files to .claude/rules/");
+    fs.cpSync(rulesSrc, rulesClaudeDest, { recursive: true });
+    fs.cpSync(rulesSrc, rulesCursorDest, { recursive: true });
+    results.push("✓ Installed rule files to .claude/rules/ and .cursor/rules/");
   }
 } catch (err) {
   results.push(`⚠ Could not install rule files: ${err}`);

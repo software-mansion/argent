@@ -7,8 +7,7 @@ description: Step-by-step workflows for developing or debugging React Native app
 
 ### 1.1 Explore Configuration (MANDATORY — Do This First)
 
-**Before running commands**, read and understand the project's build and run configuration. If the `environment-inspector` agent has already run (check project memory / `MEMORY.md` for a "Project Environment" section), use that context directly — it already contains scripts, metro port, platform info, and build commands. If not available, as a callback, you may call the `gather-workspace-data` tool as a fast first step to get a structured snapshot, then fill in gaps manually. If subagent is available - NEVER
-call gather-workspace-data manually by yourself
+**Before running commands**, read and understand the project's build and run configuration from `environment-inspector` subagent result.
 
 Do NOT default to `npx react-native start` or `npx react-native run-ios` without first checking for custom scripts and workflows.
 
