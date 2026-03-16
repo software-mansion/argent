@@ -24,6 +24,7 @@
     "skills/",
     "agents/",
     "rules/",
+    "agents/",
     "scripts/"
   ],
   "dependencies": {

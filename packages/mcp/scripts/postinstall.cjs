@@ -136,6 +136,14 @@ try {
   results.push(`⚠ Could not install rule files: ${err}`);
 }
 
+// Agents — .claude/agents/
+try {
+  copySkills(agentsSrc, path.join(projectRoot, ".claude", "agents"));
+  results.push("✓ Installed agent files to .claude/agents/");
+} catch (err) {
+  results.push(`⚠ Could not install agent files: ${err}`);
+}
+
 console.log("\nargent postinstall:");
 for (const line of results) {
   console.log(" ", line);
