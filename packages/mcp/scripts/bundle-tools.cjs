@@ -14,6 +14,8 @@ const BIN_SRC = path.resolve(WORKSPACE_ROOT, "simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
 const SKILLS_DEST = path.resolve(__dirname, "../skills");
+const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
+const RULES_DEST = path.resolve(__dirname, "../rules");
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
@@ -52,4 +54,13 @@ if (fs.existsSync(SKILLS_SRC)) {
   console.log(`✓ Copied ${count} skill(s) → ${path.relative(process.cwd(), SKILLS_DEST)}`);
 } else {
   console.warn(`⚠ Skills source not found at ${SKILLS_SRC} — skipping copy`);
+}
+
+// Copy rules into the package so they ship on npm.
+if (fs.existsSync(RULES_SRC)) {
+  fs.cpSync(RULES_SRC, RULES_DEST, { recursive: true });
+  const count = fs.readdirSync(RULES_SRC).filter((f) => f.endsWith(".md")).length;
+  console.log(`✓ Copied ${count} rule(s) → ${path.relative(process.cwd(), RULES_DEST)}`);
+} else {
+  console.warn(`⚠ Rules source not found at ${RULES_SRC} — skipping copy`);
 }

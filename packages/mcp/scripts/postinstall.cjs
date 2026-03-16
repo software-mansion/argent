@@ -124,6 +124,16 @@ try {
   results.push("✓ Installed agent files to .claude/agents/");
 } catch (err) {
   results.push(`⚠ Could not install agent files: ${err}`);
+// Rules — .claude/rules/
+try {
+  const rulesSrc = path.resolve(__dirname, "..", "rules");
+  const rulesDest = path.join(projectRoot, ".claude", "rules");
+  if (fs.existsSync(rulesSrc)) {
+    fs.cpSync(rulesSrc, rulesDest, { recursive: true });
+    results.push("✓ Installed rule files to .claude/rules/");
+  }
+} catch (err) {
+  results.push(`⚠ Could not install rule files: ${err}`);
 }
 
 console.log("\nargent postinstall:");

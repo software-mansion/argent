@@ -14,8 +14,7 @@ All interactions go through argent MCP tools. Ensure the simulator is booted bef
    - **Fallback**: use `screenshot` to estimate where the desired component is
 3. **Interact**: Perform the action (`tap`, `swipe`, `paste`, etc.) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with `screenshot`.
-5. **If a tap misses**: Do NOT retry the same coordinates more than twice. Call the discovery tool again to verify the element position and recalculate. Elements may have shifted due to animations, keyboard appearance, or state changes.
-6. **Repeat** for each step in the flow.
+5. **Repeat** for each step in the flow.
 
 ## 2. Template
 
@@ -58,12 +57,8 @@ Steps:
 
 ## Tips
 
-- **Call `screenshot` only for baseline or when no action was just performed** — actions return screenshots automatically.
-- **Use discovery tools before tapping** — `describe` for any iOS app, `debugger-component-tree` for React Native. You may use screenshot as heuristics if these tools are not helpful
-- **Don't loop on failed taps** — after 2 failed attempts, re-check element positions with a discovery tool.
 - **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
 - **Use `gesture` for long-press** context menus (800ms hold).
-- **iOS system popups** (permission dialogs, alerts not part of the app) — if cannot be tapped easly, dismiss with `keyboard` tool using `key: "enter"`.
 - **Check for loading states** — retake with `screenshot` if the auto-screenshot shows a transitional frame.
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
