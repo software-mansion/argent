@@ -211,24 +211,18 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `metro-debugger` skill.
 
-### 4.2 iOS System Popups
-
-iOS system-level popups (permission dialogs, network alerts, tracking consent, etc.) appear over the app and are **not part of the React Native view hierarchy**.
-
-If these cannot be tapped easly, use the `keyboard` tool with `key: "enter"` — this confirms the default button on the popup.
-
-### 4.3 Do not try to use the DevMenu in React Native apps by default.
+### 4.2 Do not try to use the DevMenu in React Native apps by default.
 
 Use the tools provided by tool server instead.
 
-### 4.4 Logs
+### 4.3 Logs
 
 | Log type        | Tool / Command                                                                             |
 | --------------- | ------------------------------------------------------------------------------------------ |
 | JS console logs | `debugger-console-logs` tool (captured logs) or `debugger-console-listen` tool (real-time) |
 | iOS native logs | `npx react-native log-ios` or Xcode console when running from Xcode                        |
 
-### 4.5 Debugging with Breakpoints
+### 4.4 Debugging with Breakpoints
 
 For stepping through code with breakpoints, use the debugger tools:
 
