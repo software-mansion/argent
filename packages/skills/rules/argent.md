@@ -133,6 +133,16 @@ When:
   profiler-react-renders, profiler-fiber-tree
   </skill_routing>
 
+<subagents>
+ENVIRONMENT INSPECTION AT SESSION START
+Use subagent: `environment-inspector`
+When:
+- Environment context of the project is not yet known
+- No "Project Environment" section exists in project memory / `MEMORY.md` or you lack information about basic setup workflows
+- Need to determine build commands, startup scripts, metro port, platform support, or QA tooling
+  If the subagent already ran this session (result in memory), use that context directly — do NOT re-run.
+</subagents>
+
 <important_usage_caveats>
 LICENSE
 Most tools require a Pro license. If any tool returns "No Argent license found":
@@ -169,4 +179,19 @@ IOS SYSTEM POPUPS
 Permission dialogs and other OS-level popups are not part of the app view hierarchy.
 If they cannot be tapped easily, dismiss them by pressing Enter via the `keyboard`
 tool (`key: "enter"`) — this confirms the default button and is more reliable than tapping.
+
+WORKSPACE INFORMATION RETRIEVAL
+The `gather-workspace-data` tool provides a structured snapshot used internally by the
+`environment-inspector` subagent. Retrieve workspace information according to this priority:
+
+1. **Project memory / `MEMORY.md` already has a "Project Environment" section** →
+   Use that context directly. Do NOT re-run the subagent or call the tool.
+2. **Subagent delegation is available** →
+   Run the `environment-inspector` subagent. Never call `gather-workspace-data` yourself;
+   the subagent calls it internally and fills in gaps through further inspection.
+3. **Subagent delegation is NOT available** →
+   Call `gather-workspace-data` directly as a first step, then fill in any gaps by
+   manually inspecting project files (package.json scripts, metro config, CI workflows, etc.).
+
+The main agent is responsible for persisting the subagent's JSON result to project memory.
 </important_usage_caveats>
