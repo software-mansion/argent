@@ -124,6 +124,8 @@ try {
   results.push("✓ Installed agent files to .claude/agents/");
 } catch (err) {
   results.push(`⚠ Could not install agent files: ${err}`);
+}
+
 // Rules — .claude/rules/
 try {
   const rulesSrc = path.resolve(__dirname, "..", "rules");
