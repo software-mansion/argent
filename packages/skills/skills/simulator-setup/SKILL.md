@@ -5,7 +5,7 @@ description: Set up and connect to an iOS simulator using argent MCP tools. Use 
 
 ## 1. Setup Steps
 
-All simulator interactions go through argent MCP tools — DO NOT use `curl`, `Bash`, or the `simulator-server` binary directly. If you delegate simulator tasks to sub-agents - make sure they have  MCP permissions.
+If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
 1. **Find a booted simulator**
    Use `list-simulators`. Pick the first result — booted iPhones are listed first.
