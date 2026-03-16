@@ -5,7 +5,7 @@ description: Take a screenshot of an iOS simulator screen using argent tools. Us
 
 ## 1. When to Use
 
-Interaction tools (`tap`, `swipe`, `launch-app`, etc.) automatically attach a screenshot in their response. Call `screenshot` separately only when:
+Call `screenshot` separately only when:
 
 - You need the screen state **before any action** (baseline).
 - You want to check state **after a delay** (e.g. waiting for a network response).

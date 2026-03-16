@@ -5,7 +5,7 @@ description: Interact with a running iOS simulator using argent MCP tools. Use w
 
 ## 1. Before You Start
 
-All simulator interactions go through argent MCP tools — DO NOT use `Bash`, `curl`, or the `simulator-server` binary directly. If you delegate simulator tasks to sub-agents - make sure they have MCP permissions.
+If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
 Use `list-simulators` to find available simulators. **Pick the first result** — booted iPhones are listed first. If none are booted, use `boot-simulator` first.
 
@@ -48,21 +48,11 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Finding Tap Targets
 
-Before tapping, **determine exact coordinates** using a discovery tool — do not guess positions.
-
 | App type     | Discovery tool            | What it returns                                                                       |
 | ------------ | ------------------------- | ------------------------------------------------------------------------------------- |
 | Any iOS app  | `describe`                | iOS accessibility element tree with normalized frame coordinates                      |
 | React Native | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                         |
 | Fallback     | `screenshot`              | when cannot determine using the above methods, use screenshot as a heuristic fallback |
-
-**For React Native apps**, prefer `debugger-component-tree` — it gives component-level detail and direct tap coordinates. Fall back to `describe` if the output is not helpful.
-
-**Anti-looping rule:** If a tap does not produce the expected result after **2 attempts**, **STOP retrying** the same coordinates. Instead:
-
-1. Call `describe` or `debugger-component-tree` (React Native) to verify the element position and current screen state.
-2. If the element is not where you expected, recalculate coordinates from the discovery tool output.
-3. If the element is not on screen at all, you may need to scroll or navigate first.
 
 ## 5. Tool Usage
 
@@ -122,15 +112,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
 ---
 
-## 6. iOS System Popups
-
-iOS may show system-level popups (permission dialogs, network alerts, tracking consent, etc.) that are **not part of the app**.
-
-If those cannot be tapped easly, to dismiss use the `keyboard` tool with `key: "enter"`. This confirms the default button on the popup and is more reliable than trying to tap popup buttons.
-
-## 7. Screenshots
-
-Interaction tools (`tap`, `swipe`, `gesture`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`) **automatically attach a screenshot**. No separate `screenshot` call needed.
+## 6. Screenshots
 
 Use the explicit `screenshot` tool only when:
 
@@ -140,24 +122,13 @@ Use the explicit `screenshot` tool only when:
 
 ---
 
-## 8. React Native App Detection
-
-If the app you are interacting with is a **React Native app**, resolve the `react-native-app-workflow` skill for the full workflow covering Metro, builds, and debugging. React Native apps benefit from the `debugger-component-tree` tool for element discovery and the full suite of `debugger-*` tools.
-
-You can detect a React Native app by checking for `react-native` in `package.json` dependencies, or by the presence of `metro.config.js`, `App.js`/`App.tsx` at root, or an `ios/` folder with a Podfile that references `react-native`.
-
----
-
 ## Best Practices
 
 1. **Start every task with `launch-app` or `open-url`.**
-2. **Use a discovery tool before tapping** — `debugger-component-tree` for React Native, `describe` for any iOS app.
-3. **Don't loop on failed taps** — after 2 failed attempts, use a discovery tool to re-evaluate.
-4. **Use `swipe` for lists/scrolling**, not `gesture`, unless you need non-linear movement.
-5. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
-6. **Wait for animations** — give the app ~300ms after `tap` or `button` before the next action.
-7. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-8. **Dismiss iOS system popups** with `keyboard` `enter` — don't try to tap them.
+2. **Use `swipe` for lists/scrolling**, not `gesture`, unless you need non-linear movement.
+3. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
+4. **Wait for animations** — give the app ~300ms after `tap` or `button` before the next action.
+5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
 
 ## Related Skills
 
