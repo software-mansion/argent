@@ -21,10 +21,10 @@ function attr(element: string, name: string): string | null {
   return m ? decodeXml(m[1]) : null;
 }
 
-/** Extract all <row>...</row> and <row .../> from the full XML content. */
+/** Extract all <row>...</row> blocks from the full XML content. */
 function extractRows(xml: string): string[] {
   const rows: string[] = [];
-  const re = /<row[\s>](.*?)(?:<\/row>|\/>)/gs;
+  const re = /<row[\s>](.*?)<\/row>/gs;
   let m;
   while ((m = re.exec(xml)) !== null) {
     rows.push(m[0]);
@@ -202,12 +202,12 @@ function resolveFrames(
     const nameMatch = attrs.match(/name="([^"]*)"/);
     const frameName = nameMatch ? decodeXml(nameMatch[1]) : "???";
 
-    // Determine if system library by checking the binary element inside this frame's context
     let isSystem = false;
-    // Look for <binary> right after this frame (within the backtrace)
+    // Look for <binary> child element after this frame's opening tag.
+    // Simulator paths can exceed 300 chars, so use a generous window.
     const frameFullMatch = backtraceContent.substring(
       fm.index!,
-      fm.index! + fm[0].length + 500,
+      fm.index! + fm[0].length + 2000,
     );
     const binaryIdMatch = frameFullMatch.match(
       /<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/,

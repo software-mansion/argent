@@ -13,12 +13,45 @@ description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks v
 | Tool                      | Purpose                                                                                     |
 | ------------------------- | ------------------------------------------------------------------------------------------- |
 | `ios-instruments-start`   | Start xctrace recording on a booted simulator or device. Captures CPU, hangs, and leaks.    |
-| `ios-instruments-stop`    | Stop xctrace, export trace data to XML files.                                               |
+| `ios-instruments-stop`    | Stop xctrace, export trace data to XML files (timestamped, persist on disk).                |
 | `ios-instruments-analyze` | Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, leaks). |
+| `profiler-stack-query`    | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.       |
+| `profiler-load`           | List and reload previous trace sessions from disk for re-investigation.                      |
 
 ---
 
-## 3. Workflow
+## 3. Agent Behavior Guidelines
+
+### Before profiling: always start both in parallel
+
+Always start `ios-instruments-start` and `react-profiler-start` in a single parallel message, announcing it upfront: _"Starting React + native iOS profiling in parallel — JS commits plus native CPU/hangs/leaks."_ Do NOT ask first. Only skip `react-profiler-start` if the user has **already explicitly said** they don't want React profiling in this session.
+
+- Start both tools in parallel (two tool calls in one message), stop both, analyze both, then call `profiler-combined-report` for the cross-correlated view.
+- If the user only wants native profiling, follow the standalone workflow below.
+
+### After analysis: ask about next steps
+
+After presenting the iOS Instruments report, always ask the user:
+
+1. **Investigate further** — use `profiler-stack-query` to drill into specific hangs, CPU hotspots, or leaks. Identify exact native call chains and responsible modules.
+2. **Implement fixes** — apply changes and re-profile to confirm improvement.
+3. **Done for now** — accept the report as-is.
+
+Do NOT silently move on. The initial report surfaces what is slow — query tools reveal why.
+
+### During investigation: chain queries
+
+- Hang detected -> `profiler-stack-query` mode=`hang_stacks` to see full native call chains -> `profiler-stack-query` mode=`function_callers` for the suspected function -> read native source.
+- CPU hotspot -> `profiler-stack-query` mode=`thread_breakdown` to see per-thread distribution -> `function_callers` for the dominant function.
+- Memory leak -> `profiler-stack-query` mode=`leak_stacks` filtered by `object_type` to see responsible frames and libraries.
+
+### After fixes: always re-profile
+
+Re-run the same scenario after applying fixes. Use `profiler-load` to reload the pre-fix session and compare before/after metrics.
+
+---
+
+## 4. Standalone Workflow
 
 **Complete all steps in order — do not break mid-flow.**
 
@@ -40,20 +73,36 @@ Let the user interact with the app or drive interaction via simulator tools (see
 
 ### Step 2: Stop and export
 
-Call `ios-instruments-stop` with `device_id`. This sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML.
+Call `ios-instruments-stop` with `device_id`. This sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML. Check `exportDiagnostics` in the response for any export warnings.
 
 ### Step 3: Analyze
 
 Call `ios-instruments-analyze` with `device_id`. Returns a markdown report with bottlenecks categorized as CPU hotspots, UI hangs, or memory leaks, sorted by severity.
 
+### Step 4: Present findings and ask about next steps
+
+Present a concise summary of the key findings. Then follow the "After analysis" guideline — ask whether to investigate further with query tools, implement fixes, or stop.
+
+### Step 5: Drill-down investigation
+
+Use `profiler-stack-query` to investigate specific findings. See Section 3 for chaining guidance.
+
+### Step 6: Reload previous sessions
+
+To revisit a previous trace:
+
+1. Call `profiler-load` mode=`list` project_root=`<path>` to see available sessions.
+2. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to re-parse the XML files.
+3. Use `profiler-stack-query` to investigate the reloaded data.
+
 ---
 
-## 4. Understanding Results
+## 5. Understanding Results
 
 Bottlenecks are categorized by severity:
 
 - **RED**: CPU functions taking >15% of total time, all UI hangs, all memory leaks. These require immediate attention.
-- **YELLOW**: CPU functions taking 5–15% of total time. Worth investigating but may be acceptable.
+- **YELLOW**: CPU functions taking 5-15% of total time. Worth investigating but may be acceptable.
 
 Each bottleneck type indicates a different class of problem:
 
@@ -63,7 +112,7 @@ Each bottleneck type indicates a different class of problem:
 
 ---
 
-## 5. Important Caveats
+## 6. Important Caveats
 
 - **Simulator vs device**: Simulator profiling reflects host Mac performance, not real device hardware. Use device profiling for accurate CPU timings and memory behavior.
 - **xctrace availability**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`.
@@ -77,6 +126,8 @@ Each bottleneck type indicates a different class of problem:
 | Start iOS Instruments recording | `ios-instruments-start`   |
 | Stop iOS Instruments            | `ios-instruments-stop`    |
 | Analyze iOS Instruments trace   | `ios-instruments-analyze` |
+| Drill into hangs/CPU/leaks      | `profiler-stack-query`    |
+| Reload previous trace session   | `profiler-load`           |
 
 ## Related Skills
 

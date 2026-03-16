@@ -68,4 +68,5 @@ export interface ComponentFinding {
     hasUseCallback: boolean;
     hasUseMemo: boolean;
   };
+  sourceSnippet?: string;
 }

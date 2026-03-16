@@ -137,6 +137,7 @@ export const reactProfilerStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     started_at: string;
+    startedAtEpochMs: number;
     hermes_version: string;
     detected_architecture: string | null;
   }
@@ -144,6 +145,7 @@ export const reactProfilerStartTool: ToolDefinition<
   id: "react-profiler-start",
   description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Sets up the ReactProfilerSession (auto-connects to Metro if not already connected), then starts CPU sampling and injects the React fiber commit-capture hook.
+Before calling this, ask the user if they also want native iOS profiling (ios-instruments-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.`,
   zodSchema,
   services: (params) => ({
@@ -207,7 +209,8 @@ After starting, ask the user to perform the interaction to profile, then call re
     api.profileStartWallMs = Date.now();
 
     return {
-      started_at: new Date().toISOString(),
+      started_at: new Date(api.profileStartWallMs).toISOString(),
+      startedAtEpochMs: api.profileStartWallMs,
       hermes_version: api.hermesVersion,
       detected_architecture: api.detectedArchitecture,
       ...(commitCaptureVerification && {

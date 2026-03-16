@@ -49,6 +49,7 @@ import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
 import { profilerCombinedReportTool } from "../tools/profiler/combined/profiler-combined-report";
+import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
@@ -107,6 +108,7 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);
   registry.registerTool(profilerCombinedReportTool);
+  registry.registerTool(profilerLoadTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));

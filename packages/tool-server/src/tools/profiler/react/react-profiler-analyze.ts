@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { promises as fsPromises } from "fs";
 import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
@@ -13,13 +14,13 @@ import type {
 import { runPipeline } from "../../../utils/react-profiler/pipeline/index";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { renderProfilingReport } from "../../../utils/react-profiler/pipeline/05-render";
-import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+import { getDebugDir, writeDump } from "../../../utils/react-profiler/debug/dump";
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
     .number()
     .describe(
-      "Milliseconds since profiling started (Date.now() - profileStartWallMs)",
+      "Milliseconds since profiling started. Compute as: tapTimestampMs - startedAtEpochMs, using the timestampMs returned by tap/swipe and the startedAtEpochMs returned by react-profiler-start.",
     ),
   label: z.string().describe("Description of the action performed"),
 });
@@ -44,8 +45,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Optional list of user actions with their time offset from profiling start. " +
-        "Compute offsetMs = Date.now() - profileStartWallMs at the time of each action. " +
-        "profileStartWallMs is returned by react-profiler-start as started_at (wall clock).",
+        "Compute offsetMs = tapTimestampMs - startedAtEpochMs, where tapTimestampMs comes from the tap/swipe tool return value and startedAtEpochMs comes from react-profiler-start return value.",
     ),
 });
 
@@ -55,13 +55,17 @@ export const reactProfilerAnalyzeTool: ToolDefinition<
 > = {
   id: "react-profiler-analyze",
   description: `Analyze stored profiling data and return a markdown performance report.
-Returns { report, reportFile, hotCommitsTotal, hotCommitsShown }.
+Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }.
 The report is structured around hot React commits (≥16ms absolute floor) with per-commit
 render cascades, root cause identification, and a top components table.
+Raw profiling data is saved to disk with a unique session timestamp for later reload via profiler-load.
+After presenting the report, ask the user whether to investigate further (drill-down with
+profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile for comparison.
 Requires react-profiler-stop to have been called first.
 Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
-the user action that preceded them. Compute offsetMs = Date.now() - profileStartWallMs
-at each action time (profileStartWallMs is Date.now() captured at react-profiler-start time).`,
+the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
+where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
+is returned by react-profiler-start.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
@@ -153,7 +157,50 @@ at each action time (profileStartWallMs is Date.now() captured at react-profiler
       // non-fatal — AST index may fail if tree-sitter native bindings aren't compiled
     }
 
+    // Attach source snippets to the top 5 findings by totalMs
+    const top5 = pipelineOutput.componentFindings
+      .slice()
+      .sort((a, b) => b.totalMs - a.totalMs)
+      .slice(0, 5);
+    await Promise.all(
+      top5.map(async (finding) => {
+        if (!finding.sourceLocation?.file || !finding.sourceLocation?.line) return;
+        try {
+          const raw = await fsPromises.readFile(finding.sourceLocation.file, "utf8");
+          const allLines = raw.split("\n");
+          const startLine = Math.max(0, finding.sourceLocation.line - 2);
+          const endLine = Math.min(allLines.length, startLine + 50);
+          finding.sourceSnippet = allLines.slice(startLine, endLine).join("\n");
+        } catch {
+          // non-fatal — file may not be readable
+        }
+      }),
+    );
+
     const debugDir = await getDebugDir(params.project_root);
+
+    // Persist raw profiling data so it can be reloaded by profiler-load
+    const sessionTs = new Date()
+      .toISOString()
+      .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
+      .slice(0, 15);
+    const cpuFile = cpuProfile
+      ? await writeDump(debugDir, `react-profiler-${sessionTs}_cpu.json`, cpuProfile)
+      : null;
+    const commitsFile = await writeDump(
+      debugDir,
+      `react-profiler-${sessionTs}_commits.json`,
+      {
+        commits: commitTree.commits,
+        meta: {
+          detectedArchitecture,
+          anyCompilerOptimized,
+          hotCommitIndices,
+          totalReactCommits,
+          profileStartWallMs: api.profileStartWallMs,
+        },
+      },
+    );
 
     const { report, reportFile, hotCommitsTotal, hotCommitsShown } =
       await renderProfilingReport({
@@ -174,6 +221,11 @@ at each action time (profileStartWallMs is Date.now() captured at react-profiler
       reportFile,
       hotCommitsTotal,
       hotCommitsShown,
+      sessionFiles: {
+        sessionId: sessionTs,
+        cpuProfile: cpuFile,
+        commits: commitsFile,
+      },
     };
 
     // Warn only when hook was genuinely not installed (null).

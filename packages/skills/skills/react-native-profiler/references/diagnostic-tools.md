@@ -16,16 +16,67 @@ Call `react-profiler-renders`. Returns render counts and durations per component
 ```
 Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm React Compiler is active for a given component. If `useMemoCache` is absent, the compiler bailed out for that component — memoization hints are safe to propose.
 
-## CPU hotspot table
-
-```json
-{ "port": 8081, "react_only": false }
-```
-Call `react-profiler-cpu-summary` after `react-profiler-stop`. Returns a markdown table of the top CPU consumers without running the full `react-profiler-analyze` pipeline.
-
 ## Console logs
 
 ```json
 { "port": 8081, "level": "error", "limit": 50 }
 ```
 Call `debugger-console-logs`. Filter by `level`: `"error"`, `"warn"`, `"log"`, or omit to get all.
+
+---
+
+# Post-Analysis Query Tools
+
+These require a completed profiling session (`react-profiler-stop` + `react-profiler-analyze`).
+
+## CPU query (replaces react-profiler-cpu-summary)
+
+```json
+{ "port": 8081, "mode": "top_functions", "top_n": 15 }
+```
+Call `profiler-cpu-query`. Modes:
+- `top_functions` — global CPU hotspots. Add `time_window_ms: { start, end }` to filter.
+- `time_window` — CPU breakdown for a specific time range (e.g. during a slow commit).
+- `call_tree` — callers and callees of a specific `function_name`.
+- `component_cpu` — aggregate CPU during all commits of a `component_name`.
+
+## Commit query
+
+```json
+{ "port": 8081, "mode": "by_component", "component_name": "AppNavigator" }
+```
+Call `profiler-commit-query`. Modes:
+- `by_component` — all commits where a component rendered.
+- `by_time_range` — commits in a `time_range_ms` window.
+- `by_index` — full detail of a single `commit_index`.
+- `cascade_tree` — parent-child re-render cascade for a commit.
+
+## iOS Instruments query
+
+```json
+{ "device_id": "<UDID>", "mode": "hang_stacks", "hang_index": 0 }
+```
+Call `profiler-stack-query` after `ios-instruments-analyze`. Modes:
+- `hang_stacks` — full CPU context during a specific hang.
+- `function_callers` — who calls a specific native `function_name`.
+- `thread_breakdown` — CPU time split by thread, optionally filtered.
+- `leak_stacks` — memory leak details, optionally filtered by `object_type`.
+
+## Combined report
+
+```json
+{ "port": 8081, "device_id": "<UDID>" }
+```
+Call `profiler-combined-report` when both React Profiler and iOS Instruments ran in parallel. Automatically correlates iOS hangs with React commits using wall-clock time alignment.
+
+## Session reload
+
+```json
+{ "project_root": "/path/to/app", "mode": "list" }
+```
+Call `profiler-load`. Modes:
+- `list` — show all saved profiling sessions (React + iOS) in the project's debug directory.
+- `load_react` — reload a React profiler session by `session_id`. Populates the in-memory cache for `profiler-cpu-query` and `profiler-commit-query`.
+- `load_instruments` — re-parse iOS Instruments XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
+
+Use this to revisit an earlier profiling session without re-profiling. Each `react-profiler-analyze` run saves raw data with a unique timestamp.

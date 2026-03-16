@@ -232,6 +232,30 @@ function buildFullMarkdown(
     );
   }
 
+  // Next steps guidance for the agent
+  lines.push("");
+  lines.push("---");
+  lines.push("## Next Steps");
+  lines.push("");
+  lines.push("Ask the user which path to take:");
+  lines.push("");
+  lines.push("1. **Investigate further** — use query tools to drill into specific findings before making changes:");
+  if (input.hotCommitSummaries.length > 0) {
+    const worstCommit = input.hotCommitSummaries
+      .filter((s) => !s.isMargin)
+      .sort((a, b) => b.totalRenderMs - a.totalRenderMs)[0];
+    if (worstCommit) {
+      lines.push(`   - \`profiler-commit-query\` mode=\`by_index\` commit_index=${worstCommit.commitIndex} — full breakdown of the slowest commit`);
+    }
+  }
+  if (input.componentFindings.length > 0) {
+    const topComp = input.componentFindings[0]!;
+    lines.push(`   - \`profiler-cpu-query\` mode=\`component_cpu\` component_name=\`${topComp.component}\` — CPU activity during this component's renders`);
+    lines.push(`   - \`profiler-cpu-query\` mode=\`call_tree\` — trace callers/callees of hot functions`);
+  }
+  lines.push("2. **Implement fixes** — apply changes to the top offenders identified above, then re-profile the same scenario to measure improvement.");
+  lines.push("3. **Done for now** — save the report for reference.");
+
   return lines.join("\n");
 }
 
@@ -453,9 +477,19 @@ function renderSuggestedImprovements(
           break;
         }
         case "context":
-          lines.push(
-            `**Context value recreated every render.** Memoize the value object at the Provider with \`useMemo\`.`,
-          );
+          if (!f.sourceLocation) {
+            lines.push(
+              `**Context re-renders** — source not resolved, suggestion is pattern-based. Check the Provider component for an unmemoized value object.`,
+            );
+          } else if (f.sourceLocation.hasUseMemo) {
+            lines.push(
+              `**Context re-renders — \`useMemo\` already present.** The context value reference is still changing. Investigate the Provider component: check whether its own dependencies are stable, or whether the Provider itself is remounting.`,
+            );
+          } else {
+            lines.push(
+              `**Context value recreated every render.** Memoize the value object at the Provider with \`useMemo\`.`,
+            );
+          }
           break;
         case "parent":
           if (f.parentTrigger) {
@@ -477,6 +511,20 @@ function renderSuggestedImprovements(
           );
       }
     }
+
+    // Embed source snippet in a collapsible block if available
+    if (f.sourceSnippet && f.sourceLocation) {
+      const snippetPath = `${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}`;
+      lines.push("");
+      lines.push(`<details><summary>Source — \`${snippetPath}\`</summary>`);
+      lines.push("");
+      lines.push("```tsx");
+      lines.push(f.sourceSnippet);
+      lines.push("```");
+      lines.push("");
+      lines.push("</details>");
+    }
+
     lines.push("");
   }
 

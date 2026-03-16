@@ -1,6 +1,13 @@
 import { execSync } from "child_process";
 import * as path from "path";
 
+/**
+ * Known xctrace schema names that contain CPU time-profile data.
+ * The actual name depends on the .tracetemplate — Time Profiler uses "time-profile",
+ * CPU Profiler uses "cpu-profile", and some custom templates use "time-sample".
+ */
+const CPU_SCHEMA_CANDIDATES = ["time-profile", "cpu-profile", "time-sample"];
+
 export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
   cpu: {
     suffix: "_raw_cpu.xml",
@@ -12,15 +19,16 @@ export const EXPORTS: Record<string, { suffix: string; xpath: string }> = {
   },
   leaks: {
     suffix: "_raw_leaks.xml",
-    xpath:
-      '/trace-toc/run[@number="1"]/tracks/track[@name="Leaks"]/details/detail[@name="Leaks"]',
+    xpath: '/trace-toc/run[@number="1"]/tracks/track[@name="Leaks"]/details/detail[@name="Leaks"]',
   },
 };
 
-/**
- * Detect xctrace version to determine supported export options.
- * xctrace 15+ supports --hal for human-accessible leaks.
- */
+export interface ExportDiagnostics {
+  tocSchemas: string[];
+  cpuSchemaUsed: string | null;
+  errors: Record<string, string>;
+}
+
 function getXctraceVersion(): number {
   try {
     const output = execSync("xctrace version 2>&1 || true", {
@@ -33,46 +41,170 @@ function getXctraceVersion(): number {
   }
 }
 
+/**
+ * Run `xctrace export --toc` to discover what tables/schemas exist in the trace.
+ * Returns an array of schema names found in the TOC.
+ */
+function discoverTraceSchemas(traceFile: string): string[] {
+  try {
+    const toc = execSync(
+      `xctrace export --input "${traceFile}" --toc`,
+      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const schemas: string[] = [];
+    const schemaRe = /schema="([^"]+)"/g;
+    let m;
+    while ((m = schemaRe.exec(toc)) !== null) {
+      schemas.push(m[1]);
+    }
+    return schemas;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Find the correct CPU schema xpath by checking the trace TOC.
+ * Falls back to trying known schema candidates if TOC parsing fails.
+ */
+function resolveCpuXpath(
+  traceFile: string,
+  diagnostics: ExportDiagnostics,
+): string | null {
+  const tocSchemas = discoverTraceSchemas(traceFile);
+  diagnostics.tocSchemas = tocSchemas;
+
+  if (tocSchemas.length > 0) {
+    for (const candidate of CPU_SCHEMA_CANDIDATES) {
+      if (tocSchemas.includes(candidate)) {
+        diagnostics.cpuSchemaUsed = candidate;
+        return `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
+      }
+    }
+    diagnostics.errors.cpu =
+      `No CPU schema found in trace TOC. Available schemas: [${tocSchemas.join(", ")}]. ` +
+      `Expected one of: [${CPU_SCHEMA_CANDIDATES.join(", ")}].`;
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Try exporting CPU data with each known schema name until one succeeds.
+ * Used as a fallback when TOC discovery doesn't find a match or fails.
+ */
+function tryCpuExportFallback(
+  traceFile: string,
+  outPath: string,
+  diagnostics: ExportDiagnostics,
+): boolean {
+  const triedSchemas: string[] = [];
+  for (const candidate of CPU_SCHEMA_CANDIDATES) {
+    const xpath = `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
+    try {
+      execSync(
+        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`,
+        { stdio: "pipe" },
+      );
+      diagnostics.cpuSchemaUsed = candidate;
+      return true;
+    } catch {
+      triedSchemas.push(candidate);
+    }
+  }
+  diagnostics.errors.cpu =
+    (diagnostics.errors.cpu ? diagnostics.errors.cpu + " " : "") +
+    `Brute-force export also failed for schemas: [${triedSchemas.join(", ")}].`;
+  return false;
+}
+
 export function exportIosTraceData(
   traceFile: string,
-): Record<string, string | null> {
+): { files: Record<string, string | null>; diagnostics: ExportDiagnostics } {
   const exportedFiles: Record<string, string | null> = {};
+  const diagnostics: ExportDiagnostics = {
+    tocSchemas: [],
+    cpuSchemaUsed: null,
+    errors: {},
+  };
   const dir = path.dirname(traceFile);
   const baseName = path.basename(traceFile, ".trace");
 
   for (const [key, config] of Object.entries(EXPORTS)) {
     const outPath = path.join(dir, `${baseName}${config.suffix}`);
-    try {
-      // xctrace XML export can truncate deep backtraces.
-      // We request HAL (human-accessible leaks) format when available
-      // to get fuller stacks. The --hal flag is available in Xcode 15+.
-      let cmd: string;
-      if (key === "leaks") {
-        const xcVersion = getXctraceVersion();
-        if (xcVersion >= 15) {
-          cmd = `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}' --hal`;
-        } else {
-          cmd = `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`;
-        }
-      } else {
-        cmd = `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`;
-      }
-      execSync(cmd, { stdio: "pipe" });
-      exportedFiles[key] = outPath;
-    } catch (err) {
-      // If --hal fails, fall back to standard export
-      if (key === "leaks") {
+
+    if (key === "cpu") {
+      // Dynamic CPU schema resolution
+      const resolvedXpath = resolveCpuXpath(traceFile, diagnostics);
+
+      if (resolvedXpath) {
         try {
-          const fallbackCmd = `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`;
-          execSync(fallbackCmd, { stdio: "pipe" });
+          execSync(
+            `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`,
+            { stdio: "pipe" },
+          );
           exportedFiles[key] = outPath;
           continue;
-        } catch {
-          // fall through to null
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          diagnostics.errors.cpu =
+            `TOC-resolved xpath failed (schema="${diagnostics.cpuSchemaUsed}"): ${msg}`;
+          diagnostics.cpuSchemaUsed = null;
         }
       }
+
+      // Fallback: brute-force try all known CPU schemas
+      if (tryCpuExportFallback(traceFile, outPath, diagnostics)) {
+        exportedFiles[key] = outPath;
+      } else {
+        exportedFiles[key] = null;
+      }
+      continue;
+    }
+
+    if (key === "leaks") {
+      const xcVersion = getXctraceVersion();
+      const halFlag = xcVersion >= 15 ? " --hal" : "";
+      try {
+        execSync(
+          `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'${halFlag}`,
+          { stdio: "pipe" },
+        );
+        exportedFiles[key] = outPath;
+      } catch {
+        if (halFlag) {
+          try {
+            execSync(
+              `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
+              { stdio: "pipe" },
+            );
+            exportedFiles[key] = outPath;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            diagnostics.errors[key] = msg;
+            exportedFiles[key] = null;
+          }
+        } else {
+          exportedFiles[key] = null;
+        }
+      }
+      continue;
+    }
+
+    // Default export (hangs, etc.)
+    try {
+      execSync(
+        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
+        { stdio: "pipe" },
+      );
+      exportedFiles[key] = outPath;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      diagnostics.errors[key] = msg;
       exportedFiles[key] = null;
     }
   }
-  return exportedFiles;
+
+  return { files: exportedFiles, diagnostics };
 }

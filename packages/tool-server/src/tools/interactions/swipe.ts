@@ -19,7 +19,7 @@ const zodSchema = z.object({
 
 export const swipeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { swiped: boolean }
+  { swiped: boolean; timestampMs: number }
 > = {
   id: "swipe",
   description: `Perform a smooth swipe gesture between two points.
@@ -34,12 +34,14 @@ Swipe down (fromY < toY) to scroll content up.`,
     const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
     const steps = Math.max(1, Math.round(duration / 16));
+    let timestampMs = 0;
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const x = params.fromX + (params.toX - params.fromX) * t;
       const y = params.fromY + (params.toY - params.fromY) * t;
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+      if (i === 0) timestampMs = Date.now();
       sendCommand(api, {
         cmd: "touch",
         type,
@@ -51,6 +53,6 @@ Swipe down (fromY < toY) to scroll content up.`,
       if (i < steps) await sleep(16);
     }
 
-    return { swiped: true };
+    return { swiped: true, timestampMs };
   },
 };

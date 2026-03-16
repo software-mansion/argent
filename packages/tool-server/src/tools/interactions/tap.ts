@@ -13,7 +13,7 @@ const zodSchema = z.object({
 
 export const tapTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { tapped: boolean }
+  { tapped: boolean; timestampMs: number }
 > = {
   id: "tap",
   description: `Tap the simulator screen at normalized coordinates (0.0=left/top, 1.0=right/bottom).
@@ -26,6 +26,7 @@ Before tapping, determine the correct coordinates by using debugger-component-tr
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;
+    const timestampMs = Date.now();
     sendCommand(api, {
       cmd: "touch",
       type: "Down",
@@ -43,6 +44,6 @@ Before tapping, determine the correct coordinates by using debugger-component-tr
       second_x: null,
       second_y: null,
     });
-    return { tapped: true };
+    return { tapped: true, timestampMs };
   },
 };

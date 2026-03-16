@@ -5,6 +5,7 @@ import {
   type IosInstrumentsSessionApi,
 } from "../../../blueprints/ios-instruments-session";
 import { exportIosTraceData } from "../../../utils/ios-instruments/export";
+import type { ExportDiagnostics } from "../../../utils/ios-instruments/export";
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
@@ -12,7 +13,11 @@ const zodSchema = z.object({
 
 export const iosInstrumentsStopTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { traceFile: string; exportedFiles: Record<string, string | null> }
+  {
+    traceFile: string;
+    exportedFiles: Record<string, string | null>;
+    exportDiagnostics: ExportDiagnostics;
+  }
 > = {
   id: "ios-instruments-stop",
   description: `Stop iOS Instruments profiling and export trace data to XML files.
@@ -49,12 +54,15 @@ then exports CPU, hangs, and leaks data. Call ios-instruments-start first.`,
     api.profilingActive = false;
     api.xctracePid = null;
 
-    const exportedFiles = exportIosTraceData(api.traceFile);
+    const { files: exportedFiles, diagnostics } = exportIosTraceData(
+      api.traceFile,
+    );
     api.exportedFiles = exportedFiles;
 
     return {
       traceFile: api.traceFile,
       exportedFiles,
+      exportDiagnostics: diagnostics,
     };
   },
 };

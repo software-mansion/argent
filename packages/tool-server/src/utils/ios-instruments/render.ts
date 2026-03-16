@@ -12,6 +12,7 @@ import type {
 interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
+  exportErrors?: Record<string, string>;
 }
 
 export async function renderIosInstrumentsReport(
@@ -22,8 +23,8 @@ export async function renderIosInstrumentsReport(
 
   const report =
     bottlenecksTotal === 0
-      ? renderAllClear(payload)
-      : renderFullReport(payload);
+      ? renderAllClear(payload, input.exportErrors)
+      : renderFullReport(payload, input.exportErrors);
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
   if (reportFile) {
@@ -37,7 +38,10 @@ export async function renderIosInstrumentsReport(
 // Report builders
 // ---------------------------------------------------------------------------
 
-function renderAllClear(payload: ProfilerPayload): string {
+function renderAllClear(
+  payload: ProfilerPayload,
+  exportErrors?: Record<string, string>,
+): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
@@ -46,16 +50,27 @@ function renderAllClear(payload: ProfilerPayload): string {
     ``,
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
+  ];
+
+  const errorLines = renderExportErrors(exportErrors);
+  if (errorLines.length > 0) {
+    lines.push(...errorLines, ``);
+  }
+
+  lines.push(
     `---`,
     ``,
     `All clear — no CPU hotspots, UI hangs, or memory leaks detected.`,
     ``,
     `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`,
-  ];
+  );
   return lines.join("\n");
 }
 
-function renderFullReport(payload: ProfilerPayload): string {
+function renderFullReport(
+  payload: ProfilerPayload,
+  exportErrors?: Record<string, string>,
+): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
@@ -75,13 +90,21 @@ function renderFullReport(payload: ProfilerPayload): string {
     ``,
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
+  ];
+
+  const errorLines = renderExportErrors(exportErrors);
+  if (errorLines.length > 0) {
+    lines.push(...errorLines, ``);
+  }
+
+  lines.push(
     `---`,
     ``,
     `## Summary`,
     ``,
     `| Category | Count | Severity |`,
     `|---|---|---|`,
-  ];
+  );
 
   if (cpuHotspots.length > 0) {
     lines.push(
@@ -236,12 +259,44 @@ function renderFullReport(payload: ProfilerPayload): string {
     lines.push(``);
   }
 
+  // Next steps guidance for the agent
+  lines.push(`---`, ``, `## Next Steps`, ``);
+  lines.push(`Ask the user which path to take:`, ``);
+  lines.push(`1. **Investigate further** — use \`profiler-stack-query\` to drill into specific findings:`);
+  if (uiHangs.length > 0) {
+    lines.push(`   - mode=\`hang_stacks\` hang_index=0 — full native call chains during the worst hang`);
+  }
+  if (cpuHotspots.length > 0) {
+    const topHotspot = cpuHotspots[0]!;
+    lines.push(`   - mode=\`function_callers\` function_name=\`${topHotspot.dominantFunction}\` — who calls this hot function`);
+    lines.push(`   - mode=\`thread_breakdown\` — CPU distribution across threads`);
+  }
+  if (memoryLeaks.length > 0) {
+    const topLeak = memoryLeaks.sort((a, b) => b.totalSizeBytes - a.totalSizeBytes)[0]!;
+    lines.push(`   - mode=\`leak_stacks\` object_type=\`${topLeak.objectType}\` — detailed leak analysis`);
+  }
+  lines.push(`2. **Implement fixes** — apply changes to address the findings above, then re-profile to measure improvement.`);
+  lines.push(`3. **Done for now** — save the report for reference.`);
+
   return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function renderExportErrors(
+  exportErrors?: Record<string, string>,
+): string[] {
+  if (!exportErrors || Object.keys(exportErrors).length === 0) return [];
+  const lines: string[] = [
+    `> **Export warnings:**`,
+  ];
+  for (const [key, msg] of Object.entries(exportErrors)) {
+    lines.push(`> - **${key}**: ${msg}`);
+  }
+  return lines;
+}
 
 function severityEmoji(severity: string): string {
   switch (severity) {
