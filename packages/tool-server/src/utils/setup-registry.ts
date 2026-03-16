@@ -45,6 +45,7 @@ import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
+import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -98,6 +99,8 @@ export function createRegistry(): Registry {
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
+
+  registry.registerTool(gatherWorkspaceDataTool);
 
   return registry;
 }

@@ -15,6 +15,7 @@ const LICENSE_EXEMPT_TOOLS = new Set([
   "stop-simulator-server",
   "stop-all-simulator-servers",
   "stop-metro",
+  "gather-workspace-data",
 ]);
 
 async function licenseGate(req: Request, res: Response, next: NextFunction) {

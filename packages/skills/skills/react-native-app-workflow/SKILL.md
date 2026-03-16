@@ -7,16 +7,21 @@ description: Step-by-step workflows for developing or debugging React Native app
 
 ### 1.1 Explore Configuration (MANDATORY — Do This First)
 
-**Before running commands**, read and understand the project's build and run configuration. Do NOT default to `npx react-native start` or `npx react-native run-ios` without first checking for custom scripts and workflows.
+**Before running commands**, read and understand the project's build and run configuration. If the `environment-inspector` agent has already run (check project memory / `MEMORY.md` for a "Project Environment" section), use that context directly — it already contains scripts, metro port, platform info, and build commands. If not available, as a callback, you may call the `gather-workspace-data` tool as a fast first step to get a structured snapshot, then fill in gaps manually. If subagent is available - NEVER
+call gather-workspace-data manually by yourself
 
-| Action                | Command / Location                                                                                                                      |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Check if React Native | Check for `package.json` with `react-native` dependency; look for `index.js` or `App.js` at root.                                       |
+Do NOT default to `npx react-native start` or `npx react-native run-ios` without first checking for custom scripts and workflows.
+
+**Manual fallback** (if neither the agent nor the tool is available):
+
+| Action                | Command / Location                                                                                                                                                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Check if React Native | Check for `package.json` with `react-native` dependency; look for `index.js` or `App.js` at root.                                                                                                                                       |
 | **Read user scripts** | **In `package.json`: read ALL scripts.** Look for `start`, `run-ios`, `run-android`, but also custom scripts like `start:local`, `start:dev`, `ios`, `build:ios`, flavors, etc. **Custom scripts take priority over default commands.** |
-| Metro config          | Read `metro.config.js` (or `metro.config.json`, or `metro` in `package.json`). Default RN projects extend `@react-native/metro-config`. Note any custom port, watchFolders, or other non-default configuration.  |
-| iOS entry             | `ios/` folder with `.xcworkspace` (CocoaPods) or `.xcodeproj`. Prefer opening `.xcworkspace` for builds.                                |
-| Monorepo / workspaces | Check for `workspaces` in root `package.json`, `turbo.json`, `nx.json`, or `lerna.json`. In monorepos the app may not be at the repo root. |
-| Build config files    | Look for `Makefile`, `Fastfile`, `Brewfile`, `.env` files, or README build instructions that describe the project-specific workflow.    |
+| Metro config          | Read `metro.config.js` (or `metro.config.json`, or `metro` in `package.json`). Default RN projects extend `@react-native/metro-config`. Note any custom port, watchFolders, or other non-default configuration.                         |
+| iOS entry             | `ios/` folder with `.xcworkspace` (CocoaPods) or `.xcodeproj`. Prefer opening `.xcworkspace` for builds.                                                                                                                                |
+| Monorepo / workspaces | Check for `workspaces` in root `package.json`, `turbo.json`, `nx.json`, or `lerna.json`. In monorepos the app may not be at the repo root.                                                                                              |
+| Build config files    | Look for `Makefile`, `Fastfile`, `Brewfile`, `.env` files, or README build instructions that describe the project-specific workflow.                                                                                                    |
 
 **If the project structure is convoluted and would bloat the context or it is not obvious which scripts/configuration to use, ask the user before proceeding.**
 
@@ -93,10 +98,10 @@ To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 
 After code or config changes, the app must load the new bundle:
 
-| Method       | How                                                                                               |
-| ------------ | ------------------------------------------------------------------------------------------------- |
-| Reload tool  | Use the `debugger-reload-metro` tool                                                              |
-| Restart app  | Use the `restart-app` tool, or kill the app in simulator and run `npx react-native run-ios` again |
+| Method      | How                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| Reload tool | Use the `debugger-reload-metro` tool                                                              |
+| Restart app | Use the `restart-app` tool, or kill the app in simulator and run `npx react-native run-ios` again |
 
 **Agent checklist:**
 
@@ -147,6 +152,7 @@ After code or config changes, the app must load the new bundle:
 ### 3.2 When to Ask the User
 
 **After 2-3 failed build or run attempts, STOP and ask the user for guidance.** The user may know about:
+
 - Required environment variables or `.env` files not checked into version control
 - Specific Xcode version, SDK, or signing requirements
 - Custom build configurations or schemes
@@ -158,33 +164,34 @@ If the project structure is convoluted (monorepo, custom tooling, non-standard s
 ### 3.3 Saving Build Workflow for Later
 
 Once you discover the correct build/run workflow for a project, **save it for future sessions**. This is especially valuable for projects with non-standard setups. Consider creating a Cursor rule that captures:
+
 - The commands to start Metro (custom script, port, env vars)
 - The commands to build and run the app (scheme, configuration, simulator)
 - Any required environment setup (`.env` files, signing, etc.)
 
 ### 3.4 When to Reinstall vs Refresh
 
-| Situation                                             | Action                                                                                                   |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                                            |
-| Native code or `pod install` / project config changed | Rebuild: `npx react-native run-ios` (Metro can stay running).                                            |
-| `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild.                    |
-| App needs reinstalling from .app path                 | Use `reinstall-app` tool with bundle ID and .app path.                                                   |
-| Persistent native build errors                        | Full clean + reinstall (step 3 above).                                                                   |
+| Situation                                             | Action                                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                         |
+| Native code or `pod install` / project config changed | Rebuild: `npx react-native run-ios` (Metro can stay running).                         |
+| `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild. |
+| App needs reinstalling from .app path                 | Use `reinstall-app` tool with bundle ID and .app path.                                |
+| Persistent native build errors                        | Full clean + reinstall (step 3 above).                                                |
 
 ### 3.5 iOS Simulator Control
 
-| Action                    | Tool / Command                                                            |
-| ------------------------- | ------------------------------------------------------------------------- |
-| List devices              | `list-simulators` tool                                                    |
-| Boot a simulator          | `boot-simulator` tool (pass UDID)                                        |
-| Launch an app             | `launch-app` tool (pass bundle ID)                                       |
-| Restart an app            | `restart-app` tool (terminate + relaunch by bundle ID)                    |
-| Open a URL / deep link    | `open-url` tool                                                          |
-| Rotate simulator          | `rotate` tool                                                            |
-| Stop simulator server     | `stop-simulator-server` tool (for a specific UDID)                       |
-| Stop all simulator servers| `stop-all-simulator-servers` tool                                        |
-| Shutdown simulator        | `xcrun simctl shutdown <UDID>`                                           |
+| Action                     | Tool / Command                                         |
+| -------------------------- | ------------------------------------------------------ |
+| List devices               | `list-simulators` tool                                 |
+| Boot a simulator           | `boot-simulator` tool (pass UDID)                      |
+| Launch an app              | `launch-app` tool (pass bundle ID)                     |
+| Restart an app             | `restart-app` tool (terminate + relaunch by bundle ID) |
+| Open a URL / deep link     | `open-url` tool                                        |
+| Rotate simulator           | `rotate` tool                                          |
+| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID)     |
+| Stop all simulator servers | `stop-all-simulator-servers` tool                      |
+| Shutdown simulator         | `xcrun simctl shutdown <UDID>`                         |
 
 For full simulator setup workflow, refer to the `simulator-setup` skill.
 
@@ -194,20 +201,20 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 ### 4.1 Where to Look
 
-| Problem type                      | Tool / Where to look                                                                                      |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-console-logs` tool to read captured logs, or `debugger-console-listen` for real-time logs.   |
-| **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates. |
-| **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree.|
-| **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                      |
-| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                    |
-| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                              |
+| Problem type                      | Tool / Where to look                                                                                        |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| **JavaScript errors / logs**      | Use `debugger-console-logs` tool to read captured logs, or `debugger-console-listen` for real-time logs.    |
+| **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.  |
+| **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree. |
+| **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                        |
+| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                       |
+| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                |
 
 For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `metro-debugger` skill.
 
 ### 4.2 iOS System Popups
 
-iOS system-level popups (permission dialogs, network alerts, tracking consent, etc.) appear over the app and are **not part of the React Native view hierarchy**. 
+iOS system-level popups (permission dialogs, network alerts, tracking consent, etc.) appear over the app and are **not part of the React Native view hierarchy**.
 
 If these cannot be tapped easly, use the `keyboard` tool with `key: "enter"` — this confirms the default button on the popup.
 
@@ -217,10 +224,10 @@ Use the tools provided by tool server instead.
 
 ### 4.4 Logs
 
-| Log type        | Tool / Command                                                                                |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| JS console logs | `debugger-console-logs` tool (captured logs) or `debugger-console-listen` tool (real-time)     |
-| iOS native logs | `npx react-native log-ios` or Xcode console when running from Xcode                          |
+| Log type        | Tool / Command                                                                             |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| JS console logs | `debugger-console-logs` tool (captured logs) or `debugger-console-listen` tool (real-time) |
+| iOS native logs | `npx react-native log-ios` or Xcode console when running from Xcode                        |
 
 ### 4.5 Debugging with Breakpoints
 
@@ -255,6 +262,7 @@ For the full debugging workflow, refer to the `metro-debugger` skill.
 Ask the use whether he wants you to run the test manually, come up with you own tests, try to find new test cases.
 
 ONLY IF ASKED to run existing tests:
+
 - **Jest**: `npm test` or `npx jest`.
 - **Detox (example)**:
   - Build: `detox build --configuration ios.sim.release` (or debug).
@@ -271,34 +279,35 @@ ONLY IF ASKED to run existing tests:
 
 ## Quick Reference: Tools & Commands
 
-| Goal                          | Tool / Command                                 |
-| ----------------------------- | ---------------------------------------------- |
-| Check port 8081               | `lsof -i :8081`                                |
-| Kill Metro                    | `stop-metro` tool                              |
-| Start Metro                   | `npx react-native start`                       |
-| Start Metro (reset cache)     | `npx react-native start --reset-cache`         |
-| Run iOS app                   | `npx react-native run-ios`                     |
-| List simulators               | `list-simulators` tool                         |
-| Boot simulator                | `boot-simulator` tool                          |
-| Take screenshot               | `screenshot` tool                              |
-| Describe screen (a11y tree)   | `describe` tool                                |
-| Read JS console logs          | `debugger-console-logs` tool                   |
-| Reload JS bundle              | `debugger-reload-metro` tool                   |
-| Check Metro status            | `debugger-status` tool                         |
-| Inspect React component tree  | `debugger-component-tree` tool                 |
-| Run JS in app                 | `debugger-evaluate` tool                       |
-| iOS native logs               | `npx react-native log-ios`                     |
-| Clean + reinstall (nuclear)   | See §3.1 step 3                                |
+| Goal                         | Tool / Command                         |
+| ---------------------------- | -------------------------------------- |
+| Check port 8081              | `lsof -i :8081`                        |
+| Kill Metro                   | `stop-metro` tool                      |
+| Start Metro                  | `npx react-native start`               |
+| Start Metro (reset cache)    | `npx react-native start --reset-cache` |
+| Run iOS app                  | `npx react-native run-ios`             |
+| List simulators              | `list-simulators` tool                 |
+| Boot simulator               | `boot-simulator` tool                  |
+| Take screenshot              | `screenshot` tool                      |
+| Describe screen (a11y tree)  | `describe` tool                        |
+| Read JS console logs         | `debugger-console-logs` tool           |
+| Reload JS bundle             | `debugger-reload-metro` tool           |
+| Check Metro status           | `debugger-status` tool                 |
+| Inspect React component tree | `debugger-component-tree` tool         |
+| Run JS in app                | `debugger-evaluate` tool               |
+| iOS native logs              | `npx react-native log-ios`             |
+| Clean + reinstall (nuclear)  | See §3.1 step 3                        |
 
 ---
 
-## Related Skills
+## Related Skills and Agents
 
-| Skill                    | When to use                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| `simulator-setup`        | Initial simulator boot and connection setup                                    |
-| `simulator-interact`     | Tapping, swiping, typing, hardware buttons, gestures on the simulator          |
-| `simulator-screenshot`   | Capturing screenshots of the simulator screen                                  |
-| `metro-debugger`         | Full Metro CDP debugging: breakpoints, stepping, component inspection          |
-| `react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                  |
-| `test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
+| Skill / Agent                      | When to use                                                                                                                                                                                                                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `environment-inspector` (subagent) | Run at session start to gather project environment context (build commands, scripts, platform support, QA tooling). Populates the data this skill's §1.1 needs. IF YOU ARE MAIN AGENT, NEVER USE THIS TOOL IF SUBAGENT CAN DO IT |
+| `simulator-setup`                  | Initial simulator boot and connection setup                                                                                                                                                                                      |
+| `simulator-interact`               | Tapping, swiping, typing, hardware buttons, gestures on the simulator                                                                                                                                                            |
+| `simulator-screenshot`             | Capturing screenshots of the simulator screen                                                                                                                                                                                    |
+| `metro-debugger`                   | Full Metro CDP debugging: breakpoints, stepping, component inspection                                                                                                                                                            |
+| `react-native-profiler`            | Profiling performance, finding re-render issues, CPU hotspots                                                                                                                                                                    |
+| `test-ui-flow`                     | Interactive UI testing with automatic screenshot verification after each action                                                                                                                                                  |

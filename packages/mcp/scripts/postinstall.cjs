@@ -23,6 +23,7 @@ if (!projectRoot) {
 
 const distEntry = path.resolve(__dirname, "..", "dist", "index.js");
 const skillsSrc = path.resolve(__dirname, "..", "skills");
+const agentsSrc = path.resolve(__dirname, "..", "agents");
 const logFile = path.join(os.homedir(), ".argent", "mcp-calls.log");
 
 const mcpEntry = {
@@ -115,6 +116,14 @@ try {
   results.push("✓ Installed skill files to .claude/skills/");
 } catch (err) {
   results.push(`⚠ Could not install skill files: ${err}`);
+}
+
+// Agents — .claude/agents/
+try {
+  copySkills(agentsSrc, path.join(projectRoot, ".claude", "agents"));
+  results.push("✓ Installed agent files to .claude/agents/");
+} catch (err) {
+  results.push(`⚠ Could not install agent files: ${err}`);
 }
 
 console.log("\nargent postinstall:");
