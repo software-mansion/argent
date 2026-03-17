@@ -9,20 +9,28 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ## 2. Tools
 
-| Tool              | Purpose                                              |
-| ----------------- | ---------------------------------------------------- |
-| `flow-start`      | Start recording — takes a name and executionPrerequisite, creates the file |
-| `flow-add-step`   | Execute a tool call live and record it if it succeeds |
-| `flow-add-echo`   | Add a label/comment that prints during replay        |
-| `flow-finish`     | Stop recording and get a summary                     |
-| `flow-execute`    | Replay a saved flow by name                          |
+| Tool                     | Purpose                                              |
+| ------------------------ | ---------------------------------------------------- |
+| `flow-start`             | Start recording — takes a name and executionPrerequisite, creates the file |
+| `flow-add-step`          | Execute a tool call live and record it if it succeeds |
+| `flow-add-echo`          | Add a label/comment that prints during replay        |
+| `flow-finish`            | Stop recording and get a summary                     |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it |
+| `flow-execute`           | Replay a saved flow by name                          |
 
 ## 3. Workflow
+
+### Recording
 
 1. **Start**: Call `flow-start` with a descriptive name and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
 4. **Finish**: Call `flow-finish` to stop recording.
+
+### Replaying
+
+1. **Check prerequisite**: Call `flow-read-prerequisite` to inspect the flow's execution prerequisite. Verify the required state is met.
+2. **Execute**: Call `flow-execute` with the flow name and `prerequisiteAcknowledged: true`. If the prerequisite has not been acknowledged, the tool returns a notice instead of running.
 
 Every tool returns the current flow file contents so you can track what has been recorded.
 
