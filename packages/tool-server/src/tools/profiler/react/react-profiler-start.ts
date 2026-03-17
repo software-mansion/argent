@@ -156,12 +156,12 @@ After starting, ask the user to perform the interaction to profile, then call re
     const cdp = api.cdp;
     const ignore = () => {};
 
+    // Inject commit-capture hook FIRST (before startProfiling) so no commits are missed
+    await cdp.evaluate(COMMIT_CAPTURE_SCRIPT);
+
     await cdp.send("Profiler.start", {
       interval: params.sample_interval_us,
     });
-
-    // Inject commit-capture hook FIRST (before startProfiling) so no commits are missed
-    await cdp.evaluate(COMMIT_CAPTURE_SCRIPT);
 
     // Verify the hook was installed correctly
     const verifyResult = (await cdp.evaluate(`
