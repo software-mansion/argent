@@ -50,6 +50,7 @@ import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
 import { flowFinishTool } from "../tools/flows/flow-finish";
 import { createRunFlowTool } from "../tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -109,6 +110,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
   registry.registerTool(flowFinishTool);
+  registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));
 
   return registry;

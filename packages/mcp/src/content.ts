@@ -36,6 +36,7 @@ export async function toMcpContent(
 
 export type FlowExecuteResult = {
   flow: string;
+  executionPrerequisite?: string;
   steps: {
     kind: string;
     tool?: string;
@@ -54,6 +55,14 @@ export async function flowRunToMcpContent(
   result: FlowExecuteResult,
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
+
+  if (result.executionPrerequisite) {
+    blocks.push({
+      type: "text",
+      text: `Prerequisite: ${result.executionPrerequisite}`,
+    });
+  }
+
   blocks.push({
     type: "text",
     text: `Running flow "${result.flow}" (${result.steps.length} steps)`,

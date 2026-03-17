@@ -1,13 +1,25 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { ToolDefinition } from "@argent/registry";
-import { getFlowPath, getActiveFlow, clearActiveFlow, parseFlow } from "./flow-utils";
+import {
+  getFlowPath,
+  getActiveFlow,
+  clearActiveFlow,
+  parseFlow,
+} from "./flow-utils";
 
 const zodSchema = z.object({});
 
 export const flowFinishTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; path: string; steps: number; summary: string[]; flowFile: string }
+  {
+    message: string;
+    path: string;
+    executionPrerequisite: string;
+    steps: number;
+    summary: string[];
+    flowFile: string;
+  }
 > = {
   id: "flow-finish",
   description: `Finish recording the active flow. Returns a summary of all recorded steps. You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
@@ -17,9 +29,9 @@ export const flowFinishTool: ToolDefinition<
     const flowName = getActiveFlow();
     const filePath = await getFlowPath(flowName);
     const flowFile = await fs.readFile(filePath, "utf8");
-    const steps = parseFlow(flowFile);
+    const flow = parseFlow(flowFile);
 
-    const summary = steps.map((step, i) => {
+    const summary = flow.steps.map((step, i) => {
       if (step.kind === "echo") {
         return `${i + 1}. echo: ${step.message}`;
       }
@@ -29,9 +41,10 @@ export const flowFinishTool: ToolDefinition<
     clearActiveFlow();
 
     return {
-      message: `Finished recording "${flowName}" flow (${steps.length} steps)`,
+      message: `Finished recording "${flowName}" flow (${flow.steps.length} steps)`,
       path: filePath,
-      steps: steps.length,
+      executionPrerequisite: flow.executionPrerequisite,
+      steps: flow.steps.length,
       summary,
       flowFile,
     };

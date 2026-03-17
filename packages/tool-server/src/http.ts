@@ -19,6 +19,7 @@ const LICENSE_EXEMPT_TOOLS = new Set([
   "flow-add-step",
   "flow-add-echo",
   "flow-finish",
+  "flow-read-prerequisite",
   "flow-execute",
 ]);
 

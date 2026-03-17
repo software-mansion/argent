@@ -1,7 +1,6 @@
 import { z } from "zod";
-import * as fs from "node:fs/promises";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { getFlowPath, getActiveFlow, serializeStep } from "./flow-utils";
+import { getFlowPath, getActiveFlow, appendStep } from "./flow-utils";
 
 const zodSchema = z.object({
   command: z
@@ -35,14 +34,12 @@ export function createFlowAddStepTool(
 
       const toolResult = await registry.invokeTool(params.command, args);
 
-      const line = serializeStep({
+      const flowFile = await appendStep(filePath, {
         kind: "tool",
         name: params.command,
         args,
       });
-      await fs.appendFile(filePath, line + "\n", "utf8");
 
-      const flowFile = await fs.readFile(filePath, "utf8");
       return {
         message: `Step added to "${flowName}" flow`,
         toolResult,
