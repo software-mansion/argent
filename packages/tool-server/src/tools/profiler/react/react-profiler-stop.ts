@@ -3,12 +3,14 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  cacheProfilerData,
+  type ProfilerSessionPaths,
+  cacheProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import type {
   HermesCpuProfile,
   DevToolsFiberCommit,
 } from "../../../utils/react-profiler/types/input";
+import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -45,7 +47,6 @@ Call react-profiler-start first, then exercise the app, then call this.`,
     }
 
     const profile = result.profile;
-    api.cpuProfile = profile;
 
     let commitCount = 0;
     let totalReactCommits = 0;
@@ -221,16 +222,50 @@ Call react-profiler-start first, then exercise the app, then call this.`,
       }
     }
 
-    api.commitTree = { commits: allCommits, hookNames: new Map() };
+    const commitTree = { commits: allCommits, hookNames: new Map() };
 
-    cacheProfilerData(api.port, {
-      cpuProfile: profile,
-      commitTree: api.commitTree,
+    // Write raw data to disk immediately — no in-memory retention
+    const sessionTs = new Date()
+      .toISOString()
+      .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
+      .slice(0, 15);
+
+    const debugDir = await getDebugDir(api.projectRoot);
+
+    const cpuProfilePath = await writeDumpCompact(
+      debugDir,
+      `react-profiler-${sessionTs}_cpu.json`,
+      profile,
+    );
+    const commitsPath = await writeDumpCompact(
+      debugDir,
+      `react-profiler-${sessionTs}_commits.json`,
+      {
+        commits: commitTree.commits,
+        meta: {
+          detectedArchitecture: api.detectedArchitecture,
+          anyCompilerOptimized: api.anyCompilerOptimized,
+          hotCommitIndices: api.hotCommitIndices,
+          totalReactCommits: api.totalReactCommits,
+          profileStartWallMs: api.profileStartWallMs,
+        },
+      },
+    );
+
+    const sessionPaths: ProfilerSessionPaths = {
+      sessionId: sessionTs,
+      debugDir,
+      cpuProfilePath,
+      commitsPath,
+      cpuSampleIndexPath: null,
       detectedArchitecture: api.detectedArchitecture,
       anyCompilerOptimized: api.anyCompilerOptimized,
       hotCommitIndices: api.hotCommitIndices,
       totalReactCommits: api.totalReactCommits,
-    });
+    };
+
+    cacheProfilerPaths(api.port, sessionPaths);
+    api.sessionPaths = sessionPaths;
 
     const duration_ms = (profile.endTime - profile.startTime) / 1000;
 

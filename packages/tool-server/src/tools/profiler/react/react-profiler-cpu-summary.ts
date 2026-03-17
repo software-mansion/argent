@@ -3,9 +3,11 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  getCachedProfilerData,
+  getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
-import type { HermesProfileNode } from "../../../utils/react-profiler/types/input";
+import type { HermesProfileNode, HermesCpuProfile } from "../../../utils/react-profiler/types/input";
+import { readCpuProfile } from "../../../utils/react-profiler/debug/dump";
+import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -78,6 +80,7 @@ function buildHotspots(
 
   for (const node of nodes) {
     const name = node.callFrame.functionName || "(anonymous)";
+    if (isArgentProfilerFunction(name)) continue;
     if (reactOnly && !isReactComponent(name)) continue;
 
     const self = selfHits.get(node.id) ?? 0;
@@ -133,16 +136,14 @@ Call react-profiler-stop first. Reads directly from the stored cpuProfile.`,
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
 
-    let cpuProfile = api.cpuProfile;
-    if (!cpuProfile) {
-      const cached = getCachedProfilerData(api.port);
-      if (!cached) {
-        throw new Error(
-          "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",
-        );
-      }
-      cpuProfile = cached.cpuProfile;
+    const sessionPaths = api.sessionPaths ?? getCachedProfilerPaths(api.port);
+    if (!sessionPaths?.cpuProfilePath) {
+      throw new Error(
+        "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",
+      );
     }
+
+    const cpuProfile: HermesCpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
 
     const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
     const duration_ms = Math.round((endTime - startTime) / 1000);

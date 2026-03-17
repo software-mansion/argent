@@ -3,17 +3,14 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  cacheProfilerData,
-  type ProfilerDataSnapshot,
+  cacheProfilerPaths,
+  type ProfilerSessionPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
   IOS_INSTRUMENTS_SESSION_NAMESPACE,
   type IosInstrumentsSessionApi,
 } from "../../../blueprints/ios-instruments-session";
-import type {
-  HermesCpuProfile,
-  DevToolsCommitTree,
-} from "../../../utils/react-profiler/types/input";
+import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosInstrumentsPipeline } from "../../../utils/ios-instruments/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
@@ -138,64 +135,79 @@ async function loadReactSession(
     debugDir,
     `react-profiler-${sessionId}_commits.json`,
   );
+  const cpuIndexPath = path.join(
+    debugDir,
+    `react-profiler-${sessionId}_cpu-index.json`,
+  );
 
-  let cpuProfile: HermesCpuProfile | null = null;
-  try {
-    const cpuJson = await fs.readFile(cpuPath, "utf8");
-    cpuProfile = JSON.parse(cpuJson) as HermesCpuProfile;
-  } catch {
-    // CPU profile may not exist (e.g. all-clear session)
+  // Verify files exist without reading full contents
+  let hasCpu = false;
+  let hasCommits = false;
+  let hasCpuIndex = false;
+  try { await fs.access(cpuPath); hasCpu = true; } catch { /* not present */ }
+  try { await fs.access(commitsPath); hasCommits = true; } catch { /* not present */ }
+  try { await fs.access(cpuIndexPath); hasCpuIndex = true; } catch { /* not present */ }
+
+  if (!hasCpu && !hasCommits) {
+    throw new Error(
+      `No data found for React session "${sessionId}". ` +
+        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`,
+    );
   }
 
-  let commitTree: DevToolsCommitTree = { commits: [], hookNames: new Map() };
+  // Parse only lightweight meta from commits file header
   let detectedArchitecture: "bridge" | "bridgeless" | null = null;
   let anyCompilerOptimized: boolean | null = null;
   let hotCommitIndices: number[] | null = null;
   let totalReactCommits: number | null = null;
+  let commitCount = 0;
+  let sampleInfo = "not available";
 
-  try {
-    const commitsJson = await fs.readFile(commitsPath, "utf8");
-    const parsed = JSON.parse(commitsJson) as {
-      commits: DevToolsCommitTree["commits"];
-      meta?: {
-        detectedArchitecture?: "bridge" | "bridgeless" | null;
-        anyCompilerOptimized?: boolean | null;
-        hotCommitIndices?: number[] | null;
-        totalReactCommits?: number | null;
-      };
-    };
-    commitTree = { commits: parsed.commits, hookNames: new Map() };
-    if (parsed.meta) {
-      detectedArchitecture = parsed.meta.detectedArchitecture ?? null;
-      anyCompilerOptimized = parsed.meta.anyCompilerOptimized ?? null;
-      hotCommitIndices = parsed.meta.hotCommitIndices ?? null;
-      totalReactCommits = parsed.meta.totalReactCommits ?? null;
-    }
-  } catch {
-    if (!cpuProfile) {
-      throw new Error(
-        `No data found for React session "${sessionId}". ` +
-          `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`,
-      );
+  if (hasCommits) {
+    try {
+      const onDisk = await readCommitTree(commitsPath);
+      commitCount = onDisk.commits.length;
+      if (onDisk.meta) {
+        detectedArchitecture = onDisk.meta.detectedArchitecture ?? null;
+        anyCompilerOptimized = onDisk.meta.anyCompilerOptimized ?? null;
+        hotCommitIndices = onDisk.meta.hotCommitIndices ?? null;
+        totalReactCommits = onDisk.meta.totalReactCommits ?? null;
+      }
+    } catch {
+      // non-fatal — file may be corrupted
     }
   }
 
-  const snapshot: ProfilerDataSnapshot = {
-    cpuProfile: cpuProfile!,
-    commitTree,
+  if (hasCpu) {
+    // Read just enough to get sample count for display
+    try {
+      const cpuJson = await fs.readFile(cpuPath, "utf8");
+      const parsed = JSON.parse(cpuJson) as { samples?: unknown[] };
+      sampleInfo = `${parsed.samples?.length ?? "?"} samples`;
+    } catch {
+      sampleInfo = "available (could not read sample count)";
+    }
+  }
+
+  const sessionPaths: ProfilerSessionPaths = {
+    sessionId,
+    debugDir,
+    cpuProfilePath: hasCpu ? cpuPath : null,
+    commitsPath: hasCommits ? commitsPath : null,
+    cpuSampleIndexPath: hasCpuIndex ? cpuIndexPath : null,
     detectedArchitecture,
     anyCompilerOptimized,
     hotCommitIndices,
     totalReactCommits,
   };
 
-  cacheProfilerData(port, snapshot);
+  cacheProfilerPaths(port, sessionPaths);
 
   const lines: string[] = [
     `Loaded React profiler session \`${sessionId}\` into port ${port}.`,
     "",
-    `- CPU profile: ${cpuProfile ? `${cpuProfile.samples.length} samples` : "not available"}`,
-    `- Commits: ${commitTree.commits.length} fiber renders`,
+    `- CPU profile: ${sampleInfo}`,
+    `- Commits: ${commitCount} fiber renders`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",

@@ -12,7 +12,9 @@ import { rank } from "./04-rank";
 
 export async function runPipeline(
   input: RawProfilingInput,
+  options?: { debugDumps?: boolean },
 ): Promise<PipelineOutput> {
+  const debugDumps = options?.debugDumps ?? false;
   const debugDir = await getDebugDir(input.sessionMeta.projectRoot);
 
   const sessionContext = await detectSessionContext(input);
@@ -58,18 +60,18 @@ export async function runPipeline(
     };
   }
 
-  await writeDump(debugDir, "01_reduce.json", reduceOutput);
+  if (debugDumps) await writeDump(debugDir, "01_reduce.json", reduceOutput);
 
   // Stage 2: Enrich — O(k) derive stats from Welford accumulators
   const enrichOutput = enrich(reduceOutput);
 
   // Stage 3: Tag — O(k) false-positive context flags
   const tagOutput = tag(enrichOutput);
-  await writeDump(debugDir, "03_tag.json", tagOutput);
+  if (debugDumps) await writeDump(debugDir, "03_tag.json", tagOutput);
 
   // Stage 4: Filter, rank, serialize — O(k log k)
   const componentFindings = rank(tagOutput);
-  await writeDump(debugDir, "04_component_findings.json", componentFindings);
+  if (debugDumps) await writeDump(debugDir, "04_component_findings.json", componentFindings);
 
   return {
     hotCommitSummaries,

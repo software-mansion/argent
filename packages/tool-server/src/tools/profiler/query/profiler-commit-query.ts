@@ -3,13 +3,14 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  getCachedProfilerData,
+  getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import type {
   DevToolsFiberCommit,
   DevToolsCommitTree,
 } from "../../../utils/react-profiler/types/input";
 import { deriveReason } from "../../../utils/react-profiler/pipeline/utils";
+import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 
 const timeRangeSchema = z.object({
   start: z.coerce.number().describe("Start of range in ms (performance.now clock)"),
@@ -36,14 +37,20 @@ const zodSchema = z.object({
   ),
 });
 
-function getCommitTree(api: ReactProfilerSessionApi): DevToolsCommitTree {
-  const commitTree = api.commitTree ?? getCachedProfilerData(api.port)?.commitTree;
-  if (!commitTree || commitTree.commits.length === 0) {
+async function getCommitTree(api: ReactProfilerSessionApi): Promise<DevToolsCommitTree> {
+  const sessionPaths = api.sessionPaths ?? getCachedProfilerPaths(api.port);
+  if (!sessionPaths?.commitsPath) {
     throw new Error(
       "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
     );
   }
-  return commitTree;
+  const onDisk = await readCommitTree(sessionPaths.commitsPath);
+  if (onDisk.commits.length === 0) {
+    throw new Error(
+      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
+    );
+  }
+  return { commits: onDisk.commits, hookNames: new Map() };
 }
 
 function formatReason(commit: DevToolsFiberCommit): string {
@@ -323,7 +330,7 @@ Modes:
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
-    const commitTree = getCommitTree(api);
+    const commitTree = await getCommitTree(api);
 
     switch (params.mode) {
       case "by_component": {

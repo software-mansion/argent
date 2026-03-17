@@ -5,11 +5,6 @@ import {
 } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
-import type {
-  HermesCpuProfile,
-  DevToolsCommitTree,
-} from "../utils/react-profiler/types/input";
-import type { CpuSampleIndex } from "../utils/react-profiler/pipeline/00-cpu-correlate";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
@@ -25,7 +20,7 @@ export const FIBER_ROOT_TRACKER_SCRIPT = `
   hook.__rn_mcp_roots__ = new Set();
 
   var orig = hook.onCommitFiberRoot;
-  hook.onCommitFiberRoot = function(rendererID, root, priorityLevel) {
+  hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
     hook.__rn_mcp_roots__.add(root);
 
     try {
@@ -56,14 +51,25 @@ export interface ScriptSourceEntry {
   sourceMapURL: string;
 }
 
+export interface ProfilerSessionPaths {
+  sessionId: string;
+  debugDir: string;
+  cpuProfilePath: string | null;
+  commitsPath: string | null;
+  cpuSampleIndexPath: string | null;
+  detectedArchitecture: "bridge" | "bridgeless" | null;
+  anyCompilerOptimized: boolean | null;
+  hotCommitIndices: number[] | null;
+  totalReactCommits: number | null;
+}
+
 export interface ReactProfilerSessionApi {
   port: number;
   cdp: CDPClient;
   projectRoot: string;
   hermesVersion: string;
   detectedArchitecture: "bridge" | "bridgeless" | null;
-  cpuProfile: HermesCpuProfile | null;
-  commitTree: DevToolsCommitTree | null;
+  sessionPaths: ProfilerSessionPaths | null;
   profilingActive: boolean;
   scriptSources: Map<string, ScriptSourceEntry>;
   anyCompilerOptimized: boolean | null;
@@ -97,8 +103,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
       projectRoot: debuggerApi.projectRoot,
       hermesVersion: "unknown",
       detectedArchitecture: null,
-      cpuProfile: null,
-      commitTree: null,
+      sessionPaths: null,
       profilingActive: false,
       scriptSources: new Map<string, ScriptSourceEntry>(),
       anyCompilerOptimized: null,
@@ -188,31 +193,21 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
   },
 };
 
-export interface ProfilerDataSnapshot {
-  cpuProfile: HermesCpuProfile;
-  commitTree: DevToolsCommitTree;
-  detectedArchitecture: "bridge" | "bridgeless" | null;
-  anyCompilerOptimized: boolean | null;
-  hotCommitIndices: number[] | null;
-  totalReactCommits: number | null;
-  cpuSampleIndex?: CpuSampleIndex | null;
-}
+const profilerPathsCache = new Map<number, ProfilerSessionPaths>();
 
-const profilerDataCache = new Map<number, ProfilerDataSnapshot>();
-
-export function cacheProfilerData(
+export function cacheProfilerPaths(
   port: number,
-  snapshot: ProfilerDataSnapshot,
+  paths: ProfilerSessionPaths,
 ): void {
-  profilerDataCache.set(port, snapshot);
+  profilerPathsCache.set(port, paths);
 }
 
-export function getCachedProfilerData(
+export function getCachedProfilerPaths(
   port: number,
-): ProfilerDataSnapshot | undefined {
-  return profilerDataCache.get(port);
+): ProfilerSessionPaths | undefined {
+  return profilerPathsCache.get(port);
 }
 
-export function clearCachedProfilerData(port: number): void {
-  profilerDataCache.delete(port);
+export function clearCachedProfilerPaths(port: number): void {
+  profilerPathsCache.delete(port);
 }

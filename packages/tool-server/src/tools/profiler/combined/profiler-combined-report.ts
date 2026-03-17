@@ -3,7 +3,7 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  getCachedProfilerData,
+  getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
   IOS_INSTRUMENTS_SESSION_NAMESPACE,
@@ -20,6 +20,7 @@ import type { HotCommitSummary } from "../../../utils/react-profiler/types/outpu
 import type { UiHang, MemoryLeak } from "../../../utils/ios-instruments/types";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
+import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -62,14 +63,24 @@ Call this tool when both profilers were run in parallel on the same session.`,
       );
     }
 
-    const cached = getCachedProfilerData(reactApi.port);
-    const commitTree = reactApi.commitTree ?? cached?.commitTree;
-    const cpuProfile = reactApi.cpuProfile ?? cached?.cpuProfile;
-
-    if (!commitTree || commitTree.commits.length === 0) {
+    const sessionPaths = reactApi.sessionPaths ?? getCachedProfilerPaths(reactApi.port);
+    if (!sessionPaths?.commitsPath) {
       throw new Error(
         "No React commit data. Run react-profiler-analyze first.",
       );
+    }
+
+    const onDisk = await readCommitTree(sessionPaths.commitsPath);
+    const commitTree = { commits: onDisk.commits, hookNames: new Map() };
+    if (commitTree.commits.length === 0) {
+      throw new Error(
+        "No React commit data. Run react-profiler-analyze first.",
+      );
+    }
+
+    let cpuProfile = null;
+    if (sessionPaths.cpuProfilePath) {
+      cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
     }
 
     const reactWallStart = reactApi.profileStartWallMs;
@@ -89,7 +100,7 @@ Call this tool when both profilers were run in parallel on the same session.`,
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
-    const hotIndices = cached?.hotCommitIndices ?? reactApi.hotCommitIndices ?? [];
+    const hotIndices = sessionPaths.hotCommitIndices ?? reactApi.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
 

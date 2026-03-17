@@ -3,11 +3,11 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  clearCachedProfilerData,
+  clearCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 
 const COMMIT_CAPTURE_SCRIPT = `
-(function() {
+(function __argent_commitCaptureInit() {
   globalThis.__RN_DEVTOOLS_MCP_COMMITS__ = [];
   var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return;
@@ -15,7 +15,7 @@ const COMMIT_CAPTURE_SCRIPT = `
   var origOnCommit = hook.onCommitFiberRoot;
   var commitIndex = 0;
 
-  function getChangedHookIndices(fiber) {
+  function __argent_getChangedHookIndices(fiber) {
     if (!fiber.alternate) return null;
     var changed = [];
     var curr = fiber.memoizedState;
@@ -33,7 +33,7 @@ const COMMIT_CAPTURE_SCRIPT = `
     return changed.length > 0 ? changed : null;
   }
 
-  function getNearestParentName(fiber) {
+  function __argent_getNearestParentName(fiber) {
     var ret = fiber.return;
     while (ret) {
       var pn = (ret.type && (ret.type.displayName || ret.type.name)) || null;
@@ -43,7 +43,7 @@ const COMMIT_CAPTURE_SCRIPT = `
     return null;
   }
 
-  hook.onCommitFiberRoot = function(rendererID, root, priorityLevel) {
+  hook.onCommitFiberRoot = function __argent_onCommitFiberRoot(rendererID, root, priorityLevel) {
     var ts = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
     var idx = commitIndex++;
     var commitDur = (root && root.current && typeof root.current.actualDuration === 'number')
@@ -69,7 +69,7 @@ const COMMIT_CAPTURE_SCRIPT = `
             for (var j = 0; j < ppkeys.length; j++) {
               if (!(ppkeys[j] in cp)) changed.push(ppkeys[j]);
             }
-            var changedHooks = getChangedHookIndices(fiber);
+            var changedHooks = __argent_getChangedHookIndices(fiber);
             var hasContextDeps = false;
             try { hasContextDeps = fiber.dependencies !== null && fiber.dependencies !== undefined; } catch(e) {}
             cd = {
@@ -99,7 +99,7 @@ const COMMIT_CAPTURE_SCRIPT = `
               if (ht === 'useMemoCache' || ht === 'MemoCache' || ht === 'unstable_useMemoCache') { isCompilerOptimized = true; break; }
             }
           }
-          var parentName = getNearestParentName(fiber);
+          var parentName = __argent_getNearestParentName(fiber);
           globalThis.__RN_DEVTOOLS_MCP_COMMITS__.push({
             commitIndex: idx,
             timestamp: ts,
@@ -199,9 +199,8 @@ After starting, ask the user to perform the interaction to profile, then call re
       )
       .catch(ignore);
 
-    clearCachedProfilerData(api.port);
-    api.cpuProfile = null;
-    api.commitTree = null;
+    clearCachedProfilerPaths(api.port);
+    api.sessionPaths = null;
     api.profilingActive = true;
     api.anyCompilerOptimized = null;
     api.hotCommitIndices = null;

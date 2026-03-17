@@ -4,7 +4,8 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  getCachedProfilerData,
+  type ProfilerSessionPaths,
+  getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import type {
   RawProfilingInput,
@@ -14,7 +15,8 @@ import type {
 import { runPipeline } from "../../../utils/react-profiler/pipeline/index";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { renderProfilingReport } from "../../../utils/react-profiler/pipeline/05-render";
-import { getDebugDir, writeDump } from "../../../utils/react-profiler/debug/dump";
+import { readCpuProfile, readCommitTree, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
+import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
@@ -73,31 +75,36 @@ is returned by react-profiler-start.`,
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
 
-    let cpuProfile = api.cpuProfile as HermesCpuProfile | null;
-    let commitTree: DevToolsCommitTree | null = api.commitTree;
-    let detectedArchitecture = api.detectedArchitecture;
-    let anyCompilerOptimized = api.anyCompilerOptimized;
-    let hotCommitIndices = api.hotCommitIndices;
-    let totalReactCommits = api.totalReactCommits;
+    // Resolve session paths from session or cache
+    const sessionPaths: ProfilerSessionPaths | undefined =
+      api.sessionPaths ?? getCachedProfilerPaths(api.port) ?? undefined;
 
-    if (!cpuProfile && !commitTree) {
-      const cached = getCachedProfilerData(api.port);
-      if (!cached) {
-        throw new Error(
-          "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first.",
-        );
-      }
-      cpuProfile = cached.cpuProfile;
-      commitTree = cached.commitTree;
-      detectedArchitecture = cached.detectedArchitecture;
-      anyCompilerOptimized = cached.anyCompilerOptimized;
-      hotCommitIndices = cached.hotCommitIndices;
-      totalReactCommits = cached.totalReactCommits;
+    if (!sessionPaths) {
+      throw new Error(
+        "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first.",
+      );
     }
 
-    if (!commitTree) {
+    // Read profiling data from disk (transient — GC'd when function returns)
+    let cpuProfile: HermesCpuProfile | null = null;
+    if (sessionPaths.cpuProfilePath) {
+      cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
+    }
+
+    let commitTree: DevToolsCommitTree;
+    if (sessionPaths.commitsPath) {
+      const onDisk = await readCommitTree(sessionPaths.commitsPath);
+      commitTree = { commits: onDisk.commits, hookNames: new Map() };
+    } else {
       commitTree = { commits: [], hookNames: new Map() };
     }
+
+    const {
+      detectedArchitecture,
+      anyCompilerOptimized,
+      hotCommitIndices,
+      totalReactCommits,
+    } = sessionPaths;
 
     const recordingDurationMs = cpuProfile
       ? (cpuProfile.endTime - cpuProfile.startTime) / 1000
@@ -129,12 +136,14 @@ is returned by react-profiler-start.`,
 
     const pipelineOutput = await runPipeline(input);
 
-    // Cache the cpuSampleIndex for subsequent query tool calls
+    // Serialize CpuSampleIndex to disk for subsequent query tool calls
     if (pipelineOutput.cpuSampleIndex) {
-      const snapshot = getCachedProfilerData(api.port);
-      if (snapshot) {
-        snapshot.cpuSampleIndex = pipelineOutput.cpuSampleIndex;
-      }
+      const indexPath = await writeDumpCompact(
+        sessionPaths.debugDir,
+        `react-profiler-${sessionPaths.sessionId}_cpu-index.json`,
+        serializeCpuSampleIndex(pipelineOutput.cpuSampleIndex),
+      );
+      sessionPaths.cpuSampleIndexPath = indexPath;
     }
 
     // Enrich component findings with source locations via AST index
@@ -177,30 +186,7 @@ is returned by react-profiler-start.`,
       }),
     );
 
-    const debugDir = await getDebugDir(params.project_root);
-
-    // Persist raw profiling data so it can be reloaded by profiler-load
-    const sessionTs = new Date()
-      .toISOString()
-      .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
-      .slice(0, 15);
-    const cpuFile = cpuProfile
-      ? await writeDump(debugDir, `react-profiler-${sessionTs}_cpu.json`, cpuProfile)
-      : null;
-    const commitsFile = await writeDump(
-      debugDir,
-      `react-profiler-${sessionTs}_commits.json`,
-      {
-        commits: commitTree.commits,
-        meta: {
-          detectedArchitecture,
-          anyCompilerOptimized,
-          hotCommitIndices,
-          totalReactCommits,
-          profileStartWallMs: api.profileStartWallMs,
-        },
-      },
-    );
+    const debugDir = sessionPaths.debugDir;
 
     const { report, reportFile, hotCommitsTotal, hotCommitsShown } =
       await renderProfilingReport({
@@ -222,9 +208,9 @@ is returned by react-profiler-start.`,
       hotCommitsTotal,
       hotCommitsShown,
       sessionFiles: {
-        sessionId: sessionTs,
-        cpuProfile: cpuFile,
-        commits: commitsFile,
+        sessionId: sessionPaths.sessionId,
+        cpuProfile: sessionPaths.cpuProfilePath,
+        commits: sessionPaths.commitsPath,
       },
     };
 

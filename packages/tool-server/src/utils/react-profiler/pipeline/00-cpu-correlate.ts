@@ -15,6 +15,14 @@
 import type { HermesCpuProfile, HermesProfileNode } from "../types/input";
 import type { CpuCommitHotspot } from "../types/output";
 
+/** Prefix used to name profiler-injected hook functions in the Hermes runtime. */
+export const ARGENT_PROFILER_PREFIX = "__argent_";
+
+/** Returns true if `name` is an argent-injected profiler function. */
+export function isArgentProfilerFunction(name: string): boolean {
+  return name.startsWith(ARGENT_PROFILER_PREFIX);
+}
+
 export interface CpuSampleIndex {
   /** Absolute timestamp in ms for each sample (aligned to performance.now clock). */
   timestampsMs: Float64Array;
@@ -138,6 +146,7 @@ export function queryCpuWindow(
     if (!node) continue;
     const name = node.callFrame.functionName;
     if (!name || name === "(idle)" || name === "(program)" || name === "(root)") continue;
+    if (isArgentProfilerFunction(name)) continue;
 
     const selfMs = Math.round(hits * avgIntervalMs * 100) / 100;
     const totalMs = Math.round((totalHits.get(nodeId) ?? hits) * avgIntervalMs * 100) / 100;
@@ -178,4 +187,36 @@ export function correlateCpuWithCommits<
     if (hotspots.length === 0) return summary;
     return { ...summary, cpuHotspots: hotspots };
   });
+}
+
+/** Serializable form of CpuSampleIndex for disk persistence. */
+interface SerializedCpuSampleIndex {
+  timestampsMs: number[];
+  sampleNodeIds: number[];
+  nodes: HermesProfileNode[];
+  durationMs: number;
+}
+
+/** Convert a CpuSampleIndex to a plain object for JSON serialization. */
+export function serializeCpuSampleIndex(index: CpuSampleIndex): SerializedCpuSampleIndex {
+  return {
+    timestampsMs: Array.from(index.timestampsMs),
+    sampleNodeIds: index.sampleNodeIds,
+    nodes: [...index.nodeMap.values()],
+    durationMs: index.durationMs,
+  };
+}
+
+/** Reconstruct a CpuSampleIndex from its serialized form. */
+export function deserializeCpuSampleIndex(raw: SerializedCpuSampleIndex): CpuSampleIndex {
+  const nodeMap = new Map<number, HermesProfileNode>();
+  for (const node of raw.nodes) {
+    nodeMap.set(node.id, node);
+  }
+  return {
+    timestampsMs: new Float64Array(raw.timestampsMs),
+    sampleNodeIds: raw.sampleNodeIds,
+    nodeMap,
+    durationMs: raw.durationMs,
+  };
 }

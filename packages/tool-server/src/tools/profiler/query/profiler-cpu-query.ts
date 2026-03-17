@@ -3,14 +3,19 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
-  getCachedProfilerData,
+  type ProfilerSessionPaths,
+  getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
   buildCpuSampleIndex,
   queryCpuWindow,
+  deserializeCpuSampleIndex,
+  isArgentProfilerFunction,
   type CpuSampleIndex,
 } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 import type { HermesProfileNode } from "../../../utils/react-profiler/types/input";
+import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import { promises as fs } from "fs";
 
 const timeWindowSchema = z.object({
   start: z.coerce.number().describe("Start of window in ms (performance.now clock)"),
@@ -40,24 +45,46 @@ const zodSchema = z.object({
   ),
 });
 
-function getIndex(api: ReactProfilerSessionApi): { index: CpuSampleIndex; commitTree: typeof api.commitTree } {
-  const cached = getCachedProfilerData(api.port);
-  const cpuProfile = api.cpuProfile ?? cached?.cpuProfile;
-  const commitTree = api.commitTree ?? cached?.commitTree;
+async function getIndex(api: ReactProfilerSessionApi): Promise<{
+  index: CpuSampleIndex;
+  commitTree: { commits: { commitIndex: number; timestamp: number; commitDuration: number; componentName: string }[] } | null;
+}> {
+  const sessionPaths: ProfilerSessionPaths | undefined =
+    api.sessionPaths ?? getCachedProfilerPaths(api.port) ?? undefined;
 
-  if (!cpuProfile) {
+  if (!sessionPaths?.cpuProfilePath) {
     throw new Error(
       "No CPU profile stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first.",
     );
   }
 
-  // Try to use pre-computed index from analyze
-  if (cached?.cpuSampleIndex) {
-    return { index: cached.cpuSampleIndex, commitTree: commitTree ?? null };
+  // Fast path: use pre-built index from analyze if available
+  if (sessionPaths.cpuSampleIndexPath) {
+    try {
+      const raw = JSON.parse(await fs.readFile(sessionPaths.cpuSampleIndexPath, "utf8"));
+      const index = deserializeCpuSampleIndex(raw);
+      let commitTree = null;
+      if (sessionPaths.commitsPath) {
+        const onDisk = await readCommitTree(sessionPaths.commitsPath);
+        commitTree = { commits: onDisk.commits };
+      }
+      return { index, commitTree };
+    } catch {
+      // Fall through to building from raw profile
+    }
   }
 
-  const firstCommitTs = commitTree?.commits?.[0]?.timestamp ?? null;
-  return { index: buildCpuSampleIndex(cpuProfile, firstCommitTs), commitTree: commitTree ?? null };
+  // Slow path: build index from raw CPU profile
+  const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
+  let commitTree = null;
+  let firstCommitTs: number | null = null;
+  if (sessionPaths.commitsPath) {
+    const onDisk = await readCommitTree(sessionPaths.commitsPath);
+    commitTree = { commits: onDisk.commits };
+    firstCommitTs = onDisk.commits[0]?.timestamp ?? null;
+  }
+
+  return { index: buildCpuSampleIndex(cpuProfile, firstCommitTs), commitTree };
 }
 
 function renderTopFunctions(
@@ -138,6 +165,7 @@ function renderCallTree(
       if (!child) continue;
       const name = child.callFrame.functionName;
       if (!name || name === "(idle)") continue;
+      if (isArgentProfilerFunction(name)) continue;
       const existing = calleeHits.get(name);
       if (existing) {
         existing.hits += child.hitCount || 0;
@@ -179,6 +207,7 @@ function renderCallTree(
       if (!parent) continue;
       const name = parent.callFrame.functionName;
       if (!name || name === "(root)") continue;
+      if (isArgentProfilerFunction(name)) continue;
       const existing = callerHits.get(name);
       if (existing) {
         existing.hits += parent.hitCount || 0;
@@ -305,7 +334,7 @@ Modes:
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
-    const { index, commitTree } = getIndex(api);
+    const { index, commitTree } = await getIndex(api);
 
     switch (params.mode) {
       case "top_functions":
