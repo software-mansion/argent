@@ -25,14 +25,19 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 1. **Start**: Call `flow-start` with a descriptive name and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
-4. **Finish**: Call `flow-finish` to stop recording.
+4. **Finish**: Call `flow-finish` to stop recording. It returns the file path where the flow was saved and a summary of all steps. You can edit the `.yaml` file directly afterwards to remove, reorder, or tweak steps.
+
+Every tool during recording returns the current flow file contents so you can track what has been recorded.
 
 ### Replaying
 
-1. **Check prerequisite**: Call `flow-read-prerequisite` to inspect the flow's execution prerequisite. Verify the required state is met.
-2. **Execute**: Call `flow-execute` with the flow name and `prerequisiteAcknowledged: true`. If the prerequisite has not been acknowledged, the tool returns a notice instead of running.
+Call `flow-execute` with the flow name. If the flow has an execution prerequisite:
 
-Every tool returns the current flow file contents so you can track what has been recorded.
+1. The tool returns a **notice** with the prerequisite text instead of running. It asks you to verify the prerequisite is met and call `flow-execute` again with `prerequisiteAcknowledged: true`.
+2. You can also call `flow-read-prerequisite` beforehand to inspect the prerequisite without triggering a run.
+3. Once you pass `prerequisiteAcknowledged: true`, the flow runs all steps in order and returns every tool call result (including screenshots) merged into a single response.
+
+If the flow has no prerequisite, it runs immediately without needing acknowledgment.
 
 ## 4. flow-add-step Usage
 
@@ -60,6 +65,8 @@ For tools with no arguments, omit `args` entirely.
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
 - **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
 - **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish`. The active flow is tracked automatically after `flow-start`.
+- **Start before adding.** Calling `flow-add-step`, `flow-add-echo`, or `flow-finish` without an active recording returns an error: _"No active flow. Call flow_start first."_
+- **One flow at a time.** If you call `flow-start` while already recording, the active flow switches to the new one. The response tells you which flow was abandoned and which is now active. The old flow's file remains on disk.
 - **Mistakes can be edited out.** If a step was recorded by mistake, edit the `.yaml` file directly to remove or reorder entries.
 
 ## 6. Example Session
@@ -75,7 +82,18 @@ flow-add-step  { command: "tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0
 flow-finish    {}
 ```
 
-## 7. Flow File Format
+## 7. Replay Example
+
+```
+flow-execute   { name: "open-settings" }
+→ Returns: notice with executionPrerequisite: "Simulator booted with app installed"
+  "Verify the prerequisite is met and call flow-execute again with prerequisiteAcknowledged set to true."
+
+flow-execute   { name: "open-settings", prerequisiteAcknowledged: true }
+→ Runs all steps, returns merged results with status and output for every step
+```
+
+## 8. Flow File Format
 
 Flow files use YAML. The top-level is an object with `executionPrerequisite` (describes required state) and `steps` (array of actions):
 
@@ -105,7 +123,7 @@ steps:
       y: 0.17
 ```
 
-## Related Skills
+## 9. Related Skills
 
 | Skill                  | When to use                                      |
 | ---------------------- | ------------------------------------------------ |
