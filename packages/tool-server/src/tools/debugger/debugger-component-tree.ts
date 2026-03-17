@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
-import { COMPONENT_TREE_SCRIPT } from "../../utils/debugger/scripts/component-tree";
+import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
 
 export interface RawEntry {
   id: number;
@@ -18,6 +18,8 @@ export interface RawResult {
   screenH: number;
   components: RawEntry[];
   error?: string;
+  totalFibers?: number;
+  skippedCounts?: Record<string, number>;
 }
 
 function rectsOverlap(
@@ -34,7 +36,7 @@ function rectsOverlap(
 
 export function buildTextTree(
   data: RawResult,
-  opts: { onScreenOnly: boolean; maxNodes?: number },
+  opts: { onScreenOnly: boolean; maxNodes?: number; includeSkipped?: boolean },
 ): string {
   const { screenW, screenH, components } = data;
 
@@ -44,6 +46,13 @@ export function buildTextTree(
 
   const canNormalize = screenW > 0 && screenH > 0;
   const removed = new Set<number>();
+
+  const filterStats = {
+    sameNameDedup: { count: 0, names: new Map<string, number>() },
+    offScreen: { count: 0 },
+    sameTestID: { count: 0 },
+    fullScreenWrapper: { count: 0 },
+  };
 
   // Collapse parent→child when both have the same name and nearly identical rects.
   // Walk up through already-removed parents so chains of 3+ (e.g. ScrollView×3) fully collapse.
@@ -63,6 +72,11 @@ export function buildTextTree(
       rectsOverlap(parent.rect, c.rect)
     ) {
       removed.add(c.id);
+      filterStats.sameNameDedup.count++;
+      filterStats.sameNameDedup.names.set(
+        c.name,
+        (filterStats.sameNameDedup.names.get(c.name) ?? 0) + 1,
+      );
     }
   }
 
@@ -79,6 +93,7 @@ export function buildTextTree(
         centerX > screenW * 1.5
       ) {
         removed.add(c.id);
+        filterStats.offScreen.count++;
       }
     }
   }
@@ -93,6 +108,7 @@ export function buildTextTree(
       const a = components[ancestor];
       if (!removed.has(a.id) && a.testID === c.testID) {
         removed.add(c.id);
+        filterStats.sameTestID.count++;
         break;
       }
       ancestor = a.parentIdx;
@@ -113,6 +129,7 @@ export function buildTextTree(
         Math.abs(c.rect.h - screenH) <= 5
       ) {
         removed.add(c.id);
+        filterStats.fullScreenWrapper.count++;
       }
     }
   }
@@ -284,6 +301,57 @@ export function buildTextTree(
     );
   }
 
+  if (opts.includeSkipped) {
+    const tsTotal =
+      filterStats.sameNameDedup.count +
+      filterStats.offScreen.count +
+      filterStats.sameTestID.count +
+      filterStats.fullScreenWrapper.count;
+
+    lines.push("");
+    lines.push("--- Filtered ---");
+
+    if (data.totalFibers !== undefined) {
+      lines.push(`Total fibers walked: ${data.totalFibers}`);
+    }
+
+    if (data.skippedCounts && Object.keys(data.skippedCounts).length > 0) {
+      const jsTotal = Object.values(data.skippedCounts).reduce(
+        (a, b) => a + b,
+        0,
+      );
+      const top = Object.entries(data.skippedCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([name, count]) => `${name}: ${count}`)
+        .join(", ");
+      lines.push(`JS-side skipped: ${jsTotal} (${top})`);
+    }
+
+    if (tsTotal > 0) {
+      lines.push(`TS-side removed: ${tsTotal}`);
+      if (filterStats.sameNameDedup.count > 0) {
+        const detail = Array.from(filterStats.sameNameDedup.names.entries())
+          .map(([name, count]) => `${name} x${count}`)
+          .join(", ");
+        lines.push(
+          `  Same-name dedup: ${filterStats.sameNameDedup.count} (${detail})`,
+        );
+      }
+      if (filterStats.offScreen.count > 0) {
+        lines.push(`  Off-screen: ${filterStats.offScreen.count}`);
+      }
+      if (filterStats.fullScreenWrapper.count > 0) {
+        lines.push(
+          `  Full-screen wrapper: ${filterStats.fullScreenWrapper.count}`,
+        );
+      }
+      if (filterStats.sameTestID.count > 0) {
+        lines.push(`  Same-testID chain: ${filterStats.sameTestID.count}`);
+      }
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -304,6 +372,14 @@ const zodSchema = z.object({
       "Maximum total nodes to include. When exceeded, intermediate single-child " +
         "wrapper chains are collapsed to preserve both root structure and leaf elements. " +
         "Default: no limit.",
+    ),
+  includeSkipped: z
+    .boolean()
+    .default(false)
+    .describe(
+      "When true, appends a summary of all filtered components: total fiber count, " +
+      "JS-side skip counts by name, and TS-side filter pass removals. " +
+      "Useful for understanding what was pruned from the tree."
     ),
 });
 
@@ -326,14 +402,18 @@ Workflow:
   2. Find the desired element by name, text, testID, or accessibilityLabel.
   3. Use the (tap: x,y) coordinates directly with the tap tool.
 
-Call again after navigation or state changes since positions may shift.`,
+Call again after navigation or state changes since positions may shift.
+Set includeSkipped=true to see a summary of all filtered components.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
-    const raw = await api.cdp.evaluate(COMPONENT_TREE_SCRIPT);
+    const script = makeComponentTreeScript({
+      includeSkipped: params.includeSkipped,
+    });
+    const raw = await api.cdp.evaluate(script);
 
     if (typeof raw !== "string") {
       return "Error: no result from component tree script";
@@ -347,6 +427,7 @@ Call again after navigation or state changes since positions may shift.`,
     return buildTextTree(parsed, {
       onScreenOnly: params.onScreenOnly,
       maxNodes: params.maxNodes,
+      includeSkipped: params.includeSkipped,
     });
   },
 };

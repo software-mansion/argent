@@ -7,8 +7,16 @@
  * Supports both Fabric (new architecture) and Paper (old architecture).
  * On Fabric, uses nativeFabricUIManager.measure with the shadow node.
  * On Paper, falls back to UIManager.measureInWindow with native tags.
+ *
+ * When includeSkipped is true, the script also tracks totalFibers walked
+ * and a per-name count of JS-side skipped components.
  */
-export const COMPONENT_TREE_SCRIPT = `(function() {
+export function makeComponentTreeScript(opts?: {
+  includeSkipped?: boolean;
+}): string {
+  const trackSkipped = opts?.includeSkipped ? "true" : "false";
+  return `(function() {
+  var TRACK_SKIPPED = ${trackSkipped};
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return JSON.stringify({ error: 'No DevTools hook' });
   var roots = hook.getFiberRoots(1);
@@ -48,53 +56,34 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     'NavigationRouteContext','BottomTabNavigator','BottomTabView',
     'TabBarIcon','Icon','MissingIcon','Label','ImageAnalyticsTagContext',
     'Image','RootLayout','TabLayout',
-    // Gesture handler internals
     'GestureHandlerRootView','GestureDetector','Wrap',
-    // HTML renderer internals (react-native-render-html)
     'RenderRegistryProvider','SharedPropsProvider','ListStyleSpecsProvider',
     'RenderersPropsProvider','TRenderEngineProvider','RenderHTMLConfigProvider',
     'RenderHtmlSource','RawSourceLoader','SourceLoaderInline','RenderTTree',
     'TNodeChildrenRenderer','MemoizedTNodeRenderer',
-    // Portal provider
     'PortalProviderComponent',
-    // Keyboard controller
     'KeyboardProviderWrapper','KeyboardProvider','KeyboardControllerView',
-    // Scrollable internals
     'ScrollViewContext','TextAncestorContext',
-    // TextInput internals
     'TextInputLabel',
-    // Context providers (infrastructure wrappers)
     'ThemeContext',
-    // HTML engine HOC base
     'BaseHTMLEngineProvider',
-    // Fabric / cross-app entries
     'VScrollViewNativeComponent','InnerScreen','ScreenStackItem',
     'BaseNavigationContainer','NavigationContainerInner','PlatformPressableInternal',
   ]);
 
-  // Hard-skip: always omitted even when they carry a testID/accLabel prop.
-  // These are implementation-detail components that get testID/accLabel via prop drilling
-  // and should never appear regardless of content.
   var HARD_SKIP = new Set([
-    // React Native TextInput internal chain
     'BaseTextInput','InternalTextInput','RNTextInputWithRef',
     'RCTSinglelineTextInputView','RCTMultilineTextInputView',
-    // Lottie animation internals (expo-modules / lottie-react-native)
     'LottieAnimationView','Lottie',
-    // expo-image internals — show the wrapping component instead
     'ExpoImage',
   ]);
 
-  // Returns true for components that are ALWAYS omitted (not overridable by testID).
   function isHardSkip(name) {
     if (HARD_SKIP.has(name)) return true;
-    // Animated HOC wrappers are implementation detail regardless of testID
     if (name.indexOf('AnimatedComponent(') === 0) return true;
     if (name.indexOf('Animated(') === 0) return true;
-    // With*(Component) HOC wrappers
     if (name.indexOf('With') === 0 && name.indexOf('(') > 3) return true;
     if (name.indexOf('with') === 0 && name.indexOf('(') > 3) return true;
-    // Native module view adapters
     if (name.indexOf('ViewManagerAdapter_') >= 0) return true;
     return false;
   }
@@ -106,7 +95,6 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     if (name.indexOf('withDevTools(') === 0) return true;
     if (name === 'Route' || name.indexOf('Route(') === 0) return true;
     if (name.indexOf('main(') === 0) return true;
-    // *Provider and *Context suffix - infrastructure wrappers
     if (name.length > 8 && name.slice(-8) === 'Provider') return true;
     if (name.length > 7 && name.slice(-7) === 'Context') return true;
     return false;
@@ -162,6 +150,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
   })(root.current);
 
   var components = [];
+  var totalFibers = 0;
+  var skippedCounts = {};
 
   function collectAll(fiber, parentIdx) {
     if (!fiber) return;
@@ -169,6 +159,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     var emittedIdx = -1;
 
     if (name) {
+      if (TRACK_SKIPPED) totalFibers++;
+
       var skip = shouldSkip(name);
       var testID = null, accLabel = null, text = null;
       if (fiber.memoizedProps) {
@@ -181,7 +173,6 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
         else if (typeof p.placeholder === 'string') text = p.placeholder.substring(0, 80);
       }
 
-      // testID can override soft-skips but not hard-skips (impl details)
       if (skip && testID && !isHardSkip(name)) skip = false;
 
       if (!skip) {
@@ -190,10 +181,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
 
         var isTextNode = name === 'Text' || name === 'RCTText';
         if (isTextNode && !text && !testID) {
-          // Text node with no visible content (e.g. icon font glyph) -- skip
         } else if (rect || testID || accLabel || text) {
           if (isTextNode && text && parentIdx >= 0 && components[parentIdx].text === text) {
-            // skip duplicate Text that repeats parent text
           } else {
             var entry = { id: components.length, name: name, rect: rect, parentIdx: parentIdx };
             if (testID) entry.testID = testID;
@@ -203,6 +192,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
             components.push(entry);
           }
         }
+      } else if (TRACK_SKIPPED) {
+        skippedCounts[name] = (skippedCounts[name] || 0) + 1;
       }
     }
 
@@ -211,5 +202,11 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
   }
 
   collectAll(root.current.child, -1);
-  return JSON.stringify({ screenW: screenW, screenH: screenH, components: components });
+  var result = { screenW: screenW, screenH: screenH, components: components };
+  if (TRACK_SKIPPED) {
+    result.totalFibers = totalFibers;
+    result.skippedCounts = skippedCounts;
+  }
+  return JSON.stringify(result);
 })()`;
+}

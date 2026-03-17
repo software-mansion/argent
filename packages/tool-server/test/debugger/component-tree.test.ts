@@ -206,3 +206,71 @@ describe("buildTextTree — same-testID chain collapse", () => {
     expect(result).not.toContain("Inner");
   });
 });
+
+describe("buildTextTree — includeSkipped summary", () => {
+  it("appends filtered summary section with TS-side stats", () => {
+    const rect = { x: 0, y: 62, w: 400, h: 738 };
+    const data: RawResult = {
+      ...SCREEN,
+      components: [
+        entry(0, "ScrollView", -1, rect),
+        entry(1, "ScrollView", 0, rect),
+        entry(2, "Text", 1, { x: 50, y: 100, w: 300, h: 30 }, { text: "Hello" }),
+      ],
+    };
+    const result = buildTextTree(data, { onScreenOnly: true, includeSkipped: true });
+    expect(result).toContain("--- Filtered ---");
+    expect(result).toContain("TS-side removed:");
+    expect(result).toContain("Same-name dedup:");
+    expect(result).toContain("ScrollView");
+  });
+
+  it("includes JS-side skipped counts when provided", () => {
+    const data: RawResult = {
+      ...SCREEN,
+      totalFibers: 547,
+      skippedCounts: { View: 120, RCTView: 80 },
+      components: [
+        entry(0, "MainScreen", -1, { x: 0, y: 0, w: 400, h: 700 }),
+        entry(1, "Text", 0, { x: 50, y: 100, w: 300, h: 30 }, { text: "Hello" }),
+      ],
+    };
+    const result = buildTextTree(data, { onScreenOnly: true, includeSkipped: true });
+    expect(result).toContain("--- Filtered ---");
+    expect(result).toContain("Total fibers walked: 547");
+    expect(result).toContain("JS-side skipped: 200");
+    expect(result).toContain("View: 120");
+    expect(result).toContain("RCTView: 80");
+  });
+
+  it("omits summary section when includeSkipped is false", () => {
+    const data: RawResult = {
+      ...SCREEN,
+      components: [
+        entry(0, "Root", -1, { x: 0, y: 0, w: 400, h: 700 }),
+        entry(1, "Text", 0, { x: 50, y: 100, w: 300, h: 30 }, { text: "Hi" }),
+      ],
+    };
+    const result = buildTextTree(data, { onScreenOnly: true });
+    expect(result).not.toContain("--- Filtered ---");
+  });
+
+  it("reports multiple filter passes in summary", () => {
+    const data: RawResult = {
+      ...SCREEN,
+      totalFibers: 100,
+      skippedCounts: { View: 50 },
+      components: [
+        entry(0, "Outer", -1, { x: 10, y: 10, w: 380, h: 100 }, { testID: "field" }),
+        entry(1, "Inner", 0, { x: 10, y: 10, w: 380, h: 100 }, { testID: "field" }),
+        entry(2, "FullWrap", -1, { x: 0, y: 0, w: 400, h: 800 }),
+        entry(3, "OffScreen", -1, { x: 0, y: 5000, w: 100, h: 50 }, { text: "Far away" }),
+        entry(4, "Text", 0, { x: 20, y: 20, w: 200, h: 30 }, { text: "Hello" }),
+      ],
+    };
+    const result = buildTextTree(data, { onScreenOnly: true, includeSkipped: true });
+    expect(result).toContain("Same-testID chain:");
+    expect(result).toContain("Full-screen wrapper:");
+    expect(result).toContain("Off-screen:");
+  });
+});

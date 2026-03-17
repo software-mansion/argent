@@ -214,3 +214,79 @@ describe("filterInspectItems — combined scenario (Expensify-like)", () => {
     expect(names).not.toContain("ScrollViewContext"); // sourceless SKIP
   });
 });
+
+describe("filterInspectItems — includeSkipped=true", () => {
+  it("annotates animated-dedup items instead of removing them", () => {
+    const items = [
+      item("View", src("a.tsx", 1)),
+      item("AnimatedComponent(View)"),
+    ];
+    const result = filterInspectItems(items, true);
+    expect(result).toHaveLength(2);
+    expect(result[1].skipped).toBe(true);
+    expect(result[1].skipReason).toBe("animated-dedup");
+  });
+
+  it("annotates skip-rule:no-source items", () => {
+    const items = [
+      item("Button", src("btn.tsx", 10)),
+      item("ScrollViewContext"),
+      item("Page", src("page.tsx", 1)),
+    ];
+    const result = filterInspectItems(items, true);
+    expect(result).toHaveLength(3);
+    const skipped = result.find((i) => i.name === "ScrollViewContext");
+    expect(skipped?.skipped).toBe(true);
+    expect(skipped?.skipReason).toBe("skip-rule:no-source");
+  });
+
+  it("annotates same-source-dedup items", () => {
+    const items = [
+      item("ProviderA", src("ComposeProviders.tsx", 11)),
+      item("ProviderB", src("ComposeProviders.tsx", 11)),
+      item("App", src("App.tsx", 1)),
+    ];
+    const result = filterInspectItems(items, true);
+    expect(result).toHaveLength(3);
+    expect(result[1].skipped).toBe(true);
+    expect(result[1].skipReason).toBe("same-source-dedup");
+  });
+
+  it("annotates sourceless View as skip-rule (View is in SKIP set)", () => {
+    const items = [
+      item("Text", src("text.tsx", 1)),
+      item("View"),
+      item("Page", src("page.tsx", 10)),
+    ];
+    const result = filterInspectItems(items, true);
+    expect(result).toHaveLength(3);
+    const skipped = result.find((i) => i.name === "View");
+    expect(skipped?.skipped).toBe(true);
+    expect(skipped?.skipReason).toBe("skip-rule:no-source");
+  });
+
+  it("preserves leaf View at index 0 without annotation", () => {
+    const items = [
+      item("View"),
+      item("Button", src("btn.tsx", 10)),
+    ];
+    const result = filterInspectItems(items, true);
+    expect(result[0].skipped).toBeUndefined();
+    expect(result[0].name).toBe("View");
+  });
+
+  it("all items present with includeSkipped — nothing dropped", () => {
+    const items = [
+      item("View"),
+      item("Pressable", src("p.tsx", 1)),
+      item("AnimatedComponent(Pressable)"),
+      item("ThemeProvider"),
+      item("View"),
+      item("Page", src("page.tsx", 10)),
+    ];
+    const result = filterInspectItems(items, true);
+    expect(result).toHaveLength(items.length);
+    const skippedCount = result.filter((i) => i.skipped).length;
+    expect(skippedCount).toBeGreaterThan(0);
+  });
+});

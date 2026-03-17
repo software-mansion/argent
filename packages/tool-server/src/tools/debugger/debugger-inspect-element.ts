@@ -9,13 +9,27 @@ export interface InspectItem {
   name: string;
   source: { file: string; line: number; column: number } | null;
   code: string | null;
+  skipped?: boolean;
+  skipReason?: string;
 }
 
 /**
  * Filters and deduplicates the raw inspect-element hierarchy.
  * Applied after source resolution, before maxItems truncation.
+ *
+ * When includeSkipped is true, filtered items are kept in the result
+ * with `skipped: true` and a `skipReason` string instead of being removed.
  */
-export function filterInspectItems(items: InspectItem[]): InspectItem[] {
+export function filterInspectItems(
+  items: InspectItem[],
+  includeSkipped = false,
+): InspectItem[] {
+  function skip(item: InspectItem, reason: string): InspectItem {
+    return includeSkipped
+      ? { ...item, skipped: true, skipReason: reason }
+      : item;
+  }
+
   // Deduplicate consecutive AnimatedComponent(X) / Animated(X) that wrap the
   // immediately preceding host component.
   const animDeduped: InspectItem[] = [];
@@ -27,6 +41,9 @@ export function filterInspectItems(items: InspectItem[]): InspectItem[] {
           ? item.name.slice("Animated(".length, -1)
           : null;
     if (inner !== null && animDeduped.length > 0 && animDeduped[animDeduped.length - 1].name === inner) {
+      if (includeSkipped) {
+        animDeduped.push(skip(item, "animated-dedup"));
+      }
       continue;
     }
     animDeduped.push(item);
@@ -38,8 +55,15 @@ export function filterInspectItems(items: InspectItem[]): InspectItem[] {
   const skipFiltered: InspectItem[] = [];
   for (let i = 0; i < animDeduped.length; i++) {
     const item = animDeduped[i];
+    if (item.skipped) {
+      skipFiltered.push(item);
+      continue;
+    }
     const hasSource = item.source !== null;
     if (i > 0 && !hasSource && (isHardSkip(item.name) || shouldSkip(item.name))) {
+      if (includeSkipped) {
+        skipFiltered.push(skip(item, "skip-rule:no-source"));
+      }
       continue;
     }
     skipFiltered.push(item);
@@ -48,28 +72,44 @@ export function filterInspectItems(items: InspectItem[]): InspectItem[] {
   // Pass 2: Same-source deduplication.
   // When consecutive items share the exact same source file:line, keep only the first.
   const srcDeduped: InspectItem[] = [];
+  let lastKeptSource: InspectItem["source"] = null;
   for (const item of skipFiltered) {
-    if (srcDeduped.length > 0 && item.source && srcDeduped[srcDeduped.length - 1].source) {
-      const prev = srcDeduped[srcDeduped.length - 1].source!;
-      if (prev.file === item.source.file && prev.line === item.source.line) {
+    if (item.skipped) {
+      srcDeduped.push(item);
+      continue;
+    }
+    if (lastKeptSource && item.source) {
+      if (lastKeptSource.file === item.source.file && lastKeptSource.line === item.source.line) {
+        if (includeSkipped) {
+          srcDeduped.push(skip(item, "same-source-dedup"));
+        }
         continue;
       }
     }
+    lastKeptSource = item.source;
     srcDeduped.push(item);
   }
 
   // Pass 3: Anonymous host element pruning.
   // Remove "View" items with no source (keep the leaf at index 0).
   const result: InspectItem[] = [];
-  for (let i = 0; i < srcDeduped.length; i++) {
-    const item = srcDeduped[i];
+  let keptCount = 0;
+  for (const item of srcDeduped) {
+    if (item.skipped) {
+      result.push(item);
+      continue;
+    }
     if (
-      i > 0 &&
+      keptCount > 0 &&
       item.name === "View" &&
       item.source === null
     ) {
+      if (includeSkipped) {
+        result.push(skip(item, "anonymous-view"));
+      }
       continue;
     }
+    keptCount++;
     result.push(item);
   }
 
@@ -96,6 +136,13 @@ const zodSchema = z.object({
     .describe(
       "Maximum number of hierarchy items to return, counted from the bottom (most specific component first). The hierarchy walks from the tapped element up to the root — the first items are the most relevant for editing. Increase to 70+ if you need to understand the broader navigation/screen structure."
     ),
+  includeSkipped: z
+    .boolean()
+    .default(false)
+    .describe(
+      "When true, items that would normally be filtered are kept in the response " +
+      "with skipped=true and a skipReason. Useful for understanding what was pruned."
+    ),
 });
 
 export const debuggerInspectElementTool: ToolDefinition<
@@ -114,7 +161,8 @@ Default shows 35 items which covers all app-specific code; use maxItems=70+ to a
 see the navigation/screen structure.
 
 Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
-Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.`,
+Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.
+Set includeSkipped=true to see filtered items annotated with skip reasons.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -186,10 +234,33 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
       })
     );
 
-    const deduped = filterInspectItems(items);
-    const totalItems = deduped.length;
-    const truncated = deduped.slice(0, params.maxItems);
-    const hiddenCount = totalItems - truncated.length;
+    const deduped = filterInspectItems(items, params.includeSkipped);
+
+    // maxItems counts only non-skipped items toward the limit;
+    // skipped items between kept items are included in the output.
+    let truncated: InspectItem[];
+    let totalKept: number;
+    if (params.includeSkipped) {
+      let keptCount = 0;
+      let cutoff = deduped.length;
+      for (let i = 0; i < deduped.length; i++) {
+        if (!deduped[i].skipped) {
+          keptCount++;
+          if (keptCount >= params.maxItems) {
+            cutoff = i + 1;
+            break;
+          }
+        }
+      }
+      truncated = deduped.slice(0, cutoff);
+      totalKept = 0;
+      for (const d of deduped) if (!d.skipped) totalKept++;
+    } else {
+      totalKept = deduped.length;
+      truncated = deduped.slice(0, params.maxItems);
+    }
+
+    const hiddenCount = totalKept - Math.min(totalKept, params.maxItems);
 
     return {
       x: params.x,
@@ -199,7 +270,7 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
         ? {
             truncated: true,
             hiddenCount,
-            hint: `${hiddenCount} more parent components hidden (framework/navigation wrappers). Pass maxItems=${Math.min(totalItems, params.maxItems + 35)} to see more.`,
+            hint: `${hiddenCount} more parent components hidden (framework/navigation wrappers). Pass maxItems=${Math.min(totalKept, params.maxItems + 35)} to see more.`,
           }
         : {}),
     };
