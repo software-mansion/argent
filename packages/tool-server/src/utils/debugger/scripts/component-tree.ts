@@ -26,7 +26,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
 
   var SKIP = new Set([
     'View','RCTView','RCTText','RCTScrollView','RCTScrollContentView','RCTImageView',
-    'RCTSafeAreaView','RNCSafeAreaProvider','RNSScreen','RNSScreenStack',
+    'RCTSafeAreaView','RCTVirtualText','RCTSinglelineTextInputView','RCTMultilineTextInputView',
+    'RNCSafeAreaProvider','RNSScreen','RNSScreenStack',
     'RNSScreenContentWrapper','RNSScreenNavigationContainer','RNSScreenStackHeaderConfig',
     'ScreenStackHeaderConfig','NavigationContent','NavigationStateListenerProvider',
     'PreventRemoveProvider','EnsureSingleNavigator','StaticContainer','SceneView',
@@ -34,7 +35,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     'DebugContainer','ScreenContentWrapper','Screen','ScreenStack','ScreenContainer',
     'MaybeScreenContainer','MaybeScreen','FrameSizeProvider','FrameSizeProviderInner',
     'FrameSizeListenerNativeFallback','SafeAreaProviderCompat','SafeAreaProvider',
-    'SafeAreaInsetsContext','ErrorOverlay','ErrorToastContainer',
+    'SafeAreaInsetsContext','SafeArea','SafeAreaFrameContext',
+    'ErrorOverlay','ErrorToastContainer',
     'PerformanceLoggerContext','AppContainer','RootTagContext','DebuggingOverlay',
     'DebuggingOverlayRegistrySubscription',
     'LogBoxStateSubscription','_LogBoxNotificationContainer','LogBoxInspectorContainer',
@@ -45,16 +47,68 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     'ReactNativeProfiler','FeedbackWidgetProvider',
     'NavigationRouteContext','BottomTabNavigator','BottomTabView',
     'TabBarIcon','Icon','MissingIcon','Label','ImageAnalyticsTagContext',
-    'Image','RootLayout','TabLayout'
+    'Image','RootLayout','TabLayout',
+    // Gesture handler internals
+    'GestureHandlerRootView','GestureDetector','Wrap',
+    // HTML renderer internals (react-native-render-html)
+    'RenderRegistryProvider','SharedPropsProvider','ListStyleSpecsProvider',
+    'RenderersPropsProvider','TRenderEngineProvider','RenderHTMLConfigProvider',
+    'RenderHtmlSource','RawSourceLoader','SourceLoaderInline','RenderTTree',
+    'TNodeChildrenRenderer','MemoizedTNodeRenderer',
+    // Portal provider
+    'PortalProviderComponent',
+    // Keyboard controller
+    'KeyboardProviderWrapper','KeyboardProvider','KeyboardControllerView',
+    // Scrollable internals
+    'ScrollViewContext','TextAncestorContext',
+    // TextInput internals
+    'TextInputLabel',
+    // Context providers (infrastructure wrappers)
+    'ThemeContext',
+    // HTML engine HOC base
+    'BaseHTMLEngineProvider',
+    // Fabric / cross-app entries
+    'VScrollViewNativeComponent','InnerScreen','ScreenStackItem',
+    'BaseNavigationContainer','NavigationContainerInner','PlatformPressableInternal',
   ]);
 
+  // Hard-skip: always omitted even when they carry a testID/accLabel prop.
+  // These are implementation-detail components that get testID/accLabel via prop drilling
+  // and should never appear regardless of content.
+  var HARD_SKIP = new Set([
+    // React Native TextInput internal chain
+    'BaseTextInput','InternalTextInput','RNTextInputWithRef',
+    'RCTSinglelineTextInputView','RCTMultilineTextInputView',
+    // Lottie animation internals (expo-modules / lottie-react-native)
+    'LottieAnimationView','Lottie',
+    // expo-image internals — show the wrapping component instead
+    'ExpoImage',
+  ]);
+
+  // Returns true for components that are ALWAYS omitted (not overridable by testID).
+  function isHardSkip(name) {
+    if (HARD_SKIP.has(name)) return true;
+    // Animated HOC wrappers are implementation detail regardless of testID
+    if (name.indexOf('AnimatedComponent(') === 0) return true;
+    if (name.indexOf('Animated(') === 0) return true;
+    // With*(Component) HOC wrappers
+    if (name.indexOf('With') === 0 && name.indexOf('(') > 3) return true;
+    if (name.indexOf('with') === 0 && name.indexOf('(') > 3) return true;
+    // Native module view adapters
+    if (name.indexOf('ViewManagerAdapter_') >= 0) return true;
+    return false;
+  }
+
   function shouldSkip(name) {
+    if (isHardSkip(name)) return true;
     if (SKIP.has(name)) return true;
     if (name.charAt(0) === '_' && name.charAt(1) === '_') return true;
     if (name.indexOf('withDevTools(') === 0) return true;
-    if (name.indexOf('Animated(') === 0) return true;
     if (name === 'Route' || name.indexOf('Route(') === 0) return true;
     if (name.indexOf('main(') === 0) return true;
+    // *Provider and *Context suffix - infrastructure wrappers
+    if (name.length > 8 && name.slice(-8) === 'Provider') return true;
+    if (name.length > 7 && name.slice(-7) === 'Context') return true;
     return false;
   }
 
@@ -127,7 +181,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
         else if (typeof p.placeholder === 'string') text = p.placeholder.substring(0, 80);
       }
 
-      if (skip && testID) skip = false;
+      // testID can override soft-skips but not hard-skips (impl details)
+      if (skip && testID && !isHardSkip(name)) skip = false;
 
       if (!skip) {
         var hostInfo = getHostInfo(fiber) || findHostNode(fiber, 0);
