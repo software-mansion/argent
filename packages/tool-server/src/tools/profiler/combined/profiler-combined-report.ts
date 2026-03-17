@@ -177,7 +177,7 @@ Call this tool when both profilers were run in parallel on the same session.`,
           lines.push("");
 
           // Explain the ratio
-          const ratio = topCommit.commit.totalRenderMs / hang.durationMs;
+          const ratio = hang.durationMs > 0 ? topCommit.commit.totalRenderMs / hang.durationMs : 0;
           if (ratio > 2) {
             lines.push(
               `> React reports ${topCommit.commit.totalRenderMs}ms vs Instruments' ${hang.durationMs}ms ` +
