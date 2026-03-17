@@ -79,9 +79,12 @@ export const queryDocumentationTool: ToolDefinition<
         const newToken = await readToken();
         response = await fetchDocumentation(params.text, newToken, signal);
       } else {
-        // SSO Login aborted, failed to open, either way the following response is universal to all these cases.
+        const loginMessage = ssoResult.ssoUrl
+          ? ` Open ${ssoResult.ssoUrl} to sign in to your account.`
+          : "";
+
         throw new Error(
-          `Argent license required. Login or activate your license to continue. Open ${ssoResult.ssoUrl} to sign in to your account.`,
+          `Argent license required. Login or activate your license to continue.${loginMessage}`,
         );
       }
     }
