@@ -82,6 +82,8 @@ Logs are written to a JSONL file on disk. Use the **log-registry → grep** patt
 2. **Search the file** using `Grep` or `Read` with patterns from the response.
 3. **For real-time streaming** (UI clients), use `debugger-console-listen` — returns a WebSocket URL.
 
+> **Large log files:** If `totalEntries` exceeds 10 000, delegate the grep exploration to an `Explore` subagent — pass it the file path, the entry format, and the patterns you need.
+
 ### JSONL entry format
 
 Each line is a JSON object with these fields:
