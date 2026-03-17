@@ -53,6 +53,7 @@ export default function SessionView({
   const [inspectMode, setInspectMode] = useState(false)
   const [inspectResult, setInspectResult] = useState<{ x: number; y: number; items: InspectItem[] } | null>(null)
   const [inspecting, setInspecting] = useState(false)
+  const [includeSkipped, setIncludeSkipped] = useState(false)
   const metroPort = 8081
 
   const sessionClient = useMemo(() => createSessionClient(apiUrl), [apiUrl])
@@ -86,7 +87,7 @@ export default function SessionView({
       if (!toolsApi || !inspectMode) return
       setInspecting(true)
       try {
-        const result = await toolsApi.metroInspectElement(x, y, metroPort)
+        const result = await toolsApi.metroInspectElement(x, y, metroPort, { includeSkipped })
         if ('error' in result) {
           setError(result.error)
         } else {
@@ -98,7 +99,7 @@ export default function SessionView({
         setInspecting(false)
       }
     },
-    [toolsApi, inspectMode, metroPort]
+    [toolsApi, inspectMode, metroPort, includeSkipped]
   )
 
   async function handleRotate() {
@@ -232,6 +233,8 @@ export default function SessionView({
             onToggleInspect={() => setInspectMode((v) => !v)}
             inspectResult={inspectResult}
             inspecting={inspecting}
+            includeSkipped={includeSkipped}
+            onToggleIncludeSkipped={() => setIncludeSkipped((v) => !v)}
           />
         )}
       </div>

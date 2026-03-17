@@ -23,6 +23,8 @@ interface MetroPanelProps {
   onToggleInspect: () => void
   inspectResult: { x: number; y: number; items: InspectItem[] } | null
   inspecting: boolean
+  includeSkipped: boolean
+  onToggleIncludeSkipped: () => void
 }
 
 export default function MetroPanel({
@@ -32,6 +34,8 @@ export default function MetroPanel({
   onToggleInspect,
   inspectResult,
   inspecting,
+  includeSkipped,
+  onToggleIncludeSkipped,
 }: MetroPanelProps) {
   const [activeTab, setActiveTab] = useState<Tab>('status')
   const [status, setStatus] = useState<MetroStatusInfo | null>(null)
@@ -126,6 +130,8 @@ export default function MetroPanel({
             connected={connected}
             inspectResult={inspectResult}
             inspecting={inspecting}
+            includeSkipped={includeSkipped}
+            onToggleIncludeSkipped={onToggleIncludeSkipped}
           />
         )}
         {activeTab === 'breakpoints' && (
