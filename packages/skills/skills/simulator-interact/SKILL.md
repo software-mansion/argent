@@ -1,6 +1,6 @@
 ---
 name: simulator-interact
-description: Interact with a running iOS simulator using argent MCP tools. Use when tapping UI elements, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, or performing any gesture on the simulator.
+description: Interact with a running iOS simulator using argent MCP tools. Use when tapping UI elements, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, or performing any gesture on the simulator.
 ---
 
 ## 1. Before You Start
@@ -118,7 +118,19 @@ Use the explicit `screenshot` tool only when:
 
 - You need the initial screen state before any action.
 - The auto-attached screenshot shows a transitional or loading frame.
-- You require extra context
+- You require extra context.
+- You want to check state after a delay (e.g. waiting for a network response).
+
+Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
+
+### Troubleshooting
+
+| Problem              | Solution                                                                               |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| Screenshot times out | Restart simulator-server via the `simulator-server` tool with a JWT token, then retry. |
+| No booted simulator  | Run `boot-simulator` first.                                                            |
+
+Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs to be passed once — subsequent calls reuse the running process.
 
 ---
 
@@ -129,13 +141,3 @@ Use the explicit `screenshot` tool only when:
 3. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
 4. **Wait for animations** — give the app ~300ms after `tap` or `button` before the next action.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-
-## Related Skills
-
-| Skill                       | When to use                                         |
-| --------------------------- | --------------------------------------------------- |
-| `simulator-setup`           | Booting and connecting a simulator                  |
-| `simulator-screenshot`      | Capturing screenshots without an interaction        |
-| `react-native-app-workflow` | Starting the app, Metro, build issues               |
-| `metro-debugger`            | Breakpoints, stepping, console logs, JS evaluation  |
-| `test-ui-flow`              | Interactive UI testing with screenshot verification |

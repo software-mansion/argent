@@ -55,20 +55,15 @@ Steps:
 
 ---
 
+## 4. Recovery Pattern
+
+- If screenshot shows loading/transition: wait 500ms, retake with `screenshot`.
+- If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
+- If tap fails twice at same coordinates: stop, re-discover, report if element not found.
+
 ## Tips
 
 - **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
 - **Use `gesture` for long-press** context menus (800ms hold).
-- **Check for loading states** — retake with `screenshot` if the auto-screenshot shows a transitional frame.
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
-
-## Related Skills
-
-| Skill                  | When to use                                      |
-| ---------------------- | ------------------------------------------------ |
-| `simulator-interact`   | Detailed tool usage for tapping, swiping, typing |
-| `simulator-screenshot` | Screenshot-specific options and troubleshooting  |
-| `simulator-setup`      | Booting and connecting a simulator               |
-| `react-native-app-workflow` | Starting the app, Metro, build issues            |
-| `metro-debugger`       | Breakpoints, console logs, JS evaluation         |
