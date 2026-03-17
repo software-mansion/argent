@@ -97,7 +97,7 @@ When:
 - Debugging the react-native application
 - Searching for the placement of elements on the screen using react-native app (see debugger-component-tree in the metro-debugger skillń)
   Key tools: debugger-status, debugger-reload-metro, restart-app,
-  debugger-console-logs, debugger-console-listen
+  debugger-log-registry, debugger-console-listen
 
 BREAKPOINTS, STEPPING, JS EVALUATION
 Use skill: `metro-debugger`

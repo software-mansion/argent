@@ -1,0 +1,50 @@
+import { z } from "zod";
+import type { ToolDefinition } from "@argent/registry";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
+
+interface LogRegistryResponse extends LogStats {
+  clusters: MessageCluster[];
+  grepTips: {
+    allErrors: string;
+    specificLog: string;
+    byMessage: string;
+    byTimePrefix: string;
+  };
+}
+
+const zodSchema = z.object({
+  port: z.coerce.number().default(8081).describe("Metro server port"),
+});
+
+export const debuggerLogRegistryTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
+  LogRegistryResponse
+> = {
+  id: "debugger-log-registry",
+  description: `Get a summary of all console logs captured from the React Native app.
+Returns the log file path, entry counts by level, message clusters (grouped by similarity),
+and grep patterns for searching the JSONL log file directly.
+Use this tool first to get an overview, then use Grep/Read on the returned file path for details.
+The app must be connected via debugger-connect first (auto-connects if needed).`,
+  zodSchema,
+  services: (params) => ({
+    debugger: `JsRuntimeDebugger:${params.port}`,
+  }),
+  async execute(services) {
+    const api = services.debugger as JsRuntimeDebuggerApi;
+    const stats = api.logWriter.getStats();
+    const clusters = api.logWriter.getClusters(20);
+
+    return {
+      ...stats,
+      clusters,
+      grepTips: {
+        allErrors: `grep '"level":"error"' ${stats.file}`,
+        specificLog: `grep '\\[L:<id>\\]' ${stats.file}`,
+        byMessage: `grep '<substring>' ${stats.file}`,
+        byTimePrefix: `grep '"timestamp":"${new Date().toISOString().slice(0, 13)}' ${stats.file}`,
+      },
+    };
+  },
+};

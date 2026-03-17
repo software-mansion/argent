@@ -39,7 +39,8 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `debugger-component-tree`                           | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
 | `debugger-inspect-element`                          | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
-| `debugger-console-logs` / `debugger-console-listen` | Get console messages; stream in real-time.                                                                       |
+| `debugger-log-registry`                             | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the JSONL file for details.            |
+| `debugger-console-listen`                           | Stream console messages in real-time via WebSocket.                                                              |
 | `debugger-evaluate`                                 | Run a JS expression in the app runtime.                                                                          |
 
 ---

@@ -202,7 +202,7 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 | Problem type                      | Tool / Where to look                                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-console-logs` tool to read captured logs, or `debugger-console-listen` for real-time logs.    |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and JSONL file path, then `Grep`/`Read` to search. Use `debugger-console-listen` for real-time logs. |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.  |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                        |
@@ -219,7 +219,7 @@ Use the tools provided by tool server instead.
 
 | Log type        | Tool / Command                                                                             |
 | --------------- | ------------------------------------------------------------------------------------------ |
-| JS console logs | `debugger-console-logs` tool (captured logs) or `debugger-console-listen` tool (real-time) |
+| JS console logs | `debugger-log-registry` tool (summary + JSONL file for grep) or `debugger-console-listen` tool (real-time) |
 | iOS native logs | `npx react-native log-ios` or Xcode console when running from Xcode                        |
 
 ### 4.4 Debugging with Breakpoints
@@ -283,7 +283,7 @@ ONLY IF ASKED to run existing tests:
 | Boot simulator               | `boot-simulator` tool                  |
 | Take screenshot              | `screenshot` tool                      |
 | Describe screen (a11y tree)  | `describe` tool                        |
-| Read JS console logs         | `debugger-console-logs` tool           |
+| Read JS console logs         | `debugger-log-registry` tool           |
 | Reload JS bundle             | `debugger-reload-metro` tool           |
 | Check Metro status           | `debugger-status` tool                 |
 | Inspect React component tree | `debugger-component-tree` tool         |

@@ -27,8 +27,8 @@ import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro
 import { debuggerStepTool } from "../tools/debugger/debugger-step";
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
-import { debuggerConsoleLogsTool } from "../tools/debugger/debugger-console-logs";
 import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
+import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { describeTool } from "../tools/interactions/describe";
 import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
@@ -79,8 +79,8 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerStepTool);
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
-  registry.registerTool(debuggerConsoleLogsTool);
   registry.registerTool(debuggerConsoleListenTool);
+  registry.registerTool(debuggerLogRegistryTool);
   registry.registerTool(describeTool);
   registry.registerTool(activateLicenseKeyTool);
   registry.registerTool(activateSsoTool);
