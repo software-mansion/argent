@@ -4,8 +4,8 @@ import {
   parseFlow,
   setActiveFlow,
   getActiveFlow,
+  getActiveFlowOrNull,
   clearActiveFlow,
-  type FlowStep,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
@@ -66,7 +66,7 @@ describe("parseFlow", () => {
 
   it("parses tool entries with args", () => {
     const content =
-      "executionPrerequisite: \"\"\nsteps:\n  - tool: tap\n    args:\n      x: 0.5\n      y: 0.3\n";
+      'executionPrerequisite: ""\nsteps:\n  - tool: tap\n    args:\n      x: 0.5\n      y: 0.3\n';
     const flow = parseFlow(content);
     expect(flow.steps).toEqual([
       { kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } },
@@ -74,8 +74,7 @@ describe("parseFlow", () => {
   });
 
   it("parses tool entries with no args", () => {
-    const content =
-      "executionPrerequisite: \"\"\nsteps:\n  - tool: screenshot\n";
+    const content = 'executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n';
     const flow = parseFlow(content);
     expect(flow.steps).toEqual([
       { kind: "tool", name: "screenshot", args: {} },
@@ -120,7 +119,7 @@ describe("parseFlow", () => {
   });
 
   it("throws on unrecognised entries", () => {
-    const content = "executionPrerequisite: \"\"\nsteps:\n  - bogus: line\n";
+    const content = 'executionPrerequisite: ""\nsteps:\n  - bogus: line\n';
     expect(() => parseFlow(content)).toThrow("Unrecognised flow entry");
   });
 
@@ -171,5 +170,20 @@ describe("active flow state", () => {
     setActiveFlow("first");
     setActiveFlow("second");
     expect(getActiveFlow()).toBe("second");
+  });
+
+  it("getActiveFlowOrNull returns null when no active flow", () => {
+    expect(getActiveFlowOrNull()).toBeNull();
+  });
+
+  it("getActiveFlowOrNull returns the active flow name", () => {
+    setActiveFlow("my-flow");
+    expect(getActiveFlowOrNull()).toBe("my-flow");
+  });
+
+  it("getActiveFlowOrNull returns null after clearing", () => {
+    setActiveFlow("my-flow");
+    clearActiveFlow();
+    expect(getActiveFlowOrNull()).toBeNull();
   });
 });
