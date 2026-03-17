@@ -4,7 +4,8 @@
   "description": "MCP server for iOS Simulator control",
   "type": "module",
   "bin": {
-    "argent": "dist/index.js",
+    "argent": "dist/cli.js",
+    "argent-mcp": "dist/index.js",
     "argent-simulator-server": "bin/simulator-server"
   },
   "scripts": {
