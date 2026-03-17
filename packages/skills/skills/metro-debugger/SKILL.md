@@ -88,14 +88,3 @@ For full failure recovery steps, see `references/failure-scenarios.md`.
 | Inspect component at point    | `debugger-inspect-element`                                              |
 | Full component tree           | `debugger-component-tree`                                               |
 | Console logs / evaluate       | `debugger-console-logs`, `debugger-console-listen`, `debugger-evaluate` |
-
-## Related Skills
-
-| Skill                       | When to use                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `react-native-app-workflow` | Starting the app, Metro setup, build issues, runtime errors |
-| `simulator-setup`           | Booting and connecting a simulator                          |
-| `simulator-interact`        | Tapping, swiping, typing on the simulator                   |
-| `simulator-screenshot`      | Capturing the simulator screen                              |
-| `react-native-profiler`     | Performance profiling, re-render analysis                   |
-| `test-ui-flow`              | Interactive UI testing with screenshot verification         |
