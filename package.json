@@ -7,7 +7,7 @@
     "start": "npm run build -w @argent/registry && concurrently -n ui,tool-server \"npm run dev -w @argent/ui\" \"npm run dev -w @argent/tool-server\"",
     "start:ui": "npm run dev -w @argent/ui",
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
-    "pack:mcp": "npm run build -w argent && npm pack -w argent --pack-destination ."
+    "pack:mcp": "npm run build -w @software-mansion-labs/argent && npm pack -w @software-mansion-labs/argent --pack-destination ."
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

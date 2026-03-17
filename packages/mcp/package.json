@@ -1,5 +1,5 @@
 {
-  "name": "argent",
+  "name": "@software-mansion-labs/argent",
   "version": "0.2.0",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
@@ -18,6 +18,10 @@
     "observe": "node scripts/observe.cjs",
     "benchmark": "node scripts/benchmark.cjs",
     "postinstall": "node scripts/postinstall.cjs"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   },
   "files": [
     "dist/",

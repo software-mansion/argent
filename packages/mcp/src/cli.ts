@@ -16,8 +16,8 @@ import * as os from "node:os";
 // ── Configurable constants ────────────────────────────────────────────────────
 // Change PACKAGE_NAME if the npm package name changes, and NPM_REGISTRY if
 // you need to point at a private registry or mirror.
-const PACKAGE_NAME = "argent";
-const NPM_REGISTRY = "https://registry.npmjs.org";
+const PACKAGE_NAME = "@software-mansion-labs/argent";
+const NPM_REGISTRY = "https://npm.pkg.github.com";
 const MCP_SERVER_KEY = "argent";
 const PERMISSION_RULE = "mcp__argent";
 // ─────────────────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ function getInstalledVersion(root: string): string | null {
   const pkgPath = path.join(
     root,
     "node_modules",
-    PACKAGE_NAME,
+    ...PACKAGE_NAME.split("/"),
     "package.json",
   );
   if (!fs.existsSync(pkgPath)) return null;
@@ -130,7 +130,7 @@ async function getLatestVersion(): Promise<string> {
  * package into the workspace.  Returns a log of what happened.
  */
 function configure(root: string): string[] {
-  const pkgDir = path.join(root, "node_modules", PACKAGE_NAME);
+  const pkgDir = path.join(root, "node_modules", ...PACKAGE_NAME.split("/"));
   const distEntry = path.join(pkgDir, "dist", "index.js");
   const logFile = path.join(os.homedir(), ".argent", "mcp-calls.log");
 
@@ -197,7 +197,7 @@ async function install() {
     console.log(`\nInstalling ${PACKAGE_NAME}...\n`);
   }
 
-  execSync(`npm install ${PACKAGE_NAME}`, {
+  execSync(`npm install ${PACKAGE_NAME} --registry ${NPM_REGISTRY}`, {
     cwd: projectRoot,
     stdio: "inherit",
     env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
@@ -232,7 +232,7 @@ async function update() {
 
   if (installed !== latest) {
     console.log(`\n  Updating to v${latest}...\n`);
-    execSync(`npm install ${PACKAGE_NAME}@${latest}`, {
+    execSync(`npm install ${PACKAGE_NAME}@${latest} --registry ${NPM_REGISTRY}`, {
       cwd: projectRoot,
       stdio: "inherit",
       env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
@@ -307,7 +307,7 @@ async function remove() {
   }
 
   try {
-    execSync(`npm uninstall ${PACKAGE_NAME}`, {
+    execSync(`npm uninstall ${PACKAGE_NAME} --registry ${NPM_REGISTRY}`, {
       cwd: projectRoot,
       stdio: "inherit",
     });
