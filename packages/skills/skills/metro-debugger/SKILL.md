@@ -71,12 +71,17 @@ Set to `true` only when debugging filter behavior — e.g., an expected componen
 
 ---
 
-## 5. Related Skills
+## Quick Reference
 
-| Skill                       | When to use                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `react-native-app-workflow` | Starting the app, Metro setup, build issues, runtime errors |
-| `simulator-setup`           | Booting and connecting a simulator                          |
-| `simulator-interact`        | Tapping, swiping, typing on the simulator                   |
-| `react-native-profiler`     | Performance profiling, re-render analysis                   |
-| `test-ui-flow`              | Interactive UI testing with screenshot verification         |
+| Action                        | Tool                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| Diagnose / check connection   | `debugger-status`                                                       |
+| Connect to Metro CDP          | `debugger-connect`                                                      |
+| Reload JS (already connected) | `debugger-reload-metro`                                                 |
+| Relaunch app on simulator     | `restart-app`                                                           |
+| Set breakpoint by file:line   | `debugger-set-breakpoint`                                               |
+| Remove breakpoint             | `debugger-remove-breakpoint`                                            |
+| Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                    |
+| Inspect component at point    | `debugger-inspect-element`                                              |
+| Full component tree           | `debugger-component-tree`                                               |
+| Console logs / evaluate       | `debugger-console-logs`, `debugger-console-listen`, `debugger-evaluate` |
