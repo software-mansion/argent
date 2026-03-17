@@ -77,7 +77,24 @@ export const queryDocumentationTool: ToolDefinition<
       const ssoResult = await activateWithSSO();
       if (ssoResult.success) {
         const newToken = await readToken();
-        response = await fetchDocumentation(params.text, newToken, signal);
+        // New timeout for the retry - the original signal may have
+        // been consumed while the user was completing the SSO flow.
+        const retryTimeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+        const retrySignal = options?.signal
+          ? AbortSignal.any([options.signal, retryTimeout])
+          : retryTimeout;
+        try {
+          response = await fetchDocumentation(
+            params.text,
+            newToken,
+            retrySignal,
+          );
+        } catch (cause) {
+          throw new Error(
+            "Network failure contacting Radon AI backend on retry after SSO",
+            { cause: cause as Error },
+          );
+        }
       } else {
         const loginMessage = ssoResult.ssoUrl
           ? ` Open ${ssoResult.ssoUrl} to sign in to your account.`
