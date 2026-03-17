@@ -70,7 +70,7 @@ export function buildCpuSampleIndex(
   const timestampsMs = new Float64Array(samples.length);
   let accumulatedUs = startTime;
   for (let i = 0; i < samples.length; i++) {
-    if (i > 0) accumulatedUs += timeDeltas[i]!;
+    accumulatedUs += timeDeltas[i] ?? 0;
     timestampsMs[i] = accumulatedUs / 1000 + clockOffsetMs;
   }
 
