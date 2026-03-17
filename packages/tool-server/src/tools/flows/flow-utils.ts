@@ -35,6 +35,11 @@ export function setActiveFlow(name: string): void {
   activeFlowName = name;
 }
 
+/** Returns the active flow name, or null if none is active. */
+export function getActiveFlowOrNull(): string | null {
+  return activeFlowName;
+}
+
 export function getActiveFlow(): string {
   if (!activeFlowName) {
     throw new Error("No active flow. Call flow_start first.");

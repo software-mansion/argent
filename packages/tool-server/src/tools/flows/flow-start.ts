@@ -4,22 +4,23 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   getFlowsDir,
   getFlowPath,
+  getActiveFlowOrNull,
   setActiveFlow,
   serializeFlow,
 } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z.string().describe("Name for this flow (e.g. \"settings-explore\")"),
+  name: z.string().describe('Name for this flow (e.g. "settings-explore")'),
   executionPrerequisite: z
     .string()
     .describe(
-      "Describes the required app/simulator state before running this flow (e.g. \"App on home screen after a fresh reload\", \"Settings app open on General page\")",
+      'Describes the required app/simulator state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")',
     ),
 });
 
 export const flowStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; flowFile: string }
+  { message: string; previousFlow?: string; flowFile: string }
 > = {
   id: "flow-start",
   description: `Start recording a new flow. Creates a .yaml file in the .argent/ directory.
@@ -33,6 +34,8 @@ to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
+    const previousFlow = getActiveFlowOrNull();
+
     const dir = await getFlowsDir();
     await fs.mkdir(dir, { recursive: true });
 
@@ -43,6 +46,17 @@ to remove or reorder steps.`,
     });
     await fs.writeFile(filePath, flowFile, "utf8");
     setActiveFlow(params.name);
+
+    if (previousFlow && previousFlow !== params.name) {
+      return {
+        message:
+          `Switched active flow from "${previousFlow}" to "${params.name}". ` +
+          `Recording "${previousFlow}" was abandoned - but the flow .yaml file has been saved to disk. ` +
+          `Now recording "${params.name}".`,
+        previousFlow,
+        flowFile,
+      };
+    }
 
     return {
       message: `Started recording "${params.name}" flow`,
