@@ -8,10 +8,7 @@ import {
 } from "../../../blueprints/ios-instruments-session";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
-const DEFAULT_TEMPLATE_PATH = path.resolve(
-  __dirname,
-  "Argent.tracetemplate",
-);
+const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
@@ -70,8 +67,6 @@ function detectRunningApp(udid: string): string {
 
   const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
 
-  console.log("✨✨✨ installedApps", installedApps);
-
   // 3. Cross-reference: running user apps
   const runningUserApps: AppInfo[] = [];
   for (const [, appInfo] of Object.entries(installedApps)) {
@@ -82,7 +77,6 @@ function detectRunningApp(udid: string): string {
       runningUserApps.push(appInfo);
     }
   }
-  console.log("✨✨✨ runningUserApps", runningUserApps);
 
   if (runningUserApps.length === 0) {
     throw new Error(
@@ -102,10 +96,6 @@ function detectRunningApp(udid: string): string {
     );
   }
 
-  console.log(
-    "✨✨✨ runningUserApps[0].CFBundleExecutable",
-    runningUserApps[0].CFBundleExecutable,
-  );
   return runningUserApps[0].CFBundleExecutable;
 }
 
@@ -160,17 +150,14 @@ After starting, let the user interact with the app, then call ios-instruments-st
       ]);
 
       api.xctracePid = xctraceProcess.pid ?? null;
-      console.log("✨✨✨ xctrace spawned, PID:", xctraceProcess.pid);
 
       xctraceProcess.stdout.on("data", (data: Buffer) => {
         const output = data.toString();
-        console.log("✨✨✨ xctrace STDOUT:", JSON.stringify(output));
 
         if (
           output.includes("Ctrl-C to stop") ||
           output.includes("Starting recording")
         ) {
-          console.log("✨✨✨ xctrace recording detected! Resolving...");
           api.profilingActive = true;
           api.wallClockStartMs = Date.now();
           if (api.xctracePid) {
@@ -185,7 +172,6 @@ After starting, let the user interact with the app, then call ios-instruments-st
 
       xctraceProcess.stderr.on("data", (data: Buffer) => {
         const errorOutput = data.toString();
-        console.log("✨✨✨ xctrace STDERR:", JSON.stringify(errorOutput));
         if (
           errorOutput.includes("Target failed to run") ||
           errorOutput.includes("failed with errors")
@@ -195,12 +181,7 @@ After starting, let the user interact with the app, then call ios-instruments-st
         }
       });
 
-      xctraceProcess.on("close", (code: number | null) => {
-        console.log("✨✨✨ xctrace process CLOSED with code:", code);
-      });
-
       xctraceProcess.on("error", (err: Error) => {
-        console.log("✨✨✨ xctrace process ERROR:", err.message);
         api.xctracePid = null;
         reject(new Error(`Failed to start xctrace: ${err.message}`));
       });
