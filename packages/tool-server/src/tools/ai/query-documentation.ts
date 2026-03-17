@@ -92,9 +92,15 @@ export const queryDocumentationTool: ToolDefinition<
       );
     }
 
-    const result = (await response.json()) as {
-      tool_results: { content: string }[];
-    };
+    let result: { tool_results?: { content: string }[] };
+
+    try {
+      result = (await response.json()) as {
+        tool_results: { content: string }[];
+      };
+    } catch {
+      throw new Error("Radon AI backend returned malformed JSON");
+    }
 
     if (!result.tool_results?.length) {
       throw new Error("Radon AI backend returned an empty response");
