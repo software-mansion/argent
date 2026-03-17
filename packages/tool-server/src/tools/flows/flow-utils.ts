@@ -42,7 +42,7 @@ export function getActiveFlowOrNull(): string | null {
 
 export function getActiveFlow(): string {
   if (!activeFlowName) {
-    throw new Error("No active flow. Call flow_start first.");
+    throw new Error("No active flow. Call flow-start-recording first.");
   }
   return activeFlowName;
 }

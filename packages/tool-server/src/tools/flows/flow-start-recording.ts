@@ -18,16 +18,16 @@ const zodSchema = z.object({
     ),
 });
 
-export const flowStartTool: ToolDefinition<
+export const flowStartRecordingTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { message: string; previousFlow?: string; flowFile: string }
 > = {
-  id: "flow-start",
+  id: "flow-start-recording",
   description: `Start recording a new flow. Creates a .yaml file in the .argent/ directory.
 
 After starting, use flow-add-step to append tool calls — each step is executed
 LIVE so you can verify it works before it gets recorded. Use flow-add-echo
-to add labels. Call flow-finish when done.
+to add labels. Call flow-finish-recording when done.
 
 If a recorded step turns out to be wrong, you can edit the .yaml file directly
 to remove or reorder steps.`,

@@ -15,10 +15,10 @@ const LICENSE_EXEMPT_TOOLS = new Set([
   "stop-simulator-server",
   "stop-all-simulator-servers",
   "stop-metro",
-  "flow-start",
+  "flow-start-recording",
   "flow-add-step",
   "flow-add-echo",
-  "flow-finish",
+  "flow-finish-recording",
   "flow-read-prerequisite",
   "flow-execute",
 ]);

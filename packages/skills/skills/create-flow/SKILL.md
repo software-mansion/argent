@@ -11,10 +11,10 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 | Tool                     | Purpose                                              |
 | ------------------------ | ---------------------------------------------------- |
-| `flow-start`             | Start recording — takes a name and executionPrerequisite, creates the file |
+| `flow-start-recording`   | Start recording — takes a name and executionPrerequisite, creates the file |
 | `flow-add-step`          | Execute a tool call live and record it if it succeeds |
 | `flow-add-echo`          | Add a label/comment that prints during replay        |
-| `flow-finish`            | Stop recording and get a summary                     |
+| `flow-finish-recording`  | Stop recording and get a summary                     |
 | `flow-read-prerequisite` | Read a flow's execution prerequisite without running it |
 | `flow-execute`           | Replay a saved flow by name                          |
 
@@ -22,10 +22,10 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ### Recording
 
-1. **Start**: Call `flow-start` with a descriptive name and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
+1. **Start**: Call `flow-start-recording` with a descriptive name and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
-4. **Finish**: Call `flow-finish` to stop recording. It returns the file path where the flow was saved and a summary of all steps. You can edit the `.yaml` file directly afterwards to remove, reorder, or tweak steps.
+4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps. You can edit the `.yaml` file directly afterwards to remove, reorder, or tweak steps.
 
 Every tool during recording returns the current flow file contents so you can track what has been recorded.
 
@@ -64,22 +64,22 @@ For tools with no arguments, omit `args` entirely.
 
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
 - **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
-- **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish`. The active flow is tracked automatically after `flow-start`.
-- **Start before adding.** Calling `flow-add-step`, `flow-add-echo`, or `flow-finish` without an active recording returns an error: _"No active flow. Call flow_start first."_
-- **One flow at a time.** If you call `flow-start` while already recording, the active flow switches to the new one. The response tells you which flow was abandoned and which is now active. The old flow's file remains on disk.
+- **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish-recording`. The active flow is tracked automatically after `flow-start-recording`.
+- **Start before adding.** Calling `flow-add-step`, `flow-add-echo`, or `flow-finish-recording` without an active recording returns an error: _"No active flow. Call flow-start-recording first."_
+- **One flow at a time.** If you call `flow-start-recording` while already recording, the active flow switches to the new one. The response tells you which flow was abandoned and which is now active. The old flow's file remains on disk.
 - **Mistakes can be edited out.** If a step was recorded by mistake, edit the `.yaml` file directly to remove or reorder entries.
 
 ## 6. Example Session
 
 ```
-flow-start     { name: "open-settings", executionPrerequisite: "Simulator booted with app installed" }
+flow-start-recording  { name: "open-settings", executionPrerequisite: "Simulator booted with app installed" }
 flow-add-echo  { message: "Launch Settings app" }
 flow-add-step  { command: "launch-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }
 flow-add-echo  { message: "Tap General" }
 flow-add-step  { command: "tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }
 flow-add-echo  { message: "Tap About" }
 flow-add-step  { command: "tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.17}" }
-flow-finish    {}
+flow-finish-recording  {}
 ```
 
 ## 7. Replay Example

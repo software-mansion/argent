@@ -19,9 +19,9 @@ vi.mock("../../src/tools/flows/flow-utils", async (importOriginal) => {
 });
 
 // Import after mock so the tools get the mocked functions
-import { flowStartTool } from "../../src/tools/flows/flow-start";
+import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
-import { flowFinishTool } from "../../src/tools/flows/flow-finish";
+import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
@@ -72,11 +72,11 @@ afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
-// ── flow-start ───────────────────────────────────────────────────────
+// ── flow-start-recording ─────────────────────────────────────────────
 
-describe("flow-start", () => {
+describe("flow-start-recording", () => {
   it("creates the .argent dir and a .yaml file with header", async () => {
-    const result = await flowStartTool.execute(
+    const result = await flowStartRecordingTool.execute(
       {},
       { name: "test-flow", executionPrerequisite: PREREQ },
     );
@@ -89,7 +89,7 @@ describe("flow-start", () => {
   });
 
   it("sets the active flow", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "my-flow", executionPrerequisite: PREREQ },
     );
@@ -98,14 +98,14 @@ describe("flow-start", () => {
   });
 
   it("overwrites an existing flow file", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "overwrite", executionPrerequisite: PREREQ },
     );
     await flowInsertEchoTool.execute({}, { message: "line1" });
 
     // Start again with same name — should reset
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "overwrite", executionPrerequisite: "Different prereq" },
     );
@@ -116,15 +116,15 @@ describe("flow-start", () => {
   });
 });
 
-// ── flow-start edge cases ────────────────────────────────────────────
+// ── flow-start-recording edge cases ──────────────────────────────────
 
-describe("flow-start edge cases", () => {
+describe("flow-start-recording edge cases", () => {
   it("starting a new flow while another is recording notifies about the switch", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "first-flow", executionPrerequisite: PREREQ },
     );
-    const result = await flowStartTool.execute(
+    const result = await flowStartRecordingTool.execute(
       {},
       { name: "second-flow", executionPrerequisite: "Different" },
     );
@@ -155,13 +155,13 @@ describe("flow-start edge cases", () => {
   });
 
   it("restarting the same flow does not report a switch", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "same-flow", executionPrerequisite: PREREQ },
     );
     await flowInsertEchoTool.execute({}, { message: "will be reset" });
 
-    const result = await flowStartTool.execute(
+    const result = await flowStartRecordingTool.execute(
       {},
       { name: "same-flow", executionPrerequisite: "Updated prereq" },
     );
@@ -173,7 +173,7 @@ describe("flow-start edge cases", () => {
   });
 
   it("does not report a switch when no flow was previously active", async () => {
-    const result = await flowStartTool.execute(
+    const result = await flowStartRecordingTool.execute(
       {},
       { name: "fresh-start", executionPrerequisite: PREREQ },
     );
@@ -187,7 +187,7 @@ describe("flow-start edge cases", () => {
 
 describe("flow-add-echo", () => {
   it("appends an echo entry to the flow file", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "echo-test", executionPrerequisite: PREREQ },
     );
@@ -202,7 +202,7 @@ describe("flow-add-echo", () => {
   });
 
   it("appends multiple echo entries", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "multi-echo", executionPrerequisite: PREREQ },
     );
@@ -232,7 +232,7 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "step-test", executionPrerequisite: PREREQ },
     );
@@ -258,7 +258,7 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "fail-test", executionPrerequisite: PREREQ },
     );
@@ -277,7 +277,7 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "no-args", executionPrerequisite: PREREQ },
     );
@@ -308,7 +308,7 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "bad-json", executionPrerequisite: PREREQ },
     );
@@ -326,7 +326,7 @@ describe("flow-add-step", () => {
     const registry = createMockRegistry({}); // no tools registered
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "missing-tool", executionPrerequisite: PREREQ },
     );
@@ -341,17 +341,17 @@ describe("flow-add-step", () => {
   });
 });
 
-// ── flow-finish ──────────────────────────────────────────────────────
+// ── flow-finish-recording ────────────────────────────────────────────
 
-describe("flow-finish", () => {
+describe("flow-finish-recording", () => {
   it("returns summary with prerequisite and clears active flow", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "finish-test", executionPrerequisite: PREREQ },
     );
     await flowInsertEchoTool.execute({}, { message: "Step 1" });
 
-    const result = await flowFinishTool.execute({}, {});
+    const result = await flowFinishRecordingTool.execute({}, {});
 
     expect(result.message).toContain("finish-test");
     expect(result.executionPrerequisite).toBe(PREREQ);
@@ -365,41 +365,41 @@ describe("flow-finish", () => {
   });
 
   it("throws when no active flow", async () => {
-    await expect(flowFinishTool.execute({}, {})).rejects.toThrow(
+    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow(
       "No active flow",
     );
   });
 
   it("handles empty flow", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "empty", executionPrerequisite: PREREQ },
     );
-    const result = await flowFinishTool.execute({}, {});
+    const result = await flowFinishRecordingTool.execute({}, {});
 
     expect(result.steps).toBe(0);
     expect(result.summary).toEqual([]);
   });
 
   it("calling finish twice throws on the second call", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "double-finish", executionPrerequisite: PREREQ },
     );
-    await flowFinishTool.execute({}, {});
+    await flowFinishRecordingTool.execute({}, {});
 
     // Second call should fail — active flow was cleared
-    await expect(flowFinishTool.execute({}, {})).rejects.toThrow(
+    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow(
       "No active flow",
     );
   });
 
   it("returns the file path so the agent knows where it was written", async () => {
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "path-check", executionPrerequisite: PREREQ },
     );
-    const result = await flowFinishTool.execute({}, {});
+    const result = await flowFinishRecordingTool.execute({}, {});
 
     expect(result.path).toContain(".argent");
     expect(result.path).toContain("path-check.yaml");
@@ -411,14 +411,14 @@ describe("flow-finish", () => {
     });
     const addStep = createFlowAddStepTool(registry);
 
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "summary-test", executionPrerequisite: PREREQ },
     );
     await flowInsertEchoTool.execute({}, { message: "Before tap" });
     await addStep.execute({}, { command: "tap", args: '{"x":0.5}' });
 
-    const result = await flowFinishTool.execute({}, {});
+    const result = await flowFinishRecordingTool.execute({}, {});
     expect(result.summary).toEqual([
       "1. echo: Before tap",
       '2. tool: tap {"x":0.5}',
@@ -441,7 +441,7 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
 
     // Build a flow
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "run-test", executionPrerequisite: PREREQ },
     );
@@ -449,7 +449,7 @@ describe("flow-execute", () => {
     await addStep.execute({}, { command: "tap", args: '{"x":0.5}' });
     await flowInsertEchoTool.execute({}, { message: "Take screenshot" });
     await addStep.execute({}, { command: "screenshot", args: "{}" });
-    await flowFinishTool.execute({}, {});
+    await flowFinishRecordingTool.execute({}, {});
 
     // Reset mock call counts
     vi.mocked(registry.invokeTool).mockClear();
@@ -769,7 +769,7 @@ describe("flow-execute", () => {
     await fs.writeFile(path.join(dir, "side-effect.yaml"), content);
 
     // Start recording a different flow
-    await flowStartTool.execute(
+    await flowStartRecordingTool.execute(
       {},
       { name: "recording", executionPrerequisite: PREREQ },
     );

@@ -45,10 +45,10 @@ import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
-import { flowStartTool } from "../tools/flows/flow-start";
+import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
-import { flowFinishTool } from "../tools/flows/flow-finish";
+import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 
@@ -106,10 +106,10 @@ export function createRegistry(): Registry {
   registry.registerTool(stopMetroTool);
 
   // Flow tools
-  registry.registerTool(flowStartTool);
+  registry.registerTool(flowStartRecordingTool);
   registry.registerTool(createFlowAddStepTool(registry));
   registry.registerTool(flowInsertEchoTool);
-  registry.registerTool(flowFinishTool);
+  registry.registerTool(flowFinishRecordingTool);
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));
 

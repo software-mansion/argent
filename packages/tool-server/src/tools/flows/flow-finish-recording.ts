@@ -10,7 +10,7 @@ import {
 
 const zodSchema = z.object({});
 
-export const flowFinishTool: ToolDefinition<
+export const flowFinishRecordingTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     message: string;
@@ -21,7 +21,7 @@ export const flowFinishTool: ToolDefinition<
     flowFile: string;
   }
 > = {
-  id: "flow-finish",
+  id: "flow-finish-recording",
   description: `Finish recording the active flow. Returns a summary of all recorded steps. You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
