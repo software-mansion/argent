@@ -28,6 +28,7 @@ export interface IosInstrumentsSessionApi {
   profilingActive: boolean;
   wallClockStartMs: number | null;
   parsedData: IosInstrumentsParsedData | null;
+  recordingTimeout: NodeJS.Timeout | null;
 }
 
 export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
@@ -50,6 +51,7 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
       profilingActive: false,
       wallClockStartMs: null,
       parsedData: null,
+      recordingTimeout: null,
     };
 
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -57,6 +59,10 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
+        if (state.recordingTimeout) {
+          clearTimeout(state.recordingTimeout);
+          state.recordingTimeout = null;
+        }
         if (state.profilingActive && state.xctracePid) {
           try {
             process.kill(state.xctracePid, "SIGINT");

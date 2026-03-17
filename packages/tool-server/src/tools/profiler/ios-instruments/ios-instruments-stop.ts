@@ -36,6 +36,11 @@ then exports CPU, hangs, and leaks data. Call ios-instruments-start first.`,
       );
     }
 
+    if (api.recordingTimeout) {
+      clearTimeout(api.recordingTimeout);
+      api.recordingTimeout = null;
+    }
+
     const pidToKill = api.xctracePid;
     process.kill(pidToKill, "SIGINT");
 

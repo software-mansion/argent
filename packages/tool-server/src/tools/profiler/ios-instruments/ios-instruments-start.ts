@@ -161,6 +161,15 @@ After starting, let the user interact with the app, then call ios-instruments-st
           api.profilingActive = true;
           api.wallClockStartMs = Date.now();
           if (api.xctracePid) {
+            api.recordingTimeout = setTimeout(
+              () => {
+                xctraceProcess.kill("SIGINT");
+                api.profilingActive = false;
+                api.xctracePid = null;
+                api.recordingTimeout = null;
+              },
+              10 * 60 * 1000,
+            );
             resolve({
               status: "recording",
               pid: api.xctracePid,
@@ -177,12 +186,20 @@ After starting, let the user interact with the app, then call ios-instruments-st
           errorOutput.includes("failed with errors")
         ) {
           api.xctracePid = null;
+          if (api.recordingTimeout) {
+            clearTimeout(api.recordingTimeout);
+            api.recordingTimeout = null;
+          }
           reject(new Error(`Failed to attach to iOS process: ${errorOutput}`));
         }
       });
 
       xctraceProcess.on("error", (err: Error) => {
         api.xctracePid = null;
+        if (api.recordingTimeout) {
+          clearTimeout(api.recordingTimeout);
+          api.recordingTimeout = null;
+        }
         reject(new Error(`Failed to start xctrace: ${err.message}`));
       });
     });
