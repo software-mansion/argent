@@ -72,6 +72,33 @@ Set to `true` only when debugging filter behavior — e.g., an expected componen
 
 ---
 
+## 5. Reading Console Logs (Log Registry)
+
+Logs are written to a JSONL file on disk. Use the **log-registry → grep** pattern instead of reading logs inline.
+
+### Workflow
+
+1. **Call `debugger-log-registry`** — returns: `file` (JSONL path), `totalEntries`, `byLevel`, `clusters` (top message groups with counts, grep patterns, and source file info), `grepTips`
+2. **Search the file** using `Grep` or `Read` with patterns from the response.
+3. **For real-time streaming** (UI clients), use `debugger-console-listen` — returns a WebSocket URL.
+
+### JSONL entry format
+
+Each line is a JSON object with these fields:
+
+| Field | Type | Example / Notes |
+|---|---|---|
+| `marker` | string | `"[L:42]"` — unique grep anchor |
+| `id` | number | Sequential |
+| `timestamp` | string | ISO 8601, e.g. `"2026-03-17T14:30:00.000Z"` |
+| `level` | string | `"log"` \| `"warn"` \| `"error"` \| `"info"` \| `"debug"` |
+| `message` | string | Formatted console args |
+| `args` | array | `[{ type, value?, description? }]` |
+| `stackTrace` | object? | `{ callFrames: [{ functionName, scriptId, url, lineNumber, columnNumber }] }` |
+| `byteOffset` | number | Byte position in file for seeking |
+
+---
+
 ## Quick Reference
 
 | Action                        | Tool                                                                    |
@@ -85,4 +112,6 @@ Set to `true` only when debugging filter behavior — e.g., an expected componen
 | Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                    |
 | Inspect component at point    | `debugger-inspect-element`                                              |
 | Full component tree           | `debugger-component-tree`                                               |
-| Console logs / evaluate       | `debugger-console-logs`, `debugger-console-listen`, `debugger-evaluate` |
+| Console log overview          | `debugger-log-registry` (summary + JSONL file path for `Grep`/`Read`)  |
+| Real-time console stream      | `debugger-console-listen`                                               |
+| Evaluate JS                   | `debugger-evaluate`                                                     |
