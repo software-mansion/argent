@@ -171,7 +171,7 @@ export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
   var byId = globalThis.__radon_network_by_id;
   if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
-  var entry = byId['${requestId.replace(/'/g, "\\'")}'];
+  var entry = byId['${requestId.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'];
   if (!entry) return JSON.stringify({ error: 'Request not found' });
 
   return JSON.stringify({
