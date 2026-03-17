@@ -4,7 +4,9 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, getActiveFlow, serializeStep } from "./flow-utils";
 
 const zodSchema = z.object({
-  command: z.string().describe("MCP tool name (e.g. \"tap\", \"screenshot\", \"launch-app\")"),
+  command: z
+    .string()
+    .describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
   args: z
     .string()
     .optional()
@@ -21,12 +23,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call and record it as a step in the active flow.
-
-The tool call is run immediately. If it succeeds the step is recorded; if it
-fails an error is returned and nothing is recorded.
-
-If a step was recorded by mistake, edit the .yaml file by hand to remove it.`,
+    description: `Execute a tool call and record it as a step in the active flow.\nThe tool call is run immediately. If it succeeds the step is recorded; if it fails an error is returned and nothing is recorded.\nIf a step was recorded by mistake, edit the .yaml file directly to remove it.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
