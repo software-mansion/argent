@@ -4,7 +4,6 @@ export const RN_FRAMEWORK_SIGNATURES: string[] = [
   "Hermes",
   "hermes::",
   "JSI",
-  "main",
   "facebook::",
   "React",
   "jsi::",
