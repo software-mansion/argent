@@ -216,7 +216,7 @@ is returned by react-profiler-start.`,
 
     // Warn only when hook was genuinely not installed (null).
     // hotCommitIndices === [] means hook was installed but 0 commits — that's valid, not an error.
-    if (commitTree === null || hotCommitIndices === null) {
+    if (hotCommitIndices === null) {
       result["warning"] =
         "No React commit data — the DevTools hook may not be present in this runtime, or the commit-capture script failed to inject (check react-profiler-start output for errors).";
     }
