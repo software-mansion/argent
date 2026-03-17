@@ -133,6 +133,11 @@ export function parseCpuXml(xml: string): CpuSample[] {
   let sampleIdx = 0;
   for (const row of rows) {
     if (sampleIdx >= samples.length) break;
+
+    // Skip rows that were skipped in the first pass
+    const sampleTimeRef = row.match(/<sample-time\s+ref="(\d+)"\s*\/>/);
+    if (sampleTimeRef) continue;
+
     const sample = samples[sampleIdx]!;
 
     // Resolve thread ref
