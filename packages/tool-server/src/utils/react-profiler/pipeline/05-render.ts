@@ -32,7 +32,7 @@ export interface RenderInput {
 
 export interface RenderOutput {
   report: string;
-  reportFile: string;
+  reportFile: string | null;
   hotCommitsTotal: number;
   hotCommitsShown: number;
 }
@@ -45,8 +45,8 @@ export async function renderProfilingReport(
   if (input.allClear) {
     const maxMs = input.maxCommitMs ?? 0;
     const report = renderAllClear(input, maxMs);
-    await writeReport(reportFile, report);
-    return { report, reportFile, hotCommitsTotal: 0, hotCommitsShown: 0 };
+    const wroteFile = await writeReport(reportFile, report);
+    return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal: 0, hotCommitsShown: 0 };
   }
 
   // Only non-margin commits count as "hot" for the cap and total
@@ -55,8 +55,8 @@ export async function renderProfilingReport(
 
   if (hotCommitsTotal === 0) {
     const report = renderAllClear(input, 0);
-    await writeReport(reportFile, report);
-    return { report, reportFile, hotCommitsTotal: 0, hotCommitsShown: 0 };
+    const wroteFile = await writeReport(reportFile, report);
+    return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal: 0, hotCommitsShown: 0 };
   }
 
   // Compute relative timestamps: use minimum timestamp across all summaries as t=0
@@ -100,13 +100,13 @@ export async function renderProfilingReport(
     hotCommitsTotal,
   );
 
+  const wroteFile = await writeReport(reportFile, fullMarkdown);
   let report = cappedMarkdown;
-  if (hotCommitsTotal > MAX_INLINE_COMMITS) {
+  if (hotCommitsTotal > MAX_INLINE_COMMITS && wroteFile) {
     report += `\n\n> Full analysis: \`${reportFile}\` — use the Read tool to browse all ${hotCommitsTotal} hot commits.\n`;
   }
 
-  await writeReport(reportFile, fullMarkdown);
-  return { report, reportFile, hotCommitsTotal, hotCommitsShown };
+  return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal, hotCommitsShown };
 }
 
 // ---------------------------------------------------------------------------
@@ -537,10 +537,12 @@ function shortenPath(file: string): string {
   return parts.slice(-2).join("/");
 }
 
-async function writeReport(path: string, content: string): Promise<void> {
+async function writeReport(path: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(path, content, "utf8");
+    return true;
   } catch {
     // non-fatal
+    return false;
   }
 }

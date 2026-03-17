@@ -27,11 +27,9 @@ export async function renderIosInstrumentsReport(
       : renderFullReport(payload, input.exportErrors);
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
-  if (reportFile) {
-    await writeReport(reportFile, report);
-  }
+  const wroteFile = reportFile ? await writeReport(reportFile, report) : false;
 
-  return { report, reportFile, bottlenecksTotal };
+  return { report, reportFile: wroteFile ? reportFile : null, bottlenecksTotal };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,10 +328,12 @@ function deriveReportPath(traceFile: string): string {
   return path.join(dir, `${baseName}-report.md`);
 }
 
-async function writeReport(filePath: string, content: string): Promise<void> {
+async function writeReport(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, "utf8");
+    return true;
   } catch {
     // non-fatal — report is still returned inline
+    return false;
   }
 }
