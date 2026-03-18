@@ -5,12 +5,6 @@ import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-wri
 
 interface LogRegistryResponse extends LogStats {
   clusters: MessageCluster[];
-  grepTips: {
-    allErrors: string;
-    specificLog: string;
-    byMessage: string;
-    byTimePrefix: string;
-  };
 }
 
 const zodSchema = z.object({
@@ -23,9 +17,8 @@ export const debuggerLogRegistryTool: ToolDefinition<
 > = {
   id: "debugger-log-registry",
   description: `Get a summary of all console logs captured from the React Native app.
-Returns the log file path, entry counts by level, message clusters (grouped by similarity),
-and grep patterns for searching the JSONL log file directly.
-Use this tool first to get an overview, then use Grep/Read on the returned file path for details.
+Returns the log file path, entry counts by level, and message clusters (grouped by similarity).
+Use this tool first to get an overview, then grep or tail the returned file path for details.
 The app must be connected via debugger-connect first (auto-connects if needed).`,
   zodSchema,
   services: (params) => ({
@@ -39,12 +32,6 @@ The app must be connected via debugger-connect first (auto-connects if needed).`
     return {
       ...stats,
       clusters,
-      grepTips: {
-        allErrors: `grep '"level":"error"' ${stats.file}`,
-        specificLog: `grep '\\[L:<id>\\]' ${stats.file}`,
-        byMessage: `grep '<substring>' ${stats.file}`,
-        byTimePrefix: `grep '"timestamp":"${new Date().toISOString().slice(0, 13)}' ${stats.file}`,
-      },
     };
   },
 };

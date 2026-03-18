@@ -4,13 +4,12 @@ import { LogFileWriter, type RichLogEntry } from "../../src/utils/debugger/log-f
 
 let writer: LogFileWriter;
 
-function makeEntry(id: number, overrides: Partial<Omit<RichLogEntry, "marker" | "byteOffset">> = {}) {
+function makeEntry(id: number, overrides: Partial<Omit<RichLogEntry, "marker">> = {}) {
   return {
     id,
     timestamp: new Date(1710000000000 + id * 1000).toISOString(),
     level: overrides.level ?? "log",
     message: overrides.message ?? `Log message ${id}`,
-    args: overrides.args ?? [{ type: "string", value: `Log message ${id}` }],
     stackTrace: overrides.stackTrace,
   };
 }
@@ -24,13 +23,13 @@ describe("LogFileWriter", () => {
     writer.close();
   });
 
-  it("creates a JSONL file in tmp dir", () => {
+  it("creates a flat log file in ~/.argent/tmp", () => {
     const filePath = writer.getFilePath();
-    expect(filePath).toMatch(/argent-logs-9999-\d+\.jsonl$/);
+    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
   });
 
-  it("writes entries as single-line JSON with newline delimiter", () => {
+  it("writes entries as flat text lines", () => {
     writer.write(makeEntry(0));
     writer.write(makeEntry(1));
 
@@ -38,24 +37,16 @@ describe("LogFileWriter", () => {
     const lines = content.split("\n").filter(Boolean);
     expect(lines).toHaveLength(2);
 
-    const parsed0 = JSON.parse(lines[0]);
-    expect(parsed0.marker).toBe("[L:0]");
-    expect(parsed0.id).toBe(0);
-    expect(parsed0.message).toBe("Log message 0");
-    expect(parsed0.byteOffset).toBe(0);
-
-    const parsed1 = JSON.parse(lines[1]);
-    expect(parsed1.marker).toBe("[L:1]");
-    expect(parsed1.byteOffset).toBeGreaterThan(0);
+    expect(lines[0]).toMatch(/^\[L:0\] .+ LOG\s+- \| Log message 0$/);
+    expect(lines[1]).toMatch(/^\[L:1\] .+ LOG\s+- \| Log message 1$/);
   });
 
-  it("returns RichLogEntry with marker and byteOffset from write()", () => {
+  it("returns RichLogEntry with marker from write()", () => {
     const result = writer.write(makeEntry(0));
     expect(result.marker).toBe("[L:0]");
-    expect(result.byteOffset).toBe(0);
 
     const result2 = writer.write(makeEntry(1));
-    expect(result2.byteOffset).toBeGreaterThan(0);
+    expect(result2.marker).toBe("[L:1]");
   });
 
   it("tracks stats correctly", () => {
@@ -114,7 +105,7 @@ describe("LogFileWriter", () => {
     );
 
     const clusters = writer.getClusters();
-    expect(clusters[0].sourceFile).toContain("api/user.ts");
+    expect(clusters[0].sourceFile).toBe("src/api/user.ts");
     expect(clusters[0].sourceLine).toBe(42);
   });
 
@@ -188,7 +179,7 @@ describe("LogFileWriter", () => {
     expect(writer.readAll()).toEqual([]);
   });
 
-  it("preserves stack trace in JSONL output", () => {
+  it("stackTrace is NOT persisted to flat file but sourceFile IS in cluster", () => {
     const stackTrace = {
       callFrames: [
         {
@@ -202,18 +193,66 @@ describe("LogFileWriter", () => {
     };
     writer.write(makeEntry(0, { stackTrace }));
 
+    // readAll() reconstructs from flat file — no stackTrace
     const entries = writer.readAll();
-    expect(entries[0].stackTrace).toEqual(stackTrace);
+    expect(entries[0].stackTrace).toBeUndefined();
+
+    // But source attribution is still available via in-memory clusters
+    const clusters = writer.getClusters();
+    expect(clusters[0].sourceFile).toBe("src/App.tsx");
+    expect(clusters[0].sourceLine).toBe(10);
   });
 
-  it("generates grep-safe patterns in clusters", () => {
-    writer.write(makeEntry(0, { message: "Error: foo.bar() failed [retry]" }));
+  it("collapses newlines in message to spaces in flat file", () => {
+    writer.write(makeEntry(0, { message: "Error:\nstacktrace here" }));
+
+    const content = fs.readFileSync(writer.getFilePath(), "utf-8");
+    const lines = content.split("\n").filter(Boolean);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("Error: stacktrace here");
+  });
+
+  it("bundle URL as sourceFile → cluster.sourceFile is undefined", () => {
+    writer.write(
+      makeEntry(0, {
+        message: "Bundle source",
+        stackTrace: {
+          callFrames: [
+            {
+              functionName: "",
+              scriptId: "1",
+              url: "http://localhost:8081/index.bundle?platform=ios&dev=true",
+              lineNumber: 1,
+              columnNumber: 0,
+            },
+          ],
+        },
+      }),
+    );
 
     const clusters = writer.getClusters();
-    const pattern = clusters[0].grepPattern;
-    // Special chars should be escaped: raw [ becomes \[
-    expect(pattern).toContain("\\[");
-    expect(pattern).toContain("\\.");
-    expect(pattern).toContain("\\(");
+    expect(clusters[0].sourceFile).toBeUndefined();
+  });
+
+  it("valid source URL → cluster.sourceFile is clean relative path (no port, no query)", () => {
+    writer.write(
+      makeEntry(0, {
+        message: "API call",
+        stackTrace: {
+          callFrames: [
+            {
+              functionName: "fetchUser",
+              scriptId: "1",
+              url: "http://localhost:8081/src/api/user.ts?platform=ios",
+              lineNumber: 42,
+              columnNumber: 10,
+            },
+          ],
+        },
+      }),
+    );
+
+    const clusters = writer.getClusters();
+    expect(clusters[0].sourceFile).toBe("src/api/user.ts");
   });
 });

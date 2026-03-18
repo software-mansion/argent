@@ -35,13 +35,13 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 ### Inspection & console
 
-| Tool                                                | Purpose                                                                                                          |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`                           | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
-| `debugger-inspect-element`                          | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
-| `debugger-log-registry`                             | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the JSONL file for details.            |
-| `debugger-console-listen`                           | Stream console messages in real-time via WebSocket.                                                              |
-| `debugger-evaluate`                                 | Run a JS expression in the app runtime.                                                                          |
+| Tool                       | Purpose                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
+| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
+| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
+| `debugger-console-listen`  | Stream console messages in real-time via WebSocket.                                                              |
+| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
 
 ---
 
@@ -74,46 +74,56 @@ Set to `true` only when debugging filter behavior — e.g., an expected componen
 
 ## 5. Reading Console Logs (Log Registry)
 
-Logs are written to a JSONL file on disk. Use the **log-registry → grep** pattern instead of reading logs inline.
+Logs are written to a flat log file on disk. Use the **log-registry → grep** pattern instead of reading logs inline.
 
 ### Workflow
 
-1. **Call `debugger-log-registry`** — returns: `file` (JSONL path), `totalEntries`, `byLevel`, `clusters` (top message groups with counts, grep patterns, and source file info), `grepTips`
+1. **Call `debugger-log-registry`** — returns: `file` (log path), `totalEntries`, `byLevel`, `clusters` (top message groups with counts and source file info)
 2. **Search the file** using `Grep` or `Read` with patterns from the response.
 3. **For real-time streaming** (UI clients), use `debugger-console-listen` — returns a WebSocket URL.
 
 > **Large log files:** If `totalEntries` exceeds 10 000, delegate the grep exploration to an `Explore` subagent — pass it the file path, the entry format, and the patterns you need.
 
-### JSONL entry format
+### Flat log format
 
-Each line is a JSON object with these fields:
+One entry per line — fields (whitespace-separated, `|` delimiter before message)
 
-| Field | Type | Example / Notes |
-|---|---|---|
-| `marker` | string | `"[L:42]"` — unique grep anchor |
-| `id` | number | Sequential |
-| `timestamp` | string | ISO 8601, e.g. `"2026-03-17T14:30:00.000Z"` |
-| `level` | string | `"log"` \| `"warn"` \| `"error"` \| `"info"` \| `"debug"` |
-| `message` | string | Formatted console args |
-| `args` | array | `[{ type, value?, description? }]` |
-| `stackTrace` | object? | `{ callFrames: [{ functionName, scriptId, url, lineNumber, columnNumber }] }` |
-| `byteOffset` | number | Byte position in file for seeking |
+| Field         | Example                     | Notes                                               |
+| ------------- | --------------------------- | --------------------------------------------------- |
+| `[L:<id>]`    | `[L:42]`                    | Unique grep anchor                                  |
+| `<timestamp>` | `2026-03-17T14:30:00.000Z`  | ISO 8601                                            |
+| `<LEVEL>`     | `ERROR`, `WARN `, `LOG  `   | Uppercase, padded to 5 chars                        |
+| `<source>`    | `src/api/user.ts:42` or `-` | Relative path from source map; `-` if unavailable   |
+| `<message>`   | `Failed login attempt`      | Full message; embedded newlines replaced with space |
+
+Source attribution (file + line) is also available in `clusters` returned by `debugger-log-registry`.
+
+Log files and messages can be large - **Always scope your search**, treat the file like a database, not a document.
+
+When reading from the log file:
+
+- Never `Read` the log file directly. Use `grep` or shell commands with limits using the above file format tips.
+- Default to `-m 50` unless you need more.
+- Use `tail -N` recent entries.
+- `clusters[].message` gives you the exact text which you may look for
+
+> **If the file is too large** Delegate to an `Explore` subagent with the file path, the format spec above, and the specific patterns you need.
 
 ---
 
 ## Quick Reference
 
-| Action                        | Tool                                                                    |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| Diagnose / check connection   | `debugger-status`                                                       |
-| Connect to Metro CDP          | `debugger-connect`                                                      |
-| Reload JS (already connected) | `debugger-reload-metro`                                                 |
-| Relaunch app on simulator     | `restart-app`                                                           |
-| Set breakpoint by file:line   | `debugger-set-breakpoint`                                               |
-| Remove breakpoint             | `debugger-remove-breakpoint`                                            |
-| Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                    |
-| Inspect component at point    | `debugger-inspect-element`                                              |
-| Full component tree           | `debugger-component-tree`                                               |
-| Console log overview          | `debugger-log-registry` (summary + JSONL file path for `Grep`/`Read`)  |
-| Real-time console stream      | `debugger-console-listen`                                               |
-| Evaluate JS                   | `debugger-evaluate`                                                     |
+| Action                        | Tool                                                                |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Diagnose / check connection   | `debugger-status`                                                   |
+| Connect to Metro CDP          | `debugger-connect`                                                  |
+| Reload JS (already connected) | `debugger-reload-metro`                                             |
+| Relaunch app on simulator     | `restart-app`                                                       |
+| Set breakpoint by file:line   | `debugger-set-breakpoint`                                           |
+| Remove breakpoint             | `debugger-remove-breakpoint`                                        |
+| Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                |
+| Inspect component at point    | `debugger-inspect-element`                                          |
+| Full component tree           | `debugger-component-tree`                                           |
+| Console log overview          | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
+| Real-time console stream      | `debugger-console-listen`                                           |
+| Evaluate JS                   | `debugger-evaluate`                                                 |

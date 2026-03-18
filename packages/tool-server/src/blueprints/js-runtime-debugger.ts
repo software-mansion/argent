@@ -171,7 +171,6 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
         timestamp: new Date(entry.timestamp * 1000).toISOString(),
         level: entry.level,
         message: entry.message,
-        args: entry.args,
         stackTrace: entry.stackTrace,
       });
       consoleEvents.emit("log", entry);

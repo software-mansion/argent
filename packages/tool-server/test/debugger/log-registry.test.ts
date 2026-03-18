@@ -18,7 +18,6 @@ function writeLog(
     timestamp: new Date(1710000000000 + id * 1000).toISOString(),
     level: opts.level ?? "log",
     message: opts.message ?? `Message ${id}`,
-    args: [{ type: "string", value: opts.message ?? `Message ${id}` }],
     stackTrace: opts.stackTrace,
   });
 }
@@ -42,7 +41,7 @@ describe("Log Registry (integration)", () => {
     const clusters = writer.getClusters(20);
 
     // Verify stats shape
-    expect(stats.file).toMatch(/argent-logs-8081.*\.jsonl$/);
+    expect(stats.file).toMatch(/\.argent\/tmp\/argent-logs-8081.*\.log$/);
     expect(stats.totalEntries).toBe(4);
     expect(stats.byLevel).toEqual({ log: 2, error: 1, warn: 1 });
     expect(stats.fileSizeBytes).toBeGreaterThan(0);
@@ -54,8 +53,9 @@ describe("Log Registry (integration)", () => {
     expect(helloCl!.count).toBe(2);
     expect(helloCl!.firstId).toBe(0);
     expect(helloCl!.lastId).toBe(3);
-    expect(helloCl!.grepPattern).toBe("Hello");
     expect(helloCl!.level).toBe("log");
+    // No grepPattern field — use grep -F '<message>' directly
+    expect((helloCl as any).grepPattern).toBeUndefined();
   });
 
   it("clusters are sorted by count descending", () => {
@@ -128,7 +128,7 @@ describe("Log Registry (integration)", () => {
     const entries = writer.readAll();
     expect(entries).toHaveLength(2);
 
-    // Verify JSONL format: each entry has the marker field for grep anchoring
+    // Flat format: each entry has the marker field for grep anchoring
     expect(entries[0].marker).toBe("[L:0]");
     expect(entries[1].marker).toBe("[L:1]");
   });
