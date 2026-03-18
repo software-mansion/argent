@@ -15,6 +15,12 @@ const LICENSE_EXEMPT_TOOLS = new Set([
   "stop-simulator-server",
   "stop-all-simulator-servers",
   "stop-metro",
+  "flow-start-recording",
+  "flow-add-step",
+  "flow-add-echo",
+  "flow-finish-recording",
+  "flow-read-prerequisite",
+  "flow-execute",
   "gather-workspace-data",
 ]);
 
@@ -114,46 +120,51 @@ export function createHttpApp(
     res.json({ tools });
   });
 
-  app.post("/tools/:name", (req, _res, next) => {
-    idleTimer.touch();
-    next();
-  }, licenseGate, async (req: Request, res: Response) => {
-    const name = req.params.name!;
+  app.post(
+    "/tools/:name",
+    (req, _res, next) => {
+      idleTimer.touch();
+      next();
+    },
+    licenseGate,
+    async (req: Request, res: Response) => {
+      const name = req.params.name!;
 
-    const def = registry.getTool(name);
-    if (!def) {
-      res.status(404).json({ error: `Tool "${name}" not found` });
-      return;
-    }
-
-    let parsedData = req.body;
-    if (def.zodSchema) {
-      const parseResult = def.zodSchema.safeParse(req.body);
-      if (!parseResult.success) {
-        res.status(400).json({ error: parseResult.error.message });
+      const def = registry.getTool(name);
+      if (!def) {
+        res.status(404).json({ error: `Tool "${name}" not found` });
         return;
       }
-      parsedData = parseResult.data;
-    }
 
-    const controller = new AbortController();
-    res.on("close", () => {
-      if (!res.writableFinished) controller.abort();
-    });
+      let parsedData = req.body;
+      if (def.zodSchema) {
+        const parseResult = def.zodSchema.safeParse(req.body);
+        if (!parseResult.success) {
+          res.status(400).json({ error: parseResult.error.message });
+          return;
+        }
+        parsedData = parseResult.data;
+      }
 
-    try {
-      const data = await registry.invokeTool(name, parsedData, {
-        signal: controller.signal,
+      const controller = new AbortController();
+      res.on("close", () => {
+        if (!res.writableFinished) controller.abort();
       });
-      res.json({ data });
-    } catch (err: unknown) {
-      if (err instanceof ToolNotFoundError) {
-        res.status(404).json({ error: err.message });
-        return;
+
+      try {
+        const data = await registry.invokeTool(name, parsedData, {
+          signal: controller.signal,
+        });
+        res.json({ data });
+      } catch (err: unknown) {
+        if (err instanceof ToolNotFoundError) {
+          res.status(404).json({ error: err.message });
+          return;
+        }
+        res.status(500).json({ error: formatErrorForAgent(err) });
       }
-      res.status(500).json({ error: formatErrorForAgent(err) });
-    }
-  });
+    },
+  );
 
   if (options?.onShutdown) {
     const onShutdown = options.onShutdown;

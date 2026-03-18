@@ -6,13 +6,13 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 
 ## Packages (workspace)
 
-| Package                     | Purpose                                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package                 | Purpose                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **@argent/registry**    | Core library: dependency-aware service lifecycle and stateless tool invocation. Defines registry, blueprints, tools, URNs, and errors. No HTTP or simulator logic. Services defined through blueprints govern the long-running tasks and allow for tool interaction (such as: managing the running simulator server, connecting to existing metro session and plugging into debugger). |
-| **@argent/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@argent/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                     |
-| **@argent/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Argent tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                      |
+| **@argent/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@argent/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                         |
+| **@argent/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Argent tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                          |
 | **@argent/ui**          | Web UI for simulator control and Metro debugging. Calls the tools server over HTTP and maintains WebSocket sessions to simulator-server for touch/gestures.                                                                                                                                                                                                                            |
-| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                              |
+| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                                  |
 | **@argent/vscode**      | VS Code extension (minimal; contributes launch configs and tasks for Tools Server and UI).                                                                                                                                                                                                                                                                                             |
 
 ---
@@ -52,7 +52,7 @@ The **tool server** is the Node/Express process in `@argent/tool-server` (defaul
 
 - **Setup** — On startup (`packages/tool-server/src/index.ts`): it creates a registry via `createRegistry()`, attaches the registry logger, builds the HTTP app with `createHttpApp(registry)`, and starts listening.
 
-`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the three blueprints (SimulatorServer, JsRuntimeDebugger, ProfilerSession) and all tools (simulator, interactions, debugger, profiler, license), then returns it. No services are started at this point.
+`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the three blueprints (SimulatorServer, JsRuntimeDebugger, ProfilerSession) and all tools (simulator, interactions, debugger, documentation, profiler, license), then returns it. No services are started at this point.
 
 **Interaction with the registry** — Every request that needs the registry uses that one instance:
 
@@ -101,6 +101,7 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
   - **Debugger (Metro/CDP):** `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`, `debugger-reload-metro`.
   - **Profiler:** `profiler-start`, `profiler-stop`, `profiler-analyze`, `profiler-component-source`, `profiler-cpu-summary`, `profiler-react-renders`, `profiler-fiber-tree`, `profiler-console-logs`.
   - **License:** `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
+  - **Documentation:** `query-documentation`.
 
 ---
 
@@ -122,6 +123,7 @@ The `describe` tool uses the macOS Accessibility API (`AXUIElement`) via the `si
 **Can it be auto-granted?** No. Apple requires explicit user consent for Accessibility permissions. There is no API to programmatically grant this — `AXIsProcessTrustedWithOptions` can only check and optionally prompt, and `tccutil` can only reset (not grant) permissions. Modifying TCC.db directly requires SIP to be disabled.
 
 **How it's handled:** When `httpDescribe()` in `simulator-client.ts` receives the `accessibility_not_trusted` error, it:
+
 1. Opens System Settings directly to the Accessibility pane (`x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility`).
 2. Opens Finder revealing the `simulator-server` binary (`open -R <path>`) so the user can easily locate and drag it.
 3. Throws a detailed error with step-by-step instructions including the exact binary path.
