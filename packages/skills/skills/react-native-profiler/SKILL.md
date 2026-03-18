@@ -5,7 +5,7 @@ description: Profile a React Native Hermes app to find re-render and CPU perform
 
 ## 1. Prerequisites
 
-All profiling goes through argent MCP tools. This workflow requires executing tools on the device — if in plan mode, ask the user to exit first.
+All profiling goes through argent MCP tools. This workflow requires executing tools on the device.
 
 ## 2. Tool Overview
 
@@ -30,7 +30,7 @@ All profiling goes through argent MCP tools. This workflow requires executing to
 
 Call `profiler-start`. On success:
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `simulator-interact` skill.
-- if the user stated he wishes to profile himself - suggest what interaction to perform — e.g. _"Please scroll the list / switch tabs. Tell me when done."_ Wait for their reply.
+- if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
 
 ### Step 2: Stop and collect
 
@@ -45,7 +45,7 @@ Call `profiler-analyze` with `project_root`, `platform`, and `rn_version`. Read 
 
 Read the **Suggested Improvements** section from the analysis. Apply the top fix, then re-profile (Step 1 → user interaction → Step 2 → Step 3) to confirm improvement.
 
-If the user stated that he does not wishes for changes, simply profiling report, skip the fix applying but suggest it to the user.
+If the user stated they do not want changes applied, return the profiling report without applying fixes but include the suggested improvements.
 
 **React Compiler rule:** If `meta.reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out (check `profiler-fiber-tree` for absent `useMemoCache` on that component).
 

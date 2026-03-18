@@ -46,6 +46,12 @@ import { queryDocumentationTool } from "../tools/ai/query-documentation";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
+import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
+import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
+import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
+import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
+import { createRunFlowTool } from "../tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 
 export function createRegistry(): Registry {
@@ -96,13 +102,20 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerFiberTreeTool);
   registry.registerTool(profilerConsoleLogsTool);
   registry.registerTool(queryDocumentationTool);
+  registry.registerTool(gatherWorkspaceDataTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
 
-  registry.registerTool(gatherWorkspaceDataTool);
+  // Flow tools
+  registry.registerTool(flowStartRecordingTool);
+  registry.registerTool(createFlowAddStepTool(registry));
+  registry.registerTool(flowInsertEchoTool);
+  registry.registerTool(flowFinishRecordingTool);
+  registry.registerTool(flowReadPrerequisiteTool);
+  registry.registerTool(createRunFlowTool(registry));
 
   return registry;
 }

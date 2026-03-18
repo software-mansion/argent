@@ -10,11 +10,15 @@ import {
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer } from "./launcher.js";
 import {
+  toMcpContent,
+  flowRunToMcpContent,
+  type FlowExecuteResult,
+} from "./content.js";
+import {
   autoScreenshotEnabled,
   getUdidFromArgs,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
-  normalizeToolName,
 } from "./auto-screenshot.js";
 
 let TOOLS_URL: string;
@@ -78,28 +82,6 @@ async function callTool(
   return { result: json.data, outputHint: meta?.outputHint };
 }
 
-async function toMcpContent(result: unknown, outputHint?: string) {
-  if (
-    outputHint === "image" &&
-    result &&
-    typeof result === "object" &&
-    "url" in result
-  ) {
-    const imgRes = await fetch((result as { url: string }).url);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    const filePath = (result as { path?: string }).path ?? "";
-    return [
-      {
-        type: "image" as const,
-        data: buf.toString("base64"),
-        mimeType: "image/png" as const,
-      },
-      { type: "text" as const, text: `Saved: ${filePath}` },
-    ];
-  }
-  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
-}
-
 const server = new Server(
   { name: "argent", version: "0.1.0" },
   {
@@ -151,7 +133,14 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       result,
     });
 
-    let content = await toMcpContent(result, outputHint);
+    let content =
+      params.name === "flow-execute" &&
+      result &&
+      typeof result === "object" &&
+      "flow" in result &&
+      "steps" in result
+        ? await flowRunToMcpContent(result as FlowExecuteResult)
+        : await toMcpContent(result, outputHint);
 
     const udid = getUdidFromArgs(params.arguments);
     if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
