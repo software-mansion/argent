@@ -4,6 +4,8 @@ import * as path from "node:path";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 
+const DEFAULT_SCREENSHOT_SCALE = 0.4;
+
 const connections = new Map<string, WebSocket>();
 let cmdId = 0;
 
@@ -86,7 +88,7 @@ async function simulatorPost<T>(
   } catch {
     throw new Error(
       `${toolLabel} failed: simulator-server returned non-JSON response (HTTP ${res.status}). ` +
-      `The server may be in a bad state. Restart the simulator-server and retry.`
+        `The server may be in a bad state. Restart the simulator-server and retry.`,
     );
   }
 
@@ -102,11 +104,11 @@ const DESCRIBE_FALLBACK =
  */
 export async function httpDescribe(
   api: SimulatorServerApi,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<unknown> {
-  const { res, body } = await simulatorPost<{ error?: string } & Record<string, unknown>>(
-    "Describe", api, "/api/ui/describe", {}, signal, DESCRIBE_FALLBACK,
-  );
+  const { res, body } = await simulatorPost<
+    { error?: string } & Record<string, unknown>
+  >("Describe", api, "/api/ui/describe", {}, signal, DESCRIBE_FALLBACK);
 
   if (body.error === "accessibility_not_trusted") {
     const binaryPath = getSimulatorServerBinaryPath();
@@ -116,15 +118,15 @@ export async function httpDescribe(
 
     throw new Error(
       `macOS Accessibility permission required.\n\n` +
-      `The "describe" tool needs macOS Accessibility access to read the iOS Simulator's UI element tree.\n\n` +
-      `System Settings and Finder have been opened automatically. Follow these steps:\n\n` +
-      `1. In the System Settings window that opened, look for "Privacy & Security > Accessibility".\n` +
-      `2. Click the "+" button at the bottom of the app list.\n` +
-      `3. In the Finder file-picker, navigate to the simulator-server binary that was revealed in a separate Finder window, ` +
-      `or paste this path in the Go dialog (Cmd+Shift+G in Finder):\n\n` +
-      `   ${binaryPath}\n\n` +
-      `4. Toggle the switch ON for "simulator-server" in the Accessibility list.\n` +
-      `5. Retry the "describe" tool — it should work immediately (no restart needed).`,
+        `The "describe" tool needs macOS Accessibility access to read the iOS Simulator's UI element tree.\n\n` +
+        `System Settings and Finder have been opened automatically. Follow these steps:\n\n` +
+        `1. In the System Settings window that opened, look for "Privacy & Security > Accessibility".\n` +
+        `2. Click the "+" button at the bottom of the app list.\n` +
+        `3. In the Finder file-picker, navigate to the simulator-server binary that was revealed in a separate Finder window, ` +
+        `or paste this path in the Go dialog (Cmd+Shift+G in Finder):\n\n` +
+        `   ${binaryPath}\n\n` +
+        `4. Toggle the switch ON for "simulator-server" in the Accessibility list.\n` +
+        `5. Retry the "describe" tool — it should work immediately (no restart needed).`,
     );
   }
 
@@ -132,11 +134,20 @@ export async function httpDescribe(
     const serverMsg = body.error ?? `HTTP ${res.status}`;
     throw new Error(
       `Describe failed: ${serverMsg}. ` +
-      `Verify the simulator is booted and an app is running. ${DESCRIBE_FALLBACK}`
+        `Verify the simulator is booted and an app is running. ${DESCRIBE_FALLBACK}`,
     );
   }
 
   return body;
+}
+
+export function getScreenshotScale(): number {
+  const v = process.env.RADON_SCREENSHOT_SCALE;
+  if (v) {
+    const n = parseFloat(v);
+    if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
+  }
+  return DEFAULT_SCREENSHOT_SCALE; // default: halve the resolution
 }
 
 /**
@@ -145,24 +156,32 @@ export async function httpDescribe(
 export async function httpScreenshot(
   api: SimulatorServerApi,
   rotation?: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  scale?: number,
 ): Promise<{ url: string; path: string }> {
-  const { res, body } = await simulatorPost<{ url?: string; path?: string; error?: string }>(
-    "Screenshot", api, "/api/screenshot", rotation ? { rotation } : {}, signal,
-  );
+  const resolvedScale = scale ?? getScreenshotScale();
+  const body: Record<string, unknown> = {};
+  if (rotation) body.rotation = rotation;
+  if (resolvedScale !== 1.0) body.scale = resolvedScale;
+
+  const { res, body: resBody } = await simulatorPost<{
+    url?: string;
+    path?: string;
+    error?: string;
+  }>("Screenshot", api, "/api/screenshot", body, signal);
 
   if (!res.ok) {
-    const serverMsg = body.error ?? `HTTP ${res.status}`;
+    const serverMsg = resBody.error ?? `HTTP ${res.status}`;
     throw new Error(
       `Screenshot failed: ${serverMsg}. ` +
-      `Ensure the simulator is booted and the simulator-server is running.`
+        `Ensure the simulator is booted and the simulator-server is running.`,
     );
   }
-  if (body.url == null || body.path == null) {
+  if (resBody.url == null || resBody.path == null) {
     throw new Error(
       "Screenshot failed: server response missing url or path. " +
-      "The simulator-server may be misconfigured. Try restarting it."
+        "The simulator-server may be misconfigured. Try restarting it.",
     );
   }
-  return { url: body.url, path: body.path };
+  return { url: resBody.url, path: resBody.path };
 }
