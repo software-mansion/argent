@@ -67,3 +67,15 @@ Steps:
 - **Use `gesture` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
+- **Record for replay**: If a tested flow is likely to be repeated, use the `create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
+
+## Related Skills
+
+| Skill                  | When to use                                      |
+| ---------------------- | ------------------------------------------------ |
+| `simulator-interact`   | Detailed tool usage for tapping, swiping, typing |
+| `simulator-screenshot` | Screenshot-specific options and troubleshooting  |
+| `simulator-setup`      | Booting and connecting a simulator               |
+| `react-native-app-workflow` | Starting the app, Metro, build issues       |
+| `metro-debugger`       | Breakpoints, console logs, JS evaluation         |
+| `create-flow`          | Record a test sequence as a replayable flow      |
