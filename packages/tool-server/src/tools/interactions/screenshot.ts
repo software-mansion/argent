@@ -9,6 +9,14 @@ const zodSchema = z.object({
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe("Orientation override for the screenshot"),
+  scale: z
+    .number()
+    .min(0.01)
+    .max(1.0)
+    .optional()
+    .describe(
+      "Scale factor (0.01-1.0). Defaults to RADON_SCREENSHOT_SCALE env var, or 0.5 if unset. Use 1.0 for full resolution."
+    ),
   token: z
     .string()
     .optional()
@@ -41,6 +49,6 @@ Requires a Pro license — if this fails with a license error, call activate-sso
       api.setToken(params.token);
     }
     const signal = options?.signal ?? AbortSignal.timeout(16_000);
-    return httpScreenshot(api, params.rotation, signal);
+    return httpScreenshot(api, params.rotation, signal, params.scale);
   },
 };
