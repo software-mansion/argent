@@ -87,25 +87,11 @@ const server = new Server(
   {
     capabilities: { tools: {} },
     instructions:
-      "Argent — iOS Simulator Control. " +
-      "Most tools require a valid license. If any tool returns an error containing " +
-      "'No Argent license found', call the activate-sso tool first — it opens a " +
-      "browser on the user's machine for sign-in and returns { success: true, plan }. " +
-      "If the browser cannot open, it returns { ssoUrl } — show that URL to the user. " +
-      "Alternatively, call activate-license-key with the user's license key. " +
-      "When your session ends or the user says they are done, call " +
-      "stop-all-simulator-servers to clean up running simulators. " +
-      "If the user started Metro separately, ask whether they would like you to " +
-      "call stop-metro (specify the port if it is not 8081). " +
-      "IMPORTANT — React Native apps: When you detect the target app is a React Native app " +
-      "(react-native in package.json, metro.config.js present, etc.), resolve the " +
-      "react-native-app-workflow skill and use debugger-component-tree " +
-      "to find element positions before tapping. " +
-      "IMPORTANT — Finding tap targets: Before tapping, use describe (any iOS app) or " +
-      "debugger-component-tree (React Native apps) to get exact element coordinates. " +
-      "If a tap fails after 2 attempts, stop retrying and use a discovery tool to verify positions. " +
-      "IMPORTANT — iOS system popups: Permission dialogs and other OS-level popups can be " +
-      "dismissed by pressing Enter via the keyboard tool — this is more reliable than tapping.",
+      "Argent — iOS Simulator Control for interacting, testing, profiling and debugging mobile applications. " +
+      "Always use discovery tools (describe / debugger-component-tree / screenshot) before tapping — never guess coordinates. " +
+      "License errors: call activate-sso or activate-license-key. " +
+      "On session end: call stop-all-simulator-servers and perform any necessary cleanup. " +
+      "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
   },
 );
 

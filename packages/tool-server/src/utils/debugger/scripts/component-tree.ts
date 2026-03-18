@@ -7,8 +7,16 @@
  * Supports both Fabric (new architecture) and Paper (old architecture).
  * On Fabric, uses nativeFabricUIManager.measure with the shadow node.
  * On Paper, falls back to UIManager.measureInWindow with native tags.
+ *
+ * When includeSkipped is true, the script also tracks totalFibers walked
+ * and a per-name count of JS-side skipped components.
  */
-export const COMPONENT_TREE_SCRIPT = `(function() {
+export function makeComponentTreeScript(opts?: {
+  includeSkipped?: boolean;
+}): string {
+  const trackSkipped = opts?.includeSkipped ? "true" : "false";
+  return `(function() {
+  var TRACK_SKIPPED = ${trackSkipped};
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return JSON.stringify({ error: 'No DevTools hook' });
   var roots = hook.getFiberRoots(1);
@@ -26,7 +34,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
 
   var SKIP = new Set([
     'View','RCTView','RCTText','RCTScrollView','RCTScrollContentView','RCTImageView',
-    'RCTSafeAreaView','RNCSafeAreaProvider','RNSScreen','RNSScreenStack',
+    'RCTSafeAreaView','RCTVirtualText','RCTSinglelineTextInputView','RCTMultilineTextInputView',
+    'RNCSafeAreaProvider','RNSScreen','RNSScreenStack',
     'RNSScreenContentWrapper','RNSScreenNavigationContainer','RNSScreenStackHeaderConfig',
     'ScreenStackHeaderConfig','NavigationContent','NavigationStateListenerProvider',
     'PreventRemoveProvider','EnsureSingleNavigator','StaticContainer','SceneView',
@@ -34,7 +43,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     'DebugContainer','ScreenContentWrapper','Screen','ScreenStack','ScreenContainer',
     'MaybeScreenContainer','MaybeScreen','FrameSizeProvider','FrameSizeProviderInner',
     'FrameSizeListenerNativeFallback','SafeAreaProviderCompat','SafeAreaProvider',
-    'SafeAreaInsetsContext','ErrorOverlay','ErrorToastContainer',
+    'SafeAreaInsetsContext','SafeArea','SafeAreaFrameContext',
+    'ErrorOverlay','ErrorToastContainer',
     'PerformanceLoggerContext','AppContainer','RootTagContext','DebuggingOverlay',
     'DebuggingOverlayRegistrySubscription',
     'LogBoxStateSubscription','_LogBoxNotificationContainer','LogBoxInspectorContainer',
@@ -45,16 +55,48 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     'ReactNativeProfiler','FeedbackWidgetProvider',
     'NavigationRouteContext','BottomTabNavigator','BottomTabView',
     'TabBarIcon','Icon','MissingIcon','Label','ImageAnalyticsTagContext',
-    'Image','RootLayout','TabLayout'
+    'Image','RootLayout','TabLayout',
+    'GestureHandlerRootView','GestureDetector','Wrap',
+    'RenderRegistryProvider','SharedPropsProvider','ListStyleSpecsProvider',
+    'RenderersPropsProvider','TRenderEngineProvider','RenderHTMLConfigProvider',
+    'RenderHtmlSource','RawSourceLoader','SourceLoaderInline','RenderTTree',
+    'TNodeChildrenRenderer','MemoizedTNodeRenderer',
+    'PortalProviderComponent',
+    'KeyboardProviderWrapper','KeyboardProvider','KeyboardControllerView',
+    'ScrollViewContext','TextAncestorContext',
+    'TextInputLabel',
+    'ThemeContext',
+    'BaseHTMLEngineProvider',
+    'VScrollViewNativeComponent','InnerScreen','ScreenStackItem',
+    'BaseNavigationContainer','NavigationContainerInner','PlatformPressableInternal',
   ]);
 
+  var HARD_SKIP = new Set([
+    'BaseTextInput','InternalTextInput','RNTextInputWithRef',
+    'RCTSinglelineTextInputView','RCTMultilineTextInputView',
+    'LottieAnimationView','Lottie',
+    'ExpoImage',
+  ]);
+
+  function isHardSkip(name) {
+    if (HARD_SKIP.has(name)) return true;
+    if (name.indexOf('AnimatedComponent(') === 0) return true;
+    if (name.indexOf('Animated(') === 0) return true;
+    if (name.indexOf('With') === 0 && name.indexOf('(') > 3) return true;
+    if (name.indexOf('with') === 0 && name.indexOf('(') > 3) return true;
+    if (name.indexOf('ViewManagerAdapter_') >= 0) return true;
+    return false;
+  }
+
   function shouldSkip(name) {
+    if (isHardSkip(name)) return true;
     if (SKIP.has(name)) return true;
     if (name.charAt(0) === '_' && name.charAt(1) === '_') return true;
     if (name.indexOf('withDevTools(') === 0) return true;
-    if (name.indexOf('Animated(') === 0) return true;
     if (name === 'Route' || name.indexOf('Route(') === 0) return true;
     if (name.indexOf('main(') === 0) return true;
+    if (name.length > 8 && name.slice(-8) === 'Provider') return true;
+    if (name.length > 7 && name.slice(-7) === 'Context') return true;
     return false;
   }
 
@@ -108,6 +150,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
   })(root.current);
 
   var components = [];
+  var totalFibers = 0;
+  var skippedCounts = {};
 
   function collectAll(fiber, parentIdx) {
     if (!fiber) return;
@@ -115,6 +159,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
     var emittedIdx = -1;
 
     if (name) {
+      if (TRACK_SKIPPED) totalFibers++;
+
       var skip = shouldSkip(name);
       var testID = null, accLabel = null, text = null;
       if (fiber.memoizedProps) {
@@ -127,7 +173,7 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
         else if (typeof p.placeholder === 'string') text = p.placeholder.substring(0, 80);
       }
 
-      if (skip && testID) skip = false;
+      if (skip && testID && !isHardSkip(name)) skip = false;
 
       if (!skip) {
         var hostInfo = getHostInfo(fiber) || findHostNode(fiber, 0);
@@ -135,10 +181,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
 
         var isTextNode = name === 'Text' || name === 'RCTText';
         if (isTextNode && !text && !testID) {
-          // Text node with no visible content (e.g. icon font glyph) -- skip
         } else if (rect || testID || accLabel || text) {
           if (isTextNode && text && parentIdx >= 0 && components[parentIdx].text === text) {
-            // skip duplicate Text that repeats parent text
           } else {
             var entry = { id: components.length, name: name, rect: rect, parentIdx: parentIdx };
             if (testID) entry.testID = testID;
@@ -148,6 +192,8 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
             components.push(entry);
           }
         }
+      } else if (TRACK_SKIPPED) {
+        skippedCounts[name] = (skippedCounts[name] || 0) + 1;
       }
     }
 
@@ -156,5 +202,11 @@ export const COMPONENT_TREE_SCRIPT = `(function() {
   }
 
   collectAll(root.current.child, -1);
-  return JSON.stringify({ screenW: screenW, screenH: screenH, components: components });
+  var result = { screenW: screenW, screenH: screenH, components: components };
+  if (TRACK_SKIPPED) {
+    result.totalFibers = totalFibers;
+    result.skippedCounts = skippedCounts;
+  }
+  return JSON.stringify(result);
 })()`;
+}

@@ -65,7 +65,9 @@ export class CDPClient {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(this.wsUrl);
+      const { protocol, host } = new URL(this.wsUrl);
+      const origin = (protocol === "wss:" ? "https://" : "http://") + host;
+      const ws = new WebSocket(this.wsUrl, { headers: { Origin: origin } });
       this.ws = ws;
 
       const onOpen = () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { selectTarget } from "../../src/debugger/target-selection";
-import type { CDPTarget } from "../../src/debugger/discovery";
+import { selectTarget } from "../../src/utils/debugger/target-selection";
+import type { CDPTarget } from "../../src/utils/debugger/discovery";
 
 function makeTarget(overrides: Partial<CDPTarget> = {}): CDPTarget {
   return {

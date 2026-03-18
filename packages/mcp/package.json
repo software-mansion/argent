@@ -1,6 +1,6 @@
 {
   "name": "argent",
-  "version": "0.1.1",
+  "version": "0.2.1",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
   "bin": {
@@ -22,6 +22,9 @@
     "dist/",
     "bin/",
     "skills/",
+    "agents/",
+    "rules/",
+    "agents/",
     "scripts/"
   ],
   "dependencies": {

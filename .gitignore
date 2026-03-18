@@ -9,6 +9,8 @@ packages/*/node_modules/
 .DS_Store
 1export
 packages/mcp/skills/
+packages/mcp/agents/
+packages/mcp/rules/
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/

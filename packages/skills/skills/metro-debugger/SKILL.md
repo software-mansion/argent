@@ -5,12 +5,7 @@ description: Debug a React Native app via Metro CDP using argent debugger tools.
 
 ## 1. Prerequisites
 
-All debugging goes through argent MCP tools — only use `curl` or direct HTTP calls to Metro when the functionality is not exposed via our tool. When delegating to a sub-agent, ensure it has MCP tool permissions.
-
-The debugger requires:
-
-1. **Metro dev server running** — default `localhost:8081`, depends on workspace config.
-2. **A React Native app connected to Metro** — at least one CDP target. Verify via `debugger-status`.
+The debugger requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
 
 ## 2. Tool Overview
 
@@ -32,45 +27,47 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 ### Breakpoints & execution control
 
-| Tool                         | Purpose                                                      |
-| ---------------------------- | ------------------------------------------------------------ |
-| `debugger-set-breakpoint`    | Set breakpoint by source file and line (optional condition). |
-| `debugger-remove-breakpoint` | Remove breakpoint by breakpointId.                           |
-| `debugger-pause`             | Pause JS execution.                                          |
-| `debugger-resume`            | Resume after pause or breakpoint.                            |
-| `debugger-step`              | Step over / into / out when paused.                          |
+| Tool                                                   | Purpose                                                                               |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `debugger-set-breakpoint`                              | Set breakpoint by source file and line (optional condition).                          |
+| `debugger-remove-breakpoint`                           | Remove breakpoint by breakpointId.                                                    |
+| `debugger-pause` / `debugger-resume` / `debugger-step` | Pause JS execution; resume after pause or breakpoint; step over/into/out when paused. |
 
 ### Inspection & console
 
-| Tool                       | Purpose                                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates). **Preferred tool for finding tap targets in React Native apps** — use if ensure where to tap in order to get accurate coordinates. |
-| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                      |
-| `debugger-console-logs`    | Get console messages.                                                                                                                 |
-| `debugger-console-listen`  | Stream console messages in real-time.                                                                                                 |
-| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                               |
+| Tool                                                | Purpose                                                                                                          |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`                           | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
+| `debugger-inspect-element`                          | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
+| `debugger-console-logs` / `debugger-console-listen` | Get console messages; stream in real-time.                                                                       |
+| `debugger-evaluate`                                 | Run a JS expression in the app runtime.                                                                          |
 
 ---
 
-## 3. Autonomy
+## 3. Component Inspection
 
-**Act first, ask only when necessary.** Start Metro, restart the app, and retry yourself. Only ask the user when:
+### `debugger-component-tree` vs `debugger-inspect-element`
 
-- You need information only they have (project root, non-default port).
-- Recovery failed after your attempts.
-- The user explicitly asked you not to start servers.
+|          | `debugger-component-tree`                                              | `debugger-inspect-element`                                      |
+| -------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Best for | Layout overview; finding tap targets; user-defined component hierarchy | Identifying a visible element and tracing it to its source file |
+| Use when | "What's on screen and where?"                                          | "What component is this and where is it defined?"               |
 
-Starting Metro yourself:
+Both can point to source files, but `inspect-element` is purpose-built for source tracing. `component-tree` is for orientation and tap-target discovery.
 
-Refer to the skill `react-native-app-workflow`
+### `includeSkipped` guidance
+
+Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+
+> **Warning:** Output can be very large. Always combine with `maxNodes` and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without `maxNodes` on large apps.
+
+---
 
 ## 4. Golden Rules
 
 1. **`debugger-status` first when something fails** — it runs discovery, connection, and returns diagnostics.
 2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on simulator, then retry `debugger-status`.
-3. **Never assume one failure is permanent** — follow recovery steps before asking the user.
-
-For full failure recovery steps, see `references/failure-scenarios.md`.
+3. **Never assume one failure is permanent** — follow recovery steps before asking the user. For starting Metro and full failure recovery, see `react-native-app-workflow` and `references/failure-scenarios.md`.
 
 ---
 
@@ -88,14 +85,3 @@ For full failure recovery steps, see `references/failure-scenarios.md`.
 | Inspect component at point    | `debugger-inspect-element`                                              |
 | Full component tree           | `debugger-component-tree`                                               |
 | Console logs / evaluate       | `debugger-console-logs`, `debugger-console-listen`, `debugger-evaluate` |
-
-## Related Skills
-
-| Skill                       | When to use                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `react-native-app-workflow` | Starting the app, Metro setup, build issues, runtime errors |
-| `simulator-setup`           | Booting and connecting a simulator                          |
-| `simulator-interact`        | Tapping, swiping, typing on the simulator                   |
-| `simulator-screenshot`      | Capturing the simulator screen                              |
-| `react-native-profiler`     | Performance profiling, re-render analysis                   |
-| `test-ui-flow`              | Interactive UI testing with screenshot verification         |

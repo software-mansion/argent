@@ -42,6 +42,7 @@ import { profilerCpuSummaryTool } from "../tools/profiler/profiler-cpu-summary";
 import { profilerReactRendersTool } from "../tools/profiler/profiler-react-renders";
 import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
 import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
+import { queryDocumentationTool } from "../tools/ai/query-documentation";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
@@ -51,6 +52,7 @@ import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
+import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -99,6 +101,8 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerReactRendersTool);
   registry.registerTool(profilerFiberTreeTool);
   registry.registerTool(profilerConsoleLogsTool);
+  registry.registerTool(queryDocumentationTool);
+  registry.registerTool(gatherWorkspaceDataTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
