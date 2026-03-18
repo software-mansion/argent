@@ -28,8 +28,8 @@ import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro
 import { debuggerStepTool } from "../tools/debugger/debugger-step";
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
-import { debuggerConsoleLogsTool } from "../tools/debugger/debugger-console-logs";
 import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
+import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
@@ -90,8 +90,8 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerStepTool);
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
-  registry.registerTool(debuggerConsoleLogsTool);
   registry.registerTool(debuggerConsoleListenTool);
+  registry.registerTool(debuggerLogRegistryTool);
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);

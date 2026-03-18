@@ -33,17 +33,15 @@ Supports filtering by log level (log, warn, error, all). Returns the most recent
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
 
-    const filtered =
-      params.level === "all"
-        ? api.consoleLogs
-        : api.consoleLogs.filter((entry) => entry.level === params.level);
-
-    const sliced = filtered.slice(-params.limit);
+    const { entries, total } = api.logWriter.readFiltered({
+      level: params.level === "all" ? undefined : params.level,
+      limit: params.limit,
+    });
 
     return {
-      total: filtered.length,
-      returned: sliced.length,
-      entries: sliced.map((entry) => ({
+      total,
+      returned: entries.length,
+      entries: entries.map((entry) => ({
         id: entry.id,
         level: entry.level,
         message: entry.message,

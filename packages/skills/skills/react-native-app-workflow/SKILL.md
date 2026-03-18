@@ -154,7 +154,7 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 | Problem type                      | Tool / Where to look                                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-console-logs` tool to read captured logs, or `debugger-console-listen` for real-time logs.    |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search. Use `debugger-console-listen` for real-time logs. |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.  |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                        |
@@ -163,7 +163,13 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `metro-debugger` skill.
 
-### 4.2 Do not try to use the DevMenu in React Native apps by default.
+### 4.2 JS Console Logs (Log Registry)
+
+Logs are written to a flat log file on disk under `~/.argent/tmp/`. Use the **log-registry → grep** pattern instead of reading logs inline.
+
+For the full workflow, flat entry format, and grep examples, see `metro-debugger` skill §5.
+
+### 4.3 Do not try to use the DevMenu in React Native apps by default.
 
 Use the argent tools instead.
 
