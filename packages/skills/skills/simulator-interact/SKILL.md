@@ -123,6 +123,8 @@ Use the explicit `screenshot` tool only when:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
+Screenshots are downscaled by default (30% of original resolution) to reduce context size. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
+
 ### Troubleshooting
 
 | Problem              | Solution                                                                               |

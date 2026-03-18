@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
 
-const DEFAULT_SCREENSHOT_SCALE = 0.4;
+const DEFAULT_SCREENSHOT_SCALE = 0.3;
 
 const connections = new Map<string, WebSocket>();
 let cmdId = 0;
