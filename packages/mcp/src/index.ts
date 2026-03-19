@@ -33,6 +33,36 @@ if (process.env.RADON_TOOLS_URL) {
   }
 }
 
+let reconnectPromise: Promise<void> | null = null;
+
+async function reconnect(): Promise<void> {
+  if (process.env.RADON_TOOLS_URL) return; // env-var path: never managed by launcher
+  if (!reconnectPromise) {
+    reconnectPromise = ensureToolsServer()
+      .then((url) => {
+        TOOLS_URL = url;
+      })
+      .finally(() => {
+        reconnectPromise = null;
+      });
+  }
+  return reconnectPromise;
+}
+
+async function fetchWithReconnect(
+  getUrl: () => string,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(getUrl(), init);
+  } catch {
+    // Network-level failure (e.g. ECONNREFUSED) — server may have idle-timed-out.
+    // Attempt to restart it, then retry once.
+    await reconnect();
+    return fetch(getUrl(), init); // TOOLS_URL is now updated
+  }
+}
+
 const LOG_FILE =
   process.env.RADON_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
 let logDirReady = false;
@@ -57,7 +87,7 @@ type ToolMeta = {
 };
 
 async function fetchTools(): Promise<ToolMeta[]> {
-  const res = await fetch(`${TOOLS_URL}/tools`);
+  const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`);
   const json = (await res.json()) as { tools: ToolMeta[] };
   return json.tools;
 }
@@ -68,11 +98,14 @@ async function callTool(
 ): Promise<{ result: unknown; outputHint?: string }> {
   const tools = await fetchTools();
   const meta = tools.find((t) => t.name === name);
-  const res = await fetch(`${TOOLS_URL}/tools/${name}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(args ?? {}),
-  });
+  const res = await fetchWithReconnect(
+    () => `${TOOLS_URL}/tools/${name}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args ?? {}),
+    },
+  );
   const json = (await res.json()) as {
     data?: unknown;
     error?: string;
