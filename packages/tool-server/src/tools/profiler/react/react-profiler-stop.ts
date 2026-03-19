@@ -282,8 +282,9 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         totalReactCommits: api.totalReactCommits,
       };
 
-      cacheProfilerPaths(api.port, sessionPaths);
-      api.sessionPaths = sessionPaths;
+    cacheProfilerPaths(api.port, sessionPaths);
+    api.sessionPaths = sessionPaths;
+    api.disposeSession();
 
       const duration_ms = (profile.endTime - profile.startTime) / 1000;
 

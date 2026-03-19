@@ -76,6 +76,7 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
+  disposeSession: () => void;
 }
 
 export const reactProfilerSessionBlueprint: ServiceBlueprint<
@@ -97,6 +98,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
     const cdp = debuggerApi.cdp;
     const ignore = () => {};
 
+    const events = new TypedEventEmitter<ServiceEvents>();
+
     const state: ReactProfilerSessionApi = {
       port: debuggerApi.port,
       cdp,
@@ -110,6 +113,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
       hotCommitIndices: null,
       totalReactCommits: null,
       profileStartWallMs: null,
+      disposeSession: () => events.emit("terminated"),
     };
 
     // Enable Profiler domain
@@ -173,8 +177,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
       // non-fatal
     }
 
-    const events = new TypedEventEmitter<ServiceEvents>();
-
     cdp.events.on("disconnected", (error) => {
       events.emit("terminated", error ?? new Error("CDP disconnected"));
     });
@@ -182,11 +184,10 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
-        if (state.profilingActive) {
-          await cdp.send("Profiler.stop").catch(ignore);
-          state.profilingActive = false;
-        }
-        await cdp.send("Profiler.disable").catch(ignore);
+        // No CDP calls here — Profiler.stop is issued explicitly in react-profiler-stop,
+        // and the new session's factory re-enables the domain.
+        // Keeping dispose free of I/O ensures TERMINATING→IDLE completes as a microtask,
+        // before the next MCP request (macrotask) can trigger a resolve.
       },
       events,
     };
