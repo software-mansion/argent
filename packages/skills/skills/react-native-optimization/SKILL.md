@@ -7,12 +7,12 @@ description: Optimize a React Native app for performance using argent profiler a
 
 | Tool | What it gives you | When to use |
 | ---- | ----------------- | ----------- |
-| `profiler-react-renders` | Live render counts + durations per component (markdown table, top N). **No session needed.** | First thing to run — instant spot-check of what re-renders most. |
-| `profiler-start` / `profiler-stop` | Records CPU samples + React commit data with per-fiber durations, prop/hook change tracking, and React Compiler detection. | When you need precise commit-level data, not just counts. |
-| `profiler-analyze` | Ranked report: hot commits (≥16ms), render cascades, root causes, memoization status via AST. Pass `annotations` to tag user actions by time offset. | After `profiler-stop`. **Primary diagnostic** — tells you exactly what to fix. |
-| `profiler-component-source` | AST lookup → file, line, `isMemoized`, `hasUseCallback`, `hasUseMemo`, 50 lines of source. | Per finding from `profiler-analyze` — read the code before proposing a fix. |
-| `profiler-fiber-tree` | Live component hierarchy JSON with `actualDuration`, `selfBaseDuration`. Filter by regex. Check for `useMemoCache` to confirm React Compiler is active per component. | Trace component ancestry; verify compiler status before suggesting manual memo. |
-| `profiler-cpu-summary` | CPU flamegraph hotspots by self-time (markdown table). `react_only: true` filters to PascalCase components. | **Only for non-React CPU issues** (regex, crypto, heavy computation). Not for render analysis. |
+| `react-profiler-renders` | Live render counts + durations per component (markdown table, top N). **No session needed.** | First thing to run — instant spot-check of what re-renders most. |
+| `react-profiler-start` / `react-profiler-stop` | Records CPU samples + React commit data with per-fiber durations, prop/hook change tracking, and React Compiler detection. | When you need precise commit-level data, not just counts. |
+| `react-profiler-analyze` | Ranked report: hot commits (≥16ms), render cascades, root causes, memoization status via AST. Pass `annotations` to tag user actions by time offset. | After `react-profiler-stop`. **Primary diagnostic** — tells you exactly what to fix. |
+| `react-profiler-component-source` | AST lookup → file, line, `isMemoized`, `hasUseCallback`, `hasUseMemo`, 50 lines of source. | Per finding from `react-profiler-analyze` — read the code before proposing a fix. |
+| `react-profiler-fiber-tree` | Live component hierarchy JSON with `actualDuration`, `selfBaseDuration`. Filter by regex. Check for `useMemoCache` to confirm React Compiler is active per component. | Trace component ancestry; verify compiler status before suggesting manual memo. |
+| `profiler-cpu-query` | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU breakdown. | Drill into CPU hotspots after `react-profiler-analyze`. **ONLY for non-React CPU work (regex, crypto).**. Not for render analysis. |
 
 ### Inspection
 
@@ -23,7 +23,7 @@ description: Optimize a React Native app for performance using argent profiler a
 | `debugger-inspect-element` | Component hierarchy at (x,y) with source file:line and code fragment per ancestor. | Trace a visible element back to its source definition. |
 | `view-network-logs` | Paginated HTTP request log: method, URL, status, size, duration, requestId. | Spot slow/duplicate/waterfall API calls that stall renders. |
 | `view-network-request-details` | Full request/response for a requestId: headers (sensitive redacted), body (truncated at 1000 chars), timing. | Drill into a specific slow or failing request. |
-| `profiler-console-logs` | Console log entries filtered by level (`log`/`warn`/`error`/`all`). | Check for runtime warnings, error spam, or performance-related logs. |
+| `debugger-log-registry` | Console log summary + file path for grepping. | Check for runtime warnings, error spam, or performance-related logs. |
 
 ---
 
@@ -31,9 +31,9 @@ description: Optimize a React Native app for performance using argent profiler a
 
 **Rule: Profile before optimizing.** Do not apply shotgun optimizations. Measure first, fix the top offender, re-measure.
 
-1. **Quick scan** — `profiler-react-renders` for a live render count table. Identifies hot components instantly.
-2. **Deep measure** — load `react-native-profiler` skill. `profiler-start` → interact → `profiler-stop` → `profiler-analyze`.
-3. **Inspect** — `profiler-component-source` per finding. `profiler-fiber-tree` to check React Compiler (`useMemoCache`).
+1. **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
+2. **Deep measure** — load `react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
+3. **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to check React Compiler (`useMemoCache`).
 4. **Fix** — apply one fix from §3. Validate with `debugger-evaluate` before committing.
 5. **Re-measure** — re-run step 1 or 2. Confirm improvement. **One fix per cycle** — never batch.
 
@@ -41,11 +41,11 @@ description: Optimize a React Native app for performance using argent profiler a
 
 ## 3. Fix Reference
 
-Match `profiler-analyze` / `profiler-react-renders` findings to fixes:
+Match `react-profiler-analyze` / `react-profiler-renders` findings to fixes:
 
 | Finding | Fix | Detail |
 | ------- | --- | ------ |
-| Re-renders with same props | `React.memo(Comp)` | **Skip if React Compiler active** — check `useMemoCache` via `profiler-fiber-tree` |
+| Re-renders with same props | `React.memo(Comp)` | **Skip if React Compiler active** — check `useMemoCache` via `react-profiler-fiber-tree` |
 | Expensive recomputation / unstable callbacks | `useMemo(fn, [deps])` / `useCallback(fn, [deps])` | `useCallback` must pair with `React.memo` on child |
 | Inline objects/arrays in JSX | `StyleSheet.create()` / module const | New ref every render breaks shallow equality |
 | List jank | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout` | Or `@shopify/flash-list` with `estimatedItemSize` |
@@ -63,13 +63,13 @@ When optimizing the entire app, **dispatch parallel sub-agents** — one per dis
 1. **Discover targets** — read project source structure to identify major features/modules.
 2. **Spawn one sub-agent per target** in parallel. Each agent:
    - Analyzes the code for known anti-patterns and performance issues (§3)
-   - Runs `profiler-component-source` on suspect components to check memoization status
+   - Runs `react-profiler-component-source` on suspect components to check memoization status
    - Compares code to best practices — static analysis, not E2E testing
    - Returns: feature name, ranked findings with file:line, suggested fix from §3
 3. **Merge results** — prioritize findings by severity across all sub-agents.
 4. **Fix top-down** — apply fixes starting from worst offender, re-measure after each.
 
-Use `profiler-react-renders` as a live pre-scan to validate static findings against runtime behavior.
+Use `react-profiler-renders` as a live pre-scan to validate static findings against runtime behavior.
 
 ## Related Skills
 
