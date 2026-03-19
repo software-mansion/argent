@@ -76,7 +76,11 @@ When: Verifying complete user flows, running interact → screenshot → verify 
 PERFORMANCE PROFILING
 Use skill: `react-native-profiler`
 When: App feels slow, investigating re-renders or CPU hotspots, producing ranked performance reports.
-  </skill_routing>
+
+PERFORMANCE OPTIMIZATION
+Use skill: `react-native-optimization`
+When: Applying performance fixes, reducing bundle size, improving startup time, optimizing lists/images/navigation, fixing re-render issues, or after profiling to apply suggested improvements.
+</skill_routing>
 
 <subagents>
 ENVIRONMENT INSPECTION AT SESSION START
