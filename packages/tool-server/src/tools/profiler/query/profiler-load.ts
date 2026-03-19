@@ -7,11 +7,11 @@ import {
   type ProfilerSessionPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
-  IOS_INSTRUMENTS_SESSION_NAMESPACE,
-  type IosInstrumentsSessionApi,
-} from "../../../blueprints/ios-instruments-session";
+  IOS_PROFILER_SESSION_NAMESPACE,
+  type IosProfilerSessionApi,
+} from "../../../blueprints/ios-profiler-session";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
-import { runIosInstrumentsPipeline } from "../../../utils/ios-instruments/pipeline/index";
+import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
@@ -68,7 +68,7 @@ async function listSessions(debugDir: string): Promise<string> {
       continue;
     }
 
-    const instrMatch = entry.match(/^ios-instruments-(\d{8}-?\d{6})/);
+    const instrMatch = entry.match(/^ios-profiler-(\d{8}-?\d{6})/);
     if (instrMatch) {
       const sid = instrMatch[1];
       if (!instrumentsSessions.has(sid)) instrumentsSessions.set(sid, []);
@@ -144,9 +144,24 @@ async function loadReactSession(
   let hasCpu = false;
   let hasCommits = false;
   let hasCpuIndex = false;
-  try { await fs.access(cpuPath); hasCpu = true; } catch { /* not present */ }
-  try { await fs.access(commitsPath); hasCommits = true; } catch { /* not present */ }
-  try { await fs.access(cpuIndexPath); hasCpuIndex = true; } catch { /* not present */ }
+  try {
+    await fs.access(cpuPath);
+    hasCpu = true;
+  } catch {
+    /* not present */
+  }
+  try {
+    await fs.access(commitsPath);
+    hasCommits = true;
+  } catch {
+    /* not present */
+  }
+  try {
+    await fs.access(cpuIndexPath);
+    hasCpuIndex = true;
+  } catch {
+    /* not present */
+  }
 
   if (!hasCpu && !hasCommits) {
     throw new Error(
@@ -219,20 +234,17 @@ async function loadReactSession(
 async function loadInstrumentsSession(
   debugDir: string,
   sessionId: string,
-  api: IosInstrumentsSessionApi,
+  api: IosProfilerSessionApi,
 ): Promise<string> {
   // Find exported XML files for this session
-  const cpuXml = path.join(
-    debugDir,
-    `ios-instruments-${sessionId}_raw_cpu.xml`,
-  );
+  const cpuXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_cpu.xml`);
   const hangsXml = path.join(
     debugDir,
-    `ios-instruments-${sessionId}_raw_hangs.xml`,
+    `ios-profiler-${sessionId}_raw_hangs.xml`,
   );
   const leaksXml = path.join(
     debugDir,
-    `ios-instruments-${sessionId}_raw_leaks.xml`,
+    `ios-profiler-${sessionId}_raw_leaks.xml`,
   );
 
   const files: Record<string, string | null> = {
@@ -265,12 +277,12 @@ async function loadInstrumentsSession(
   if (!files.cpu && !files.hangs && !files.leaks) {
     throw new Error(
       `No iOS Instruments XML files found for session "${sessionId}". ` +
-        `Expected files matching ios-instruments-${sessionId}_raw_*.xml in ${debugDir}`,
+        `Expected files matching ios-profiler-${sessionId}_raw_*.xml in ${debugDir}`,
     );
   }
 
   const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
-    await runIosInstrumentsPipeline(files);
+    await runIosProfilerPipeline(files);
 
   api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
   api.exportedFiles = files;
@@ -305,7 +317,7 @@ After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-
   services: (params) => {
     const svcs: Record<string, string> = {};
     if (params.mode === "load_instruments" && params.device_id) {
-      svcs.session = `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${params.device_id}`;
+      svcs.session = `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`;
     }
     return svcs;
   },
@@ -336,7 +348,7 @@ After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-
             "load_instruments mode requires the device_id parameter.",
           );
         }
-        const api = services.session as IosInstrumentsSessionApi;
+        const api = services.session as IosProfilerSessionApi;
         return loadInstrumentsSession(debugDir, params.session_id, api);
       }
 

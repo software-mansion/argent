@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCpuXml } from "../../src/utils/ios-instruments/pipeline/xml-parser";
+import { parseCpuXml } from "../../src/utils/ios-profiler/pipeline/xml-parser";
 
 function makeXml(frameName: string): string {
   return `<row>

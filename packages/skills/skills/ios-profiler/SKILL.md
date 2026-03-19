@@ -1,5 +1,5 @@
 ---
-name: ios-instruments
+name: ios-profiler
 description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks via xctrace. Use when diagnosing native-level performance issues on iOS simulators or devices.
 ---
 
@@ -10,13 +10,13 @@ description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks v
 
 ## 2. Tool Overview
 
-| Tool                      | Purpose                                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------- |
-| `ios-instruments-start`   | Start xctrace recording on a booted simulator or device. Captures CPU, hangs, and leaks.    |
-| `ios-instruments-stop`    | Stop xctrace, export trace data to XML files (timestamped, persist on disk).                |
-| `ios-instruments-analyze` | Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, leaks). |
-| `profiler-stack-query`    | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.       |
-| `profiler-load`           | List and reload previous trace sessions from disk for re-investigation.                      |
+| Tool                   | Purpose                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| `ios-profiler-start`   | Start xctrace recording on a booted simulator or device. Captures CPU, hangs, and leaks.     |
+| `ios-profiler-stop`    | Stop xctrace, export trace data to XML files (timestamped, persist on disk).                 |
+| `ios-profiler-analyze` | Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, leaks). |
+| `profiler-stack-query` | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.       |
+| `profiler-load`        | List and reload previous trace sessions from disk for re-investigation.                      |
 
 ---
 
@@ -24,7 +24,7 @@ description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks v
 
 ### Before profiling: always start both in parallel
 
-Always start `ios-instruments-start` and `react-profiler-start` in a single parallel message, announcing it upfront: _"Starting React + native iOS profiling in parallel — JS commits plus native CPU/hangs/leaks."_ Do NOT ask first. Only skip `react-profiler-start` if the user has **already explicitly said** they don't want React profiling in this session.
+Always start `ios-profiler-start` and `react-profiler-start` in a single parallel message, announcing it upfront: _"Starting React + native iOS profiling in parallel — JS commits plus native CPU/hangs/leaks."_ Do NOT ask first. Only skip `react-profiler-start` if the user has **already explicitly said** they don't want React profiling in this session.
 
 - Start both tools in parallel (two tool calls in one message), stop both, analyze both, then call `profiler-combined-report` for the cross-correlated view.
 - If the user only wants native profiling, follow the standalone workflow below.
@@ -57,7 +57,7 @@ Re-run the same scenario after applying fixes. Use `profiler-load` to reload the
 
 ### Step 0: Ensure the target app is running
 
-The `ios-instruments-start` tool **auto-detects** the running app on the simulator.
+The `ios-profiler-start` tool **auto-detects** the running app on the simulator.
 You do not need to derive `app_process` manually — just make sure the app is launched.
 
 1. If the app is already running on the simulator, skip to Step 1 (do not pass `app_process`).
@@ -68,16 +68,16 @@ You do not need to derive `app_process` manually — just make sure the app is l
 
 ### Step 1: Start recording
 
-Call `ios-instruments-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/rn-devtools-debug/` with a timestamped filename.
+Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/rn-devtools-debug/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `simulator-interact` skill).
 
 ### Step 2: Stop and export
 
-Call `ios-instruments-stop` with `device_id`. This sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML. Check `exportDiagnostics` in the response for any export warnings.
+Call `ios-profiler-stop` with `device_id`. This sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML. Check `exportDiagnostics` in the response for any export warnings.
 
 ### Step 3: Analyze
 
-Call `ios-instruments-analyze` with `device_id`. Returns a markdown report with bottlenecks categorized as CPU hotspots, UI hangs, or memory leaks, sorted by severity.
+Call `ios-profiler-analyze` with `device_id`. Returns a markdown report with bottlenecks categorized as CPU hotspots, UI hangs, or memory leaks, sorted by severity.
 
 ### Step 4: Present findings and ask about next steps
 
@@ -121,18 +121,18 @@ Each bottleneck type indicates a different class of problem:
 
 ## Quick Reference
 
-| Action                          | Tool                      |
-| ------------------------------- | ------------------------- |
-| Start iOS Instruments recording | `ios-instruments-start`   |
-| Stop iOS Instruments            | `ios-instruments-stop`    |
-| Analyze iOS Instruments trace   | `ios-instruments-analyze` |
-| Drill into hangs/CPU/leaks      | `profiler-stack-query`    |
-| Reload previous trace session   | `profiler-load`           |
+| Action                          | Tool                   |
+| ------------------------------- | ---------------------- |
+| Start iOS Instruments recording | `ios-profiler-start`   |
+| Stop iOS Instruments            | `ios-profiler-stop`    |
+| Analyze iOS Instruments trace   | `ios-profiler-analyze` |
+| Drill into hangs/CPU/leaks      | `profiler-stack-query` |
+| Reload previous trace session   | `profiler-load`        |
 
 ## Related Skills
 
-| Skill                     | When to use                                                 |
-| ------------------------- | ----------------------------------------------------------- |
-| `react-native-profiler`   | React/Hermes profiling for re-renders and JS CPU hotspots   |
-| `simulator-setup`         | Booting and connecting a simulator                          |
-| `simulator-interact`      | Driving UI interaction on the simulator                     |
+| Skill                   | When to use                                               |
+| ----------------------- | --------------------------------------------------------- |
+| `react-native-profiler` | React/Hermes profiling for re-renders and JS CPU hotspots |
+| `simulator-setup`       | Booting and connecting a simulator                        |
+| `simulator-interact`    | Driving UI interaction on the simulator                   |

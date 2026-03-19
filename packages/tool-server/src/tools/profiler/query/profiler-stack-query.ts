@@ -1,39 +1,62 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  IOS_INSTRUMENTS_SESSION_NAMESPACE,
-  type IosInstrumentsSessionApi,
-} from "../../../blueprints/ios-instruments-session";
-import type { CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../../../utils/ios-instruments/types";
-import { findDominantFunction, extractAppCallChain } from "../../../utils/ios-instruments/pipeline/02-aggregate";
+  IOS_PROFILER_SESSION_NAMESPACE,
+  type IosProfilerSessionApi,
+} from "../../../blueprints/ios-profiler-session";
+import type {
+  CpuSample,
+  UiHang,
+  CpuHotspot,
+  MemoryLeak,
+} from "../../../utils/ios-profiler/types";
+import {
+  findDominantFunction,
+  extractAppCallChain,
+} from "../../../utils/ios-profiler/pipeline/02-aggregate";
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
-  mode: z.enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"]).describe(
-    "Query mode: hang_stacks (full CPU context during a hang), function_callers (who calls a native function), " +
-    "thread_breakdown (CPU split by thread), leak_stacks (leak details by object type)",
-  ),
-  hang_index: z.coerce.number().int().optional().describe(
-    "0-based index into the hang list for hang_stacks mode",
-  ),
-  function_name: z.string().optional().describe(
-    "Function name for function_callers mode",
-  ),
-  thread: z.string().optional().describe(
-    "Thread name filter for thread_breakdown mode",
-  ),
-  object_type: z.string().optional().describe(
-    "Object type filter for leak_stacks mode",
-  ),
-  top_n: z.coerce.number().int().positive().default(15).describe(
-    "Max results to return (default 15)",
-  ),
+  mode: z
+    .enum([
+      "hang_stacks",
+      "function_callers",
+      "thread_breakdown",
+      "leak_stacks",
+    ])
+    .describe(
+      "Query mode: hang_stacks (full CPU context during a hang), function_callers (who calls a native function), " +
+        "thread_breakdown (CPU split by thread), leak_stacks (leak details by object type)",
+    ),
+  hang_index: z.coerce
+    .number()
+    .int()
+    .optional()
+    .describe("0-based index into the hang list for hang_stacks mode"),
+  function_name: z
+    .string()
+    .optional()
+    .describe("Function name for function_callers mode"),
+  thread: z
+    .string()
+    .optional()
+    .describe("Thread name filter for thread_breakdown mode"),
+  object_type: z
+    .string()
+    .optional()
+    .describe("Object type filter for leak_stacks mode"),
+  top_n: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15)
+    .describe("Max results to return (default 15)"),
 });
 
-function getParsedData(api: IosInstrumentsSessionApi) {
+function getParsedData(api: IosProfilerSessionApi) {
   if (!api.parsedData) {
     throw new Error(
-      "No parsed trace data. Run ios-instruments-stop → ios-instruments-analyze first.",
+      "No parsed trace data. Run ios-profiler-stop → ios-profiler-analyze first.",
     );
   }
   return api.parsedData;
@@ -82,7 +105,9 @@ function renderHangStacks(
     lines.push("### App Call Chains During Hang");
     lines.push("");
     for (const { chain, sampleCount } of hang.appCallChains) {
-      lines.push(`- (${sampleCount} samples) ${chain.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(
+        `- (${sampleCount} samples) ${chain.map((f) => `\`${f}\``).join(" → ")}`,
+      );
     }
     lines.push("");
   }
@@ -111,7 +136,9 @@ function renderHangStacks(
       }
     }
 
-    const sorted = [...uniqueStacks.values()].sort((a, b) => b.count - a.count).slice(0, topN);
+    const sorted = [...uniqueStacks.values()]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, topN);
     for (const { stack, count } of sorted) {
       lines.push(`- (${count}×) ${stack.map((f) => `\`${f}\``).join(" → ")}`);
     }
@@ -163,7 +190,9 @@ function renderFunctionCallers(
     "",
   ];
 
-  const sortedCallers = [...callerCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN);
+  const sortedCallers = [...callerCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN);
   if (sortedCallers.length > 0) {
     lines.push("### Called By");
     lines.push("");
@@ -175,7 +204,9 @@ function renderFunctionCallers(
     lines.push("");
   }
 
-  const sortedCallees = [...calleeCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, topN);
+  const sortedCallees = [...calleeCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, topN);
   if (sortedCallees.length > 0) {
     lines.push("### Calls Into");
     lines.push("");
@@ -202,7 +233,11 @@ function renderThreadBreakdown(
 
   for (const sample of cpuSamples) {
     const thread = normalizeThreadName(sample.threadFmt);
-    if (threadFilter && !thread.toLowerCase().includes(threadFilter.toLowerCase())) continue;
+    if (
+      threadFilter &&
+      !thread.toLowerCase().includes(threadFilter.toLowerCase())
+    )
+      continue;
     threadWeight.set(thread, (threadWeight.get(thread) ?? 0) + sample.weightNs);
     threadSamples.set(thread, (threadSamples.get(thread) ?? 0) + 1);
   }
@@ -228,15 +263,16 @@ function renderThreadBreakdown(
 
   for (const [thread, weight] of sorted) {
     const weightMs = Math.round(weight / 1_000_000);
-    const pct = totalWeight > 0 ? ((weight / totalWeight) * 100).toFixed(1) : "0";
+    const pct =
+      totalWeight > 0 ? ((weight / totalWeight) * 100).toFixed(1) : "0";
     const samples = threadSamples.get(thread) ?? 0;
     lines.push(`| ${thread} | ${weightMs} | ${pct}% | ${samples} |`);
   }
 
   // If a specific thread is filtered, also show hotspots for that thread
   if (threadFilter) {
-    const threadHotspots = cpuHotspots.filter(
-      (h) => h.thread.toLowerCase().includes(threadFilter.toLowerCase()),
+    const threadHotspots = cpuHotspots.filter((h) =>
+      h.thread.toLowerCase().includes(threadFilter.toLowerCase()),
     );
     if (threadHotspots.length > 0) {
       lines.push("");
@@ -262,8 +298,8 @@ function renderLeakStacks(
 ): string {
   let filtered = memoryLeaks;
   if (objectTypeFilter) {
-    filtered = memoryLeaks.filter(
-      (l) => l.objectType.toLowerCase().includes(objectTypeFilter.toLowerCase()),
+    filtered = memoryLeaks.filter((l) =>
+      l.objectType.toLowerCase().includes(objectTypeFilter.toLowerCase()),
     );
   }
 
@@ -273,7 +309,9 @@ function renderLeakStacks(
       : "_No memory leaks detected._";
   }
 
-  const sorted = [...filtered].sort((a, b) => b.totalSizeBytes - a.totalSizeBytes).slice(0, topN);
+  const sorted = [...filtered]
+    .sort((a, b) => b.totalSizeBytes - a.totalSizeBytes)
+    .slice(0, topN);
 
   const totalBytes = sorted.reduce((s, l) => s + l.totalSizeBytes, 0);
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
@@ -298,7 +336,8 @@ function renderLeakStacks(
 
 function normalizeThreadName(threadFmt: string): string {
   if (/main\s*thread/i.test(threadFmt)) return "Main Thread";
-  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt)) return "JS/Hermes";
+  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt))
+    return "JS/Hermes";
   const shortMatch = threadFmt.match(/^(.+?)\s+0x/);
   if (shortMatch) return shortMatch[1];
   return threadFmt;
@@ -316,7 +355,7 @@ export const profilerStackQueryTool: ToolDefinition<
 > = {
   id: "profiler-stack-query",
   description: `Query iOS Instruments trace data for iterative investigation of native performance.
-Requires ios-instruments-stop → ios-instruments-analyze to have been called first.
+Requires ios-profiler-stop → ios-profiler-analyze to have been called first.
 Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls a specific native function and what it calls.
@@ -324,32 +363,54 @@ Modes:
 - leak_stacks: Memory leak details, optionally filtered by object_type.`,
   zodSchema,
   services: (params) => ({
-    session: `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${params.device_id}`,
+    session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
   async execute(services, params) {
-    const api = services.session as IosInstrumentsSessionApi;
+    const api = services.session as IosProfilerSessionApi;
     const data = getParsedData(api);
 
     switch (params.mode) {
       case "hang_stacks": {
         if (params.hang_index == null) {
-          throw new Error("hang_stacks mode requires the hang_index parameter.");
+          throw new Error(
+            "hang_stacks mode requires the hang_index parameter.",
+          );
         }
-        return renderHangStacks(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
+        return renderHangStacks(
+          data.cpuSamples,
+          data.uiHangs,
+          params.hang_index,
+          params.top_n,
+        );
       }
 
       case "function_callers": {
         if (!params.function_name) {
-          throw new Error("function_callers mode requires the function_name parameter.");
+          throw new Error(
+            "function_callers mode requires the function_name parameter.",
+          );
         }
-        return renderFunctionCallers(data.cpuSamples, params.function_name, params.top_n);
+        return renderFunctionCallers(
+          data.cpuSamples,
+          params.function_name,
+          params.top_n,
+        );
       }
 
       case "thread_breakdown":
-        return renderThreadBreakdown(data.cpuSamples, data.cpuHotspots, params.thread, params.top_n);
+        return renderThreadBreakdown(
+          data.cpuSamples,
+          data.cpuHotspots,
+          params.thread,
+          params.top_n,
+        );
 
       case "leak_stacks":
-        return renderLeakStacks(data.memoryLeaks, params.object_type, params.top_n);
+        return renderLeakStacks(
+          data.memoryLeaks,
+          params.object_type,
+          params.top_n,
+        );
 
       default:
         throw new Error(`Unknown mode: ${params.mode}`);

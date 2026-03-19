@@ -8,18 +8,18 @@ import type {
   UiHang,
   MemoryLeak,
   CpuHotspot,
-} from "../utils/ios-instruments/types";
+} from "../utils/ios-profiler/types";
 
-export const IOS_INSTRUMENTS_SESSION_NAMESPACE = "IosInstrumentsSession";
+export const IOS_PROFILER_SESSION_NAMESPACE = "IosProfilerSession";
 
-export interface IosInstrumentsParsedData {
+export interface IosProfilerParsedData {
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
 }
 
-export interface IosInstrumentsSessionApi {
+export interface IosProfilerSessionApi {
   deviceId: string;
   appProcess: string | null;
   xctracePid: number | null;
@@ -27,22 +27,22 @@ export interface IosInstrumentsSessionApi {
   exportedFiles: Record<string, string | null> | null;
   profilingActive: boolean;
   wallClockStartMs: number | null;
-  parsedData: IosInstrumentsParsedData | null;
+  parsedData: IosProfilerParsedData | null;
   recordingTimeout: NodeJS.Timeout | null;
 }
 
 export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
-  IosInstrumentsSessionApi,
+  IosProfilerSessionApi,
   string
 > = {
-  namespace: IOS_INSTRUMENTS_SESSION_NAMESPACE,
+  namespace: IOS_PROFILER_SESSION_NAMESPACE,
 
   getURN(deviceId: string) {
-    return `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${deviceId}`;
+    return `${IOS_PROFILER_SESSION_NAMESPACE}:${deviceId}`;
   },
 
   async factory(_deps, _payload) {
-    const state: IosInstrumentsSessionApi = {
+    const state: IosProfilerSessionApi = {
       deviceId: _payload,
       appProcess: null,
       xctracePid: null,

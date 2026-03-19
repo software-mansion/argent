@@ -30,7 +30,7 @@ All profiling goes through argent MCP tools. This workflow requires executing to
 | `profiler-combined-report` | Cross-correlated report when both React Profiler and iOS Instruments ran in parallel.              |
 | `profiler-load`            | List and reload previous profiling sessions from disk for re-investigation with query tools.       |
 
-For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `ios-instruments` skill.
+For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `ios-profiler` skill.
 
 ---
 
@@ -40,10 +40,10 @@ Follow these rules throughout the profiling workflow:
 
 ### Before profiling: always start both in parallel
 
-Always call `react-profiler-start` and `ios-instruments-start` in a single parallel message. Announce this: _"Starting React + native iOS profiling in parallel — JS commits plus native CPU/hangs/leaks."_ Do NOT ask first. Only skip `ios-instruments-start` if the user has **already explicitly said** they don't want native profiling in this session.
+Always call `react-profiler-start` and `ios-profiler-start` in a single parallel message. Announce this: _"Starting React + native iOS profiling in parallel — JS commits plus native CPU/hangs/leaks."_ Do NOT ask first. Only skip `ios-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session.
 
-- Start `react-profiler-start` and `ios-instruments-start` in parallel (two tool calls in one message).
-- If the user only wants iOS-only, use the `ios-instruments` skill workflow.
+- Start `react-profiler-start` and `ios-profiler-start` in parallel (two tool calls in one message).
+- If the user only wants iOS-only, use the `ios-profiler` skill workflow.
 
 ### After analysis: ask about next steps
 
@@ -79,7 +79,7 @@ Follow the "Before profiling" guideline above. Default is dual profiling — sta
 
 ### Step 2: Start profiling
 
-Call `react-profiler-start` **and** `ios-instruments-start` in parallel (two tool calls in one message). Do NOT ask — dual profiling is the default. Only skip `ios-instruments-start` if the user already explicitly opted out in this session. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. On success:
+Call `react-profiler-start` **and** `ios-profiler-start` in parallel (two tool calls in one message). Do NOT ask — dual profiling is the default. Only skip `ios-profiler-start` if the user already explicitly opted out in this session. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. On success:
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `simulator-interact` skill.
 - if the user stated he wishes to profile himself - suggest what interaction to perform — e.g. _"Please scroll the list / switch tabs. Tell me when done."_ Wait for their reply.
 
@@ -89,7 +89,7 @@ After each `tap` or `swipe` call, record an annotation using the returned `times
 
 ### Step 3: Stop and collect
 
-Call `react-profiler-stop` **and** `ios-instruments-stop` in parallel. Only skip `ios-instruments-stop` if you did not start it in Step 2. Note `duration_ms`, `fiber_renders_captured`, `hook_installed`.
+Call `react-profiler-stop` **and** `ios-profiler-stop` in parallel. Only skip `ios-profiler-stop` if you did not start it in Step 2. Note `duration_ms`, `fiber_renders_captured`, `hook_installed`.
 If `hook_installed: false` or `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
 
 ### Step 4: Analyze
@@ -98,7 +98,7 @@ Call `react-profiler-analyze` with `project_root`, `platform`, and `rn_version`.
 
 If you performed interactions using `tap`/`swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the tap/swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
 
-If dual profiling, also call `ios-instruments-analyze`, then call `profiler-combined-report` for the cross-correlated view.
+If dual profiling, also call `ios-profiler-analyze`, then call `profiler-combined-report` for the cross-correlated view.
 
 The analyze report includes **CPU hotspots per commit** — showing exactly which JS functions ran during each slow React commit. Raw data is saved to disk automatically for later reload.
 
@@ -172,7 +172,7 @@ For standalone diagnostic tools (live render stats, fiber tree, CPU summary), se
 
 | Skill                       | When to use                                                   |
 | --------------------------- | ------------------------------------------------------------- |
-| `ios-instruments`           | Native iOS profiling for CPU hotspots, UI hangs, memory leaks |
+| `ios-profiler`           | Native iOS profiling for CPU hotspots, UI hangs, memory leaks |
 | `react-native-app-workflow` | Starting the app, Metro setup, build issues                   |
 | `metro-debugger`            | Breakpoints, stepping, console logs, JS evaluation            |
 | `simulator-setup`           | Booting and connecting a simulator                            |

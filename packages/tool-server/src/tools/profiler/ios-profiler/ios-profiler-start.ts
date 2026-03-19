@@ -3,9 +3,9 @@ import { spawn, execSync } from "child_process";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  IOS_INSTRUMENTS_SESSION_NAMESPACE,
-  type IosInstrumentsSessionApi,
-} from "../../../blueprints/ios-instruments-session";
+  IOS_PROFILER_SESSION_NAMESPACE,
+  type IosProfilerSessionApi,
+} from "../../../blueprints/ios-profiler-session";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
@@ -103,16 +103,16 @@ export const iosInstrumentsStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { status: "recording"; pid: number; traceFile: string }
 > = {
-  id: "ios-instruments-start",
+  id: "ios-profiler-start",
   description: `Start iOS Instruments profiling via xctrace on a booted simulator or connected device.
 Auto-detects the running app process unless app_process is explicitly provided.
-After starting, let the user interact with the app, then call ios-instruments-stop.`,
+After starting, let the user interact with the app, then call ios-profiler-stop.`,
   zodSchema,
   services: (params) => ({
-    session: `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${params.device_id}`,
+    session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
   async execute(services, params) {
-    const api = services.session as IosInstrumentsSessionApi;
+    const api = services.session as IosProfilerSessionApi;
 
     if (api.profilingActive) {
       throw new Error(
@@ -128,10 +128,7 @@ After starting, let the user interact with the app, then call ios-instruments-st
       .toISOString()
       .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
       .slice(0, 15);
-    const outputFile = path.join(
-      debugDir,
-      `ios-instruments-${timestamp}.trace`,
-    );
+    const outputFile = path.join(debugDir, `ios-profiler-${timestamp}.trace`);
 
     api.appProcess = appProcess;
     api.traceFile = outputFile;

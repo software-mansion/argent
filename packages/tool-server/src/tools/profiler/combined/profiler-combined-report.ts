@@ -6,9 +6,9 @@ import {
   getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
-  IOS_INSTRUMENTS_SESSION_NAMESPACE,
-  type IosInstrumentsSessionApi,
-} from "../../../blueprints/ios-instruments-session";
+  IOS_PROFILER_SESSION_NAMESPACE,
+  type IosProfilerSessionApi,
+} from "../../../blueprints/ios-profiler-session";
 import {
   buildReactAnchor,
   buildIosAnchor,
@@ -17,10 +17,13 @@ import {
   windowsOverlap,
 } from "../../../utils/profiler-shared/time-align";
 import type { HotCommitSummary } from "../../../utils/react-profiler/types/output";
-import type { UiHang, MemoryLeak } from "../../../utils/ios-instruments/types";
+import type { UiHang, MemoryLeak } from "../../../utils/ios-profiler/types";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
-import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
+import {
+  readCpuProfile,
+  readCommitTree,
+} from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -45,25 +48,26 @@ export const profilerCombinedReportTool: ToolDefinition<
   id: "profiler-combined-report",
   description: `Generate a cross-correlated report combining React Profiler and iOS Instruments data.
 Maps iOS Instruments hangs to React commits using wall-clock time alignment.
-Requires both react-profiler-analyze and ios-instruments-analyze to have been called first.
+Requires both react-profiler-analyze and ios-profiler-analyze to have been called first.
 Call this tool when both profilers were run in parallel on the same session.`,
   zodSchema,
   services: (params) => ({
     reactSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
-    iosSession: `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${params.device_id}`,
+    iosSession: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
   async execute(services) {
     const reactApi = services.reactSession as ReactProfilerSessionApi;
-    const iosApi = services.iosSession as IosInstrumentsSessionApi;
+    const iosApi = services.iosSession as IosProfilerSessionApi;
 
     // Validate prerequisites
     if (!iosApi.parsedData) {
       throw new Error(
-        "No iOS Instruments data. Run ios-instruments-analyze first.",
+        "No iOS Instruments data. Run ios-profiler-analyze first.",
       );
     }
 
-    const sessionPaths = reactApi.sessionPaths ?? getCachedProfilerPaths(reactApi.port);
+    const sessionPaths =
+      reactApi.sessionPaths ?? getCachedProfilerPaths(reactApi.port);
     if (!sessionPaths?.commitsPath) {
       throw new Error(
         "No React commit data. Run react-profiler-analyze first.",
@@ -89,7 +93,7 @@ Call this tool when both profilers were run in parallel on the same session.`,
     if (!reactWallStart || !iosWallStart) {
       throw new Error(
         "Missing wall-clock anchor from one or both profilers. Both profilers must be started " +
-        "before they can be correlated. Re-run the profiling session.",
+          "before they can be correlated. Re-run the profiling session.",
       );
     }
 
@@ -100,7 +104,8 @@ Call this tool when both profilers were run in parallel on the same session.`,
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
-    const hotIndices = sessionPaths.hotCommitIndices ?? reactApi.hotCommitIndices ?? [];
+    const hotIndices =
+      sessionPaths.hotCommitIndices ?? reactApi.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
 
@@ -117,11 +122,17 @@ Call this tool when both profilers were run in parallel on the same session.`,
       const hangStartNs = parseHangStartNs(hang.startTimeFormatted);
       const hangDurationNs = hang.durationMs * 1_000_000;
       const hangWallStartMs = instrumentsNsToWallClock(hangStartNs, iosAnchor);
-      const hangWallEndMs = instrumentsNsToWallClock(hangStartNs + hangDurationNs, iosAnchor);
+      const hangWallEndMs = instrumentsNsToWallClock(
+        hangStartNs + hangDurationNs,
+        iosAnchor,
+      );
 
       const overlapping = nonMarginCommits
         .map((commit) => {
-          const commitWallStartMs = reactTimeToWallClock(commit.timestampMs, reactAnchor);
+          const commitWallStartMs = reactTimeToWallClock(
+            commit.timestampMs,
+            reactAnchor,
+          );
           const commitWallEndMs = commitWallStartMs + commit.totalRenderMs;
           return { commit, commitWallStartMs, commitWallEndMs };
         })
@@ -163,8 +174,12 @@ Call this tool when both profilers were run in parallel on the same session.`,
       lines.push("## Hang ↔ Commit Correlations");
       lines.push("");
 
-      const correlated = correlations.filter((c) => c.overlappingCommits.length > 0);
-      const uncorrelated = correlations.filter((c) => c.overlappingCommits.length === 0);
+      const correlated = correlations.filter(
+        (c) => c.overlappingCommits.length > 0,
+      );
+      const uncorrelated = correlations.filter(
+        (c) => c.overlappingCommits.length === 0,
+      );
 
       if (correlated.length > 0) {
         for (const corr of correlated) {
@@ -177,22 +192,29 @@ Call this tool when both profilers were run in parallel on the same session.`,
           lines.push("");
 
           // Explain the ratio
-          const ratio = hang.durationMs > 0 ? topCommit.commit.totalRenderMs / hang.durationMs : 0;
+          const ratio =
+            hang.durationMs > 0
+              ? topCommit.commit.totalRenderMs / hang.durationMs
+              : 0;
           if (ratio > 2) {
             lines.push(
               `> React reports ${topCommit.commit.totalRenderMs}ms vs Instruments' ${hang.durationMs}ms ` +
-              `(~${ratio.toFixed(0)}× ratio — expected in dev mode where JS is ~3–4× slower).`,
+                `(~${ratio.toFixed(0)}× ratio — expected in dev mode where JS is ~3–4× slower).`,
             );
             lines.push("");
           }
 
           // What caused it
           if (topCommit.commit.isInitialRender) {
-            lines.push(`**Cause:** Initial mount of ${topCommit.commit.totalComponentCount} components`);
+            lines.push(
+              `**Cause:** Initial mount of ${topCommit.commit.totalComponentCount} components`,
+            );
           } else if (topCommit.commit.rootCauseComponent) {
             lines.push(
               `**Cause:** \`${topCommit.commit.rootCauseComponent}\` re-rendered` +
-              (topCommit.commit.rootCauseReason ? ` (${topCommit.commit.rootCauseReason})` : ""),
+                (topCommit.commit.rootCauseReason
+                  ? ` (${topCommit.commit.rootCauseReason})`
+                  : ""),
             );
           }
 
@@ -202,12 +224,17 @@ Call this tool when both profilers were run in parallel on the same session.`,
             lines.push("Top components in this commit:");
             for (const comp of topCommit.commit.components.slice(0, 5)) {
               const countStr = comp.count > 1 ? ` ×${comp.count}` : "";
-              lines.push(`- \`${comp.name}\`${countStr} ${comp.selfDurationMs}ms`);
+              lines.push(
+                `- \`${comp.name}\`${countStr} ${comp.selfDurationMs}ms`,
+              );
             }
           }
 
           // CPU from both sides
-          if (topCommit.commit.cpuHotspots && topCommit.commit.cpuHotspots.length > 0) {
+          if (
+            topCommit.commit.cpuHotspots &&
+            topCommit.commit.cpuHotspots.length > 0
+          ) {
             lines.push("");
             lines.push("JS CPU (Hermes) during this commit:");
             for (const hs of topCommit.commit.cpuHotspots.slice(0, 3)) {
@@ -245,9 +272,9 @@ Call this tool when both profilers were run in parallel on the same session.`,
           const { hang } = corr;
           lines.push(
             `- **${hang.hangType}** at ${hang.startTimeFormatted} (${hang.durationMs}ms)` +
-            (hang.suspectedFunctions.length > 0
-              ? ` — \`${hang.suspectedFunctions[0]}\``
-              : ""),
+              (hang.suspectedFunctions.length > 0
+                ? ` — \`${hang.suspectedFunctions[0]}\``
+                : ""),
           );
         }
         lines.push("");
@@ -276,7 +303,9 @@ Call this tool when both profilers were run in parallel on the same session.`,
 
         lines.push(
           `- **\`${leak.objectType}\`** ${formatBytes(leak.totalSizeBytes)} (${leak.count}×) — \`${leak.responsibleFrame}\`` +
-          (possibleComponent ? ` — may relate to \`${possibleComponent}\` mount/unmount` : ""),
+            (possibleComponent
+              ? ` — may relate to \`${possibleComponent}\` mount/unmount`
+              : ""),
         );
       }
       lines.push("");
@@ -290,7 +319,9 @@ Call this tool when both profilers were run in parallel on the same session.`,
     lines.push("");
 
     if (nonMarginCommits.length > 0) {
-      const worstCommit = nonMarginCommits.sort((a, b) => b.totalRenderMs - a.totalRenderMs)[0]!;
+      const worstCommit = nonMarginCommits.sort(
+        (a, b) => b.totalRenderMs - a.totalRenderMs,
+      )[0]!;
       lines.push(
         `- \`profiler-cpu-query\` mode=\`component_cpu\` — investigate CPU during specific component commits`,
       );

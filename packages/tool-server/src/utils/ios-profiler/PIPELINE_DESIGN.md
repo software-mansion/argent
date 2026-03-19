@@ -4,7 +4,7 @@ Living document tracking the reasoning behind pipeline architecture decisions.
 
 ## Architecture Overview
 
-**3-tool flow**: `ios-instruments-start` → `ios-instruments-stop` → `ios-instruments-analyze`
+**3-tool flow**: `ios-profiler-start` → `ios-profiler-stop` → `ios-profiler-analyze`
 
 1. **Start** — Detects the running app process on the simulator, spawns `xctrace record` attached to it.
 2. **Stop** — Sends SIGINT to xctrace, waits for process exit, exports the `.trace` bundle to 3 XML files (CPU time-profile, potential-hangs, leaks).
@@ -57,14 +57,14 @@ Leak data from xctrace is a static summary — total count and size by object ty
 
 ### Severity thresholds
 
-| Category | Condition | Severity |
-| --- | --- | --- |
-| CPU Hotspot | weight > 15% of total | RED |
-| CPU Hotspot | weight 3–15% | YELLOW |
-| CPU Hotspot | weight < 3% | filtered out |
-| UI Hang | type contains "severe" or equals "hang" | RED |
-| UI Hang | type is "microhang" | YELLOW |
-| Memory Leak | all | RED |
+| Category    | Condition                               | Severity     |
+| ----------- | --------------------------------------- | ------------ |
+| CPU Hotspot | weight > 15% of total                   | RED          |
+| CPU Hotspot | weight 3–15%                            | YELLOW       |
+| CPU Hotspot | weight < 3%                             | filtered out |
+| UI Hang     | type contains "severe" or equals "hang" | RED          |
+| UI Hang     | type is "microhang"                     | YELLOW       |
+| Memory Leak | all                                     | RED          |
 
 The 3% minimum weight filter prevents noise — xctrace captures thousands of samples and most functions appear briefly. 15% RED threshold flags functions consuming significant wall time. All leaks are RED because any leak is a bug regardless of size.
 
@@ -90,9 +90,9 @@ If zero bottlenecks survive filtering, the report says "All clear" rather than m
 
 ## Stage Summary
 
-| Stage | File | Purpose |
-| --- | --- | --- |
-| 0 | `pipeline/xml-parser.ts` | Parse 3 XMLs in parallel — id/ref deduplication, frame/binary resolution |
-| 1 | `pipeline/01-correlate.ts` | Hang–CPU time-window correlation, leak aggregation by object type |
-| 2 | `pipeline/02-aggregate.ts` | CPU hotspot grouping by dominant function + thread, min-weight filter, hang-overlap flags |
-| — | `render.ts` | Render bottlenecks to markdown with summary table, per-category sections, suggestions |
+| Stage | File                       | Purpose                                                                                   |
+| ----- | -------------------------- | ----------------------------------------------------------------------------------------- |
+| 0     | `pipeline/xml-parser.ts`   | Parse 3 XMLs in parallel — id/ref deduplication, frame/binary resolution                  |
+| 1     | `pipeline/01-correlate.ts` | Hang–CPU time-window correlation, leak aggregation by object type                         |
+| 2     | `pipeline/02-aggregate.ts` | CPU hotspot grouping by dominant function + thread, min-weight filter, hang-overlap flags |
+| —     | `render.ts`                | Render bottlenecks to markdown with summary table, per-category sections, suggestions     |

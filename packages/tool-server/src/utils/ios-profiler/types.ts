@@ -91,7 +91,7 @@ export interface ProfilerPayload {
   bottlenecks: Bottleneck[];
 }
 
-export interface IosInstrumentsAnalyzeResult {
+export interface IosProfilerAnalyzeResult {
   report: string;
   reportFile: string | null;
   bottlenecksTotal: number;

@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  IOS_INSTRUMENTS_SESSION_NAMESPACE,
-  type IosInstrumentsSessionApi,
-} from "../../../blueprints/ios-instruments-session";
-import { exportIosTraceData } from "../../../utils/ios-instruments/export";
-import type { ExportDiagnostics } from "../../../utils/ios-instruments/export";
+  IOS_PROFILER_SESSION_NAMESPACE,
+  type IosProfilerSessionApi,
+} from "../../../blueprints/ios-profiler-session";
+import { exportIosTraceData } from "../../../utils/ios-profiler/export";
+import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
@@ -19,20 +19,20 @@ export const iosInstrumentsStopTool: ToolDefinition<
     exportDiagnostics: ExportDiagnostics;
   }
 > = {
-  id: "ios-instruments-stop",
+  id: "ios-profiler-stop",
   description: `Stop iOS Instruments profiling and export trace data to XML files.
 Sends SIGINT to the running xctrace process, waits for it to finish packaging the trace,
-then exports CPU, hangs, and leaks data. Call ios-instruments-start first.`,
+then exports CPU, hangs, and leaks data. Call ios-profiler-start first.`,
   zodSchema,
   services: (params) => ({
-    session: `${IOS_INSTRUMENTS_SESSION_NAMESPACE}:${params.device_id}`,
+    session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
   async execute(services) {
-    const api = services.session as IosInstrumentsSessionApi;
+    const api = services.session as IosProfilerSessionApi;
 
     if (!api.profilingActive || !api.xctracePid || !api.traceFile) {
       throw new Error(
-        "No active iOS profiling session found. Call ios-instruments-start first.",
+        "No active iOS profiling session found. Call ios-profiler-start first.",
       );
     }
 

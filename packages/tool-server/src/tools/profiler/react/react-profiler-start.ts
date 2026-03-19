@@ -1,10 +1,11 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { type Registry, type ToolDefinition, ServiceState } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
   clearCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
+import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
 
 const COMMIT_CAPTURE_SCRIPT = `
 (function __argent_commitCaptureInit() {
@@ -133,7 +134,15 @@ const zodSchema = z.object({
     .describe("CPU sampling interval in microseconds (default 100)"),
 });
 
-export const reactProfilerStartTool: ToolDefinition<
+function safeGetState(registry: Registry, urn: string): ServiceState | null {
+  try {
+    return registry.getServiceState(urn);
+  } catch {
+    return null;
+  }
+}
+
+export function createReactProfilerStartTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     started_at: string;
@@ -141,80 +150,126 @@ export const reactProfilerStartTool: ToolDefinition<
     hermes_version: string;
     detected_architecture: string | null;
   }
-> = {
-  id: "react-profiler-start",
-  description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
+> {
+  return {
+    id: "react-profiler-start",
+    description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Sets up the ReactProfilerSession (auto-connects to Metro if not already connected), then starts CPU sampling and injects the React fiber commit-capture hook.
-Before calling this, ask the user if they also want native iOS profiling (ios-instruments-start) — recommend running both in parallel for a complete picture.
+Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.`,
-  zodSchema,
-  services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
-  }),
-  async execute(services, params) {
-    const api = services.profilerSession as ReactProfilerSessionApi;
-    const cdp = api.cdp;
-    const ignore = () => {};
+    zodSchema,
+    services: () => ({}),
+    async execute(_services, params) {
+      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`;
+      const ignore = () => {};
 
-    // Inject commit-capture hook FIRST (before startProfiling) so no commits are missed
-    await cdp.evaluate(COMMIT_CAPTURE_SCRIPT);
-
-    await cdp.send("Profiler.start", {
-      interval: params.sample_interval_us,
-    });
-
-    // Verify the hook was installed correctly
-    const verifyResult = (await cdp.evaluate(`
-      JSON.stringify({
-        hookExists: typeof globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ !== 'undefined',
-        arrayCreated: Array.isArray(globalThis.__RN_DEVTOOLS_MCP_COMMITS__),
-        hookPatched: !!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__?.__rn_mcp_commit_capture__
-      })
-    `)) as string | undefined;
-
-    let commitCaptureVerification: Record<string, boolean> | null = null;
-    if (verifyResult) {
-      commitCaptureVerification = JSON.parse(verifyResult) as Record<
-        string,
-        boolean
-      >;
-    }
-
-    // Enable React profiling via DevTools hook (best-effort)
-    await cdp
-      .evaluate(
-        `
-        var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-        if (hook) {
-          hook._profiling = true;
-          if (typeof hook.startProfiling === 'function') hook.startProfiling(true);
-          if (hook.rendererInterfaces) {
-            hook.rendererInterfaces.forEach(function(ri) {
-              try { if (ri && ri.startProfiling) ri.startProfiling(true); } catch(e) {}
-            });
-          }
+      async function disposeAndWait() {
+        try { await registry.disposeService(psUrn); } catch { /* ignore */ }
+        try { await registry.disposeService(jsdUrn); } catch { /* ignore */ }
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          const jsdState = safeGetState(registry, jsdUrn);
+          const psState = safeGetState(registry, psUrn);
+          if (jsdState !== ServiceState.TERMINATING && psState !== ServiceState.TERMINATING) break;
+          await new Promise(r => setTimeout(r, 50));
         }
-        undefined
-      `,
-      )
-      .catch(ignore);
+      }
 
-    clearCachedProfilerPaths(api.port);
-    api.sessionPaths = null;
-    api.profilingActive = true;
-    api.anyCompilerOptimized = null;
-    api.hotCommitIndices = null;
-    api.totalReactCommits = null;
-    api.profileStartWallMs = Date.now();
+      // Pre-clean: if either service is in a non-healthy state, dispose both so
+      // resolveService starts fresh instead of hitting "terminated during init".
+      const snapshot = registry.getSnapshot();
+      const psEntry = snapshot.services.get(psUrn);
+      const jsdEntry = snapshot.services.get(jsdUrn);
+      if (
+        (psEntry && psEntry.state !== ServiceState.RUNNING && psEntry.state !== ServiceState.IDLE) ||
+        (jsdEntry && jsdEntry.state !== ServiceState.RUNNING && jsdEntry.state !== ServiceState.IDLE)
+      ) {
+        await disposeAndWait();
+      }
 
-    return {
-      started_at: new Date(api.profileStartWallMs).toISOString(),
-      startedAtEpochMs: api.profileStartWallMs,
-      hermes_version: api.hermesVersion,
-      detected_architecture: api.detectedArchitecture,
-      ...(commitCaptureVerification && {
-        commit_capture: commitCaptureVerification,
-      }),
-    };
-  },
-};
+      let api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
+
+      if (!api.cdp.isConnected()) {
+        await disposeAndWait();
+        api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
+
+        if (!api.cdp.isConnected()) {
+          throw new Error(
+            "CDP connection not available. The Hermes runtime may still be loading. Call react-profiler-start again.",
+          );
+        }
+      }
+
+      const cdp = api.cdp;
+
+      // If a previous stop failed mid-execution, profilingActive may still be true.
+      // Stop the profiler first to avoid a double-start error in Hermes.
+      if (api.profilingActive) {
+        await cdp.send("Profiler.stop").catch(ignore);
+        api.profilingActive = false;
+      }
+
+      // Inject commit-capture hook FIRST (before startProfiling) so no commits are missed
+      await cdp.evaluate(COMMIT_CAPTURE_SCRIPT);
+
+      await cdp.send("Profiler.start", {
+        interval: params.sample_interval_us,
+      });
+
+      // Verify the hook was installed correctly
+      const verifyResult = (await cdp.evaluate(`
+        JSON.stringify({
+          hookExists: typeof globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ !== 'undefined',
+          arrayCreated: Array.isArray(globalThis.__RN_DEVTOOLS_MCP_COMMITS__),
+          hookPatched: !!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__?.__rn_mcp_commit_capture__
+        })
+      `)) as string | undefined;
+
+      let commitCaptureVerification: Record<string, boolean> | null = null;
+      if (verifyResult) {
+        commitCaptureVerification = JSON.parse(verifyResult) as Record<
+          string,
+          boolean
+        >;
+      }
+
+      // Enable React profiling via DevTools hook (best-effort)
+      await cdp
+        .evaluate(
+          `
+          var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+          if (hook) {
+            hook._profiling = true;
+            if (typeof hook.startProfiling === 'function') hook.startProfiling(true);
+            if (hook.rendererInterfaces) {
+              hook.rendererInterfaces.forEach(function(ri) {
+                try { if (ri && ri.startProfiling) ri.startProfiling(true); } catch(e) {}
+              });
+            }
+          }
+          undefined
+        `,
+        )
+        .catch(ignore);
+
+      clearCachedProfilerPaths(api.port);
+      api.sessionPaths = null;
+      api.profilingActive = true;
+      api.anyCompilerOptimized = null;
+      api.hotCommitIndices = null;
+      api.totalReactCommits = null;
+      api.profileStartWallMs = Date.now();
+
+      return {
+        started_at: new Date(api.profileStartWallMs).toISOString(),
+        startedAtEpochMs: api.profileStartWallMs,
+        hermes_version: api.hermesVersion,
+        detected_architecture: api.detectedArchitecture,
+        ...(commitCaptureVerification && {
+          commit_capture: commitCaptureVerification,
+        }),
+      };
+    },
+  };
+}

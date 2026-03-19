@@ -6,7 +6,7 @@ import type {
   CpuHotspot,
   UiHang,
   MemoryLeak,
-  IosInstrumentsAnalyzeResult,
+  IosProfilerAnalyzeResult,
 } from "./types";
 
 interface RenderInput {
@@ -15,9 +15,9 @@ interface RenderInput {
   exportErrors?: Record<string, string>;
 }
 
-export async function renderIosInstrumentsReport(
+export async function renderIosProfilerReport(
   input: RenderInput,
-): Promise<IosInstrumentsAnalyzeResult> {
+): Promise<IosProfilerAnalyzeResult> {
   const { payload, traceFile } = input;
   const bottlenecksTotal = payload.bottlenecks.length;
 

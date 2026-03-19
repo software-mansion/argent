@@ -11,7 +11,7 @@ export interface PipelineOutput {
   memoryLeaks: MemoryLeak[];
 }
 
-export async function runIosInstrumentsPipeline(
+export async function runIosProfilerPipeline(
   files: Record<string, string | null>,
 ): Promise<PipelineOutput> {
   // Stage 0: Parse all three XMLs in parallel
