@@ -1,11 +1,11 @@
 ---
 name: react-native-optimization
-description: Optimize a React Native app for performance, bundle size, and runtime efficiency. Use when reducing app size, improving startup time, eliminating unnecessary re-renders, optimizing images, lists, navigation, or applying production-ready performance patterns.
+description: Optimize a React Native app for performance, bundle size, and runtime efficiency. Entry-point skill for all performance work. Use when the app feels slow, user asks to optimize, reduce bundle size, improve startup time, fix re-renders, optimize lists/images/navigation, or apply any performance pattern. Delegates to `react-native-profiler` for measurement.
 ---
 
 ## 1. Prerequisites
 
-Requires a working React Native project. Most techniques are code-level — no MCP tools needed unless profiling. For profiling-guided optimization, use the `react-native-profiler` skill first to identify bottlenecks, then return here to apply fixes.
+Requires a working React Native project. For profiling-guided optimization, use the `react-native-profiler` skill.
 
 **Rule: Profile before optimizing.** Do not apply shotgun optimizations. Measure first, fix the top offender, re-measure.
 
@@ -103,11 +103,10 @@ Requires a working React Native project. Most techniques are code-level — no M
 | Goal | Tool / Technique |
 | ---- | ---------------- |
 | Find bottlenecks | `react-native-profiler` skill |
-| Visualize bundle | `react-native-bundle-visualizer` |
-| Fix re-renders | `React.memo` + `useCallback` + `useMemo` |
+| Fix re-renders | `React.memo` + `useCallback` + `useMemo`, proper use of other state stores |
 | Fast lists | `FlashList` or tuned `FlatList` |
 | Image caching | `react-native-fast-image` |
-| Native animations | `react-native-reanimated` / `useNativeDriver` |
+| Native animations | `react-native-reanimated` |
 | Faster startup | Hermes + inline requires + lazy init |
 | Smaller bundle | Deep imports, `depcheck`, ProGuard |
 | Defer heavy work | `InteractionManager.runAfterInteractions` |
@@ -119,7 +118,7 @@ Requires a working React Native project. Most techniques are code-level — no M
 
 | Skill | When to use |
 | ----- | ----------- |
-| `react-native-profiler` | Measure before and after — profile-guided optimization |
+| `react-native-profiler` | **Load this skill to learn how to measure before and after of all your changes.** Profile before fixing, re-profile after. This skill describes to how use the profiling tools. |
 | `react-native-app-workflow` | Build/run the app, Metro issues, reload after changes |
 | `metro-debugger` | Evaluate JS in runtime, inspect components, set breakpoints |
 | `test-ui-flow` | Verify optimized flows still work correctly |
