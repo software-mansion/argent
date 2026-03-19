@@ -259,6 +259,13 @@ export class Registry {
         options
       );
 
+      // Guard: if the node was terminated while factory was running, discard the new instance
+      if (node.state !== ServiceState.STARTING) {
+        try { await instance.dispose(); } catch { /* ignore */ }
+        node.initPromise = null;
+        throw new ServiceInitializationError(urn, 'Service was terminated during initialization');
+      }
+
       this._transition(node, ServiceState.RUNNING);
       node.instance = instance as ServiceInstance;
 
