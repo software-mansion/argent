@@ -73,10 +73,14 @@ END-TO-END UI TESTING
 Use skill: `test-ui-flow`
 When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
 
-PERFORMANCE PROFILING
+PERFORMANCE OPTIMIZATION
+Use skill: `react-native-optimization`
+When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `react-native-profiler` for measurement.
+
+APP & COMPONENT PROFILING
 Use skill: `react-native-profiler`
-When: App feels slow, investigating re-renders or CPU hotspots, producing ranked performance reports.
-  </skill_routing>
+When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
+</skill_routing>
 
 <subagents>
 ENVIRONMENT INSPECTION AT SESSION START

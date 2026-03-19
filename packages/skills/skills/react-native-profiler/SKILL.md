@@ -1,11 +1,13 @@
 ---
 name: react-native-profiler
-description: Profile a React Native Hermes app to find re-render and CPU performance issues using argent profiler tools. Use when profiling performance, finding slow components, diagnosing re-renders, checking CPU hotspots, or producing a ranked issue report with source-level fixes.
+description: Profile a React Native Hermes app to measure re-render and CPU performance using argent profiler tools. Use during optimization to measure before/after, spot slow components, diagnose re-renders, check CPU hotspots, or produce a ranked issue report.
 ---
 
 ## 1. Prerequisites
 
 All profiling goes through argent MCP tools. This workflow requires executing tools on the device.
+
+**This skill is complementary to `react-native-optimization`, not a replacement for it.** 
 
 ## 2. Tool Overview
 
@@ -172,7 +174,9 @@ For standalone diagnostic tools (live render stats, fiber tree, CPU summary), se
 
 | Skill                       | When to use                                                   |
 | --------------------------- | ------------------------------------------------------------- |
-| `ios-profiler`           | Native iOS profiling for CPU hotspots, UI hangs, memory leaks |
+| `react-native-optimization` | Choose and apply the right fix for profiler findings          |
+| `simulator-interact`        | Test the app live by interacting with it in the simulator     |
+| `ios-profiler`              | Native iOS profiling for CPU hotspots, UI hangs, memory leaks |
 | `react-native-app-workflow` | Starting the app, Metro setup, build issues                   |
 | `metro-debugger`            | Breakpoints, stepping, console logs, JS evaluation            |
 | `simulator-setup`           | Booting and connecting a simulator                            |

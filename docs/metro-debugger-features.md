@@ -109,10 +109,12 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
 - Current skills in this repo (`packages/skills/skills/`):
   - `simulator-setup` — Boot a simulator and start the simulator-server.
   - `simulator-interact` — Tap, swipe, gestures, keyboard, and other device interactions.
-  - `simulator-screenshot` — When to call `screenshot` explicitly vs rely on auto-screenshots.
   - `test-ui-flow` — Interact-screenshot-verify loop template.
+  - `create-flow` — Record and replay reusable interaction flows for creating repeatable testing scenarios.
   - `metro-debugger` — CDP debugging workflow: connect, breakpoints, inspect, console.
   - `react-native-app-workflow` — Full RN development lifecycle (start, debug, build, test).
-  - `react-native-profiler` — Performance profiling with `react-profiler-start` / `react-profiler-stop` / `react-profiler-analyze`.
+  - `react-native-optimization` — Entry-point for all performance work: optimization workflow, fix reference, sub-agent dispatch.
+  - `react-native-profiler` — both per-component and app-wide performance profiling achieved with `react-profiler-start` / `react-profiler-stop` / `react-profiler-analyze` workflow.
+  - `ios-profiler` — native profiling for iOS via `ios-profiler-start` / `ios-profiler-stop` / `ios-profiler-analyze`.
 - Skills are installed into the user's skills directory via the `radon-skills` CLI and referenced in the agent configuration so the model has access to them.
 
