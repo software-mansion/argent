@@ -10,11 +10,15 @@ import {
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer } from "./launcher.js";
 import {
+  toMcpContent,
+  flowRunToMcpContent,
+  type FlowExecuteResult,
+} from "./content.js";
+import {
   autoScreenshotEnabled,
   getUdidFromArgs,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
-  normalizeToolName,
 } from "./auto-screenshot.js";
 
 let TOOLS_URL: string;
@@ -26,6 +30,36 @@ if (process.env.RADON_TOOLS_URL) {
   } catch (err) {
     process.stderr.write(`[argent] Failed to start tools server: ${err}\n`);
     process.exit(1);
+  }
+}
+
+let reconnectPromise: Promise<void> | null = null;
+
+async function reconnect(): Promise<void> {
+  if (process.env.RADON_TOOLS_URL) return; // env-var path: never managed by launcher
+  if (!reconnectPromise) {
+    reconnectPromise = ensureToolsServer()
+      .then((url) => {
+        TOOLS_URL = url;
+      })
+      .finally(() => {
+        reconnectPromise = null;
+      });
+  }
+  return reconnectPromise;
+}
+
+async function fetchWithReconnect(
+  getUrl: () => string,
+  init?: RequestInit,
+): Promise<Response> {
+  try {
+    return await fetch(getUrl(), init);
+  } catch {
+    // Network-level failure (e.g. ECONNREFUSED) — server may have idle-timed-out.
+    // Attempt to restart it, then retry once.
+    await reconnect();
+    return fetch(getUrl(), init); // TOOLS_URL is now updated
   }
 }
 
@@ -53,7 +87,7 @@ type ToolMeta = {
 };
 
 async function fetchTools(): Promise<ToolMeta[]> {
-  const res = await fetch(`${TOOLS_URL}/tools`);
+  const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`);
   const json = (await res.json()) as { tools: ToolMeta[] };
   return json.tools;
 }
@@ -64,11 +98,14 @@ async function callTool(
 ): Promise<{ result: unknown; outputHint?: string }> {
   const tools = await fetchTools();
   const meta = tools.find((t) => t.name === name);
-  const res = await fetch(`${TOOLS_URL}/tools/${name}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(args ?? {}),
-  });
+  const res = await fetchWithReconnect(
+    () => `${TOOLS_URL}/tools/${name}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args ?? {}),
+    },
+  );
   const json = (await res.json()) as {
     data?: unknown;
     error?: string;
@@ -76,28 +113,6 @@ async function callTool(
   };
   if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
   return { result: json.data, outputHint: meta?.outputHint };
-}
-
-async function toMcpContent(result: unknown, outputHint?: string) {
-  if (
-    outputHint === "image" &&
-    result &&
-    typeof result === "object" &&
-    "url" in result
-  ) {
-    const imgRes = await fetch((result as { url: string }).url);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    const filePath = (result as { path?: string }).path ?? "";
-    return [
-      {
-        type: "image" as const,
-        data: buf.toString("base64"),
-        mimeType: "image/png" as const,
-      },
-      { type: "text" as const, text: `Saved: ${filePath}` },
-    ];
-  }
-  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
 }
 
 const server = new Server(
@@ -151,7 +166,14 @@ server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       result,
     });
 
-    let content = await toMcpContent(result, outputHint);
+    let content =
+      params.name === "flow-execute" &&
+      result &&
+      typeof result === "object" &&
+      "flow" in result &&
+      "steps" in result
+        ? await flowRunToMcpContent(result as FlowExecuteResult)
+        : await toMcpContent(result, outputHint);
 
     const udid = getUdidFromArgs(params.arguments);
     if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {

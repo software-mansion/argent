@@ -1,6 +1,6 @@
 {
   "name": "@argent/tool-server",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -19,6 +19,7 @@
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2",
     "ws": "^8.18.0",
+    "yaml": "^2.8.2",
     "zod": "^3.23.0"
   },
   "devDependencies": {

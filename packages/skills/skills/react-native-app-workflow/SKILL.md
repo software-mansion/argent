@@ -154,7 +154,7 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 | Problem type                      | Tool / Where to look                                                                                        |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-console-logs` tool to read captured logs, or `debugger-console-listen` for real-time logs.    |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search. Use `debugger-console-listen` for real-time logs. |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.  |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                        |
@@ -163,7 +163,13 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 
 For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `metro-debugger` skill.
 
-### 4.2 Do not try to use the DevMenu in React Native apps by default.
+### 4.2 JS Console Logs (Log Registry)
+
+Logs are written to a flat log file on disk under `~/.argent/tmp/`. Use the **log-registry → grep** pattern instead of reading logs inline.
+
+For the full workflow, flat entry format, and grep examples, see `metro-debugger` skill §5.
+
+### 4.3 Do not try to use the DevMenu in React Native apps by default.
 
 Use the argent tools instead.
 
@@ -172,5 +178,60 @@ Use the argent tools instead.
 ## 5. Testing the App
 
 Check the `environment-inspector` result for test commands. For interactive UI testing with automatic screenshot verification, use the `test-ui-flow` skill.
+
+- **Unit tests**: Look for Jest in `package.json` (`"test": "jest"`, `jest` config). Run: `npm test` or `yarn test`.
+- **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
+- **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `test-ui-flow` skill.
+
+### 5.2 Running Tests (Typical)
+
+If the user's intent is ambiguous (run existing tests, write new tests, or find missing coverage), clarify before proceeding.
+- **Jest**: `npm test` or `npx jest`.
+- **Detox (example)**:
+  - Build: `detox build --configuration ios.sim.release` (or debug).
+  - Run: `detox test --configuration ios.sim.release`.
+  - Ensure simulator is booted and not used by another process.
+
+### 5.3 Agent Testing Checklist
+
+- [ ] Read `package.json` and test config (Jest, Detox, etc.).
+- [ ] If E2E: confirm simulator/device and build config.
+- [ ] If unclear: clarify whether to use existing workflows or write new tests.
+
+---
+
+## Quick Reference: Tools & Commands
+
+| Goal                          | Tool / Command                                 |
+| ----------------------------- | ---------------------------------------------- |
+| Check port 8081               | `lsof -i :8081`                                |
+| Kill Metro                    | `stop-metro` tool                              |
+| Start Metro                   | `npx react-native start`                       |
+| Start Metro (reset cache)     | `npx react-native start --reset-cache`         |
+| Run iOS app                   | `npx react-native run-ios`                     |
+| List simulators               | `list-simulators` tool                         |
+| Boot simulator                | `boot-simulator` tool                          |
+| Take screenshot               | `screenshot` tool                              |
+| Describe screen (a11y tree)   | `describe` tool                                |
+| Read JS console logs          | `debugger-console-logs` tool                   |
+| Reload JS bundle              | `debugger-reload-metro` tool                   |
+| Check Metro status            | `debugger-status` tool                         |
+| Inspect React component tree  | `debugger-component-tree` tool                 |
+| Run JS in app                 | `debugger-evaluate` tool                       |
+| iOS native logs               | `npx react-native log-ios`                     |
+| Clean + reinstall (nuclear)   | See §3.1 step 3                                |
+
+---
+
+## Related Skills
+
+| Skill                    | When to use                                                                    |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `simulator-setup`        | Initial simulator boot and connection setup                                    |
+| `simulator-interact`     | Tapping, swiping, typing, hardware buttons, gestures on the simulator          |
+| `simulator-screenshot`   | Capturing screenshots of the simulator screen                                  |
+| `metro-debugger`         | Full Metro CDP debugging: breakpoints, stepping, component inspection          |
+| `react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                  |
+| `test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
 
 Ask the user before running tests: confirm which test suite (unit, E2E, or both), whether to use existing CI commands, and whether they want you to run existing tests, write new ones, or explore test cases yourself.

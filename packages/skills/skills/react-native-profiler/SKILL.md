@@ -5,7 +5,7 @@ description: Profile a React Native Hermes app to find re-render and CPU perform
 
 ## 1. Prerequisites
 
-All profiling goes through argent MCP tools. This workflow requires executing tools on the device — if in plan mode, ask the user to exit first.
+All profiling goes through argent MCP tools. This workflow requires executing tools on the device.
 
 ## 2. Tool Overview
 
@@ -81,7 +81,7 @@ Follow the "Before profiling" guideline above. Default is dual profiling — sta
 
 Call `react-profiler-start` **and** `ios-profiler-start` in parallel (two tool calls in one message). Do NOT ask — dual profiling is the default. Only skip `ios-profiler-start` if the user already explicitly opted out in this session. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. On success:
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `simulator-interact` skill.
-- if the user stated he wishes to profile himself - suggest what interaction to perform — e.g. _"Please scroll the list / switch tabs. Tell me when done."_ Wait for their reply.
+- if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
 
 ### Annotate every interaction
 

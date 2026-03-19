@@ -9,6 +9,7 @@ import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-cl
 import { createSourceResolver, type SourceResolver } from "../utils/debugger/source-resolver";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import { DISABLE_LOGBOX_SCRIPT } from "../utils/debugger/scripts/disable-logbox";
+import { LogFileWriter } from "../utils/debugger/log-file-writer";
 import { WebSocketServer, WebSocket } from "ws";
 import * as http from "node:http";
 
@@ -20,13 +21,20 @@ export interface ConsoleLogEntry {
   args: Array<{ type: string; value?: unknown; description?: string }>;
   message: string;
   timestamp: number;
+  stackTrace?: {
+    callFrames: Array<{
+      functionName: string;
+      scriptId: string;
+      url: string;
+      lineNumber: number;
+      columnNumber: number;
+    }>;
+  };
 }
 
 export type ConsoleLogEvents = {
   log: (entry: ConsoleLogEntry) => void;
 };
-
-const MAX_LOG_BUFFER = 1000;
 
 function formatConsoleArgs(params: ConsoleAPICalledParams): string {
   return params.args
@@ -40,14 +48,14 @@ function formatConsoleArgs(params: ConsoleAPICalledParams): string {
 
 function createConsoleLogServer(
   consoleEvents: TypedEventEmitter<ConsoleLogEvents>,
-  consoleLogs: ConsoleLogEntry[],
+  logWriter: LogFileWriter,
 ): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
     const server = http.createServer();
     const wss = new WebSocketServer({ server });
 
     wss.on("connection", (ws) => {
-      for (const entry of consoleLogs) {
+      for (const entry of logWriter.readAll()) {
         ws.send(JSON.stringify(entry));
       }
 
@@ -89,7 +97,7 @@ export interface JsRuntimeDebuggerApi {
   cdp: CDPClient;
   sourceResolver: SourceResolver;
   sourceMaps: SourceMapsRegistry;
-  consoleLogs: ConsoleLogEntry[];
+  logWriter: LogFileWriter;
   consoleEvents: TypedEventEmitter<ConsoleLogEvents>;
   consoleSocketUrl: string;
 }
@@ -141,7 +149,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
-    const consoleLogs: ConsoleLogEntry[] = [];
+    const logWriter = new LogFileWriter(port);
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
@@ -156,15 +164,19 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
         })),
         message: formatConsoleArgs(params),
         timestamp: params.timestamp,
+        stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
       };
-      consoleLogs.push(entry);
-      if (consoleLogs.length > MAX_LOG_BUFFER) {
-        consoleLogs.splice(0, consoleLogs.length - MAX_LOG_BUFFER);
-      }
+      logWriter.write({
+        id: entry.id,
+        timestamp: new Date(entry.timestamp * 1000).toISOString(),
+        level: entry.level,
+        message: entry.message,
+        stackTrace: entry.stackTrace,
+      });
       consoleEvents.emit("log", entry);
     });
 
-    const consoleServer = await createConsoleLogServer(consoleEvents, consoleLogs);
+    const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
     const api: JsRuntimeDebuggerApi = {
       port,
@@ -174,7 +186,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       cdp,
       sourceResolver,
       sourceMaps,
-      consoleLogs,
+      logWriter,
       consoleEvents,
       consoleSocketUrl: consoleServer.url,
     };
@@ -189,6 +201,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       api,
       dispose: async () => {
         await consoleServer.close();
+        logWriter.close();
         await cdp.disconnect();
       },
       events,

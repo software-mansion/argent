@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
+import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
@@ -27,8 +28,10 @@ import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro
 import { debuggerStepTool } from "../tools/debugger/debugger-step";
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
-import { debuggerConsoleLogsTool } from "../tools/debugger/debugger-console-logs";
 import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
+import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
+import { networkLogsTool } from "../tools/network/network-logs";
+import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
 import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
@@ -50,9 +53,16 @@ import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
 import { profilerCombinedReportTool } from "../tools/profiler/combined/profiler-combined-report";
 import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
+import { queryDocumentationTool } from "../tools/ai/query-documentation";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
+import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
+import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
+import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
+import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
+import { createRunFlowTool } from "../tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 
 export function createRegistry(): Registry {
@@ -60,6 +70,7 @@ export function createRegistry(): Registry {
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
+  registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(iosInstrumentsSessionBlueprint);
 
@@ -88,8 +99,10 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerStepTool);
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
-  registry.registerTool(debuggerConsoleLogsTool);
   registry.registerTool(debuggerConsoleListenTool);
+  registry.registerTool(debuggerLogRegistryTool);
+  registry.registerTool(networkLogsTool);
+  registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);
   registry.registerTool(activateLicenseKeyTool);
   registry.registerTool(activateSsoTool);
@@ -110,13 +123,21 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerStackQueryTool);
   registry.registerTool(profilerCombinedReportTool);
   registry.registerTool(profilerLoadTool);
+  registry.registerTool(queryDocumentationTool);
+  registry.registerTool(gatherWorkspaceDataTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
 
-  registry.registerTool(gatherWorkspaceDataTool);
+  // Flow tools
+  registry.registerTool(flowStartRecordingTool);
+  registry.registerTool(createFlowAddStepTool(registry));
+  registry.registerTool(flowInsertEchoTool);
+  registry.registerTool(flowFinishRecordingTool);
+  registry.registerTool(flowReadPrerequisiteTool);
+  registry.registerTool(createRunFlowTool(registry));
 
   return registry;
 }
