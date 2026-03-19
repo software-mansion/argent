@@ -7,7 +7,7 @@ description: Profile a React Native Hermes app to measure re-render and CPU perf
 
 All profiling goes through argent MCP tools. This workflow requires executing tools on the device.
 
-**This skill is complimentary to `react-native-optimization`, not a replacement for it.** 
+**This skill is complementary to `react-native-optimization`, not a replacement for it.** 
 
 ## 2. Tool Overview
 

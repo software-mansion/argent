@@ -7,12 +7,12 @@ description: Optimize a React Native app for performance using argent profiler a
 
 | Tool | What it gives you | When to use |
 | ---- | ----------------- | ----------- |
-| `react-profiler-renders` | Live render counts + durations per component (markdown table, top N). **No session needed.** | First thing to run — instant spot-check of what re-renders most. |
+| `react-profiler-renders` | Live render counts + durations per component (markdown table, top N). | First thing to run — instant spot-check of what re-renders most. |
 | `react-profiler-start` / `react-profiler-stop` | Records CPU samples + React commit data with per-fiber durations, prop/hook change tracking, and React Compiler detection. | When you need precise commit-level data, not just counts. |
 | `react-profiler-analyze` | Ranked report: hot commits (≥16ms), render cascades, root causes, memoization status via AST. Pass `annotations` to tag user actions by time offset. | After `react-profiler-stop`. **Primary diagnostic** — tells you exactly what to fix. |
 | `react-profiler-component-source` | AST lookup → file, line, `isMemoized`, `hasUseCallback`, `hasUseMemo`, 50 lines of source. | Per finding from `react-profiler-analyze` — read the code before proposing a fix. |
-| `react-profiler-fiber-tree` | Live component hierarchy JSON with `actualDuration`, `selfBaseDuration`. Filter by regex. Check for `useMemoCache` to confirm React Compiler is active per component. | Trace component ancestry; verify compiler status before suggesting manual memo. |
-| `profiler-cpu-query` | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU breakdown. | Drill into CPU hotspots after `react-profiler-analyze`. **ONLY for non-React CPU work (regex, crypto).**. Not for render analysis. |
+| `react-profiler-fiber-tree` | Live component hierarchy JSON with `actualDuration`, `selfBaseDuration`. Filter by regex. | Trace component ancestry; understand render cost distribution across the tree. |
+| `profiler-cpu-query` | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU breakdown. | Drill into CPU hotspots after `react-profiler-analyze`. Use `mode=component_cpu` to see what JS ran during a component's renders. |
 
 ### Inspection
 
@@ -33,7 +33,7 @@ description: Optimize a React Native app for performance using argent profiler a
 
 1. **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
 2. **Deep measure** — load `react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
-3. **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to check React Compiler (`useMemoCache`).
+3. **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
 4. **Fix** — apply one fix from §3. Validate with `debugger-evaluate` before committing.
 5. **Re-measure** — re-run step 1 or 2. Confirm improvement. **One fix per cycle** — never batch.
 
@@ -45,7 +45,7 @@ Match `react-profiler-analyze` / `react-profiler-renders` findings to fixes:
 
 | Finding | Fix | Detail |
 | ------- | --- | ------ |
-| Re-renders with same props | `React.memo(Comp)` | **Skip if React Compiler active** — check `useMemoCache` via `react-profiler-fiber-tree` |
+| Re-renders with same props | `React.memo(Comp)` | **Skip if React Compiler active** — `react-profiler-analyze` reports compiler status per component |
 | Expensive recomputation / unstable callbacks | `useMemo(fn, [deps])` / `useCallback(fn, [deps])` | `useCallback` must pair with `React.memo` on child |
 | Inline objects/arrays in JSX | `StyleSheet.create()` / module const | New ref every render breaks shallow equality |
 | List jank | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout` | Or `@shopify/flash-list` with `estimatedItemSize` |
