@@ -13,6 +13,10 @@ description: Optimize a React Native app for performance using argent profiler a
 | `react-profiler-component-source` | AST lookup → file, line, `isMemoized`, `hasUseCallback`, `hasUseMemo`, 50 lines of source. | Per finding from `react-profiler-analyze` — read the code before proposing a fix. |
 | `react-profiler-fiber-tree` | Live component hierarchy JSON with `actualDuration`, `selfBaseDuration`. Filter by regex. | Trace component ancestry; understand render cost distribution across the tree. |
 | `profiler-cpu-query` | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU breakdown. | Drill into CPU hotspots after `react-profiler-analyze`. Use `mode=component_cpu` to see what JS ran during a component's renders. |
+| `ios-profiler-start` / `ios-profiler-stop` | Records native CPU samples, UI hangs, and memory leaks via Instruments (`xctrace`). | When jank or bottlenecks may be in the native layer, not JS. Load `ios-profiler` skill for full workflow. |
+| `ios-profiler-analyze` | Severity-ranked report: native CPU hotspots, main-thread hangs with suspected functions, memory leaks with responsible frames. | After `ios-profiler-stop`. |
+| `profiler-combined-report` | Cross-correlates React commits with native Instruments hangs via wall-clock alignment. Shows which React renders overlap with native hangs. | After both React and iOS profiling sessions complete. |
+| `profiler-stack-query` | iOS-only drill-down: hang stacks, function callers/callees, thread CPU breakdown, leak stacks. | Drill into specific native findings from `ios-profiler-analyze`. |
 
 ### Inspection
 
@@ -75,8 +79,9 @@ Use `react-profiler-renders` as a live pre-scan to validate static findings agai
 
 | Skill | When to use |
 | ----- | ----------- |
-| `react-native-profiler` | Full profiler workflow: measure → analyze → repeat |
+| `react-native-profiler` | Full React profiler workflow: measure → analyze → repeat |
+| `ios-profiler` | Native iOS profiling (CPU hotspots, UI hangs, memory leaks) via Instruments |
 | `react-native-app-workflow` | Build/run app, Metro, reload after changes |
-| `metro-debugger` | Breakpoints, stepping, component inspection |
+| `metro-debugger` | Breakpoints, stepping, JS pause/resume — for correctness issues found during optimization |
 | `test-ui-flow` | Verify optimized flows still work |
-| `simulator-interact` | Navigate and interact with the simulator - cannot be used by sub-agents |
+| `simulator-interact` | Navigate and interact with the simulator to trigger code paths for profiling |

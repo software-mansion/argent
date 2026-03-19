@@ -131,8 +131,9 @@ Each bottleneck type indicates a different class of problem:
 
 ## Related Skills
 
-| Skill                   | When to use                                               |
-| ----------------------- | --------------------------------------------------------- |
-| `react-native-profiler` | React/Hermes profiling for re-renders and JS CPU hotspots |
-| `simulator-setup`       | Booting and connecting a simulator                        |
-| `simulator-interact`    | Driving UI interaction on the simulator                   |
+| Skill                        | When to use                                               |
+| ---------------------------- | --------------------------------------------------------- |
+| `react-native-optimization`  | Entry-point for all performance work — choose and apply fixes for profiler findings |
+| `react-native-profiler`      | React/Hermes profiling for re-renders and JS CPU hotspots |
+| `simulator-setup`            | Booting and connecting a simulator                        |
+| `simulator-interact`         | Driving UI interaction on the simulator                   |
