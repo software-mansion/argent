@@ -80,6 +80,10 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 APP & COMPONENT PROFILING
 Use skill: `react-native-profiler`
 When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
+
+NATIVE iOS PROFILING
+Use skill: `ios-profiler`
+When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `react-native-profiler`.
 </skill_routing>
 
 <subagents>
