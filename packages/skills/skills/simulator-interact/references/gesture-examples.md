@@ -1,6 +1,6 @@
 # Gesture Examples
 
-Detailed sequences and parameters for the gesture tool family.
+Detailed sequences and parameters for the gesture tool family. All coordinates, distances, and radii are **normalized 0.0–1.0** (fractions of screen width/height, not pixels) — same coordinate space across all gesture tools.
 
 ## gesture-pinch — Two-finger pinch
 

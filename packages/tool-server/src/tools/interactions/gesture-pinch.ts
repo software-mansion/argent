@@ -7,27 +7,33 @@ const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   centerX: z
     .number()
-    .describe("Center of pinch, horizontal position (0.0–1.0)"),
+    .describe(
+      "Center of pinch, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)",
+    ),
   centerY: z
     .number()
-    .describe("Center of pinch, vertical position (0.0–1.0)"),
+    .describe(
+      "Center of pinch, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)",
+    ),
   startDistance: z
     .number()
     .describe(
-      "Initial distance between the two fingers (0.0–1.0 normalized). " +
-        "Use a larger startDistance than endDistance to pinch in (zoom out)."
+      "Initial distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
+        "E.g. 0.2 = fingers 20% of screen apart. " +
+        "Use a larger startDistance than endDistance to pinch in (zoom out).",
     ),
   endDistance: z
     .number()
     .describe(
-      "Final distance between the two fingers (0.0–1.0 normalized). " +
-        "Use a larger endDistance than startDistance to pinch out (zoom in)."
+      "Final distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
+        "E.g. 0.6 = fingers 60% of screen apart. " +
+        "Use a larger endDistance than startDistance to pinch out (zoom in).",
     ),
   angle: z
     .number()
     .optional()
     .describe(
-      "Axis angle in degrees along which the fingers are placed (default 0 = horizontal)."
+      "Axis angle in degrees along which the fingers are placed (default 0 = horizontal).",
     ),
   durationMs: z
     .number()
@@ -40,9 +46,10 @@ export const gesturePinchTool: ToolDefinition<
   { pinched: boolean; timestampMs: number }
 > = {
   id: "gesture-pinch",
-  description: `Perform a smooth two-finger pinch gesture.
+  description: `Perform a smooth two-finger pinch gesture. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
 startDistance > endDistance = pinch in (zoom out).
 startDistance < endDistance = pinch out (zoom in).
+Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
 Auto-generates interpolated frames at ~60fps for a natural feel.
 The angle parameter controls the axis (0 = horizontal, 90 = vertical).`,
   zodSchema,

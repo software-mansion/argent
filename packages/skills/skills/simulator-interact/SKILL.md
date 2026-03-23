@@ -82,7 +82,7 @@ Swipe **up** (`fromY > toY`) = scroll content **down**. Optional: `"durationMs":
 { "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "startDistance": 0.2, "endDistance": 0.6 }
 ```
 
-`startDistance < endDistance` = pinch out (zoom in). `startDistance > endDistance` = pinch in (zoom out). Optional: `"angle": 90` for vertical axis, `"durationMs": 500` for slower pinch.
+All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same as all other gesture tools. `startDistance: 0.2` means fingers start 20% of the screen apart; `endDistance: 0.6` means they end 60% apart. `startDistance < endDistance` = pinch out (zoom in). `startDistance > endDistance` = pinch in (zoom out). Optional: `"angle": 90` for vertical axis, `"durationMs": 500` for slower pinch.
 
 ### gesture-rotate — Two-finger rotation
 
@@ -90,7 +90,7 @@ Swipe **up** (`fromY > toY`) = scroll content **down**. Optional: `"durationMs":
 { "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "radius": 0.15, "startAngle": 0, "endAngle": 90 }
 ```
 
-`endAngle > startAngle` = clockwise. Optional: `"durationMs": 500` for slower rotation.
+All positions and radius are normalized 0.0–1.0 (fractions of screen, not pixels). `radius: 0.15` means each finger is 15% of the screen away from center. `endAngle > startAngle` = clockwise. Optional: `"durationMs": 500` for slower rotation.
 
 ### gesture-custom — Custom touch sequence
 

@@ -7,13 +7,20 @@ const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   centerX: z
     .number()
-    .describe("Center of rotation, horizontal position (0.0–1.0)"),
+    .describe(
+      "Center of rotation, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)",
+    ),
   centerY: z
     .number()
-    .describe("Center of rotation, vertical position (0.0–1.0)"),
+    .describe(
+      "Center of rotation, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)",
+    ),
   radius: z
     .number()
-    .describe("Distance from center to each finger (0.0–1.0 normalized)"),
+    .describe(
+      "Distance from center to each finger: normalized 0.0–1.0 (fraction of screen, not pixels). " +
+        "E.g. 0.15 = fingers placed 15% of screen away from center.",
+    ),
   startAngle: z
     .number()
     .describe("Starting angle in degrees (0 = right, 90 = down)"),
@@ -31,10 +38,11 @@ export const gestureRotateTool: ToolDefinition<
   { rotated: boolean; timestampMs: number }
 > = {
   id: "gesture-rotate",
-  description: `Perform a smooth two-finger rotation gesture.
+  description: `Perform a smooth two-finger rotation gesture. All positions and radius are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
 Two fingers are placed opposite each other at the given radius from the center,
 then rotated from startAngle to endAngle.
 endAngle > startAngle = clockwise rotation.
+Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise rotation at screen center.
 Auto-generates interpolated frames at ~60fps for a natural feel.`,
   zodSchema,
   services: (params) => ({
