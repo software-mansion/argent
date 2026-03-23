@@ -7,8 +7,12 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  x: z.number().describe("Horizontal position (0.0=left, 1.0=right)"),
-  y: z.number().describe("Vertical position (0.0=top, 1.0=bottom)"),
+  x: z.number().describe(
+    "Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels",
+  ),
+  y: z.number().describe(
+    "Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels",
+  ),
 });
 
 export const gestureTapTool: ToolDefinition<
@@ -16,10 +20,10 @@ export const gestureTapTool: ToolDefinition<
   { tapped: boolean; timestampMs: number }
 > = {
   id: "gesture-tap",
-  description: `Tap the simulator screen at normalized coordinates (0.0=left/top, 1.0=right/bottom).
+  description: `Tap the simulator screen at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
 Sends a Down event followed by an Up event at the same point.
 
-Before tapping, determine the correct coordinates by using debugger-component-tree, describe or screenshot tools. More information in simualtor-interact skill`,
+Before tapping, determine the correct coordinates by using debugger-component-tree, describe or screenshot tools. More information in simulator-interact skill`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

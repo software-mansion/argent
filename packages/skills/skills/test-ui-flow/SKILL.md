@@ -60,6 +60,7 @@ Steps:
 - If screenshot shows loading/transition: wait 500ms, retake with `screenshot`.
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
+- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `create-flow` skill §10 for structured diagnosis and correction.
 
 ## Tips
 
