@@ -1,5 +1,5 @@
-import type { SimulatorServerApi } from "../../blueprints/simulator-server";
-import { sendCommand } from "../../utils/simulator-client";
+import type { SimulatorServerApi } from "../blueprints/simulator-server";
+import { sendCommand } from "./simulator-client";
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

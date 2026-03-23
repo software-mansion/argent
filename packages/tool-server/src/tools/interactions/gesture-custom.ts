@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 import { sendCommand } from "../../utils/simulator-client";
-import { interpolateEvents } from "./gesture-utils";
+import { interpolateEvents } from "../../utils/gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

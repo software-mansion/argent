@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { SimulatorServerApi } from "../../blueprints/simulator-server";
-import { sleep, sendTouchEvent } from "./gesture-utils";
+import { sleep, sendTouchEvent } from "../../utils/gesture-utils";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
