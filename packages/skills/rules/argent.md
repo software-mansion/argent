@@ -25,12 +25,13 @@ Argent MCP tools are the preferred form of interaction with the application.
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before tapping anything, use a discovery tool to get exact coordinates:
-  - `describe` — any iOS app (returns accessibility element tree).
+  - `describe` — any iOS app (returns accessibility element tree). Preferred.
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
   - `screenshot` - as a fallback, if above fail or need additional context
 - Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
-- If a tap fails twice at the same coordinates, stop retrying. Re-run the discovery tool.
+- If a **tap fails twice** at the same coordinates, stop retrying. Re-run the discovery tool.
+  If you've used `describe`and it was insufficient - then try `component-tree`
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
@@ -45,9 +46,7 @@ source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding.
 
-When `is_react_native` is true: load `react-native-app-workflow` skill, and use
-`debugger-component-tree` for all element discovery where needed. `describe` can still
-be useful when there is a modal or system-level overlay in place.
+When `is_react_native` is true: load `react-native-app-workflow` skill. Apart from `describe`, a `debugger-component-tree` for element discovery can be used.
 </react_native_detection>
 
 <skill_routing>
