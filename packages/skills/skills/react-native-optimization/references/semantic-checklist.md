@@ -1,6 +1,7 @@
 # Phase 3: Semantic Sweep
 
-Work through each item. Do not skip.
+Work through each item. Do not skip. Dispatch one sub-agent per checklist item.
+Depends on Phase 1 output — `exhaustive-deps` findings must be available.
 
 ## Checklist
 
@@ -16,8 +17,11 @@ Wrap independent calls in `Promise.all`.
 Grep for `setInterval`, `setTimeout`, `addEventListener`, `.subscribe(`, `.on(` inside `useEffect`.
 Verify each returns a cleanup function.
 
+### Unused state variables
+Find `useState` calls where the value is set but never read in JSX or passed to children. Common examples: renderCount, lastComputed, refreshCount. Remove the `useState` call entirely.
+
 ### Exhaustive deps (from Phase 1)
-Process `react-hooks/exhaustive-deps` findings.
+Process `react-hooks/exhaustive-deps` findings from Phase 1.
 Some "missing" deps are intentional (refs, dispatch). Use judgment.
 
 ### Monolithic context

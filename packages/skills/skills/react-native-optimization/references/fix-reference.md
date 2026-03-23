@@ -6,11 +6,11 @@
 | Expensive recomputation | `useMemo` / `useCallback` (pair with `React.memo` on child) |
 | Inline objects/arrays in JSX | `StyleSheet.create()` / module const |
 | Index as key | Stable unique ID |
-| List jank | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout`, or `@shopify/flash-list` |
+| List jank | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout` (only if fixed height), or `@shopify/flash-list` |
 | ScrollView + .map() | `FlatList` / `FlashList` |
-| JS-thread animation | `useNativeDriver: true` / Reanimated (`useNativeDriver` only for transform/opacity) |
+| JS-thread animation | `useNativeDriver: true` / Reanimated. Supports all non-layout properties — cannot animate width, height, margin, padding, flex. |
 | Heavy work during transitions | `InteractionManager.runAfterInteractions()` |
-| Slow startup | Hermes + inline requires in `metro.config.js` |
+| Slow startup | Hermes + inline requires in `metro.config.js`, `React.lazy` with Suspense for code splitting |
 | Slow/redundant network | Batch, debounce, or cache. Use `view-network-logs` → `view-network-request-details` to identify. |
 | Empty catch blocks | Add error handling (`console.error` at minimum) |
 | Missing useEffect cleanup | Return cleanup function (cancel timers, remove listeners) |
@@ -19,4 +19,6 @@
 | Missing hook deps | Add correct deps per `exhaustive-deps` |
 | Sequential awaits | `Promise.all` |
 | Monolithic context | Split into focused contexts (architectural rec, not quick fix) |
-| TypeScript `any` | Add proper types |
+| Navigation jank | `react-native-screens`, `enableFreeze()`, lazy screen loading |
+| Image performance | `FastImage` or equivalent, proper sizing, caching strategy |
+| console.log in production | Strip with `babel-plugin-transform-remove-console` |
