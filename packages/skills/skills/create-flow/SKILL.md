@@ -123,10 +123,87 @@ steps:
       y: 0.17
 ```
 
-## 9. Related Skills
+## 9. When to Proactively Record a Flow
 
-| Skill                  | When to use                                      |
-| ---------------------- | ------------------------------------------------ |
-| `simulator-interact`   | Detailed tool usage for tapping, swiping, typing |
-| `simulator-setup`      | Booting and connecting a simulator               |
-| `test-ui-flow`         | Interactive UI testing with screenshot verification |
+You do not need the user to ask for a flow. Record one proactively when you recognise any of these patterns:
+
+- **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `react-native-profiler` and `ios-profiler` skills).
+- **Repeating steps**: You have already performed a multi-step interaction sequence once and the task requires doing it again (comparison, retry, re-test).
+- **Complex path discovered**: You worked through a non-trivial sequence of taps/swipes/navigation to reach a desired app state. Capture it before it is lost.
+- **User says "again" / "one more time"**: Any request to redo what you just did is a signal to record first, then replay.
+
+## 10. Flow Self-Improvement
+
+Flows break. UI layouts change, coordinates drift, screens get added or removed. When `flow-execute` returns a failure, follow this procedure to diagnose and fix the flow instead of silently re-recording or giving up.
+
+### 10.1 Classify the Result
+
+After every `flow-execute`, classify the outcome before proceeding:
+
+| Outcome | Signal | Action |
+|---|---|---|
+| **Success** | All steps completed, final screenshot shows expected state | Continue with task |
+| **Hard error** | A step has `ERROR` in the result — engine stopped there | Enter §10.2 |
+| **Silent misfire** | All steps completed but final screenshot shows wrong screen | Enter §10.2 |
+| **Partial divergence** | Intermediate screenshot shows wrong state even though later steps ran | Enter §10.2 |
+
+For silent misfires and partial divergence, echo annotations (§10.5) are your reference for what each screen *should* look like.
+
+### 10.2 Diagnose
+
+1. Note the failure step index and error message (if hard error).
+2. Call `screenshot` to see where the app actually is now.
+3. Call `describe` or `debugger-component-tree` to get the current element tree.
+4. Compare current state to what the failed step expected. Classify the root cause:
+
+| Root cause | Symptoms |
+|---|---|
+| Coordinate drift | Tap succeeded but hit wrong element; elements shifted positions |
+| Missing element | Target element not present in element tree |
+| Wrong screen | Screenshot shows entirely different page than expected |
+| Timing | Element exists in tree but tap missed; loading spinner visible |
+| State mismatch | First step fails — executionPrerequisite was not actually met |
+
+5. State the diagnosis in one sentence before attempting any correction.
+
+### 10.3 Correct
+
+Choose the lightest strategy that fits:
+
+**Strategy 1 — Edit the YAML** (coordinate drift, parameter changes).
+Read `.argent/<flow-name>.yaml`, update the broken step's `x`/`y`, `bundleId`, `text`, or other args. Re-run `flow-execute` to verify.
+
+**Strategy 2 — Manual recovery + continue** (timing/transient issues, one-off replay).
+Manually execute the failed step with corrected coordinates from §10.2 discovery, then manually execute remaining steps. Does not fix the YAML — use only when re-recording is not worth it.
+
+**Strategy 3 — Re-record from failure point** (structural changes, new intermediate screens).
+Navigate the app to the state just before the failure point. Call `flow-start-recording` with the same flow name (overwrites). Re-add the working prefix steps via `flow-add-step`, then continue recording new steps from the divergence point. Call `flow-finish-recording`.
+
+**Strategy 4 — Full re-record** (major changes, unclear diagnosis, or 3+ broken steps).
+Reset the app to prerequisite state (`restart-app` + `launch-app`). Record from scratch with the same flow name.
+
+**Decision heuristic:**
+- 1 step broken, parameter-only change → Strategy 1
+- 1 step broken, transient issue, not worth persisting → Strategy 2
+- 2–3 steps broken or flow structure partially changed → Strategy 3
+- 3+ steps broken, or unclear root cause → Strategy 4
+- Flow used for profiling comparison (must be identical) → Strategy 4
+
+### 10.4 Verify and Bound Retries
+
+After applying a correction, re-run `flow-execute` to verify.
+- If it succeeds → done. Report what changed (e.g. "Fixed step 4: updated tap coordinates from 0.5,0.35 to 0.5,0.42").
+- If it fails at a **different** step → return to §10.2 for a second attempt.
+- If this is already the second correction attempt → **stop**. Report the diagnosis to the user and recommend a full re-record or manual investigation.
+
+**Hard cap: 2 correction cycles.** Do not enter an unbounded fix loop.
+
+### 10.5 Making Flows Resilient
+
+Apply these when recording new flows to reduce future breakage:
+
+- **Echo expected state, not just actions.** Write `"On Settings > General screen, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen *should* look like.
+- **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
+- **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
+- **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
+- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates.
