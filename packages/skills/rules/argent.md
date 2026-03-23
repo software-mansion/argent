@@ -25,7 +25,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before tapping anything, use a discovery tool to get exact coordinates:
-  - `describe` — any iOS app (returns accessibility element tree)
+  - `describe` — any iOS app (returns accessibility element tree).
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
   - `screenshot` - as a fallback, if above fail or need additional context
 - Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
@@ -35,6 +35,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 - iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
   </core_rules>
 
 <react_native_detection>
