@@ -42,8 +42,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         );
       }
 
-      const api =
-        await registry.resolveService<ReactProfilerSessionApi>(psUrn);
+      const api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
       const cdp = api.cdp;
 
       if (!api.cdp.isConnected()) {
@@ -282,9 +281,9 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         totalReactCommits: api.totalReactCommits,
       };
 
-    cacheProfilerPaths(api.port, sessionPaths);
-    api.sessionPaths = sessionPaths;
-    api.disposeSession();
+      cacheProfilerPaths(api.port, sessionPaths);
+      api.sessionPaths = sessionPaths;
+      api.disposeSession();
 
       const duration_ms = (profile.endTime - profile.startTime) / 1000;
 

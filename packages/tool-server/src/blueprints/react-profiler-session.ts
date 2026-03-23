@@ -184,10 +184,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
-        // No CDP calls here — Profiler.stop is issued explicitly in react-profiler-stop,
-        // and the new session's factory re-enables the domain.
-        // Keeping dispose free of I/O ensures TERMINATING→IDLE completes as a microtask,
-        // before the next MCP request (macrotask) can trigger a resolve.
+        // Profiler.stop is called explicitly in react-profiler-stop before disposal.
+        await cdp.send("Profiler.disable").catch(ignore);
       },
       events,
     };

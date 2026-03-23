@@ -166,6 +166,10 @@ registry.registerTool(createReactProfilerStopTool(registry));
 | `react-profiler-stop` after Metro reload | Crashes: "no CDP targets" (tries to re-create dead session) | Clean error: "No active profiling session" with guidance to start a new one |
 | Blueprint factory interrupted mid-init by cascade | Node left in phantom RUNNING state | Factory result discarded, node correctly in ERROR, next `resolveService` starts fresh |
 
+### Blueprint dispose
+
+`ReactProfilerSession.dispose` calls `Profiler.disable` (best-effort, errors caught) to match the `Profiler.enable` in the factory. This is a single CDP call with `.catch(ignore)`, so it does not meaningfully delay TERMINATING→IDLE. If CDP is already disconnected (e.g. after a Metro reload), the call silently fails.
+
 ---
 
 ## Testing
