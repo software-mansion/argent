@@ -18,7 +18,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the RN project root (debug files are in <project_root>/rn-devtools-debug/)",
+      "Absolute path to the RN project root (debug files are in <project_root>/argent-profiler-cwd/)",
     ),
   mode: z
     .enum(["list", "load_react", "load_instruments"])

@@ -15,7 +15,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the user's project root directory. Output files will be saved to <project_root>/rn-devtools-debug/.",
+      "Absolute path to the user's project root directory. Output files will be saved to <project_root>/argent-profiler-cwd/.",
     ),
   app_process: z
     .string()

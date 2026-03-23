@@ -1,11 +1,11 @@
-import { promises as fs } from 'fs';
-import { join } from 'path';
-import type { HermesCpuProfile, DevToolsFiberCommit } from '../types/input';
+import { promises as fs } from "fs";
+import { join } from "path";
+import type { HermesCpuProfile, DevToolsFiberCommit } from "../types/input";
 
-const DEBUG_DIR_NAME = 'rn-devtools-debug';
+const DEBUG_DIR_NAME = "argent-profiler-cwd";
 
 /**
- * Returns (and creates if needed) <projectRoot>/rn-devtools-debug/.
+ * Returns (and creates if needed) <projectRoot>/argent-profiler-cwd/.
  */
 export async function getDebugDir(projectRoot: string): Promise<string> {
   const dir = join(projectRoot, DEBUG_DIR_NAME);
@@ -22,11 +22,15 @@ const jsonReplacer = (_key: string, value: unknown): unknown => {
  * Writes `data` as pretty-printed JSON to `<dir>/<filename>`.
  * Returns the full file path. Non-fatal — returns null on error.
  */
-export async function writeDump(dir: string, filename: string, data: unknown): Promise<string | null> {
+export async function writeDump(
+  dir: string,
+  filename: string,
+  data: unknown,
+): Promise<string | null> {
   try {
     const path = join(dir, filename);
     const json = JSON.stringify(data, jsonReplacer, 2);
-    await fs.writeFile(path, json, 'utf8');
+    await fs.writeFile(path, json, "utf8");
     return path;
   } catch {
     return null;
@@ -38,11 +42,15 @@ export async function writeDump(dir: string, filename: string, data: unknown): P
  * Saves ~30% string size vs pretty-printed for large profiling data.
  * Returns the full file path. Non-fatal — returns null on error.
  */
-export async function writeDumpCompact(dir: string, filename: string, data: unknown): Promise<string | null> {
+export async function writeDumpCompact(
+  dir: string,
+  filename: string,
+  data: unknown,
+): Promise<string | null> {
   try {
     const path = join(dir, filename);
     const json = JSON.stringify(data, jsonReplacer);
-    await fs.writeFile(path, json, 'utf8');
+    await fs.writeFile(path, json, "utf8");
     return path;
   } catch {
     return null;
@@ -53,14 +61,14 @@ export async function writeDumpCompact(dir: string, filename: string, data: unkn
  * Read a CPU profile from disk.
  */
 export async function readCpuProfile(path: string): Promise<HermesCpuProfile> {
-  const json = await fs.readFile(path, 'utf8');
+  const json = await fs.readFile(path, "utf8");
   return JSON.parse(json) as HermesCpuProfile;
 }
 
 export interface CommitTreeOnDisk {
   commits: DevToolsFiberCommit[];
   meta?: {
-    detectedArchitecture?: 'bridge' | 'bridgeless' | null;
+    detectedArchitecture?: "bridge" | "bridgeless" | null;
     anyCompilerOptimized?: boolean | null;
     hotCommitIndices?: number[] | null;
     totalReactCommits?: number | null;
@@ -72,6 +80,6 @@ export interface CommitTreeOnDisk {
  * Read a commit tree (with meta) from disk.
  */
 export async function readCommitTree(path: string): Promise<CommitTreeOnDisk> {
-  const json = await fs.readFile(path, 'utf8');
+  const json = await fs.readFile(path, "utf8");
   return JSON.parse(json) as CommitTreeOnDisk;
 }
