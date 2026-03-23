@@ -14,15 +14,15 @@ import {
 // ---------------------------------------------------------------------------
 describe("normalizeToolName", () => {
   it("returns name unchanged when no prefix", () => {
-    expect(normalizeToolName("tap")).toBe("tap");
+    expect(normalizeToolName("gesture-tap")).toBe("gesture-tap");
   });
 
   it("strips mcp__radon-lite__ prefix", () => {
-    expect(normalizeToolName("mcp__radon-lite__tap")).toBe("tap");
+    expect(normalizeToolName("mcp__radon-lite__gesture-tap")).toBe("gesture-tap");
   });
 
   it("strips any prefix ending with __", () => {
-    expect(normalizeToolName("prefix__other__swipe")).toBe("swipe");
+    expect(normalizeToolName("prefix__other__gesture-swipe")).toBe("gesture-swipe");
   });
 
   it("handles tool names with hyphens", () => {
@@ -70,7 +70,7 @@ describe("shouldAutoScreenshot", () => {
   });
 
   it("returns true for prefixed tool names", () => {
-    expect(shouldAutoScreenshot("mcp__radon-lite__tap")).toBe(true);
+    expect(shouldAutoScreenshot("mcp__radon-lite__gesture-tap")).toBe(true);
     expect(shouldAutoScreenshot("mcp__radon-lite__launch-app")).toBe(true);
   });
 
@@ -154,8 +154,8 @@ describe("getAutoScreenshotDelayMs", () => {
   });
 
   it("normalizes prefixed tool names", () => {
-    expect(getAutoScreenshotDelayMs("mcp__radon-lite__tap")).toBe(
-      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["tap"]
+    expect(getAutoScreenshotDelayMs("mcp__radon-lite__gesture-tap")).toBe(
+      AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["gesture-tap"]
     );
     expect(getAutoScreenshotDelayMs("mcp__radon-lite__launch-app")).toBe(
       AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["launch-app"]
@@ -175,7 +175,7 @@ describe("getAutoScreenshotDelayMs", () => {
 
   it("ignores non-numeric env override", () => {
     process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "abc";
-    expect(getAutoScreenshotDelayMs("tap")).toBe(1300);
+    expect(getAutoScreenshotDelayMs("gesture-tap")).toBe(1500);
   });
 });
 

@@ -17,11 +17,11 @@ const zodSchema = z.object({
     .describe("Total gesture duration in milliseconds (default 300)"),
 });
 
-export const swipeTool: ToolDefinition<
+export const gestureSwipeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { swiped: boolean; timestampMs: number }
 > = {
-  id: "swipe",
+  id: "gesture-swipe",
   description: `Perform a smooth swipe gesture between two points.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.

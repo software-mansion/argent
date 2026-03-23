@@ -11,11 +11,11 @@ const zodSchema = z.object({
   y: z.number().describe("Vertical position (0.0=top, 1.0=bottom)"),
 });
 
-export const tapTool: ToolDefinition<
+export const gestureTapTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { tapped: boolean; timestampMs: number }
 > = {
-  id: "tap",
+  id: "gesture-tap",
   description: `Tap the simulator screen at normalized coordinates (0.0=left/top, 1.0=right/bottom).
 Sends a Down event followed by an Up event at the same point.
 

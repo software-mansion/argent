@@ -49,7 +49,7 @@ args: "{\"udid\": \"<UDID>\", \"bundleId\": \"com.apple.Preferences\"}"
 ```
 
 ```
-command: "tap"
+command: "gesture-tap"
 args: "{\"udid\": \"<UDID>\", \"x\": 0.5, \"y\": 0.35}"
 ```
 
@@ -76,9 +76,9 @@ flow-start-recording  { name: "open-settings", executionPrerequisite: "Simulator
 flow-add-echo  { message: "Launch Settings app" }
 flow-add-step  { command: "launch-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }
 flow-add-echo  { message: "Tap General" }
-flow-add-step  { command: "tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }
+flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.35}" }
 flow-add-echo  { message: "Tap About" }
-flow-add-step  { command: "tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.17}" }
+flow-add-step  { command: "gesture-tap", args: "{\"udid\": \"ABC\", \"x\": 0.5, \"y\": 0.17}" }
 flow-finish-recording  {}
 ```
 
@@ -110,13 +110,13 @@ steps:
       udid: ABC
       bundleId: com.apple.Preferences
   - echo: Tap General
-  - tool: tap
+  - tool: gesture-tap
     args:
       udid: ABC
       x: 0.5
       y: 0.35
   - echo: Tap About
-  - tool: tap
+  - tool: gesture-tap
     args:
       udid: ABC
       x: 0.5

@@ -112,13 +112,13 @@ describe("flowRunToMcpContent", () => {
   it("renders tool error steps", async () => {
     const input: FlowExecuteResult = {
       flow: "f",
-      steps: [{ kind: "tool", tool: "tap", error: "connection lost" }],
+      steps: [{ kind: "tool", tool: "gesture-tap", error: "connection lost" }],
     };
     const blocks = await flowRunToMcpContent(input);
 
     expect(blocks[1]).toEqual({
       type: "text",
-      text: "[1] tap ERROR: connection lost",
+      text: "[1] gesture-tap ERROR: connection lost",
     });
   });
 
@@ -126,13 +126,13 @@ describe("flowRunToMcpContent", () => {
     const input: FlowExecuteResult = {
       flow: "f",
       steps: [
-        { kind: "tool", tool: "tap", result: { ok: true } },
+        { kind: "tool", tool: "gesture-tap", result: { ok: true } },
       ],
     };
     const blocks = await flowRunToMcpContent(input);
 
     // [0] header, [1] tool name, [2] JSON result, [3] footer
-    expect(blocks[1]).toEqual({ type: "text", text: "[1] tap" });
+    expect(blocks[1]).toEqual({ type: "text", text: "[1] gesture-tap" });
     expect(blocks[2]).toEqual({
       type: "text",
       text: JSON.stringify({ ok: true }, null, 2),
@@ -178,7 +178,7 @@ describe("flowRunToMcpContent", () => {
       flow: "mixed",
       steps: [
         { kind: "echo", message: "Start" },
-        { kind: "tool", tool: "tap", result: { x: 1 } },
+        { kind: "tool", tool: "gesture-tap", result: { x: 1 } },
         { kind: "echo", message: "End" },
       ],
     };
@@ -190,7 +190,7 @@ describe("flowRunToMcpContent", () => {
 
     expect(texts[0]).toContain("Running flow");
     expect(texts[1]).toBe("[1] Start");
-    expect(texts[2]).toBe("[2] tap");
+    expect(texts[2]).toBe("[2] gesture-tap");
     // [3] is JSON result
     expect(texts[4]).toBe("[3] End");
     expect(texts[5]).toContain("complete");

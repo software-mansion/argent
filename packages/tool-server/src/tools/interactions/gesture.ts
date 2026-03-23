@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 import { sendCommand } from "../../utils/simulator-client";
+import { interpolateEvents } from "./gesture-utils";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -28,17 +29,27 @@ const zodSchema = z.object({
   events: z
     .array(eventSchema)
     .describe("Sequence of touch events to send to the simulator"),
+  interpolate: z
+    .number()
+    .optional()
+    .describe(
+      "Number of intermediate Move events to auto-insert between each pair of consecutive events. " +
+        "Smooths out gestures by linearly interpolating both primary (x,y) and secondary (x2,y2) coordinates. " +
+        "The delay is split evenly across interpolated frames. Default: no interpolation."
+    ),
 });
 
-export const gestureTool: ToolDefinition<
+export const gestureCustomTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { events: number }
 > = {
-  id: "gesture",
+  id: "gesture-custom",
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
-For simple taps use the tap tool. For straight-line scrolling use the swipe tool.
+For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
+For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
 Coordinates are normalized 0.0–1.0. delayMs controls the delay before each event (default 16ms ≈ 60fps).
+Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
@@ -46,14 +57,24 @@ Example long-press at center:
 Example smooth scroll down:
   [{"type":"Down","x":0.5,"y":0.7},
    {"type":"Move","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.5},{"type":"Move","x":0.5,"y":0.4},
-   {"type":"Up","x":0.5,"y":0.3}]`,
+   {"type":"Up","x":0.5,"y":0.3}]
+
+Example pinch-to-zoom (with interpolate:10 for smoothness):
+  events: [{"type":"Down","x":0.4,"y":0.5,"x2":0.6,"y2":0.5},
+           {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
+  interpolate: 10`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;
-    for (const event of params.events) {
+    const events =
+      params.interpolate && params.interpolate > 0
+        ? interpolateEvents(params.events, params.interpolate)
+        : params.events;
+
+    for (const event of events) {
       await sleep(event.delayMs ?? 16);
       sendCommand(api, {
         cmd: "touch",
@@ -64,6 +85,6 @@ Example smooth scroll down:
         second_y: event.y2 ?? null,
       });
     }
-    return { events: params.events.length };
+    return { events: events.length };
   },
 };
