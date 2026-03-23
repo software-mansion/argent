@@ -87,13 +87,23 @@ Call this tool when both profilers were run in parallel on the same session.`,
       cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
     }
 
-    const reactWallStart = reactApi.profileStartWallMs;
+    const reactWallStart = reactApi.profileStartWallMs ?? onDisk.meta?.profileStartWallMs ?? null;
     const iosWallStart = iosApi.wallClockStartMs;
 
-    if (!reactWallStart || !iosWallStart) {
+    if (!reactWallStart && !iosWallStart) {
       throw new Error(
-        "Missing wall-clock anchor from one or both profilers. Both profilers must be started " +
-          "before they can be correlated. Re-run the profiling session.",
+        "Missing wall-clock anchor from both profilers. Re-run the full profiling session " +
+        "(ios-instruments-start + react-profiler-start).",
+      );
+    } else if (!reactWallStart) {
+      throw new Error(
+        "Missing wall-clock anchor from React Profiler (profileStartWallMs not found). " +
+        "Re-run the profiling session starting with react-profiler-start.",
+      );
+    } else if (!iosWallStart) {
+      throw new Error(
+        "Missing wall-clock anchor from iOS Profiler (wallClockStartMs not found). " +
+        "Re-run the profiling session starting with ios-profiler-start.",
       );
     }
 

@@ -9,10 +9,18 @@ import type {
   IosProfilerAnalyzeResult,
 } from "./types";
 
+const MAX_INLINE_HOTSPOTS = 5;
+const MAX_INLINE_HANGS = 3;
+
 interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
   exportErrors?: Record<string, string>;
+}
+
+interface InlineCap {
+  hotspotLimit: number;
+  hangLimit: number;
 }
 
 export async function renderIosProfilerReport(
@@ -21,13 +29,33 @@ export async function renderIosProfilerReport(
   const { payload, traceFile } = input;
   const bottlenecksTotal = payload.bottlenecks.length;
 
-  const report =
+  const cpuHotspotsCount = payload.bottlenecks.filter(
+    (b) => b.type === "ios_cpu_hotspot",
+  ).length;
+  const uiHangsCount = payload.bottlenecks.filter(
+    (b) => b.type === "ios_ui_hang",
+  ).length;
+
+  const fullReport =
     bottlenecksTotal === 0
       ? renderAllClear(payload, input.exportErrors)
-      : renderFullReport(payload, input.exportErrors);
+      : renderFullReport(payload, input.exportErrors, { hotspotLimit: Infinity, hangLimit: Infinity });
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
-  const wroteFile = reportFile ? await writeReport(reportFile, report) : false;
+  const wroteFile = reportFile ? await writeReport(reportFile, fullReport) : false;
+
+  const inlineReport =
+    bottlenecksTotal === 0
+      ? renderAllClear(payload, input.exportErrors)
+      : renderFullReport(payload, input.exportErrors, { hotspotLimit: MAX_INLINE_HOTSPOTS, hangLimit: MAX_INLINE_HANGS });
+
+  const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
+  const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
+  const report =
+    wroteFile && reportFile
+      ? inlineReport +
+        `\n\n> Full report: \`${reportFile}\` — ${bottlenecksTotal} bottleneck(s) total, showing top ${shownHotspots} CPU hotspots and top ${shownHangs} hangs inline. Use the Read tool to view all details.`
+      : inlineReport;
 
   return { report, reportFile: wroteFile ? reportFile : null, bottlenecksTotal };
 }
@@ -68,6 +96,7 @@ function renderAllClear(
 function renderFullReport(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
+  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -134,8 +163,11 @@ function renderFullReport(
       );
     });
 
-    // Deep detail per hotspot
-    for (const b of cpuHotspots) {
+    // Deep detail per hotspot (capped for inline)
+    const hotspotDetailSlice = isFinite(cap.hotspotLimit)
+      ? cpuHotspots.slice(0, cap.hotspotLimit)
+      : cpuHotspots;
+    for (const b of hotspotDetailSlice) {
       lines.push(``);
       lines.push(`### \`${b.dominantFunction}\` (${b.thread})`);
       lines.push(``);
@@ -168,6 +200,12 @@ function renderFullReport(
         lines.push(``);
       }
     }
+    if (isFinite(cap.hotspotLimit) && cpuHotspots.length > cap.hotspotLimit) {
+      lines.push(
+        `> ... and ${cpuHotspots.length - cap.hotspotLimit} more hotspot(s). See full report for details.`,
+        ``,
+      );
+    }
   }
 
   // UI Hangs section
@@ -182,8 +220,11 @@ function renderFullReport(
         `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`,
       );
     });
-    // Show correlated call chains for each hang
-    for (const hang of uiHangs) {
+    // Show correlated call chains for each hang (capped for inline)
+    const hangDetailSlice = isFinite(cap.hangLimit)
+      ? uiHangs.slice(0, cap.hangLimit)
+      : uiHangs;
+    for (const hang of hangDetailSlice) {
       if (hang.appCallChains.length > 0) {
         lines.push(``);
         lines.push(
@@ -203,6 +244,12 @@ function renderFullReport(
           lines.push(`- \`${fn}\``);
         }
       }
+    }
+    if (isFinite(cap.hangLimit) && uiHangs.length > cap.hangLimit) {
+      lines.push(
+        ``,
+        `> ... and ${uiHangs.length - cap.hangLimit} more hang(s). See full report for details.`,
+      );
     }
   }
 
