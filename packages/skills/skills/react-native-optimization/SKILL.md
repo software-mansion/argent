@@ -1,19 +1,19 @@
 ---
 name: react-native-optimization
-description: Optimizes a React Native app via a 4-phase pipeline (lint sweep, pattern grep, semantic sweep, visual profiling). Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to react-native-profiler for measurement.
+description: Optimizes a React Native app via a 5-phase pipeline (lint sweep, pattern grep, semantic sweep, visual profiling, regression check). Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to react-native-profiler for measurement.
 ---
 
 ## Rules
 
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
-- **One fix per measure cycle.** Fix → re-profile → confirm improvement. NEVER BATCH. Use programatic (not e2e) performence measurements when possible - they are the most reliable and can be performed by sub-agents.
+- **Measure after high-impact fixes.** Architectural changes (context splits, FlatList conversions, memo additions) require re-profiling after each fix. Mechanical batch fixes (inline styles, index keys) can be applied together — re-profile once after the batch. Use programmatic (not e2e) performance measurements when possible — they are the most reliable and can be performed by sub-agents.
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
-- **Use sub-agents aggressively.** Phases 1–3 and code analysis are parallelizable — spawn sub-agents per feature/module. Sub-agents CANNOT touch the simulator (it is a singleton) — all E2E interaction, profiling, and screenshot verification must happen in the main agent.
+- **Sub-agent usage.** Phases 1–3 run centrally (one lint command, one grep pass), then sub-agents fix the *results* in parallel — one sub-agent per file with issues. Sub-agents CANNOT touch the simulator (it is a singleton) — all E2E interaction, profiling, and screenshot verification must happen in the main agent.
 
 ## Pipeline
 
-For full-app optimization, run all four phases in order.
-For a single screen, start at Phase 4 and scope Phases 1–3 to relevant files.
+For full-app optimization, run all five phases in order.
+For a single screen, start with a baseline profile (Phase 4), then scope Phases 1–3 to the screen's component tree, re-profile, then verify (Phase 5).
 
 Copy this checklist into your TODO list:
 
@@ -28,53 +28,40 @@ Optimization Progress:
 
 ### Phase 1 — Lint sweep
 
-Run ESLint with RN-specific rules, parse JSON output into a hit list, process each hit individually.
+Run ESLint once at the project root, parse JSON output into a hit list. Dispatch sub-agents to fix results — one per file.
 See [references/lint-rules.md](references/lint-rules.md) for ruleset and procedure.
 
 ### Phase 2 — Pattern grep
 
-Run fixed regex patterns for anti-patterns ESLint can't catch. Triage each candidate.
+Run each regex pattern once across the source tree. Triage candidates, then dispatch sub-agents to fix per-file.
 See [references/grep-patterns.md](references/grep-patterns.md) for patterns.
 
 ### Phase 3 — Semantic sweep
 
-Work through a checklist that requires code understanding:
-missing `React.memo`, sequential `await` → `Promise.all`, missing `useEffect` cleanup, incorrect hook deps, monolithic contexts.
+Work through a checklist requiring code understanding. Depends on Phase 1 output (exhaustive-deps findings). Dispatch one sub-agent per checklist item.
 See [references/semantic-checklist.md](references/semantic-checklist.md) for full checklist.
 
 ### Phase 4 — Visual profiling
 
 1. Load `react-native-profiler` skill, start dual profiling
-2. Exercise key user flows
+2. Exercise key user flows (navigate screens the user specified, or all major flows)
 3. Analyze with `react-profiler-analyze` + `ios-profiler-analyze`
 4. Cross-reference profiling results with Phase 1–3 findings
-5. Fix highest-impact issues. Re-profile after each fix.
+5. Fix highest-impact issues. Re-profile after architectural changes; batch mechanical fixes.
 
 ### Phase 5 — Verify no regressions
 
-After all fixes, verify every screen and UI flow within scope is not crashing. If no scope was specified, verify the entire app — navigate every reachable screen using `simulator-interact`, confirm each renders without errors. Use `debugger-log-registry` to check for runtime errors after each navigation. This phase MUST run in the main agent, CANNOT USE SUB-AGENTS FOR ANY E2E ACTIONS.
+Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app — cover all reachable screens via `simulator-interact`. Use `debugger-log-registry` to check for runtime errors and take screenshots to check for red/yellow error screens. This phase runs in the main agent only.
 
 ## Fix reference
 
-See [references/fix-reference.md](references/fix-reference.md) for the full table.
-
-| Finding | Fix |
-| ------- | --- |
-| Re-renders, same props | `React.memo` (skip if Compiler active) |
-| Inline styles/objects in JSX | `StyleSheet.create()` / module const |
-| Index as list key | Stable unique ID |
-| ScrollView + `.map()` | `FlatList` / `FlashList` |
-| Empty catch blocks | Proper error handling |
-| Missing useEffect cleanup | Return cleanup function |
-| Sequential awaits | `Promise.all` |
-| JS-thread animation | `useNativeDriver: true` / Reanimated |
-| Slow network | `view-network-logs` → batch/debounce/cache |
+See [references/fix-reference.md](references/fix-reference.md) for the finding-to-fix table.
 
 ## App-wide optimization
 
-Dispatch parallel sub-agents for Phases 1–3 (code analysis only):
-1. **Phase 1+2** — sub-agents run lint and grep in parallel across full codebase
-2. **Phase 3** — one sub-agent per feature/module for semantic sweep
-3. **Merge** findings from all sub-agents, rank by severity
-4. **Phase 4+5** — main agent profiles, then navigates all screens to verify nothing crashes
-6. **Fix top-down** — worst offender first, re-measure each
+1. **Phase 1+2** — run lint and grep centrally (one command each), collect all results
+2. **Dispatch sub-agents** — one per file with issues from Phase 1+2 results, to apply fixes in parallel
+3. **Phase 3** — one sub-agent per checklist item (not per module) for semantic sweep
+4. **Merge** findings, rank by severity
+5. **Phase 4+5** — main agent profiles top offending screens, then navigates all screens to verify nothing crashes
+6. **Fix top-down** — worst offender first, re-profile after architectural changes
