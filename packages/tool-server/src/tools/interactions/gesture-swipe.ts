@@ -21,12 +21,12 @@ const zodSchema = z.object({
     .describe("Total gesture duration in milliseconds (default 300)"),
 });
 
-export const swipeTool: ToolDefinition<
+export const gestureSwipeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { swiped: boolean; timestampMs: number }
 > = {
-  id: "swipe",
-  description: `Perform a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as tap and simulator-server touch.
+  id: "gesture-swipe",
+  description: `Perform a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Swipe down (fromY < toY) to scroll content up.`,

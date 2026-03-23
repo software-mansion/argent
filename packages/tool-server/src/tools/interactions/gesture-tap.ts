@@ -15,11 +15,11 @@ const zodSchema = z.object({
   ),
 });
 
-export const tapTool: ToolDefinition<
+export const gestureTapTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { tapped: boolean; timestampMs: number }
 > = {
-  id: "tap",
+  id: "gesture-tap",
   description: `Tap the simulator screen at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
 Sends a Down event followed by an Up event at the same point.
 
