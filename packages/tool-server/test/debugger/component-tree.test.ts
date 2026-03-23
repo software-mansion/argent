@@ -51,13 +51,31 @@ describe("buildTextTree — same-name dedup (B fix)", () => {
     expect(result).toContain('Text "Content"');
   });
 
-  it("does NOT collapse different-name parent/child", () => {
+  it("collapses different-name content-free child with same rect", () => {
     const rect = { x: 0, y: 62, w: 400, h: 738 };
     const data: RawResult = {
       ...SCREEN,
       components: [
         entry(0, "Wrapper", -1, rect),
         entry(1, "ScrollView", 0, rect),
+        entry(2, "Text", 1, { x: 50, y: 100, w: 300, h: 30 }, { text: "Hi" }),
+      ],
+    };
+    const result = buildTextTree(data, { onScreenOnly: true });
+    // ScrollView is content-free (no text/testID/accLabel) and overlaps parent → collapsed
+    expect(result).not.toContain("ScrollView");
+    // Child text gets reparented to Wrapper
+    expect(result).toContain("Wrapper");
+    expect(result).toContain('Text "Hi"');
+  });
+
+  it("keeps different-name child with same rect when it has testID", () => {
+    const rect = { x: 0, y: 62, w: 400, h: 738 };
+    const data: RawResult = {
+      ...SCREEN,
+      components: [
+        entry(0, "Wrapper", -1, rect),
+        entry(1, "ScrollView", 0, rect, { testID: "myScroll" }),
         entry(2, "Text", 1, { x: 50, y: 100, w: 300, h: 30 }, { text: "Hi" }),
       ],
     };
