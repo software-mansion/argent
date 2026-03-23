@@ -8,6 +8,7 @@ description: Optimizes a React Native app via a 4-phase pipeline (lint sweep, pa
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
 - **One fix per measure cycle.** Fix → re-profile → confirm improvement. NEVER BATCH. Use programatic (not e2e) performence measurements when possible - they are the most reliable and can be performed by sub-agents.
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
+- **Use sub-agents aggressively.** Phases 1–3 and code analysis are parallelizable — spawn sub-agents per feature/module. Sub-agents CANNOT touch the simulator (it is a singleton) — all E2E interaction, profiling, and screenshot verification must happen in the main agent.
 
 ## Pipeline
 
@@ -22,6 +23,7 @@ Optimization Progress:
 - [ ] Phase 2: Pattern grep (semi-deterministic)
 - [ ] Phase 3: Semantic sweep (agent-driven)
 - [ ] Phase 4: Visual profiling (measure + verify)
+- [ ] Phase 5: Verify all screens/flows are not crashing
 ```
 
 ### Phase 1 — Lint sweep
@@ -48,6 +50,10 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 4. Cross-reference profiling results with Phase 1–3 findings
 5. Fix highest-impact issues. Re-profile after each fix.
 
+### Phase 5 — Verify no regressions
+
+After all fixes, verify every screen and UI flow within scope is not crashing. If no scope was specified, verify the entire app — navigate every reachable screen using `simulator-interact`, confirm each renders without errors. Use `debugger-log-registry` to check for runtime errors after each navigation. This phase MUST run in the main agent, CANNOT USE SUB-AGENTS FOR ANY E2E ACTIONS.
+
 ## Fix reference
 
 See [references/fix-reference.md](references/fix-reference.md) for the full table.
@@ -66,11 +72,9 @@ See [references/fix-reference.md](references/fix-reference.md) for the full tabl
 
 ## App-wide optimization
 
-Dispatch parallel sub-agents:
-1. **Phase 1+2 in parallel** across full codebase
-2. **Phase 3** — one sub-agent per feature/module
-3. **Merge** findings, rank by severity
-4. **Phase 4** — profile top offending screens
-5. **Fix top-down** — worst offender first, re-measure each
-
-Use `react-profiler-renders` as a live pre-scan to validate static findings against runtime behavior.
+Dispatch parallel sub-agents for Phases 1–3 (code analysis only):
+1. **Phase 1+2** — sub-agents run lint and grep in parallel across full codebase
+2. **Phase 3** — one sub-agent per feature/module for semantic sweep
+3. **Merge** findings from all sub-agents, rank by severity
+4. **Phase 4+5** — main agent profiles, then navigates all screens to verify nothing crashes
+6. **Fix top-down** — worst offender first, re-measure each
