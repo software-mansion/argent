@@ -30,8 +30,8 @@ Argent MCP tools are the preferred form of interaction with the application.
   - `screenshot` - as a fallback, if above fail or need additional context
 - Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
-- If a **tap fails twice** at the same coordinates, stop retrying. Re-run the discovery tool.
-  If you've used `describe`and it was insufficient - then try `component-tree`
+- If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
+  For example, if you've used `describe`and it was insufficient - then try `component-tree` if in react-native app. Based on which was more succesful - use the preffered option in the future.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
@@ -46,7 +46,7 @@ source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding.
 
-When `is_react_native` is true: load `react-native-app-workflow` skill. Apart from `describe`, a `debugger-component-tree` for element discovery can be used.
+When `is_react_native` is true: load `react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
 </react_native_detection>
 
 <skill_routing>
