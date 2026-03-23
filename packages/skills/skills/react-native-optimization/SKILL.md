@@ -27,7 +27,7 @@ Quick-access tools (no profiling session required):
 3. **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
 4. **Verify correctness** - before attempting fixing, recollect the information from steps &1, &2, &3 and make logical conclusion whether the approach is worth undertaking
 5. **Fix** — apply one fix from §3. Validate with `debugger-evaluate` before committing.
-6. **Re-measure** — re-run step 1 or 2. Report whether the target metric improved, regressed, or stayed flat. Check whether the fix introduced regressions in other areas (e.g., fewer re-renders but higher CPU, or new jank in a different screen). If no net benefit or unacceptable tradeoffs, revert. **One fix per cycle** — never batch.
+6. **Re-measure** — re-run step 1 or 2. Report whether the target metric improved, regressed, or stayed flat. Check whether the fix introduced regressions in other areas (e.g., fewer re-renders but higher CPU, or new jank in a different screen). If no net benefit or unacceptable tradeoffs, revert. **One fix per cycle** — never batch. When the measurement involves simulator interaction, record the interaction as a flow (`create-flow` skill) before the first run so all subsequent cycles replay identical steps. If a recorded flow breaks after applying a fix (e.g., UI layout changed), follow `create-flow` skill §10 to repair the flow rather than silently discarding it.
 
 ---
 

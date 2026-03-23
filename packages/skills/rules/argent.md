@@ -84,6 +84,11 @@ When: To measure performance of specific components, to find app-wide bottleneck
 NATIVE iOS PROFILING
 Use skill: `ios-profiler`
 When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `react-native-profiler`.
+
+RECORDING & REPLAYING FLOWS
+Use skill: `create-flow`
+When: A multi-step interaction sequence needs to be repeated — re-profiling after a fix, A/B comparisons, regression checks, user says "again" / "run that flow", or you worked through a complex path worth saving. Also use proactively: if you are about to repeat steps you already performed, record first, then replay.
+Prompt keywords: flow, repeat, test X times
 </skill_routing>
 
 <subagents>

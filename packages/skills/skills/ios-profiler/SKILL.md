@@ -25,6 +25,8 @@ After `ios-profiler-analyze` surfaces findings, use `profiler-stack-query` to dr
 
 After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
 
+**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
+
 > **Note:** The `react-native-profiler` instructs to starts iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 
 ---
