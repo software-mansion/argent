@@ -7,10 +7,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  fromX: z.number().describe("Start horizontal position (0.0–1.0)"),
-  fromY: z.number().describe("Start vertical position (0.0–1.0)"),
-  toX: z.number().describe("End horizontal position (0.0–1.0)"),
-  toY: z.number().describe("End vertical position (0.0–1.0)"),
+  fromX: z.number().describe(
+    "Start x: normalized 0.0–1.0 (not pixels; same as tap)",
+  ),
+  fromY: z.number().describe(
+    "Start y: normalized 0.0–1.0 (not pixels; same as tap)",
+  ),
+  toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
+  toY: z.number().describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
   durationMs: z
     .number()
     .optional()
@@ -22,7 +26,7 @@ export const swipeTool: ToolDefinition<
   { swiped: boolean; timestampMs: number }
 > = {
   id: "swipe",
-  description: `Perform a smooth swipe gesture between two points.
+  description: `Perform a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as tap and simulator-server touch.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Swipe down (fromY < toY) to scroll content up.`,

@@ -7,16 +7,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const eventSchema = z.object({
   type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().describe("Normalized x coordinate (0.0–1.0)"),
-  y: z.number().describe("Normalized y coordinate (0.0–1.0)"),
+  x: z.number().describe(
+    "Normalized x 0.0–1.0 (not pixels; same as tap/swipe)",
+  ),
+  y: z.number().describe(
+    "Normalized y 0.0–1.0 (not pixels; same as tap/swipe)",
+  ),
   x2: z
     .number()
     .optional()
-    .describe("Second touch x coordinate for two-finger gestures (0.0–1.0)"),
+    .describe(
+      "Second touch x for two-finger gestures: normalized 0.0–1.0 (not pixels)",
+    ),
   y2: z
     .number()
     .optional()
-    .describe("Second touch y coordinate for two-finger gestures (0.0–1.0)"),
+    .describe(
+      "Second touch y for two-finger gestures: normalized 0.0–1.0 (not pixels)",
+    ),
   delayMs: z
     .number()
     .optional()
@@ -27,7 +35,9 @@ const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   events: z
     .array(eventSchema)
-    .describe("Sequence of touch events to send to the simulator"),
+    .describe(
+      "Sequence of touch events; x/y (and optional second touch) are normalized 0.0–1.0, not pixels",
+    ),
 });
 
 export const gestureTool: ToolDefinition<
@@ -38,7 +48,7 @@ export const gestureTool: ToolDefinition<
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the tap tool. For straight-line scrolling use the swipe tool.
-Coordinates are normalized 0.0–1.0. delayMs controls the delay before each event (default 16ms ≈ 60fps).
+All x/y values are normalized 0.0–1.0 (screen fractions, not pixels), matching simulator-server touch input—same convention as tap and swipe. delayMs controls the delay before each event (default 16ms ≈ 60fps).
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]

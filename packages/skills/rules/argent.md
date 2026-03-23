@@ -37,6 +37,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
+- **Always** read skills correlated with the usage of given tool or functionality, as in skill_routing section below, to know what should be passed and how to use it.
   </core_rules>
 
 <react_native_detection>

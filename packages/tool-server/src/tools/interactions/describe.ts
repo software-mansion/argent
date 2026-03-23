@@ -14,7 +14,7 @@ export const describeTool: ToolDefinition<
   id: "describe",
   description: `Get the iOS accessibility element tree for the simulator screen.
 Returns a JSON tree of UI elements with roles, labels, identifiers, values, and
-normalized [0,1] frame coordinates (same space as the tap/swipe tools).
+frame coordinates in normalized [0,1] space (fractions of the screen, not pixels)—the same space as tap/swipe/gesture and simulator-server touch input.
 
 Use this to find exact tap targets: \`frame.x + frame.width/2\` gives the tap X,
 \`frame.y + frame.height/2\` gives the tap Y.
