@@ -17,6 +17,7 @@ import { gestureTool } from "../tools/interactions/gesture";
 import { buttonTool } from "../tools/interactions/button";
 import { keyboardTool } from "../tools/interactions/keyboard";
 import { rotateTool } from "../tools/simulator/rotate";
+import { createRunSequenceTool } from "../tools/interactions/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
@@ -88,6 +89,7 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
   registry.registerTool(rotateTool);
+  registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
   registry.registerTool(debuggerEvaluateTool);

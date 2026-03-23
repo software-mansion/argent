@@ -17,6 +17,7 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "restart-app",
   "open-url",
   "describe",
+  "run-sequence",
 ]);
 
 /**
@@ -34,6 +35,7 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   keyboard: 300,
   rotate: 1000,
   describe: 100,
+  "run-sequence": 1500,
 };
 
 const DEFAULT_DELAY_MS = 1400;
