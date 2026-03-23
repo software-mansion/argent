@@ -24,11 +24,12 @@ Argent MCP tools are the preferred form of interaction with the application.
 
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
+- Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Before tapping anything, use a discovery tool to get exact coordinates:
   - `describe` — any iOS app (returns accessibility element tree). Preferred.
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
   - `screenshot` - as a fallback, if above fail or need additional context
-- Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
+- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
   For example, if you've used `describe`and it was insufficient - then try `component-tree` if in react-native app. Based on which was more succesful - use the preffered option in the future.
