@@ -1,6 +1,6 @@
 # Phase 1: Lint Rules
 
-Run once at the project root before reading any code. Catches mechanical issues deterministically.
+Run once at the project root. Catches mechanical issues deterministically.
 
 ## Rules
 
@@ -25,5 +25,4 @@ Run once at the project root before reading any code. Catches mechanical issues 
      --format json {src_dir}
    ```
 3. Parse output into: `file:line -> rule -> message`.
-4. Dispatch sub-agents to fix results — one sub-agent per file with hits.
-5. Collect `exhaustive-deps` hits for Phase 3 — they need semantic reasoning.
+4. Collect `exhaustive-deps` hits separately for Phase 3.
