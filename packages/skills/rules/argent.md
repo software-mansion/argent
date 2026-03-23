@@ -24,6 +24,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
+- Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Before tapping anything, use a discovery tool to get exact coordinates:
   - `describe` — any iOS app (returns accessibility element tree). Preferred.
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
