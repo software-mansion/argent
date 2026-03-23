@@ -20,15 +20,24 @@ Argent MCP tools are the preferred form of interaction with the application.
 - Profiling performance or diagnosing re-renders in a React Native app
   </argent_use_cases>
 
+<tapping_rule>
+**HARD RULE: NEVER derive tap coordinates from a screenshot.**
+BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extract coordinates from the result. This is not optional. Whenever something changed YOU MUST first call `describe` or `component-tree` to not try and hallucinate the positions of the elements. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+
+`describe` is good for system-level components
+`component-tree` is good for react-native specific components
+
+If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
+</tapping_rule>
+
 <core_rules>
 
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
-- Before tapping anything, use a discovery tool to get exact coordinates:
+- IMPORTANT: NEVER tap anything without knowing exact coordinates. DO NOT GUESS WHERE TO TAP. Especially when navigated to another screen after an action you MUST **always** use a discovery tool `describe` or `debugger-component-tree` to get exact coordinates. Reference:
   - `describe` — any iOS app (returns accessibility element tree). Preferred.
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
-  - `screenshot` - as a fallback, if above fail or need additional context
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
@@ -39,6 +48,7 @@ Argent MCP tools are the preferred form of interaction with the application.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
 - Before executing argent-mcp tool **always** read relevant skills for guidance, as in skill_routing section.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
   </core_rules>
 
 <react_native_detection>
