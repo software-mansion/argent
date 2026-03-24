@@ -30,7 +30,11 @@ BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extr
 If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
 </tapping_rule>
 
-<core_rules>
+<skill_reading_rule>
+**HARD RULE**: ALWAYS read relevant skills for guidance before executing argent-mcp tool using in skill_routing reference.
+</skill_reading_rule>
+
+<important_rules>
 
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
@@ -47,9 +51,9 @@ If `describe` is not sufficient ALWAYS do a followup of `component-tree` in reac
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
-- Before executing argent-mcp tool **always** read relevant skills for guidance, as in skill_routing section.
+- ALWAYS use `run-sequence` when performing multiple sequentialsimulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
-  </core_rules>
+  </important_rules>
 
 <react_native_detection>
 Project type is determined by the `environment-inspector` subagent (see <subagents>).
@@ -69,7 +73,7 @@ SIMULATOR SETUP
 Use skill: `simulator-setup`
 When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
-TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS
+TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Use skill: `simulator-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
