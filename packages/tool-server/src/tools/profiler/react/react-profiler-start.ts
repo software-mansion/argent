@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { type Registry, type ToolDefinition, ServiceState } from "@argent/registry";
+import {
+  type Registry,
+  type ToolDefinition,
+  ServiceState,
+} from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -142,7 +146,9 @@ function safeGetState(registry: Registry, urn: string): ServiceState | null {
   }
 }
 
-export function createReactProfilerStartTool(registry: Registry): ToolDefinition<
+export function createReactProfilerStartTool(
+  registry: Registry,
+): ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     started_at: string;
@@ -165,14 +171,26 @@ After starting, ask the user to perform the interaction to profile, then call re
       const ignore = () => {};
 
       async function disposeAndWait() {
-        try { await registry.disposeService(psUrn); } catch { /* ignore */ }
-        try { await registry.disposeService(jsdUrn); } catch { /* ignore */ }
+        try {
+          await registry.disposeService(psUrn);
+        } catch {
+          /* ignore */
+        }
+        try {
+          await registry.disposeService(jsdUrn);
+        } catch {
+          /* ignore */
+        }
         const deadline = Date.now() + 3000;
         while (Date.now() < deadline) {
           const jsdState = safeGetState(registry, jsdUrn);
           const psState = safeGetState(registry, psUrn);
-          if (jsdState !== ServiceState.TERMINATING && psState !== ServiceState.TERMINATING) break;
-          await new Promise(r => setTimeout(r, 50));
+          if (
+            jsdState !== ServiceState.TERMINATING &&
+            psState !== ServiceState.TERMINATING
+          )
+            break;
+          await new Promise((r) => setTimeout(r, 50));
         }
       }
 
@@ -182,8 +200,12 @@ After starting, ask the user to perform the interaction to profile, then call re
       const psEntry = snapshot.services.get(psUrn);
       const jsdEntry = snapshot.services.get(jsdUrn);
       if (
-        (psEntry && psEntry.state !== ServiceState.RUNNING && psEntry.state !== ServiceState.IDLE) ||
-        (jsdEntry && jsdEntry.state !== ServiceState.RUNNING && jsdEntry.state !== ServiceState.IDLE)
+        (psEntry &&
+          psEntry.state !== ServiceState.RUNNING &&
+          psEntry.state !== ServiceState.IDLE) ||
+        (jsdEntry &&
+          jsdEntry.state !== ServiceState.RUNNING &&
+          jsdEntry.state !== ServiceState.IDLE)
       ) {
         await disposeAndWait();
       }
@@ -212,6 +234,9 @@ After starting, ask the user to perform the interaction to profile, then call re
 
       // Inject commit-capture hook FIRST (before startProfiling) so no commits are missed
       await cdp.evaluate(COMMIT_CAPTURE_SCRIPT);
+
+      // Re-enable Profiler domain (no-op if already enabled, re-enables after Fast Refresh)
+      await cdp.send("Profiler.enable").catch(ignore);
 
       await cdp.send("Profiler.start", {
         interval: params.sample_interval_us,

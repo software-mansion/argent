@@ -76,6 +76,7 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
+  disposeSession: () => void;
 }
 
 export const reactProfilerSessionBlueprint: ServiceBlueprint<
@@ -97,6 +98,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
     const cdp = debuggerApi.cdp;
     const ignore = () => {};
 
+    const events = new TypedEventEmitter<ServiceEvents>();
+
     const state: ReactProfilerSessionApi = {
       port: debuggerApi.port,
       cdp,
@@ -110,6 +113,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
       hotCommitIndices: null,
       totalReactCommits: null,
       profileStartWallMs: null,
+      disposeSession: () => events.emit("terminated"),
     };
 
     // Enable Profiler domain
@@ -173,8 +177,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
       // non-fatal
     }
 
-    const events = new TypedEventEmitter<ServiceEvents>();
-
     cdp.events.on("disconnected", (error) => {
       events.emit("terminated", error ?? new Error("CDP disconnected"));
     });
@@ -182,10 +184,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
     return {
       api: state,
       dispose: async () => {
-        if (state.profilingActive) {
-          await cdp.send("Profiler.stop").catch(ignore);
-          state.profilingActive = false;
-        }
+        // Profiler.stop is called explicitly in react-profiler-stop before disposal.
         await cdp.send("Profiler.disable").catch(ignore);
       },
       events,

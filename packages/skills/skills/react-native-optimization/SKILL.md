@@ -5,11 +5,19 @@ description: Optimizes a React Native app via a 4-phase pipeline (lint sweep, se
 
 ## Rules
 
+- Do not apply shotgun optimizations. Measure first, define what "good enough" looks like (target metric + threshold), fix the top offender, re-measure honestly.
+
+- **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
+- **Deep measure** — load `react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
+- **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
+- **Verify correctness** - before attempting fixing, recollect the information from steps &1, &2, &3 and make logical conclusion whether the approach is worth undertaking
+- **Fix** — apply one fix from §3. Validate with `debugger-evaluate` before committing.
+- **Re-measure** — re-run step 1 or 2. Report whether the target metric improved, regressed, or stayed flat. Check whether the fix introduced regressions in other areas (e.g., fewer re-renders but higher CPU, or new jank in a different screen). If no net benefit or unacceptable tradeoffs, revert. 
+- **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
+- **One fix per cycle** — never batch. When the measurement involves simulator interaction, record the interaction as a flow (`create-flow` skill) before the first run so all subsequent cycles replay identical steps. If a recorded flow breaks after applying a fix (e.g., UI layout changed), follow `create-flow` skill §10 to repair the flow rather than silently discarding it.
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
 - **Measure after high-impact fixes.** Architectural changes (context splits, FlatList conversions, memo additions) require re-profiling after each fix. Mechanical batch fixes (inline styles, index keys) can be applied together - re-profile once after the batch. Use programmatic (not e2e) performance measurements when possible - they are the most reliable and can be performed by sub-agents.
-- **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
 - **Sub-agent usage.** Phase 1 runs centrally (one lint command), then sub-agents fix the *results* in parallel - one sub-agent per file with issues. Phase 2 dispatches one sub-agent per checklist item. Sub-agents CANNOT touch the simulator (it is a singleton) - all E2E interaction, profiling, and screenshot verification must happen in the main agent.
-- **Fixes.** Consult [references/fix-reference.md](references/fix-reference.md) for the finding-to-fix table. It is the single source of truth for how to fix each issue.
 
 ## Pipeline
 
@@ -56,3 +64,5 @@ Navigate every screen and UI flow within scope, confirm each renders without err
 4. **Merge** findings, rank by severity
 5. **Phase 3+4**: main agent profiles top offending screens, then verifies nothing crashes
 6. **Fix top-down**: worst offender first, re-profile after architectural changes
+
+Use `react-profiler-renders` as a live pre-scan to validate static findings against runtime behavior.

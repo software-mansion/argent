@@ -16,7 +16,7 @@ If you delegate simulator tasks to sub-agents, make sure they have MCP permissio
    Returns `{ apiUrl, streamUrl }`.
 
 3. **Verify connection**
-   All interaction tools (`tap`, `swipe`, `gesture`, etc.) auto-start the server if not already running.
+   All interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-custom`, etc.) auto-start the server if not already running.
 
 ## 2. Notes
 

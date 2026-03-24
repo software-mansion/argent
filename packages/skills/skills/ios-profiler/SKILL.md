@@ -3,12 +3,7 @@ name: ios-profiler
 description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks via xctrace. Use when diagnosing native-level performance issues on iOS simulators or devices.
 ---
 
-## 1. Prerequisites
-
-- A booted iOS simulator (see `simulator-setup` skill) or connected device.
-- Argent MCP tools available. This workflow requires executing tools on the device — if in plan mode, ask the user to exit first.
-
-## 2. Tool Overview
+## 1. Tool Overview
 
 | Tool                   | Purpose                                                                                      |
 | ---------------------- | -------------------------------------------------------------------------------------------- |
@@ -20,38 +15,23 @@ description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks v
 
 ---
 
-## 3. Agent Behavior Guidelines
+## 2. Investigation Patterns
 
-### Before profiling: always start both in parallel
+After `ios-profiler-analyze` surfaces findings, use `profiler-stack-query` to drill into root causes:
 
-Always start `ios-profiler-start` and `react-profiler-start` in a single parallel message, announcing it upfront: _"Starting React + native iOS profiling in parallel — JS commits plus native CPU/hangs/leaks."_ Do NOT ask first. Only skip `react-profiler-start` if the user has **already explicitly said** they don't want React profiling in this session.
+- **Hang detected** → `profiler-stack-query` mode=`hang_stacks` for full native call chains → mode=`function_callers` for the suspected function → read native source.
+- **CPU hotspot** → `profiler-stack-query` mode=`thread_breakdown` for per-thread distribution → mode=`function_callers` for the dominant function.
+- **Memory leak** → `profiler-stack-query` mode=`leak_stacks` filtered by `object_type` for responsible frames and libraries.
 
-- Start both tools in parallel (two tool calls in one message), stop both, analyze both, then call `profiler-combined-report` for the cross-correlated view.
-- If the user only wants native profiling, follow the standalone workflow below.
+After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
 
-### After analysis: ask about next steps
+**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
 
-After presenting the iOS Instruments report, always ask the user:
-
-1. **Investigate further** — use `profiler-stack-query` to drill into specific hangs, CPU hotspots, or leaks. Identify exact native call chains and responsible modules.
-2. **Implement fixes** — apply changes and re-profile to confirm improvement.
-3. **Done for now** — accept the report as-is.
-
-Do NOT silently move on. The initial report surfaces what is slow — query tools reveal why.
-
-### During investigation: chain queries
-
-- Hang detected -> `profiler-stack-query` mode=`hang_stacks` to see full native call chains -> `profiler-stack-query` mode=`function_callers` for the suspected function -> read native source.
-- CPU hotspot -> `profiler-stack-query` mode=`thread_breakdown` to see per-thread distribution -> `function_callers` for the dominant function.
-- Memory leak -> `profiler-stack-query` mode=`leak_stacks` filtered by `object_type` to see responsible frames and libraries.
-
-### After fixes: always re-profile
-
-Re-run the same scenario after applying fixes. Use `profiler-load` to reload the pre-fix session and compare before/after metrics.
+> **Note:** The `react-native-profiler` instructs to starts iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 
 ---
 
-## 4. Standalone Workflow
+## 4. Workflow
 
 **Complete all steps in order — do not break mid-flow.**
 
@@ -68,7 +48,7 @@ You do not need to derive `app_process` manually — just make sure the app is l
 
 ### Step 1: Start recording
 
-Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/rn-devtools-debug/` with a timestamped filename.
+Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/argent-profiler-cwd/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `simulator-interact` skill).
 
 ### Step 2: Stop and export
@@ -85,7 +65,7 @@ Present a concise summary of the key findings. Then follow the "After analysis" 
 
 ### Step 5: Drill-down investigation
 
-Use `profiler-stack-query` to investigate specific findings. See Section 3 for chaining guidance.
+Use `profiler-stack-query` to investigate specific findings. See §3 Investigation Patterns for chaining guidance.
 
 ### Step 6: Reload previous sessions
 
@@ -116,24 +96,8 @@ Each bottleneck type indicates a different class of problem:
 
 - **Simulator vs device**: Simulator profiling reflects host Mac performance, not real device hardware. Use device profiling for accurate CPU timings and memory behavior.
 - **xctrace availability**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`.
+- **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead — not app work. Discount those entries when evaluating findings.
+- **Run-to-run variance**: Small fluctuations in CPU percentages between runs are normal. Treat only consistent directional changes (across 2+ runs or >15% delta) as actionable signal.
+- **Live data variability**: If the app fetches live API data, different responses between runs change rendering workload independently of code changes. Note when data-dependent screens show variance.
 
 ---
-
-## Quick Reference
-
-| Action                          | Tool                   |
-| ------------------------------- | ---------------------- |
-| Start iOS Instruments recording | `ios-profiler-start`   |
-| Stop iOS Instruments            | `ios-profiler-stop`    |
-| Analyze iOS Instruments trace   | `ios-profiler-analyze` |
-| Drill into hangs/CPU/leaks      | `profiler-stack-query` |
-| Reload previous trace session   | `profiler-load`        |
-
-## Related Skills
-
-| Skill                        | When to use                                               |
-| ---------------------------- | --------------------------------------------------------- |
-| `react-native-optimization`  | Entry-point for all performance work — choose and apply fixes for profiler findings |
-| `react-native-profiler`      | React/Hermes profiling for re-renders and JS CPU hotspots |
-| `simulator-setup`            | Booting and connecting a simulator                        |
-| `simulator-interact`         | Driving UI interaction on the simulator                   |

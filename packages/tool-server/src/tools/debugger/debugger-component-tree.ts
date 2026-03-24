@@ -1,4 +1,5 @@
 import { z } from "zod";
+import * as crypto from "node:crypto";
 import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
@@ -52,6 +53,9 @@ export function buildTextTree(
     offScreen: { count: 0 },
     sameTestID: { count: 0 },
     fullScreenWrapper: { count: 0 },
+    ancestorText: { count: 0 },
+    contentFreeWrapper: { count: 0 },
+    soleChildLeaf: { count: 0 },
   };
 
   // Collapse parent→child when both have the same name and nearly identical rects.
@@ -80,8 +84,30 @@ export function buildTextTree(
     }
   }
 
-  // Remove components that are entirely off-screen (scrolled away, off-canvas overlays)
+  // Remove components that are entirely off-screen and prune their entire subtree.
+  // This catches off-canvas navigation stacks (drawer, hidden tabs) whose children
+  // would otherwise survive because they lack rects.
   if (canNormalize && opts.onScreenOnly) {
+    // Build a quick parent→children index for subtree pruning
+    const tempChildren = new Map<number, number[]>();
+    for (const c of components) {
+      if (c.parentIdx >= 0) {
+        let list = tempChildren.get(c.parentIdx);
+        if (!list) {
+          list = [];
+          tempChildren.set(c.parentIdx, list);
+        }
+        list.push(c.id);
+      }
+    }
+
+    function removeSubtree(id: number) {
+      removed.add(id);
+      filterStats.offScreen.count++;
+      const ch = tempChildren.get(id);
+      if (ch) for (const cid of ch) removeSubtree(cid);
+    }
+
     for (const c of components) {
       if (removed.has(c.id) || !c.rect) continue;
       const centerY = c.rect.y + c.rect.h / 2;
@@ -89,9 +115,23 @@ export function buildTextTree(
       if (
         centerY < -screenH * 0.1 ||
         centerY > screenH * 1.05 ||
-        centerX < -screenW * 0.5 ||
-        centerX > screenW * 1.5
+        centerX < -screenW * 0.05 ||
+        centerX > screenW * 1.05
       ) {
+        removeSubtree(c.id);
+      }
+    }
+
+    // Also remove rectless components whose entire ancestor chain is removed.
+    // These are children of off-screen containers that have no rect themselves.
+    for (const c of components) {
+      if (removed.has(c.id) || c.rect) continue;
+      let ancestor = c.parentIdx;
+      while (ancestor >= 0 && !components[ancestor].rect) {
+        if (removed.has(ancestor)) break;
+        ancestor = components[ancestor].parentIdx;
+      }
+      if (ancestor >= 0 && removed.has(ancestor)) {
         removed.add(c.id);
         filterStats.offScreen.count++;
       }
@@ -134,6 +174,54 @@ export function buildTextTree(
     }
   }
 
+  // Remove components whose display text (text or accLabel) is already present
+  // in an ancestor's display text. Handles chains like:
+  //   Link "Browse topic X" → Button "Browse topic X" → Text "X"
+  // where children repeat or subset the parent's label. Up to 6 levels deep.
+  for (const c of components) {
+    const cDisplay = c.text ?? c.accLabel;
+    if (removed.has(c.id) || !cDisplay || c.testID) continue;
+    let ancestor = c.parentIdx;
+    let depth = 0;
+    while (ancestor >= 0 && depth < 6) {
+      if (removed.has(ancestor)) {
+        ancestor = components[ancestor].parentIdx;
+        continue;
+      }
+      const a = components[ancestor];
+      const aDisplay = a.text ?? a.accLabel;
+      if (
+        aDisplay &&
+        aDisplay.length >= cDisplay.length &&
+        aDisplay.includes(cDisplay)
+      ) {
+        removed.add(c.id);
+        filterStats.ancestorText.count++;
+        break;
+      }
+      ancestor = a.parentIdx;
+      depth++;
+    }
+  }
+
+  // Collapse content-free wrappers with same rect as their effective parent.
+  // A component that has no text, testID, or accLabel and overlaps its parent's
+  // rect is a layout wrapper that adds indentation noise without navigation value.
+  for (const c of components) {
+    if (removed.has(c.id) || c.text || c.testID || c.accLabel) continue;
+    if (!c.rect) continue;
+    let effectiveParentIdx = c.parentIdx;
+    while (effectiveParentIdx >= 0 && removed.has(effectiveParentIdx)) {
+      effectiveParentIdx = components[effectiveParentIdx].parentIdx;
+    }
+    const parent =
+      effectiveParentIdx >= 0 ? components[effectiveParentIdx] : null;
+    if (parent && parent.rect && rectsOverlap(parent.rect, c.rect)) {
+      removed.add(c.id);
+      filterStats.contentFreeWrapper.count++;
+    }
+  }
+
   const childrenOf = new Map<number, number[]>();
   const roots: number[] = [];
   for (const c of components) {
@@ -155,6 +243,51 @@ export function buildTextTree(
         childrenOf.set(effectiveParent, list);
       }
       list.push(c.id);
+    }
+  }
+
+  // Remove single-child leaf nodes that add no navigation value: the component
+  // has no testID, is the sole child of a parent that already has text/testID,
+  // and has no children of its own. Catches patterns like:
+  //   WebOnlyInlineLinkText "Rachel Maddow" → UITextView "View profile"
+  //   ShareMenuButton [testID=postShareBtn] → Trigger "Open share menu"
+  {
+    const toRemove: number[] = [];
+    for (const [parentId, children] of childrenOf) {
+      if (children.length !== 1) continue;
+      const childId = children[0];
+      const child = components[childId];
+      const parent = components[parentId];
+      if (child.testID) continue;
+      if (!parent.text && !parent.accLabel && !parent.testID) continue;
+      if (childrenOf.has(childId)) continue; // not a leaf
+      toRemove.push(childId);
+    }
+    if (toRemove.length > 0) {
+      for (const id of toRemove) {
+        removed.add(id);
+        filterStats.soleChildLeaf.count++;
+      }
+      // Rebuild childrenOf after removals
+      childrenOf.clear();
+      roots.length = 0;
+      for (const c of components) {
+        if (removed.has(c.id)) continue;
+        let effectiveParent = c.parentIdx;
+        while (effectiveParent >= 0 && removed.has(effectiveParent)) {
+          effectiveParent = components[effectiveParent].parentIdx;
+        }
+        if (effectiveParent === -1) {
+          roots.push(c.id);
+        } else {
+          let list = childrenOf.get(effectiveParent);
+          if (!list) {
+            list = [];
+            childrenOf.set(effectiveParent, list);
+          }
+          list.push(c.id);
+        }
+      }
     }
   }
 
@@ -306,7 +439,10 @@ export function buildTextTree(
       filterStats.sameNameDedup.count +
       filterStats.offScreen.count +
       filterStats.sameTestID.count +
-      filterStats.fullScreenWrapper.count;
+      filterStats.fullScreenWrapper.count +
+      filterStats.ancestorText.count +
+      filterStats.contentFreeWrapper.count +
+      filterStats.soleChildLeaf.count;
 
     lines.push("");
     lines.push("--- Filtered ---");
@@ -348,6 +484,19 @@ export function buildTextTree(
       }
       if (filterStats.sameTestID.count > 0) {
         lines.push(`  Same-testID chain: ${filterStats.sameTestID.count}`);
+      }
+      if (filterStats.ancestorText.count > 0) {
+        lines.push(`  Ancestor text dedup: ${filterStats.ancestorText.count}`);
+      }
+      if (filterStats.contentFreeWrapper.count > 0) {
+        lines.push(
+          `  Content-free wrapper: ${filterStats.contentFreeWrapper.count}`,
+        );
+      }
+      if (filterStats.soleChildLeaf.count > 0) {
+        lines.push(
+          `  Sole-child leaf: ${filterStats.soleChildLeaf.count}`,
+        );
       }
     }
   }
@@ -393,7 +542,7 @@ Only shows on-screen components with unique positions — off-screen (scrolled) 
 full-screen transparent wrappers, and implementation-detail components are pruned.
 
 Each visible component is listed with its name, text content, and normalized
-tap coordinates in [0,1] space (same coordinate space as the tap/swipe tools).
+tap coordinates in [0,1] space (fractions of the screen, not pixels—same space as tap/swipe/gesture and simulator-server touch).
 
 This is the preferred element discovery tool for React Native apps. More information in react-native-app-workflow skill.
 
@@ -410,11 +559,16 @@ Set includeSkipped=true to see a summary of all filtered components.`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
+    const requestId = crypto.randomUUID();
     const script = makeComponentTreeScript({
       includeSkipped: params.includeSkipped,
+      requestId,
     });
-    const raw = await api.cdp.evaluate(script);
+    const response = await api.cdp.evaluateWithBinding(script, requestId, {
+      timeout: 15_000,
+    });
 
+    const raw = response.result;
     if (typeof raw !== "string") {
       return "Error: no result from component tree script";
     }
