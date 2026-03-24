@@ -10,6 +10,7 @@ const { execSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const { killArgentProcesses } = require(path.join(__dirname, "..", "packages", "mcp", "scripts", "kill-argent.cjs"));
 
 const args = process.argv.slice(2);
 const isGlobal = args.includes("--global");
@@ -82,9 +83,15 @@ function grantPermission(settingsPath) {
 // ---------------------------------------------------------------------------
 if (isGlobal) {
   console.log("\nInstalling argent globally...");
-  execSync(`npm install -g "${tarball}"`, { stdio: "inherit" });
 
+  // Kill processes from the current global install and any repo dev build
   const globalRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
+  killArgentProcesses([
+    path.join(globalRoot, "argent", "dist"),
+    path.join(root, "packages", "mcp", "dist"),
+  ]);
+
+  execSync(`npm install -g "${tarball}"`, { stdio: "inherit" });
   const globalEntry = path.join(globalRoot, "argent", "dist", "index.js");
   const logFile = path.join(os.homedir(), ".argent", "mcp-calls.log");
   const mcpEntry = {
@@ -112,6 +119,12 @@ if (!fs.existsSync(projectRoot)) {
   console.error(`Error: ${projectRoot} does not exist.`);
   process.exit(1);
 }
+
+// Kill processes from the existing local install and any repo dev build
+killArgentProcesses([
+  path.join(projectRoot, "node_modules", "argent", "dist"),
+  path.join(root, "packages", "mcp", "dist"),
+]);
 
 console.log(`\nInstalling argent in ${projectRoot}...`);
 execSync(`npm install --force "${tarball}"`, {

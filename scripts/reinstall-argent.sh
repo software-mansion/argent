@@ -6,6 +6,7 @@ GLOBAL_ROOT="$(npm root -g)"
 echo "1. Killing existing Argent processes"
 
 pkill -f "$GLOBAL_ROOT/argent/dist" || true
+pkill -f "$REPO_ROOT/packages/mcp/dist" || true
 
 echo "2. Building and installing"
 
