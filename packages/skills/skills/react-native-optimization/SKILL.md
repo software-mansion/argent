@@ -59,3 +59,6 @@ Navigate every screen and UI flow within scope, confirm each renders without err
 2. **Phase 2**: one sub-agent per checklist item for semantic sweep
 3. **Phase 3**: main agent profiles top offending screens; fixes architectural issues top-down
 4. **Phase 4**: main agent navigates all screens to verify nothing crashes
+
+After the entire run, run lint again to verify no new issues were introduced with your changes.
+This also helps ensure you haven't missed any issues which could've been fixed.
