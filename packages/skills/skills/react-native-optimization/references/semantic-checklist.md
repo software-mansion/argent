@@ -1,34 +1,27 @@
 # Phase 2: Semantic Sweep
 
-Work through each item. Do not skip.
-Depends on Phase 1 output — `exhaustive-deps` findings must be available.
+Work through each area. Do not skip.
 Consult fix-reference.md for how to fix confirmed issues.
 
 ## Checklist
 
-### Missing React.memo
-Check every exported function component rendered in a list, frequently-updating parent, or context consumer. Skip if React Compiler is active.
+### Memoization
+Check every exported function component: is it rendered in a list, a frequently-updating parent, or a context consumer? If yes and props are stable, wrap in `React.memo`. Check context providers for unstable `value` props. Skip `React.memo` if React Compiler is active.
 
-### ScrollView + .map()
-Grep for `<ScrollView` with `.map(` nearby. These should be FlatList/FlashList.
+### List rendering
+Check all list-like rendering: ScrollView+map, manually iterated arrays, deeply nested FlatLists. Verify lists use virtualization (`FlatList`/`FlashList`), stable keys, and proper item sizing.
 
-### Sequential fetches
-Grep for `await` inside loops and sequential `await` calls that could be parallelized.
+### Animations
+Check all animation code against current library best practices. Prefer Reanimated over the Animated API. Check for JS-thread animation bottlenecks (`requestAnimationFrame` loops, state-driven animations).
 
-### Missing useEffect cleanup
-Grep for `setInterval`, `setTimeout`, `addEventListener`, `.subscribe(`, `.on(` inside `useEffect`. Verify each returns a cleanup function.
+### Async patterns
+Check for sequential `await` calls that could be `Promise.all`. Check for missing `AbortController` / cancellation on unmount. Check for fetch waterfalls (parent fetches → child fetches → grandchild fetches).
 
-### Unused state variables
-Find `useState` calls where the value is set but never read in JSX or passed to children.
+### Effect cleanup
+Check all `useEffect` hooks that create timers, listeners, or subscriptions. Verify each returns a cleanup function. Check for effects missing dependency arrays (runs every render).
 
-### Unbounded state growth
-Look for spread patterns (`...prev`) in setState callbacks where arrays/objects grow without `.slice()` or size cap.
-
-### useNativeDriver: false
-Grep for `useNativeDriver:\s*false`. Switch to `true` if animating non-layout properties.
-
-### Exhaustive deps (from Phase 1)
-Process `react-hooks/exhaustive-deps` findings. Some "missing" deps are intentional (refs, dispatch). Use judgment.
+### State hygiene
+Check for unused state (set but never rendered), unbounded state growth (arrays/objects that grow without cap), and derived state that should be computed with `useMemo` instead.
 
 ### Monolithic context
 Flag but do NOT auto-fix. Report as architectural recommendation.
