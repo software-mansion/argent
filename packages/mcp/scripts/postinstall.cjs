@@ -13,6 +13,7 @@ if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { killArgentProcesses } = require("./kill-argent.cjs");
 
 // npm sets this to the directory that ran `npm install`
 const projectRoot = process.env.npm_config_local_prefix;
@@ -22,6 +23,11 @@ if (!projectRoot) {
 }
 
 const distEntry = path.resolve(__dirname, "..", "dist", "index.js");
+const distDir = path.resolve(__dirname, "..", "dist");
+
+// Kill any running argent processes from this install location before updating
+const killedOnInstall = killArgentProcesses(distDir);
+
 const skillsSrc = path.resolve(__dirname, "..", "skills");
 const agentsSrc = path.resolve(__dirname, "..", "agents");
 const logFile = path.join(os.homedir(), ".argent", "mcp-calls.log");
@@ -77,6 +83,9 @@ function copySkills(srcDir, destDir) {
 }
 
 const results = [];
+if (killedOnInstall.length > 0) {
+  results.push("✓ Stopped running argent processes before update");
+}
 
 // Claude Code — .claude/mcp.json
 try {
@@ -148,3 +157,4 @@ for (const line of results) {
   console.log(" ", line);
 }
 console.log();
+

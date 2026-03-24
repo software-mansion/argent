@@ -5,6 +5,8 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { execSync } = require("child_process");
+const { killArgentProcesses } = require("./kill-argent.cjs");
 
 const userScope = process.argv.includes("--user");
 const allowPermissions = process.argv.includes("--allow");
@@ -40,6 +42,14 @@ function removePermissions(configPath) {
 }
 
 if (userScope) {
+  // Kill processes running from the global argent install
+  try {
+    const globalRoot = execSync("npm root -g", { encoding: "utf8" }).trim();
+    killArgentProcesses(path.join(globalRoot, "argent", "dist"));
+  } catch {
+    // npm root -g may fail in some environments — skip silently
+  }
+
   const userConfigPath = path.join(os.homedir(), ".claude.json");
   if (!fs.existsSync(userConfigPath)) {
     console.log("(not found, nothing to do)");
@@ -59,6 +69,9 @@ if (userScope) {
   }
 } else {
   const projectRoot = process.env.npm_config_local_prefix ?? process.cwd();
+
+  // Kill processes running from this project's argent installation
+  killArgentProcesses(path.join(projectRoot, "node_modules", "argent", "dist"));
 
   // Claude Code
   const claudeConfigPath = path.join(projectRoot, ".claude", "mcp.json");
