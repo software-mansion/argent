@@ -12,4 +12,7 @@ packages/mcp/skills/
 packages/mcp/agents/
 packages/mcp/rules/
 
-.claude/**/MEMORY.md
+# We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
+.claude/
+.cursor/
+.mcp.json

@@ -20,20 +20,35 @@ Argent MCP tools are the preferred form of interaction with the application.
 - Profiling performance or diagnosing re-renders in a React Native app
   </argent_use_cases>
 
+<tapping_rule>
+**HARD RULE: NEVER derive tap coordinates from a screenshot.**
+BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extract coordinates from the result. This is not optional. Whenever something changed YOU MUST first call `describe` or `component-tree` to not try and hallucinate the positions of the elements. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+
+`describe` is good for system-level components
+`component-tree` is good for react-native specific components
+
+If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
+</tapping_rule>
+
 <core_rules>
 
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
-- Before tapping anything, use a discovery tool to get exact coordinates:
-  - `describe` — any iOS app (returns accessibility element tree)
+- Before calling any gesture tool for the first time, use ToolSearch to load its schema.
+- IMPORTANT: NEVER tap anything without knowing exact coordinates. DO NOT GUESS WHERE TO TAP. Especially when navigated to another screen after an action you MUST **always** use a discovery tool `describe` or `debugger-component-tree` to get exact coordinates. Reference:
+  - `describe` — any iOS app (returns accessibility element tree). Preferred.
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
-  - `screenshot` - as a fallback, if above fail or need additional context
-- Interaction tools (`tap`, `swipe`, `launch-app`, etc.) return a screenshot automatically.
+- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
-- If a tap fails twice at the same coordinates, stop retrying. Re-run the discovery tool.
+- If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
+  For example, if you've used `describe`and it was insufficient - then try `component-tree` if in react-native app. Based on which was more succesful - use the preffered option in the future.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
+  If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
+- Before executing argent-mcp tool **always** read relevant skills for guidance, as in skill_routing section.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
   </core_rules>
 
 <react_native_detection>
@@ -43,99 +58,50 @@ source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding.
 
-When `is_react_native` is true: load `react-native-app-workflow` skill, and use
-`debugger-component-tree` for all element discovery where needed.
+When `is_react_native` is true: load `react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
 </react_native_detection>
 
 <skill_routing>
-Load the matching skill before starting work — skills contain the full step-by-step
+Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure, tool reference, and edge-case handling for each workflow.
 
-STARTING A SESSION / SIMULATOR SETUP
+SIMULATOR SETUP
 Use skill: `simulator-setup`
-When:
+When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
-- Beginning task that involves the simulator
-- No simulator is booted yet
-- Need to find a UDID or start a simulator-server
-- Getting { apiUrl, streamUrl } for the session
-  Key tools: list-simulators, boot-simulator, simulator-server
-
-TAPPING, SWIPING, TYPING, GESTURES
+TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS
 Use skill: `simulator-interact`
-When:
-
-- Performing any touch interaction (tap, swipe, long-press, pinch, drag)
-- Typing text into the app
-- Pressing hardware buttons (home, back, volume, power)
-- Launching or restarting an app
-- Opening a URL or deep link
-- Rotating the device
-  Key tools: tap, swipe, gesture, paste, keyboard, button, rotate, launch-app,
-  restart-app, open-url, describe, debugger-component-tree
-
-TAKING SCREENSHOTS
-Use skill: `simulator-screenshot`
-When:
-
-- Need a screenshot without performing any interaction first
-- Auto-screenshot from an interaction showed a loading/transitional frame, which lacks the needed information
-- Checking state after a delay (e.g. waiting for a network response)
-  Key tools: screenshot
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
 RUNNING / BUILDING / DEBUGGING A REACT NATIVE APP
 Use skill: `react-native-app-workflow`
-When:
-
-- You detect that the project you are working with is a react-native application
-- Starting Metro or running the iOS app for the first time in this session
-- Build fails or pods need reinstalling
-- App lost connection to Metro
-- Reading JS console logs or native crash logs
-- Reloading the JS bundle
-- User asks to run, launch, or reinstall the app
-- Debugging the react-native application
-- Searching for the placement of elements on the screen using react-native app (see debugger-component-tree in the metro-debugger skillń)
-  Key tools: debugger-status, debugger-reload-metro, restart-app,
-  debugger-console-logs, debugger-console-listen
+When: Project is react-native, starting Metro or running iOS app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
 
 BREAKPOINTS, STEPPING, JS EVALUATION
 Use skill: `metro-debugger`
-When:
-
-- Setting or removing breakpoints
-- Pausing or stepping through JS execution
-- Evaluating JavaScript expressions in the app runtime
-- Inspecting the React component tree at a source level
-- Diagnosing why a specific code path is not reached
-- Searching for the placement of elements on the screen using react-native app (debugger-component-tree tool)
-  Key tools: debugger-connect, debugger-set-breakpoint, debugger-remove-breakpoint,
-  debugger-pause, debugger-resume, debugger-step, debugger-evaluate,
-  debugger-component-tree, debugger-inspect-element, debugger-status
+When: Setting/removing breakpoints, pausing/stepping through JS, evaluating expressions, inspecting React component tree at source level, finding element placement via `debugger-component-tree`.
 
 END-TO-END UI TESTING
 Use skill: `test-ui-flow`
-When:
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
 
-- Verifying a complete user flow (login, checkout, navigation, form submission)
-- Running an interact → screenshot → verify loop
-- Testing that a sequence of actions produces the expected visual result
-- User asks to "test" a feature by actually using the app
-  Key tools: screenshot, describe, debugger-component-tree, tap, swipe,
-  paste, keyboard, launch-app
+PERFORMANCE OPTIMIZATION
+Use skill: `react-native-optimization`
+When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `react-native-profiler` for measurement.
 
-PERFORMANCE PROFILING
+APP & COMPONENT PROFILING
 Use skill: `react-native-profiler`
-When:
+When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
 
-- App feels slow or janky
-- User asks about re-renders, unnecessary renders, or component performance
-- Diagnosing CPU hotspots
-- Producing a ranked report of performance issues with source-level fixes
-  Key tools: profiler-start, profiler-stop, profiler-analyze,
-  profiler-component-source, profiler-cpu-summary,
-  profiler-react-renders, profiler-fiber-tree
-  </skill_routing>
+NATIVE iOS PROFILING
+Use skill: `ios-profiler`
+When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `react-native-profiler`.
+
+RECORDING & REPLAYING FLOWS
+Use skill: `create-flow`
+When: A multi-step interaction sequence needs to be repeated — re-profiling after a fix, A/B comparisons, regression checks, user says "again" / "run that flow", or you worked through a complex path worth saving. Also use proactively: if you are about to repeat steps you already performed, record first, then replay.
+Prompt keywords: flow, repeat, test X times
+</skill_routing>
 
 <subagents>
 ENVIRONMENT INSPECTION AT SESSION START
@@ -154,34 +120,6 @@ Most tools require a Pro license. If any tool returns "No Argent license found":
 1. Call `activate-sso` — opens a browser for sign-in and returns { success: true, plan }.
 2. If the browser cannot open, it returns `{ ssoUrl }` — show that URL to the user.
 3. Alternatively, call `activate-license-key` with the user's license key.
-
-SESSION CLEANUP
-When the session ends or the user says they are done:
-
-- Call `stop-all-simulator-servers` to clean up running simulator processes.
-- If the user started Metro separately, ask whether they would like you to call
-  `stop-metro` (specify the port if it is not 8081).
-
-FINDING TAP TARGETS
-Before tapping anything, always use a discovery tool to get exact coordinates.
-Never guess positions from a screenshot alone.
-
-- Any iOS app: use `describe` (returns accessibility element tree with normalized frames).
-- React Native apps: use `debugger-component-tree` (returns component names with tap coords).
-- Fallback: use `screenshot` tool if the above fail
-  If a tap fails after 2 attempts, stop retrying. Call the discovery tool again to
-  verify the element position and current screen state before trying a new coordinate.
-
-REACT NATIVE APPS
-Use the `is_react_native` field from the `environment-inspector` subagent result to
-determine whether the project is React Native. When true: load the `react-native-app-workflow`
-skill and use `debugger-component-tree` for element discovery. Using `describe` can still be
-useful when there is, for example, a modal in place.
-
-IOS SYSTEM POPUPS
-Permission dialogs and other OS-level popups are not part of the app view hierarchy.
-If they cannot be tapped easily, dismiss them by pressing Enter via the `keyboard`
-tool (`key: "enter"`) — this confirms the default button and is more reliable than tapping.
 
 WORKSPACE INFORMATION RETRIEVAL
 The `gather-workspace-data` tool provides a structured snapshot used internally by the

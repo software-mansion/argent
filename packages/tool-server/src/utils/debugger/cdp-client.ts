@@ -65,6 +65,10 @@ export class CDPClient {
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      // Do not send an Origin header — Expo's dev server rejects WebSocket
+      // connections whose Origin doesn't exactly match its serverBaseUrl
+      // (typically 127.0.0.1 vs localhost mismatch). Omitting Origin bypasses
+      // the check, which is safe since we only connect locally.
       const ws = new WebSocket(this.wsUrl);
       this.ws = ws;
 

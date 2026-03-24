@@ -5,12 +5,7 @@ description: Debug a React Native app via Metro CDP using argent debugger tools.
 
 ## 1. Prerequisites
 
-Use `curl` or direct HTTP calls to Metro only when the functionality is not exposed via argent tools. When delegating to a sub-agent, ensure it has MCP tool permissions.
-
-The debugger requires:
-
-1. **Metro dev server running** — default `localhost:8081`, depends on workspace config.
-2. **A React Native app connected to Metro** — at least one CDP target. Verify via `debugger-status`.
+The debugger requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
 
 ## 2. Tool Overview
 
@@ -32,70 +27,103 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 ### Breakpoints & execution control
 
-| Tool                         | Purpose                                                      |
-| ---------------------------- | ------------------------------------------------------------ |
-| `debugger-set-breakpoint`    | Set breakpoint by source file and line (optional condition). |
-| `debugger-remove-breakpoint` | Remove breakpoint by breakpointId.                           |
-| `debugger-pause`             | Pause JS execution.                                          |
-| `debugger-resume`            | Resume after pause or breakpoint.                            |
-| `debugger-step`              | Step over / into / out when paused.                          |
+| Tool                                                   | Purpose                                                                               |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| `debugger-set-breakpoint`                              | Set breakpoint by source file and line (optional condition).                          |
+| `debugger-remove-breakpoint`                           | Remove breakpoint by breakpointId.                                                    |
+| `debugger-pause` / `debugger-resume` / `debugger-step` | Pause JS execution; resume after pause or breakpoint; step over/into/out when paused. |
 
 ### Inspection & console
 
-| Tool                       | Purpose                                                                                                                               |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates). **Preferred tool for finding tap targets in React Native apps** — use if ensure where to tap in order to get accurate coordinates. |
-| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`.                      |
-| `debugger-console-logs`    | Get console messages.                                                                                                                 |
-| `debugger-console-listen`  | Stream console messages in real-time.                                                                                                 |
-| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                               |
+| Tool                       | Purpose                                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
+| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
+| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
+| `debugger-console-listen`  | Stream console messages in real-time via WebSocket.                                                              |
+| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
 
 ---
 
-## 3. Autonomy
+## 3. Component Inspection
 
-**Act first, ask only when necessary.** Start Metro, restart the app, and retry yourself. Only ask the user when:
+### `debugger-component-tree` vs `debugger-inspect-element`
 
-- You need information only they have (project root, non-default port).
-- Recovery failed after your attempts.
-- The user explicitly asked you not to start servers.
+|          | `debugger-component-tree`                                              | `debugger-inspect-element`                                      |
+| -------- | ---------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Best for | Layout overview; finding tap targets; user-defined component hierarchy | Identifying a visible element and tracing it to its source file |
+| Use when | "What's on screen and where?"                                          | "What component is this and where is it defined?"               |
 
-Starting Metro yourself:
+Both can point to source files, but `inspect-element` is purpose-built for source tracing. `component-tree` is for orientation and tap-target discovery.
 
-Refer to the skill `react-native-app-workflow`
+### `includeSkipped` guidance
+
+Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+
+> **Warning:** Output can be very large. Always combine with `maxNodes` and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without `maxNodes` on large apps.
+
+---
 
 ## 4. Golden Rules
 
 1. **`debugger-status` first when something fails** — it runs discovery, connection, and returns diagnostics.
 2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on simulator, then retry `debugger-status`.
-3. **Never assume one failure is permanent** — follow recovery steps before asking the user.
+3. **Never assume one failure is permanent** — follow recovery steps before asking the user. For starting Metro and full failure recovery, see `react-native-app-workflow` and `references/failure-scenarios.md`.
 
-For full failure recovery steps, see `references/failure-scenarios.md`.
+---
+
+## 5. Reading Console Logs (Log Registry)
+
+Logs are written to a flat log file on disk. Use the **log-registry → grep** pattern instead of reading logs inline.
+
+### Workflow
+
+1. **Call `debugger-log-registry`** — returns: `file` (log path), `totalEntries`, `byLevel`, `clusters` (top message groups with counts and source file info)
+2. **Search the file** using `Grep` or `Read` with patterns from the response.
+3. **For real-time streaming** (UI clients), use `debugger-console-listen` — returns a WebSocket URL.
+
+> **Large log files:** If `totalEntries` exceeds 10 000, delegate the grep exploration to an `Explore` subagent — pass it the file path, the entry format, and the patterns you need.
+
+### Flat log format
+
+One entry per line — fields (whitespace-separated, `|` delimiter before message)
+
+| Field         | Example                     | Notes                                               |
+| ------------- | --------------------------- | --------------------------------------------------- |
+| `[L:<id>]`    | `[L:42]`                    | Unique grep anchor                                  |
+| `<timestamp>` | `2026-03-17T14:30:00.000Z`  | ISO 8601                                            |
+| `<LEVEL>`     | `ERROR`, `WARN `, `LOG  `   | Uppercase, padded to 5 chars                        |
+| `<source>`    | `src/api/user.ts:42` or `-` | Relative path from source map; `-` if unavailable   |
+| `<message>`   | `Failed login attempt`      | Full message; embedded newlines replaced with space |
+
+Source attribution (file + line) is also available in `clusters` returned by `debugger-log-registry`.
+
+Log files and messages can be large - **Always scope your search**, treat the file like a database, not a document.
+
+When reading from the log file:
+
+- Never `Read` the log file directly. Use `grep` or shell commands with limits using the above file format tips.
+- Default to `-m 50` unless you need more.
+- Use `tail -N` recent entries.
+- `clusters[].message` gives you the exact text which you may look for
+
+> **If the file is too large** Delegate to an `Explore` subagent with the file path, the format spec above, and the specific patterns you need.
 
 ---
 
 ## Quick Reference
 
-| Action                        | Tool                                                                    |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| Diagnose / check connection   | `debugger-status`                                                       |
-| Connect to Metro CDP          | `debugger-connect`                                                      |
-| Reload JS (already connected) | `debugger-reload-metro`                                                 |
-| Relaunch app on simulator     | `restart-app`                                                           |
-| Set breakpoint by file:line   | `debugger-set-breakpoint`                                               |
-| Remove breakpoint             | `debugger-remove-breakpoint`                                            |
-| Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                    |
-| Inspect component at point    | `debugger-inspect-element`                                              |
-| Full component tree           | `debugger-component-tree`                                               |
-| Console logs / evaluate       | `debugger-console-logs`, `debugger-console-listen`, `debugger-evaluate` |
-
-## Related Skills
-
-| Skill                       | When to use                                                 |
-| --------------------------- | ----------------------------------------------------------- |
-| `react-native-app-workflow` | Starting the app, Metro setup, build issues, runtime errors |
-| `simulator-setup`           | Booting and connecting a simulator                          |
-| `simulator-interact`        | Tapping, swiping, typing on the simulator                   |
-| `simulator-screenshot`      | Capturing the simulator screen                              |
-| `react-native-profiler`     | Performance profiling, re-render analysis                   |
-| `test-ui-flow`              | Interactive UI testing with screenshot verification         |
+| Action                        | Tool                                                                |
+| ----------------------------- | ------------------------------------------------------------------- |
+| Diagnose / check connection   | `debugger-status`                                                   |
+| Connect to Metro CDP          | `debugger-connect`                                                  |
+| Reload JS (already connected) | `debugger-reload-metro`                                             |
+| Relaunch app on simulator     | `restart-app`                                                       |
+| Set breakpoint by file:line   | `debugger-set-breakpoint`                                           |
+| Remove breakpoint             | `debugger-remove-breakpoint`                                        |
+| Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                |
+| Inspect component at point    | `debugger-inspect-element`                                          |
+| Full component tree           | `debugger-component-tree`                                           |
+| Console log overview          | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
+| Real-time console stream      | `debugger-console-listen`                                           |
+| Evaluate JS                   | `debugger-evaluate`                                                 |

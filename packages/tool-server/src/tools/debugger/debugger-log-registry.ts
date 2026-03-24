@@ -1,0 +1,37 @@
+import { z } from "zod";
+import type { ToolDefinition } from "@argent/registry";
+import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
+import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
+
+interface LogRegistryResponse extends LogStats {
+  clusters: MessageCluster[];
+}
+
+const zodSchema = z.object({
+  port: z.coerce.number().default(8081).describe("Metro server port"),
+});
+
+export const debuggerLogRegistryTool: ToolDefinition<
+  z.infer<typeof zodSchema>,
+  LogRegistryResponse
+> = {
+  id: "debugger-log-registry",
+  description: `Get a summary of all console logs captured from the React Native app.
+Returns the log file path, entry counts by level, and message clusters (grouped by similarity).
+Use this tool first to get an overview, then grep or tail the returned file path for details.
+The app must be connected via debugger-connect first (auto-connects if needed).`,
+  zodSchema,
+  services: (params) => ({
+    debugger: `JsRuntimeDebugger:${params.port}`,
+  }),
+  async execute(services) {
+    const api = services.debugger as JsRuntimeDebuggerApi;
+    const stats = api.logWriter.getStats();
+    const clusters = api.logWriter.getClusters(20);
+
+    return {
+      ...stats,
+      clusters,
+    };
+  },
+};

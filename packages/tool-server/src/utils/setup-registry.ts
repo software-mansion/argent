@@ -1,7 +1,8 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
-import { profilerSessionBlueprint } from "../blueprints/profiler-session";
+import { networkInspectorBlueprint } from "../blueprints/network-inspector";
+import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
 import { simulatorServerTool } from "../tools/simulator/simulator-server";
@@ -10,9 +11,11 @@ import { restartAppTool } from "../tools/simulator/restart-app";
 import { reinstallAppTool } from "../tools/simulator/reinstall-app";
 import { openUrlTool } from "../tools/simulator/open-url";
 import { screenshotTool } from "../tools/interactions/screenshot";
-import { tapTool } from "../tools/interactions/tap";
-import { swipeTool } from "../tools/interactions/swipe";
-import { gestureTool } from "../tools/interactions/gesture";
+import { gestureTapTool } from "../tools/interactions/gesture-tap";
+import { gestureSwipeTool } from "../tools/interactions/gesture-swipe";
+import { gestureCustomTool } from "../tools/interactions/gesture-custom";
+import { gesturePinchTool } from "../tools/interactions/gesture-pinch";
+import { gestureRotateTool } from "../tools/interactions/gesture-rotate";
 import { buttonTool } from "../tools/interactions/button";
 import { keyboardTool } from "../tools/interactions/keyboard";
 import { rotateTool } from "../tools/simulator/rotate";
@@ -27,24 +30,41 @@ import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro
 import { debuggerStepTool } from "../tools/debugger/debugger-step";
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
-import { debuggerConsoleLogsTool } from "../tools/debugger/debugger-console-logs";
 import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
+import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
+import { networkLogsTool } from "../tools/network/network-logs";
+import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
 import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
 import { activateSsoTool } from "../tools/license/activate-sso";
 import { getLicenseStatusTool } from "../tools/license/get-license-status";
 import { removeLicenseTool } from "../tools/license/remove-license";
-import { profilerStartTool } from "../tools/profiler/profiler-start";
-import { profilerStopTool } from "../tools/profiler/profiler-stop";
-import { profilerAnalyzeTool } from "../tools/profiler/profiler-analyze";
-import { profilerComponentSourceTool } from "../tools/profiler/profiler-component-source";
-import { profilerCpuSummaryTool } from "../tools/profiler/profiler-cpu-summary";
-import { profilerReactRendersTool } from "../tools/profiler/profiler-react-renders";
-import { profilerFiberTreeTool } from "../tools/profiler/profiler-fiber-tree";
-import { profilerConsoleLogsTool } from "../tools/profiler/profiler-console-logs";
+import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
+import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
+import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
+import { reactProfilerComponentSourceTool } from "../tools/profiler/react/react-profiler-component-source";
+import { reactProfilerCpuSummaryTool } from "../tools/profiler/react/react-profiler-cpu-summary";
+import { reactProfilerRendersTool } from "../tools/profiler/react/react-profiler-renders";
+import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profiler-fiber-tree";
+import { iosInstrumentsStartTool } from "../tools/profiler/ios-profiler/ios-profiler-start";
+import { iosInstrumentsStopTool } from "../tools/profiler/ios-profiler/ios-profiler-stop";
+import { iosInstrumentsAnalyzeTool } from "../tools/profiler/ios-profiler/ios-profiler-analyze";
+import { iosInstrumentsSessionBlueprint } from "../blueprints/ios-profiler-session";
+import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
+import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
+import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
+import { profilerCombinedReportTool } from "../tools/profiler/combined/profiler-combined-report";
+import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
+import { queryDocumentationTool } from "../tools/ai/query-documentation";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
+import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
+import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
+import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
+import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
+import { createRunFlowTool } from "../tools/flows/flow-run";
+import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 
 export function createRegistry(): Registry {
@@ -52,7 +72,9 @@ export function createRegistry(): Registry {
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
-  registry.registerBlueprint(profilerSessionBlueprint);
+  registry.registerBlueprint(networkInspectorBlueprint);
+  registry.registerBlueprint(reactProfilerSessionBlueprint);
+  registry.registerBlueprint(iosInstrumentsSessionBlueprint);
 
   registry.registerTool(listSimulatorsTool);
   registry.registerTool(bootSimulatorTool);
@@ -62,9 +84,11 @@ export function createRegistry(): Registry {
   registry.registerTool(openUrlTool);
   registry.registerTool(simulatorServerTool);
   registry.registerTool(screenshotTool);
-  registry.registerTool(tapTool);
-  registry.registerTool(swipeTool);
-  registry.registerTool(gestureTool);
+  registry.registerTool(gestureTapTool);
+  registry.registerTool(gestureSwipeTool);
+  registry.registerTool(gestureCustomTool);
+  registry.registerTool(gesturePinchTool);
+  registry.registerTool(gestureRotateTool);
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
   registry.registerTool(rotateTool);
@@ -79,28 +103,45 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerStepTool);
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
-  registry.registerTool(debuggerConsoleLogsTool);
   registry.registerTool(debuggerConsoleListenTool);
+  registry.registerTool(debuggerLogRegistryTool);
+  registry.registerTool(networkLogsTool);
+  registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);
   registry.registerTool(activateLicenseKeyTool);
   registry.registerTool(activateSsoTool);
   registry.registerTool(getLicenseStatusTool);
   registry.registerTool(removeLicenseTool);
-  registry.registerTool(profilerStartTool);
-  registry.registerTool(profilerStopTool);
-  registry.registerTool(profilerAnalyzeTool);
-  registry.registerTool(profilerComponentSourceTool);
-  registry.registerTool(profilerCpuSummaryTool);
-  registry.registerTool(profilerReactRendersTool);
-  registry.registerTool(profilerFiberTreeTool);
-  registry.registerTool(profilerConsoleLogsTool);
+  registry.registerTool(createReactProfilerStartTool(registry));
+  registry.registerTool(createReactProfilerStopTool(registry));
+  registry.registerTool(reactProfilerAnalyzeTool);
+  registry.registerTool(reactProfilerComponentSourceTool);
+  registry.registerTool(reactProfilerCpuSummaryTool);
+  registry.registerTool(reactProfilerRendersTool);
+  registry.registerTool(reactProfilerFiberTreeTool);
+  registry.registerTool(iosInstrumentsStartTool);
+  registry.registerTool(iosInstrumentsStopTool);
+  registry.registerTool(iosInstrumentsAnalyzeTool);
+  registry.registerTool(profilerCpuQueryTool);
+  registry.registerTool(profilerCommitQueryTool);
+  registry.registerTool(profilerStackQueryTool);
+  registry.registerTool(profilerCombinedReportTool);
+  registry.registerTool(profilerLoadTool);
+  registry.registerTool(queryDocumentationTool);
+  registry.registerTool(gatherWorkspaceDataTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
 
-  registry.registerTool(gatherWorkspaceDataTool);
+  // Flow tools
+  registry.registerTool(flowStartRecordingTool);
+  registry.registerTool(createFlowAddStepTool(registry));
+  registry.registerTool(flowInsertEchoTool);
+  registry.registerTool(flowFinishRecordingTool);
+  registry.registerTool(flowReadPrerequisiteTool);
+  registry.registerTool(createRunFlowTool(registry));
 
   return registry;
 }

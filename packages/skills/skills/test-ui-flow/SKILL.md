@@ -12,7 +12,7 @@ All interactions go through argent MCP tools. Ensure the simulator is booted bef
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps. To use it, resolve the `react-native-app-workflow` skill for setup.
    - **Any iOS app**: use `describe` — it returns the accessibility element tree with normalized frame coordinates.
    - **Fallback**: use `screenshot` to estimate where the desired component is
-3. **Interact**: Perform the action (`tap`, `swipe`, `paste`, etc.) — you receive a screenshot automatically.
+3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `paste`, etc.) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with `screenshot`.
 5. **Repeat** for each step in the flow.
 
@@ -55,13 +55,20 @@ Steps:
 
 ---
 
+## 4. Recovery Pattern
+
+- If screenshot shows loading/transition: wait 500ms, retake with `screenshot`.
+- If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
+- If tap fails twice at same coordinates: stop, re-discover, report if element not found.
+- If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `create-flow` skill §10 for structured diagnosis and correction.
+
 ## Tips
 
 - **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
-- **Use `gesture` for long-press** context menus (800ms hold).
-- **Check for loading states** — retake with `screenshot` if the auto-screenshot shows a transitional frame.
+- **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
+- **Record for replay**: If a tested flow is likely to be repeated, use the `create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
 
 ## Related Skills
 
@@ -70,5 +77,6 @@ Steps:
 | `simulator-interact`   | Detailed tool usage for tapping, swiping, typing |
 | `simulator-screenshot` | Screenshot-specific options and troubleshooting  |
 | `simulator-setup`      | Booting and connecting a simulator               |
-| `react-native-app-workflow` | Starting the app, Metro, build issues            |
+| `react-native-app-workflow` | Starting the app, Metro, build issues       |
 | `metro-debugger`       | Breakpoints, console logs, JS evaluation         |
+| `create-flow`          | Record a test sequence as a replayable flow      |

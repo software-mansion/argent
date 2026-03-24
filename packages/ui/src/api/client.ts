@@ -95,6 +95,8 @@ export interface InspectItem {
   name: string
   source: { file: string; line: number; column: number } | null
   code: string | null
+  skipped?: boolean
+  skipReason?: string
 }
 
 export interface BreakpointResult {
@@ -207,12 +209,18 @@ export function createClient(toolsUrl: string) {
     metroStep: (action: 'stepOver' | 'stepInto' | 'stepOut', port = 8081) =>
       req<{ action: string; sent: boolean }>('POST', `${base}/tools/debugger-step`, { port, action }),
 
-    metroComponentTree: (port = 8081) =>
-      req<{ components: ComponentEntry[] } | { error: string }>('POST', `${base}/tools/debugger-component-tree`, { port }),
+    metroComponentTree: (port = 8081, includeSkipped = false) =>
+      req<{ components: ComponentEntry[] } | { error: string } | string>(
+        'POST', `${base}/tools/debugger-component-tree`, { port, includeSkipped }
+      ),
 
-    metroInspectElement: (x: number, y: number, port = 8081, contextLines = 3) =>
+    metroInspectElement: (x: number, y: number, port = 8081, opts?: { contextLines?: number; includeSkipped?: boolean }) =>
       req<{ x: number; y: number; items: InspectItem[] } | { error: string }>(
-        'POST', `${base}/tools/debugger-inspect-element`, { port, x, y, contextLines }
+        'POST', `${base}/tools/debugger-inspect-element`, {
+          port, x, y,
+          contextLines: opts?.contextLines ?? 3,
+          includeSkipped: opts?.includeSkipped ?? false,
+        }
       ),
 
     metroConsoleLogs: (count: number | 'all' = 'all', port = 8081, sinceId?: number) =>

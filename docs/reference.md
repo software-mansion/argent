@@ -6,13 +6,13 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 
 ## Packages (workspace)
 
-| Package                     | Purpose                                                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package                 | Purpose                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **@argent/registry**    | Core library: dependency-aware service lifecycle and stateless tool invocation. Defines registry, blueprints, tools, URNs, and errors. No HTTP or simulator logic. Services defined through blueprints govern the long-running tasks and allow for tool interaction (such as: managing the running simulator server, connecting to existing metro session and plugging into debugger). |
-| **@argent/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@argent/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                     |
-| **@argent/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Argent tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                      |
+| **@argent/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@argent/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                         |
+| **@argent/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Argent tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                          |
 | **@argent/ui**          | Web UI for simulator control and Metro debugging. Calls the tools server over HTTP and maintains WebSocket sessions to simulator-server for touch/gestures.                                                                                                                                                                                                                            |
-| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                              |
+| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                                  |
 | **@argent/vscode**      | VS Code extension (minimal; contributes launch configs and tasks for Tools Server and UI).                                                                                                                                                                                                                                                                                             |
 
 ---
@@ -23,7 +23,7 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 
 The single central object that coordinates **tools** and **services**:
 
-- **Blueprints** — Templates for context-aware services (e.g. `SimulatorServer`, `JsRuntimeDebugger`, `ProfilerSession`). Each blueprint has a namespace, `getURN(context)`, optional dependencies, and a `factory` that creates a service instance. The registry does **not** start any services at startup; it only stores these templates.
+- **Blueprints** — Templates for context-aware services (e.g. `SimulatorServer`, `JsRuntimeDebugger`, `ReactProfilerSession`, `IosProfilerSession`). Each blueprint has a namespace, `getURN(context)`, optional dependencies, and a `factory` that creates a service instance. The registry does **not** start any services at startup; it only stores these templates.
 - **Services** — Long-running instances (e.g. a simulator-server process, a Metro CDP connection) created **on demand** and identified by **URN** (e.g. `SimulatorServer:<udid>`, `JsRuntimeDebugger:8081`). When something asks for a service by URN, the registry:
   - calls `resolveService(urn)`
   - if there is an instance for the URN, it reuses it, otherwise...
@@ -52,7 +52,7 @@ The **tool server** is the Node/Express process in `@argent/tool-server` (defaul
 
 - **Setup** — On startup (`packages/tool-server/src/index.ts`): it creates a registry via `createRegistry()`, attaches the registry logger, builds the HTTP app with `createHttpApp(registry)`, and starts listening.
 
-`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the three blueprints (SimulatorServer, JsRuntimeDebugger, ProfilerSession) and all tools (simulator, interactions, debugger, profiler, license), then returns it. No services are started at this point.
+`createRegistry()` (in `utils/setup-registry.ts`) instantiates a single `Registry`, registers the four blueprints (SimulatorServer, JsRuntimeDebugger, ReactProfilerSession, IosProfilerSession) and all tools (simulator, interactions, debugger, react-profiler, ios-profiler, license), then returns it. No services are started at this point.
 
 **Interaction with the registry** — Every request that needs the registry uses that one instance:
 
@@ -99,8 +99,10 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
   - **Simulator lifecycle:** `list-simulators`, `boot-simulator`, `simulator-server`, `launch-app`, `open-url`, `rotate`, `restart-app`, `reinstall-app`, `stop-simulator-server`, `stop-all-simulator-servers`, `stop-metro`.
   - **Interactions:** `tap`, `swipe`, `gesture`, `button`, `keyboard`, `paste`, `screenshot`, `describe`.
   - **Debugger (Metro/CDP):** `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`, `debugger-reload-metro`.
-  - **Profiler:** `profiler-start`, `profiler-stop`, `profiler-analyze`, `profiler-component-source`, `profiler-cpu-summary`, `profiler-react-renders`, `profiler-fiber-tree`, `profiler-console-logs`.
+  - **React Profiler:** `react-profiler-start`, `react-profiler-stop`, `react-profiler-analyze`, `react-profiler-component-source`, `react-profiler-cpu-summary`, `react-profiler-renders`, `react-profiler-fiber-tree`.
+  - **iOS Instruments Profiler:** `ios-profiler-start`, `ios-profiler-stop`, `ios-profiler-analyze`.
   - **License:** `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
+  - **Documentation:** `query-documentation`.
 
 ---
 
@@ -122,6 +124,7 @@ The `describe` tool uses the macOS Accessibility API (`AXUIElement`) via the `si
 **Can it be auto-granted?** No. Apple requires explicit user consent for Accessibility permissions. There is no API to programmatically grant this — `AXIsProcessTrustedWithOptions` can only check and optionally prompt, and `tccutil` can only reset (not grant) permissions. Modifying TCC.db directly requires SIP to be disabled.
 
 **How it's handled:** When `httpDescribe()` in `simulator-client.ts` receives the `accessibility_not_trusted` error, it:
+
 1. Opens System Settings directly to the Accessibility pane (`x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility`).
 2. Opens Finder revealing the `simulator-server` binary (`open -R <path>`) so the user can easily locate and drag it.
 3. Throws a detailed error with step-by-step instructions including the exact binary path.
@@ -143,20 +146,29 @@ Both `open` calls are fire-and-forget — if they fail (e.g. different macOS ver
 
 ---
 
-## Profiler
+## React Profiler
 
-- **ProfilerSession**  
-  Blueprint that depends on `JsRuntimeDebugger` (URN `ProfilerSession:port`). On creation it enables the CDP `Profiler` domain, injects a fiber root tracker script for React commit capture, and detects the RN architecture (bridge vs bridgeless) and Hermes version. Holds the raw `cpuProfile` and `commitTree` after a profiling run, plus script source entries for source map resolution.
-- **profiler-\*** tools  
-  Performance profiling tools that resolve `ProfilerSession:port`:
-  - `profiler-start` — Start CPU profiling + React commit capture on the Hermes runtime.
-  - `profiler-stop` — Stop CPU profiling and collect the `cpuProfile` + React commit tree.
-  - `profiler-analyze` — Analyze stored profiling data and return a markdown performance report.
-  - `profiler-component-source` — AST lookup via tree-sitter: returns file path, line number, memoization status, and 50 lines of source for a named React component.
-  - `profiler-cpu-summary` — Raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
-  - `profiler-react-renders` — Walk the live React fiber tree to collect component render counts and durations.
-  - `profiler-fiber-tree` — Walk the React fiber tree and return a JSON representation of the component hierarchy.
-  - `profiler-console-logs` — Return console log entries captured from the connected React Native app.
+- **ReactProfilerSession**
+  Blueprint that depends on `JsRuntimeDebugger` (URN `ReactProfilerSession:port`). On creation it enables the CDP `Profiler` domain, injects a fiber root tracker script for React commit capture, and detects the RN architecture (bridge vs bridgeless) and Hermes version. Holds the raw `cpuProfile` and `commitTree` after a profiling run, plus script source entries for source map resolution.
+- **react-profiler-\*** tools
+  Performance profiling tools that resolve `ReactProfilerSession:port`:
+  - `react-profiler-start` — Start CPU profiling + React commit capture on the Hermes runtime.
+  - `react-profiler-stop` — Stop CPU profiling and collect the `cpuProfile` + React commit tree.
+  - `react-profiler-analyze` — Analyze stored profiling data and return a markdown performance report.
+  - `react-profiler-component-source` — AST lookup via tree-sitter: returns file path, line number, memoization status, and 50 lines of source for a named React component.
+  - `react-profiler-cpu-summary` — Raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
+  - `react-profiler-renders` — Walk the live React fiber tree to collect component render counts and durations.
+  - `react-profiler-fiber-tree` — Walk the React fiber tree and return a JSON representation of the component hierarchy.
+
+## iOS Instruments Profiler
+
+- **IosProfilerSession**
+  Standalone blueprint (URN `IosProfilerSession:deviceId`). Manages the xctrace process lifecycle — no CDP or Metro dependency. Holds the running process PID, trace file path, and exported XML file paths.
+- **ios-profiler-\*** tools
+  Native iOS profiling tools that resolve `IosProfilerSession:deviceId`:
+  - `ios-profiler-start` — Start xctrace recording on a booted simulator or device. Captures CPU time profile, hangs, and leaks.
+  - `ios-profiler-stop` — Stop xctrace, export trace data to XML files.
+  - `ios-profiler-analyze` — Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, memory leaks).
 
 ---
 

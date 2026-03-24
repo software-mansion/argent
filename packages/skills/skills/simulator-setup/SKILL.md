@@ -16,18 +16,10 @@ If you delegate simulator tasks to sub-agents, make sure they have MCP permissio
    Returns `{ apiUrl, streamUrl }`.
 
 3. **Verify connection**
-   All interaction tools (`tap`, `swipe`, `gesture`, etc.) auto-start the server if not already running.
+   All interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-custom`, etc.) auto-start the server if not already running.
 
 ## 2. Notes
 
 - UDIDs look like: `A1B2C3D4-E5F6-7890-ABCD-EF1234567890`
 - For screenshots, pass a JWT token to `simulator-server` or `screenshot` directly.
 - The `streamUrl` points to an MJPEG stream viewable in a browser.
-
-## Related Skills
-
-| Skill                  | When to use                                                  |
-| ---------------------- | ------------------------------------------------------------ |
-| `simulator-interact`   | Tapping, swiping, typing on the simulator                    |
-| `simulator-screenshot` | Capturing the simulator screen                               |
-| `react-native-app-workflow` | Starting the app, Metro, build issues                        |
