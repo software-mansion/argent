@@ -4,9 +4,11 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const ALLOWED_TOOLS = new Set([
-  "tap",
-  "swipe",
-  "gesture",
+  "gesture-tap",
+  "gesture-swipe",
+  "gesture-custom",
+  "gesture-pinch",
+  "gesture-rotate",
   "button",
   "keyboard",
   "rotate",
@@ -20,7 +22,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: tap, swipe, gesture, button, keyboard, rotate",
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate",
           ),
         args: z
           .record(z.unknown())
@@ -65,18 +67,20 @@ a prior tap), use individual tool calls instead.
 
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
-  tap:      { x: number, y: number }
-  swipe:    { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }
-  gesture:  { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }] }
-  button:   { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }
-  keyboard: { text?: string, key?: string, delayMs?: number }
-  rotate:   { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }
+  gesture-tap:    { x: number, y: number }
+  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }
+  gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }
+  gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }
+  gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }
+  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }
+  keyboard:       { text?: string, key?: string, delayMs?: number }
+  rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }
 
 Example — scroll down three times:
   { "udid": "<UDID>", "steps": [
-    { "tool": "swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
   ]}
 
 Example — type text and submit:

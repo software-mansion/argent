@@ -51,6 +51,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Type text (fast) | `paste`           | Form fields — uses clipboard                              |
 | Type text        | `keyboard`        | Fallback when paste fails; supports Enter, Escape, arrows |
 | Rotate device    | `rotate`          | Orientation changes                                       |
+| Multiple actions | `run-sequence`    | Batch steps in one call (no intermediate screenshots)     |
 
 ## 4. Finding Tap Targets
 
@@ -157,6 +158,50 @@ Screenshots are downscaled by default (30% of original resolution) to reduce con
 | No booted simulator  | Run `boot-simulator` first.                                                            |
 
 Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs to be passed once — subsequent calls reuse the running process.
+
+---
+
+## 7. Action Sequencing with `run-sequence`
+
+Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete. Use cases:
+scrolling mutliple tines, typing and submitting automatically, known sequence of multiplte taps, rotating device back and forth.
+
+Do **not** use `run-sequence` when any step depends on observing the result of a previous step
+
+### Allowed tools inside `run-sequence`
+
+`gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`
+
+The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
+
+### Examples
+
+Scroll down three times:
+```json
+{ "udid": "<UDID>", "steps": [
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
+]}
+```
+
+Type into a focused field and submit:
+```json
+{ "udid": "<UDID>", "steps": [
+  { "tool": "keyboard", "args": { "text": "hello world" } },
+  { "tool": "keyboard", "args": { "key": "enter" } }
+]}
+```
+
+Tap a known button, then scroll down:
+```json
+{ "udid": "<UDID>", "steps": [
+  { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.15 } },
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }, "delayMs": 300 }
+]}
+```
+
+Stops on the first error and returns partial results.
 
 ---
 
