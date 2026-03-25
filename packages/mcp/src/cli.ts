@@ -16,7 +16,7 @@ import * as os from "node:os";
 // ── Configurable constants ────────────────────────────────────────────────────
 // Change PACKAGE_NAME if the npm package name changes, and NPM_REGISTRY if
 // you need to point at a private registry or mirror.
-const PACKAGE_NAME = "@software-mansion-labs/argent";
+const PACKAGE_NAME = "@software-mansion/argent";
 const NPM_REGISTRY = "https://npm.pkg.github.com";
 const MCP_SERVER_KEY = "argent";
 const PERMISSION_RULE = "mcp__argent";
@@ -114,15 +114,12 @@ function getInstalledVersion(root: string): string | null {
   }
 }
 
-async function getLatestVersion(): Promise<string> {
-  const url = `${NPM_REGISTRY}/${PACKAGE_NAME}/latest`;
-  const res = await fetch(url);
-  if (!res.ok)
-    throw new Error(
-      `npm registry returned HTTP ${res.status} for ${PACKAGE_NAME}`,
-    );
-  const data = (await res.json()) as { version: string };
-  return data.version;
+function getLatestVersion(): string {
+  const result = execSync(
+    `npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`,
+    { encoding: "utf8" },
+  );
+  return result.trim();
 }
 
 /**
@@ -221,7 +218,7 @@ async function update() {
   console.log(`\nChecking for ${PACKAGE_NAME} updates...\n`);
   let latest: string;
   try {
-    latest = await getLatestVersion();
+    latest = getLatestVersion();
   } catch (err) {
     console.error(`  ⚠ Could not reach npm registry: ${err}`);
     process.exit(1);

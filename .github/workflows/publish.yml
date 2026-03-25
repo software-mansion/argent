@@ -18,9 +18,11 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://npm.pkg.github.com'
-          scope: '@software-mansion-labs'
+          scope: '@software-mansion'
 
       - run: npm ci
+
+      - run: npm run build -w @software-mansion/argent
 
       - run: npm publish --workspace packages/mcp
         env:

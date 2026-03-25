@@ -1,6 +1,6 @@
 # Releasing Argent
 
-This document describes how to publish a new version of `@software-mansion-labs/argent` to GitHub Packages.
+This document describes how to publish a new version of `@software-mansion/argent` to GitHub Packages.
 
 ---
 
@@ -22,11 +22,12 @@ git tag + push
 ┌─────────────────────────────┐
 │  publish.yml                │  triggered by: release created
 │  → npm ci                   │
+│  → npm run build            │
 │  → npm publish              │  pushes to https://npm.pkg.github.com
 └─────────────────────────────┘
 ```
 
-You push a version tag. `release.yml` creates a GitHub Release with an auto-generated changelog. That release event immediately triggers `publish.yml`, which builds and publishes the npm package.
+You push a version tag. `release.yml` creates a GitHub Release with an auto-generated changelog. That release event immediately triggers `publish.yml`, which installs dependencies, builds the package, and publishes it to GitHub Packages.
 
 ---
 
@@ -65,7 +66,7 @@ That's it. The two workflows take over from here.
 ### 3. Verify
 
 - **Release** — go to the repo on GitHub → Releases. A new release should appear within ~30 seconds, with a changelog auto-populated from merged PR titles since the last tag.
-- **Package** — go to the repo on GitHub → Packages (right sidebar). The new version of `@software-mansion-labs/argent` should appear after the publish job completes (~1–2 minutes total).
+- **Package** — go to the repo on GitHub → Packages (right sidebar). The new version of `@software-mansion/argent` should appear after the publish job completes (~1–2 minutes total).
 
 ---
 

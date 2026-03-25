@@ -1,5 +1,5 @@
 {
-  "name": "@software-mansion-labs/argent",
+  "name": "@software-mansion/argent",
   "version": "0.3.0",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
@@ -29,7 +29,6 @@
     "skills/",
     "agents/",
     "rules/",
-    "agents/",
     "scripts/"
   ],
   "dependencies": {
