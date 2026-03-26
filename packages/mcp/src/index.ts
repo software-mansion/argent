@@ -22,8 +22,8 @@ import {
 } from "./auto-screenshot.js";
 
 let TOOLS_URL: string;
-if (process.env.RADON_TOOLS_URL) {
-  TOOLS_URL = process.env.RADON_TOOLS_URL;
+if (process.env.ARGENT_TOOLS_URL) {
+  TOOLS_URL = process.env.ARGENT_TOOLS_URL;
 } else {
   try {
     TOOLS_URL = await ensureToolsServer();
@@ -36,7 +36,7 @@ if (process.env.RADON_TOOLS_URL) {
 let reconnectPromise: Promise<void> | null = null;
 
 async function reconnect(): Promise<void> {
-  if (process.env.RADON_TOOLS_URL) return; // env-var path: never managed by launcher
+  if (process.env.ARGENT_TOOLS_URL) return; // env-var path: never managed by launcher
   if (!reconnectPromise) {
     reconnectPromise = ensureToolsServer()
       .then((url) => {
@@ -64,7 +64,7 @@ async function fetchWithReconnect(
 }
 
 const LOG_FILE =
-  process.env.RADON_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
+  process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
 let logDirReady = false;
 
 async function spyLog(entry: Record<string, unknown>) {

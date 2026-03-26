@@ -171,7 +171,7 @@ async function run() {
 
   // Test 10: Runtime.addBinding
   try {
-    await client.addBinding("__radon_lite_test");
+    await client.addBinding("__argent_test");
     record("Runtime.addBinding", true, "Binding registered");
   } catch (err: unknown) {
     record("Runtime.addBinding", false, (err as Error).message);

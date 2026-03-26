@@ -29,7 +29,7 @@ export default function TokenRequiredOverlay() {
       <div className="text-center max-w-xs px-4">
         <p className="text-sm font-semibold text-rl-fg mb-1">Pro feature</p>
         <p className="text-xs text-rl-fg-muted">
-          Screenshots, screen recording, and replay require an active Radon IDE
+          Screenshots, screen recording, and replay require an active Argent
           Pro, Team, or Enterprise subscription.
         </p>
       </div>

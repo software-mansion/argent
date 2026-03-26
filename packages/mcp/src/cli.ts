@@ -135,7 +135,7 @@ function configure(root: string): string[] {
     type: "stdio",
     command: "node",
     args: [distEntry],
-    env: { RADON_MCP_LOG: logFile },
+    env: { ARGENT_MCP_LOG: logFile },
   };
 
   const results: string[] = [];

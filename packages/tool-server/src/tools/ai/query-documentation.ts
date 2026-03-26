@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { InvokeToolOptions, ToolDefinition } from "@argent/registry";
 import { activateWithSSO, readToken } from "../../utils/license";
 
-const RADON_AI_URL = "https://radon-ai-backend.swmansion.com/";
+const ARGENT_AI_URL = "https://radon-ai-backend.swmansion.com/";
 const PLACEHOLDER_CALL_ID = "3241";
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -18,7 +18,7 @@ const zodSchema = z.object({
     .describe("JWT license token (injected automatically)"),
 });
 
-const QUERY_DOCS_URL = new URL("/api/tool_calls/", RADON_AI_URL);
+const QUERY_DOCS_URL = new URL("/api/tool_calls/", ARGENT_AI_URL);
 
 async function fetchDocumentation(
   text: string,
@@ -68,7 +68,7 @@ export const queryDocumentationTool: ToolDefinition<
         signal,
       );
     } catch (cause) {
-      throw new Error("Network failure contacting Radon AI backend", {
+      throw new Error("Network failure contacting Argent AI backend", {
         cause: cause as Error,
       });
     }
@@ -91,7 +91,7 @@ export const queryDocumentationTool: ToolDefinition<
           );
         } catch (cause) {
           throw new Error(
-            "Network failure contacting Radon AI backend on retry after SSO",
+            "Network failure contacting Argent AI backend on retry after SSO",
             { cause: cause as Error },
           );
         }
@@ -108,7 +108,7 @@ export const queryDocumentationTool: ToolDefinition<
 
     if (!response.ok) {
       throw new Error(
-        `Radon AI backend responded with status ${response.status}.`,
+        `Argent AI backend responded with status ${response.status}.`,
       );
     }
 
@@ -119,11 +119,11 @@ export const queryDocumentationTool: ToolDefinition<
         tool_results: { content: string }[];
       };
     } catch {
-      throw new Error("Radon AI backend returned malformed JSON");
+      throw new Error("Argent AI backend returned malformed JSON");
     }
 
     if (!result.tool_results?.length) {
-      throw new Error("Radon AI backend returned an empty response");
+      throw new Error("Argent AI backend returned an empty response");
     }
 
     return { content: result.tool_results[0].content };
