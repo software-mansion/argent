@@ -96,7 +96,7 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
 - **Tool** (`ToolDefinition`)  
   A single invocable operation: `id`, `description`, optional `zodSchema` / `inputSchema`, optional `outputHint`, `services(params)` (returns alias → URN or `{ urn, options }`), and `execute(services, params, options)`. The Registry resolves the URNs to APIs, then calls `execute`. Tools are registered with `registry.registerTool(...)` in `setup-registry.ts`.
 - **Tool categories in this repo** (all registered in `packages/tool-server/src/utils/setup-registry.ts`)
-  - **Simulator lifecycle:** `list-simulators`, `boot-simulator`, `simulator-server`, `launch-app`, `open-url`, `rotate`, `restart-app`, `reinstall-app`, `stop-simulator-server`, `stop-all-simulator-servers`, `stop-metro`.
+  - **Simulator lifecycle:** `list-devices`, `boot-simulator`, `simulator-server`, `launch-app`, `open-url`, `rotate`, `restart-app`, `reinstall-app`, `stop-simulator-server`, `stop-all-simulator-servers`, `stop-metro`.
   - **Interactions:** `tap`, `swipe`, `gesture`, `button`, `keyboard`, `paste`, `screenshot`, `describe`.
   - **Debugger (Metro/CDP):** `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`, `debugger-reload-metro`.
   - **React Profiler:** `react-profiler-start`, `react-profiler-stop`, `react-profiler-analyze`, `react-profiler-component-source`, `react-profiler-cpu-summary`, `react-profiler-renders`, `react-profiler-fiber-tree`.

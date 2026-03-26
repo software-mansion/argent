@@ -1,4 +1,5 @@
 export interface Simulator {
+  type: string
   udid: string
   name: string
   state: string
@@ -170,12 +171,12 @@ export function createClient(toolsUrl: string) {
       req<RegistrySnapshot>('GET', `${base}/registry/snapshot`),
 
     listSimulators: () =>
-      req<{ simulators: Simulator[] }>('POST', `${base}/tools/list-simulators`, {})
-        .then(d => d.simulators),
+      req<{ devices: Simulator[] }>('POST', `${base}/tools/list-devices`, {})
+        .then(d => d.devices.filter(s => s.type === 'simulator')),
 
     listRunningSimulators: () =>
-      req<{ simulators: Simulator[] }>('POST', `${base}/tools/list-simulators`, {})
-        .then(d => d.simulators.filter(s => s.state === 'Booted')),
+      req<{ devices: Simulator[] }>('POST', `${base}/tools/list-devices`, {})
+        .then(d => d.devices.filter(s => s.type === 'simulator' && s.state === 'Booted')),
 
     bootSimulator: (udid: string) =>
       req<void>('POST', `${base}/tools/boot-simulator`, { udid }),

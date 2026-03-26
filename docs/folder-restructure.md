@@ -31,7 +31,7 @@ This document summarizes the changes in this PR for anyone acknowledging or revi
 - `**src/tools/**` — Reorganized from a flat list into subfolders:
   - `**tools/interactions/**` — `button`, `describe`, `gesture`, `keyboard`, `paste`, `screenshot`, `swipe`, `tap` (moved from `src/tools/*.ts`).
   - `**tools/license/**` — `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
-  - `**tools/simulator/**` — `boot-simulator`, `launch-app`, `list-simulators`, `open-url`, `rotate`, `simulator-server`.
+  - `**tools/simulator/**` — `boot-simulator`, `launch-app`, `list-devices`, `open-url`, `rotate`, `simulator-server`.
   - `**tools/debugger/**` — New: `debugger-connect`, `debugger-status`, `debugger-evaluate`, `debugger-set-breakpoint`, `debugger-remove-breakpoint`, `debugger-pause`, `debugger-resume`, `debugger-step`, `debugger-component-tree`, `debugger-inspect-element`, `debugger-console-logs`, `debugger-console-listen`.
 - **Blueprints** — Still under `src/blueprints/` (`simulator-server.ts`, `js-runtime-debugger.ts`); no path change.
 - **Tests** — New/relocated under `test/`: Metro-related tests in `test/metro/`, plus `test-breakpoint-e2e.ts`, `test-breakpoint-hit.ts`, `metro-cdp-verify.ts`; **vitest.config.ts** added.

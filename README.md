@@ -56,7 +56,7 @@ Test it:
 
 ```bash
 curl http://localhost:3001/tools                        # list tools
-curl -X POST http://localhost:3001/tools/list-simulators \
+curl -X POST http://localhost:3001/tools/list-devices \
   -H "Content-Type: application/json" -d '{}'           # invoke a tool
 ```
 

@@ -3,7 +3,6 @@ import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
-import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { listDevicesTool } from "../tools/simulator/list-devices";
 import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
 import { simulatorServerTool } from "../tools/simulator/simulator-server";
@@ -77,7 +76,6 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(iosInstrumentsSessionBlueprint);
 
-  registry.registerTool(listSimulatorsTool);
   registry.registerTool(listDevicesTool);
   registry.registerTool(bootSimulatorTool);
   registry.registerTool(launchAppTool);
