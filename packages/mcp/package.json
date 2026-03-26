@@ -1,10 +1,11 @@
 {
-  "name": "argent",
-  "version": "0.3.0",
+  "name": "@software-mansion/argent",
+  "version": "0.3.1",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
   "bin": {
-    "argent": "dist/index.js",
+    "argent": "dist/cli.js",
+    "argent-mcp": "dist/index.js",
     "argent-simulator-server": "bin/simulator-server"
   },
   "scripts": {
@@ -18,13 +19,16 @@
     "benchmark": "node scripts/benchmark.cjs",
     "postinstall": "node scripts/postinstall.cjs"
   },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
+  },
   "files": [
     "dist/",
     "bin/",
     "skills/",
     "agents/",
     "rules/",
-    "agents/",
     "scripts/"
   ],
   "dependencies": {

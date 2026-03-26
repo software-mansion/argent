@@ -62,19 +62,17 @@ curl -X POST http://localhost:3001/tools/list-simulators \
 
 ## Installing in a project
 
-To set up argent in another project so AI assistants (Claude, Cursor) can use it:
+The `argent` package is distributed via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) under the `@software-mansion` scope. Because the source repository is private, you must authenticate before installing.
+
+See **[INSTALL.md](./INSTALL.md)** for the full step-by-step guide (token setup, `.npmrc` configuration, and the install command).
+
+**Quick start** (after completing auth setup):
 
 ```bash
-node scripts/setup-project.cjs /path/to/project
+npx @software-mansion/argent install
 ```
 
-This builds and packs argent, installs it as a local dependency, copies skills to `.claude/skills/`, and registers the MCP server in both `.claude/mcp.json` and `.cursor/mcp.json`. Existing configs are merged, not overwritten.
-
-To install globally instead (configures `~/.claude.json` at the user level):
-
-```bash
-node scripts/setup-project.cjs --global
-```
+This installs the package from GitHub Packages and configures MCP servers in `.claude/mcp.json`, `.cursor/mcp.json`, and copies skills, agents, and rules into your workspace.
 
 ### VS Code launch configs
 
@@ -98,8 +96,8 @@ npm test -w @argent/tool-server        # tool-server tests (vitest)
 ### MCP package
 
 ```bash
-npm run build -w argent                # compile + bundle into single CJS file
-npm run pack:mcp                       # build and create argent-<version>.tgz
+npm run build -w @software-mansion/argent   # compile + bundle into single CJS file
+npm run pack:mcp                                  # build and create argent-<version>.tgz
 ```
 
 ## Simulator server API
