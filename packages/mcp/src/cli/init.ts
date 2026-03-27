@@ -15,6 +15,8 @@ import { PACKAGE_NAME } from "./constants.js";
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
 
+  printBanner();
+
   p.intro(pc.bgCyan(pc.black(" argent init ")));
 
   const version = getInstalledVersion() ?? "unknown";
@@ -282,6 +284,42 @@ export async function init(args: string[]): Promise<void> {
 
   p.note(summaryLines.join("\n"), "Summary");
   p.outro(pc.green("argent is ready!"));
+}
+
+function printBanner(): void {
+  const lines = [
+    " █████  ██████   ██████  ███████ ███    ██ ████████",
+    "██   ██ ██   ██ ██       ██      ████   ██    ██   ",
+    "███████ ██████  ██   ███ █████   ██ ██  ██    ██   ",
+    "██   ██ ██   ██ ██    ██ ██      ██  ██ ██    ██   ",
+    "██   ██ ██   ██  ██████  ███████ ██   ████    ██   ",
+  ];
+
+  const width = Math.max(...lines.map((l) => l.length));
+  const from = [232, 160, 72] as const;
+  const to = [180, 72, 40] as const;
+
+  console.log();
+  for (let y = 0; y < lines.length; y++) {
+    const line = lines[y];
+    let output = "";
+    for (let x = 0; x < line.length; x++) {
+      if (line[x] === " ") {
+        output += " ";
+        continue;
+      }
+      const t = width > 1 ? (x / (width - 1) + y / (lines.length - 1)) / 2 : 0;
+      const r = Math.round(from[0] + (to[0] - from[0]) * t);
+      const g = Math.round(from[1] + (to[1] - from[1]) * t);
+      const b = Math.round(from[2] + (to[2] - from[2]) * t);
+      output += `\x1b[38;2;${r};${g};${b}m${line[x]}`;
+    }
+    console.log(output + "\x1b[0m");
+  }
+
+  const attribution = "by Software Mansion";
+  console.log(" ".repeat(width - attribution.length) + pc.dim(attribution));
+  console.log();
 }
 
 function runNpxSkills(
