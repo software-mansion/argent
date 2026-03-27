@@ -1,0 +1,12 @@
+// Configurable constants for the argent CLI.
+// Change these if the npm package name, registry, or MCP key changes.
+
+export const PACKAGE_NAME = "@software-mansion/argent";
+
+// Used ONLY for single-package queries (e.g. `npm view`), never for install
+// commands. Install relies on the user's scoped registry in ~/.npmrc so that
+// third-party dependencies resolve from npmjs.org normally.
+export const NPM_REGISTRY = "https://npm.pkg.github.com";
+export const MCP_SERVER_KEY = "argent";
+export const MCP_BINARY_NAME = "argent-mcp";
+export const PERMISSION_RULE = "mcp__argent";

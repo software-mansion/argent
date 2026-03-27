@@ -2,6 +2,12 @@
 // @ts-check
 "use strict";
 
+// DEPRECATED: This script is kept for backwards compatibility.
+// Use `argent init` instead (after installing the package globally).
+console.warn(
+  "\x1b[33m[DEPRECATED]\x1b[0m scripts/install.cjs is deprecated. Use `argent init` instead."
+);
+
 const fs = require("fs");
 const path = require("path");
 const os = require("os");

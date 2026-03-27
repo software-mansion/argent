@@ -12,8 +12,8 @@ if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {
 console.log(`
 @software-mansion/argent installed.
 
-To configure your workspace (MCP server, skills, rules), run:
+To set up your workspace (MCP server, skills, rules), run:
 
-  npx @software-mansion/argent install
+  argent init
 `);
 
