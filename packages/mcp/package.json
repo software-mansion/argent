@@ -32,7 +32,9 @@
     "scripts/"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0"
+    "@clack/prompts": "^1.1.0",
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
