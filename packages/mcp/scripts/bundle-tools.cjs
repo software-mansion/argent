@@ -22,6 +22,8 @@ const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
 const SKILLS_DEST = path.resolve(__dirname, "../skills");
 const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
+const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
+const AGENTS_DEST = path.resolve(__dirname, "../agents");
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
@@ -104,4 +106,17 @@ if (fs.existsSync(RULES_SRC)) {
   );
 } else {
   console.warn(`⚠ Rules source not found at ${RULES_SRC} — skipping copy`);
+}
+
+// Copy agents into the package so they ship on npm.
+if (fs.existsSync(AGENTS_SRC)) {
+  fs.cpSync(AGENTS_SRC, AGENTS_DEST, { recursive: true });
+  const count = fs
+    .readdirSync(AGENTS_SRC, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".md")).length;
+  console.log(
+    `✓ Copied ${count} agent(s) → ${path.relative(process.cwd(), AGENTS_DEST)}`,
+  );
+} else {
+  console.warn(`⚠ Agents source not found at ${AGENTS_SRC} — skipping copy`);
 }
