@@ -14,7 +14,6 @@ The tools server spawns simulator-server processes on demand. The UI and MCP bri
 | `@argent/registry`    | `packages/registry`    | Core library: dependency-aware service lifecycle, blueprints, tools, URNs. No HTTP or simulator logic. |
 | `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (`GET /tools`, `POST /tools/:name`). Registers all blueprints and tools.    |
 | `@argent/mcp`         | `packages/mcp`         | MCP bridge — exposes all tools to AI assistants (Claude, Cursor) via Model Context Protocol.           |
-| `@argent/ui`          | `packages/ui`          | Web UI for simulator control and Metro debugging.                                                      |
 | `@argent/skills`      | `packages/skills`      | Markdown skill files that instruct AI agents when/how to use Argent tools.                             |
 
 ## Requirements
@@ -29,27 +28,16 @@ The tools server spawns simulator-server processes on demand. The UI and MCP bri
 npm install
 ```
 
-### Run the full app (tools server + UI)
+### Run the tools server
 
 ```bash
 npm run start
 ```
 
-This builds the registry, then starts both the tools server (port 3001) and the Vite UI dev server (port 5173) concurrently.
-
-Open **http://localhost:5173**, connect to the tools server (default URL is pre-filled), pick a simulator, boot it, and start a session.
-
-To run them in separate terminals instead:
+This builds the registry, then starts the tools server on port 3001.
 
 ```bash
-npm run start:tool-server   # API at http://localhost:3001
-npm run start:ui             # UI  at http://localhost:5173
-```
-
-### Run tools server only (no UI)
-
-```bash
-npm run start:tool-server
+npm run start:tool-server   # equivalent alias
 ```
 
 Test it:

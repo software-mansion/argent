@@ -8,8 +8,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "test:cdp-verify": "ts-node test/metro-cdp-verify.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@argent/registry": "file:../registry",
