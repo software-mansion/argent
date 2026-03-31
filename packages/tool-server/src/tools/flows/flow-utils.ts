@@ -120,7 +120,7 @@ export function parseFlow(content: string): FlowFile {
   const steps = parsed.steps.map((raw) => {
     if ("echo" in raw) return fromYamlStep(raw);
     if ("tool" in raw) return fromYamlStep(raw);
-    throw new Error(`Unrecognised flow entry: ${JSON.stringify(raw)}`);
+    throw new Error(`Unrecognized flow entry: ${JSON.stringify(raw)}`);
   });
 
   return {

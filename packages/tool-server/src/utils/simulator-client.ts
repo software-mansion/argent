@@ -43,7 +43,7 @@ export function sendCommand(api: SimulatorServerApi, cmd: object): void {
 
 function getSimulatorServerBinaryPath(): string {
   const dir =
-    process.env.RADON_SIMULATOR_SERVER_DIR ??
+    process.env.ARGENT_SIMULATOR_SERVER_DIR ??
     path.join(__dirname, "..", "..", "..", "..");
   return path.join(dir, "simulator-server");
 }
@@ -142,7 +142,7 @@ export async function httpDescribe(
 }
 
 export function getScreenshotScale(): number {
-  const v = process.env.RADON_SCREENSHOT_SCALE;
+  const v = process.env.ARGENT_SCREENSHOT_SCALE;
   if (v) {
     const n = parseFloat(v);
     if (!Number.isNaN(n) && n > 0 && n <= 1) return n;

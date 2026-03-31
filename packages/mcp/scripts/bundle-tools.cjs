@@ -18,10 +18,19 @@ const REGISTRY_ENTRY = path.resolve(
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const BIN_SRC = path.resolve(WORKSPACE_ROOT, "simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
+const BIN_DIR = path.resolve(__dirname, "../bin");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
 const SKILLS_DEST = path.resolve(__dirname, "../skills");
 const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
+const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
+const AGENTS_DEST = path.resolve(__dirname, "../agents");
+
+// Purge artifact directories so stale files don't survive across builds.
+for (const dir of [BIN_DIR, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) {
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+}
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
@@ -42,9 +51,6 @@ console.log(
 );
 
 // Copy simulator-server binary
-const BIN_DIR = path.dirname(BIN_DEST);
-fs.mkdirSync(BIN_DIR, { recursive: true });
-
 if (fs.existsSync(BIN_SRC)) {
   fs.copyFileSync(BIN_SRC, BIN_DEST);
   fs.chmodSync(BIN_DEST, 0o755);
@@ -104,4 +110,17 @@ if (fs.existsSync(RULES_SRC)) {
   );
 } else {
   console.warn(`⚠ Rules source not found at ${RULES_SRC} — skipping copy`);
+}
+
+// Copy agents into the package so they ship on npm.
+if (fs.existsSync(AGENTS_SRC)) {
+  fs.cpSync(AGENTS_SRC, AGENTS_DEST, { recursive: true });
+  const count = fs
+    .readdirSync(AGENTS_SRC, { withFileTypes: true })
+    .filter((e) => e.isFile() && e.name.endsWith(".md")).length;
+  console.log(
+    `✓ Copied ${count} agent(s) → ${path.relative(process.cwd(), AGENTS_DEST)}`,
+  );
+} else {
+  console.warn(`⚠ Agents source not found at ${AGENTS_SRC} — skipping copy`);
 }

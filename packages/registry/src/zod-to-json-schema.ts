@@ -30,6 +30,15 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
   if (type instanceof z.ZodArray) {
     return { type: "array", items: zodTypeToJsonSchema(type.element) };
   }
+  if (type instanceof z.ZodObject) {
+    return zodObjectToJsonSchema(type);
+  }
+  if (type instanceof z.ZodRecord) {
+    return { type: "object" };
+  }
+  if (type instanceof z.ZodEnum) {
+    return { type: "string", enum: type.options };
+  }
   return {};
 }
 

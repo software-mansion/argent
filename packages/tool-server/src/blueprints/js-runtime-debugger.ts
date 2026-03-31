@@ -141,7 +141,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
       .send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 })
       .catch(ignore);
     await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
-    await cdp.addBinding("__radon_lite_callback");
+    await cdp.addBinding("__argent_callback");
 
     await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(ignore);
 

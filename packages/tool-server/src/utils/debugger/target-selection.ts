@@ -10,7 +10,7 @@ export interface SelectedTarget {
 /**
  * Pick the most appropriate CDP target from the Metro /json/list response.
  *
- * Selection priority (matches Radon's DebuggerTarget.ts):
+ * Selection priority (matches Argent's DebuggerTarget.ts):
  * 1. prefersFuseboxFrontend === true (RN >= 0.76 new debugger)
  * 2. description ends with "[C++ connection]"
  * 3. title starts with "React Native Bridge" (legacy)

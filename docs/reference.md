@@ -12,7 +12,7 @@ Reference for modules, concepts, and features in the codebase. Use this as a qui
 | **@argent/tool-server** | Tools server allowing for tool usage and tool implementations. Depends on `@argent/registry`, sets up the registry, registers blueprints and tools, exposes HTTP API (`GET/POST /tools`, `/registry/snapshot`). The tools are defined to be atomic actions which can be called by the client using the server.                                                                         |
 | **@argent/mcp**         | MCP (Model Context Protocol) bridge. Fetches the tool list from the tools server and proxies all tool calls to it. Exposes Argent tools to MCP clients (e.g. Cursor, Claude).                                                                                                                                                                                                          |
 | **@argent/ui**          | Web UI for simulator control and Metro debugging. Calls the tools server over HTTP and maintains WebSocket sessions to simulator-server for touch/gestures.                                                                                                                                                                                                                            |
-| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `radon-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                                  |
+| **@argent/skills**      | Claude/Cursor skills (markdown instructions) for when and how to use Argent tools. Installable via `argent-skills`; places skill files in the user’s skills directory.                                                                                                                                                                                                                  |
 | **@argent/vscode**      | VS Code extension (minimal; contributes launch configs and tasks for Tools Server and UI).                                                                                                                                                                                                                                                                                             |
 
 ---
@@ -102,7 +102,6 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
   - **React Profiler:** `react-profiler-start`, `react-profiler-stop`, `react-profiler-analyze`, `react-profiler-component-source`, `react-profiler-cpu-summary`, `react-profiler-renders`, `react-profiler-fiber-tree`.
   - **iOS Instruments Profiler:** `ios-profiler-start`, `ios-profiler-stop`, `ios-profiler-analyze`.
   - **License:** `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
-  - **Documentation:** `query-documentation`.
 
 ---
 
@@ -131,7 +130,7 @@ The `describe` tool uses the macOS Accessibility API (`AXUIElement`) via the `si
 
 Both `open` calls are fire-and-forget — if they fail (e.g. different macOS version), the error message still contains all the information for manual steps.
 
-**Binary identification:** macOS identifies unsigned binaries by their absolute path. The binary is at `<argent_package>/bin/simulator-server` (resolved via `RADON_SIMULATOR_SERVER_DIR` env var set by the MCP launcher, or fallback path from `__dirname`). If the package is updated and the binary changes, the user may need to re-toggle the permission.
+**Binary identification:** macOS identifies unsigned binaries by their absolute path. The binary is at `<argent_package>/bin/simulator-server` (resolved via `ARGENT_SIMULATOR_SERVER_DIR` env var set by the MCP launcher, or fallback path from `__dirname`). If the package is updated and the binary changes, the user may need to re-toggle the permission.
 
 **No restart needed:** After granting permission, the next `describe` call works immediately — `AXIsProcessTrusted()` is checked at runtime on each call.
 
@@ -174,13 +173,13 @@ Both `open` calls are fire-and-forget — if they fail (e.g. different macOS ver
 
 ## MCP
 
-The `@argent/mcp` package runs an MCP server that lists tools from `RADON_TOOLS_URL` and forwards `CallTool` to `POST /tools/:name`. So “all tools registered in the Registry” are exposed to MCP (including debugger and simulator tools). Image-capable tools use `outputHint: "image"` so the bridge can return inline base64 images.
+The `@argent/mcp` package runs an MCP server that lists tools from `ARGENT_TOOLS_URL` and forwards `CallTool` to `POST /tools/:name`. So “all tools registered in the Registry” are exposed to MCP (including debugger and simulator tools). Image-capable tools use `outputHint: "image"` so the bridge can return inline base64 images.
 
 ---
 
 ## Skills
 
-Markdown files that instruct an agent when and how to use Argent tools (e.g. simulator setup, interaction, screenshots, Metro debugging). Lives under `packages/skills/skills/`. The `radon-skills` CLI installs them into the user’s skills directory (e.g. Cursor/Claude). They do not implement tools; they describe usage.
+Markdown files that instruct an agent when and how to use Argent tools (e.g. simulator setup, interaction, screenshots, Metro debugging). Lives under `packages/skills/skills/`. The `argent-skills` CLI installs them into the user’s skills directory (e.g. Cursor/Claude). They do not implement tools; they describe usage.
 
 ---
 
