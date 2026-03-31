@@ -45,7 +45,7 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
 const DEFAULT_DELAY_MS = 1400;
 
 export function autoScreenshotEnabled(): boolean {
-  const v = process.env.RADON_AUTO_SCREENSHOT;
+  const v = process.env.ARGENT_AUTO_SCREENSHOT;
   return v === undefined || v === "" || v === "1" || v.toLowerCase() === "true";
 }
 
@@ -63,7 +63,7 @@ export function getUdidFromArgs(args: unknown): string | undefined {
 
 /**
  * Strip known MCP prefix so the allow-list matches canonical names.
- * Cursor sends `mcp__radon-lite__tap`; we need `tap`.
+ * Cursor sends `mcp__argent__tap`; we need `tap`.
  */
 export function normalizeToolName(name: string): string {
   const idx = name.lastIndexOf("__");
@@ -78,7 +78,7 @@ export function shouldAutoScreenshot(toolName: string): boolean {
 export function getAutoScreenshotDelayMs(toolName: string): number {
   const canonical = normalizeToolName(toolName);
   const base = AUTO_SCREENSHOT_DELAY_MS_BY_TOOL[canonical] ?? DEFAULT_DELAY_MS;
-  const envOverride = process.env.RADON_AUTO_SCREENSHOT_DELAY_MS;
+  const envOverride = process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
   if (envOverride) {
     const envMs = parseInt(envOverride, 10);
     if (!Number.isNaN(envMs)) return Math.max(base, envMs);

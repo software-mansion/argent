@@ -39,7 +39,7 @@ describe("getMcpEntry", () => {
     const entry = getMcpEntry();
     expect(entry.command).toBe("argent");
     expect(entry.args).toEqual(["mcp"]);
-    expect(entry.env).toHaveProperty("RADON_MCP_LOG");
+    expect(entry.env).toHaveProperty("ARGENT_MCP_LOG");
   });
 });
 

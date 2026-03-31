@@ -28,7 +28,7 @@ function buildMcpEntry(): McpServerEntry {
   return {
     command: MCP_BINARY_NAME,
     args: ["mcp"],
-    env: { RADON_MCP_LOG: logFile },
+    env: { ARGENT_MCP_LOG: logFile },
   };
 }
 
