@@ -492,30 +492,11 @@ export function printBanner(): void {
     "╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝",
   ];
 
-  const BODY = "\x1b[38;2;158;158;168m";
-  const SHADOW = "\x1b[38;2;78;78;88m";
-  const RESET = "\x1b[0m";
-  const shadowChars = new Set("╔╗╚╝║═");
-
   const width = Math.max(...lines.map((l) => l.length));
 
   console.log();
   for (const line of lines) {
-    let output = "";
-    let lastColor = "";
-    for (const ch of line) {
-      if (ch === " ") {
-        output += " ";
-      } else {
-        const color = shadowChars.has(ch) ? SHADOW : BODY;
-        if (color !== lastColor) {
-          output += color;
-          lastColor = color;
-        }
-        output += ch;
-      }
-    }
-    console.log(output + RESET);
+    console.log(line);
   }
 
   const attribution = "by Software Mansion";
