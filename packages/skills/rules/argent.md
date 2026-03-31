@@ -12,7 +12,6 @@ Argent MCP tools are the preferred form of interaction with the application.
 </description>
 
 <argent_use_cases>
-
 - User mentions iOS simulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in the simulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
@@ -21,7 +20,7 @@ Argent MCP tools are the preferred form of interaction with the application.
   </argent_use_cases>
 
 <tapping_rule>
-**HARD RULE: NEVER derive tap coordinates from a screenshot.**
+**HARD RULE: Never derive tap coordinates from a screenshot.**
 BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extract coordinates from the result. This is not optional. Whenever something changed YOU MUST first call `describe` or `component-tree` to not try and hallucinate the positions of the elements. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
 `describe` is good for system-level components
@@ -31,11 +30,10 @@ If `describe` is not sufficient ALWAYS do a followup of `component-tree` in reac
 </tapping_rule>
 
 <skill_reading_rule>
-**HARD RULE**: ALWAYS read relevant skills for guidance before executing argent-mcp tool using in skill_routing reference.
+**HARD RULE**: Always read relevant skills for guidance before executing argent-mcp tool using in skill_routing reference.
 </skill_reading_rule>
 
 <important_rules>
-
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.

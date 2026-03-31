@@ -35,11 +35,11 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "gesture-tap": 1500,
   "gesture-pinch": 1500,
   "gesture-rotate": 1500,
+  "run-sequence": 15000,
   button: 1500,
-  keyboard: 300,
   rotate: 1000,
+  keyboard: 300,
   describe: 100,
-  "run-sequence": 1500,
 };
 
 const DEFAULT_DELAY_MS = 1400;
