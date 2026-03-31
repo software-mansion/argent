@@ -7,13 +7,20 @@ description: Interact with a running iOS simulator using argent MCP tools. Use w
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-simulators` to find available simulators. **Pick the first result** — booted iPhones are listed first. If none are booted, use `boot-simulator` first.
+Use `list-simulators` to find available simulators. **Pick the first result** if specific not specified by user — booted iPhones are listed first. If none are booted, use `boot-simulator` first.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
-Always refer to tapping_rule from your argent.md rule before tapping.
+## 2. Best Practices
 
-## 2. Opening Apps
+1. **Always refer to tapping_rule** from your argent.md rule before tapping.
+2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
+3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. Consider whether you need multiple swipes, if yes - use `run-sequence`.
+4. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
+5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
+
+
+## 3. Opening Apps
 
 **Never navigate to an app by tapping home-screen icons.** Use `launch-app` or `open-url` — they are instant and reliable.
 
@@ -33,10 +40,11 @@ Common IDs: `com.apple.MobileSMS` (Messages), `com.apple.mobilesafari` (Safari),
 
 Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<number>`, `mailto:<address>`, `https://...` (Safari)
 
-## 3. Choosing the Right Tool
+## 4. Choosing the Right Tool
 
 | Action           | Tool              | Notes                                                     |
 | ---------------- | ----------------- | --------------------------------------------------------- |
+| Multiple actions | `run-sequence`    | Batch steps in one call (no intermediate screenshots)     |
 | Open an app      | `launch-app`      | **Always — never tap home-screen icons**                  |
 | Restart an app   | `restart-app`     | Reinstall or reconnect to Metro                           |
 | Open URL/scheme  | `open-url`        | Web pages, deep links, URL schemes                        |
@@ -52,7 +60,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Type text        | `keyboard`        | Fallback when paste fails; supports Enter, Escape, arrows |
 | Rotate device    | `rotate`          | Orientation changes                                       |
 
-## 4. Finding Tap Targets
+## 5. Finding Tap Targets
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
@@ -62,7 +70,7 @@ IMPORTANT. When moved to a different screen after an action or do not know the c
 | React Native | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                         |
 | Fallback     | `screenshot`              | when cannot determine using the above methods, use screenshot as a heuristic fallback |
 
-## 5. Tool Usage
+## 6. Tool Usage
 
 ### gesture-tap — Single tap at a point
 
@@ -136,7 +144,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
 ---
 
-## 6. Screenshots
+## 7. Screenshots
 
 Use the explicit `screenshot` tool only when:
 
@@ -160,10 +168,53 @@ Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs 
 
 ---
 
-## Best Practices
+## 8. Action Sequencing with `run-sequence`
 
-1. **Start every task with `launch-app` or `open-url`.**
-2. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement.
-3. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
-4. **Wait for animations** — give the app ~300ms after `gesture-tap` or `button` before the next action.
-5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
+Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete. Use cases:
+scrolling mutliple tines, typing and submitting automatically, known sequence of multiplte taps, rotating device back and forth.
+
+Do **not** use `run-sequence` when any step depends on observing the result of a previous step
+
+### Use cases
+
+Use the sequencing when:
+- Knowing that some action needs multiple steps without necesserily immediate insight of screenshot
+- "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
+- form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
+- "submit form" → fill all fields in sequence, tap submit
+- "go back to X" → defined tap sequence for the navigation
+
+### Allowed tools inside `run-sequence`
+
+`gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`
+
+The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
+
+### Examples
+
+Scroll down three times:
+```json
+{ "udid": "<UDID>", "steps": [
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
+]}
+```
+
+Type into a focused field and submit:
+```json
+{ "udid": "<UDID>", "steps": [
+  { "tool": "keyboard", "args": { "text": "hello world" } },
+  { "tool": "keyboard", "args": { "key": "enter" } }
+]}
+```
+
+Tap a known button, then scroll down:
+```json
+{ "udid": "<UDID>", "steps": [
+  { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.15 } },
+  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }, "delayMs": 300 }
+]}
+```
+
+Stops on the first error and returns partial results.

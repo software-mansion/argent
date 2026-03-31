@@ -16,10 +16,10 @@ const REFRESH_META_DIR = path.join(os.homedir(), ".argent");
 const LAST_REFRESH_FILE = path.join(REFRESH_META_DIR, "last-token-refresh");
 
 // Binary lives at workspace root (three levels up from dist/ at runtime).
-// When bundled by esbuild, __dirname is dist/ — use RADON_SIMULATOR_SERVER_DIR env var instead.
+// When bundled by esbuild, __dirname is dist/ — use ARGENT_SIMULATOR_SERVER_DIR env var instead.
 function getBinaryPath(): string {
   const BINARY_DIR =
-    process.env.RADON_SIMULATOR_SERVER_DIR ??
+    process.env.ARGENT_SIMULATOR_SERVER_DIR ??
     path.join(__dirname, "..", "..", "..", "..");
   return path.join(BINARY_DIR, "simulator-server");
 }

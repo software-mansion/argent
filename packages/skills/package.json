@@ -8,6 +8,6 @@
     "install-skills": "node scripts/install.js"
   },
   "bin": {
-    "radon-skills": "scripts/install.js"
+    "argent-skills": "scripts/install.js"
   }
 }

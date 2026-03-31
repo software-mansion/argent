@@ -1,13 +1,31 @@
 node_modules/
+
+# Build outputs
 dist/
-*.log
-*.tsbuildinfo
+build/
 packages/*/dist/
+packages/*/build/
 packages/*/node_modules/
-**/*tsconfig.tsbuildinfo
+
+# TypeScript build info
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# Source maps
+*.js.map
+*.d.ts.map
+
+# Packed archives
 *.tgz
+
+# OS
 .DS_Store
+
+# Misc
+*.log
 1export
+
+# MCP package generated assets (copied/bundled at build time)
 packages/mcp/bin/
 packages/mcp/skills/
 packages/mcp/agents/

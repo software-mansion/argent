@@ -1,7 +1,7 @@
 /**
  * JS script injected via Runtime.evaluate to intercept network requests.
  * Monkey-patches globalThis.fetch and XMLHttpRequest to capture request/response
- * metadata and store them in globalThis.__radon_network_log.
+ * metadata and store them in globalThis.__argent_network_log.
  *
  * The network tools read this array via Runtime.evaluate to fetch captured logs.
  * Each entry follows the NetworkLogEntry shape used by the tools.
@@ -9,13 +9,13 @@
  * Designed to be idempotent — calling it twice won't double-patch.
  */
 export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
-  if (globalThis.__radon_network_installed) return JSON.stringify({ installed: false, reason: 'already installed' });
-  globalThis.__radon_network_installed = true;
+  if (globalThis.__argent_network_installed) return JSON.stringify({ installed: false, reason: 'already installed' });
+  globalThis.__argent_network_installed = true;
 
   var log = [];
-  globalThis.__radon_network_log = log;
+  globalThis.__argent_network_log = log;
   var byId = {};
-  globalThis.__radon_network_by_id = byId;
+  globalThis.__argent_network_by_id = byId;
   var nextReqId = 1;
   var MAX_ENTRIES = 2000;
   function genId() { return 'rn-net-' + (nextReqId++); }
@@ -121,7 +121,7 @@ export function makeNetworkLogReadScript(
   metroPort: number,
 ): string {
   return `(function() {
-  var log = globalThis.__radon_network_log;
+  var log = globalThis.__argent_network_log;
   if (!log) return JSON.stringify({ entries: [], total: 0, interceptorInstalled: false });
 
   // Filter out requests to the Metro server
@@ -169,7 +169,7 @@ export function makeNetworkLogReadScript(
  */
 export function makeNetworkDetailReadScript(requestId: string): string {
   return `(function() {
-  var byId = globalThis.__radon_network_by_id;
+  var byId = globalThis.__argent_network_by_id;
   if (!byId) return JSON.stringify({ error: 'Network interceptor not installed' });
   var entry = byId['${requestId.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'];
   if (!entry) return JSON.stringify({ error: 'Request not found' });

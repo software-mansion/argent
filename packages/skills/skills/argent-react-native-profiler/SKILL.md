@@ -101,11 +101,11 @@ The analyze report includes **CPU hotspots per commit** — showing exactly whic
 
 ### Step 4: Assess results
 
-Analyse whether the results give you proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works. Make sure to give honest feedback and be ready to change the approach if needed.
+Analyze whether the results give you a proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works. Make sure to give honest feedback and be ready to change the approach if needed.
 
 ### Step 5: Present findings and ask about next steps
 
-Present a concise summary of the key findings - present whether possibilites for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop. 
+Present a concise summary of the key findings - present whether possibilities for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop. 
 
 ### Step 6: Drill-down investigation (iterative)
 
@@ -118,7 +118,7 @@ Based on findings from the report, use query tools to investigate deeper:
 - **Who triggered whom?** -> `profiler-commit-query` mode=`cascade_tree` — visual parent-child cascade.
 - **iOS hang details?** -> `profiler-stack-query` mode=`hang_stacks` — native call stacks during a hang.
 
-Repeat as needed until you identify the root cause function and file, refering to step &4 for honest evaluation. After each round of investigation, ask the user if they want to continue digging or move to fixing.
+Repeat as needed until you identify the root cause function and file, referring to step 4 for honest evaluation. After each round of investigation, ask the user if they want to continue digging or move to fixing.
 
 ### Step 7: Reload a previous session
 
@@ -137,7 +137,7 @@ If fix is present, read the source code of the identified bottleneck using `reac
 
 **Tip:** If the interaction sequence was recorded as a flow (see "Use flows for reproducible profiling" above), replay it with `flow-execute` instead of manually repeating the steps. This guarantees identical interaction conditions for the comparison. If the flow fails during replay (e.g., a UI fix changed the layout), follow `argent-create-flow` skill §10 (Flow Self-Improvement) to diagnose and repair the flow before retrying the profiling cycle.
 
-If the user stated that he does not wish for changes, present the profiling report and skip the fix but suggest it to the user.
+If the user stated that they do not wish for changes, present the profiling report and skip the fix but suggest it to the user.
 
 **React Compiler rule:** If `meta.reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out (check `react-profiler-fiber-tree` for absent `useMemoCache` on that component).
 

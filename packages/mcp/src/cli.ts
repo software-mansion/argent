@@ -3,6 +3,7 @@
  * argent CLI — globally-installed entry point.
  *
  * Usage:
+ *   argent mcp          Start the MCP stdio server (used by editors)
  *   argent init         Set up argent in a workspace (MCP + skills + rules)
  *   argent update       Check for updates, refresh configuration
  *   argent uninstall    Remove argent from a workspace
@@ -22,6 +23,7 @@ argent v${version}
 Usage: argent <command> [options]
 
 Commands:
+  mcp         Start the MCP stdio server (used by editors)
   init        Initialize argent in the current workspace (MCP server + skills)
   update      Check for updates and refresh configuration
   uninstall   Remove argent configuration from the workspace
@@ -39,6 +41,8 @@ Package: ${PACKAGE_NAME}
 
 async function main(): Promise<void> {
   switch (command) {
+    case "mcp":
+      return (await import("./mcp-server.js")).startMcpServer();
     case "init":
       return (await import("./cli/init.js")).init(rest);
     case "update":

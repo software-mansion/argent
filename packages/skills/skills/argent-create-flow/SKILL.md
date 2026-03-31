@@ -125,7 +125,7 @@ steps:
 
 ## 9. When to Proactively Record a Flow
 
-You do not need the user to ask for a flow. Record one proactively when you recognise any of these patterns:
+You do not need the user to ask for a flow. Record one proactively when you recognize any of these patterns:
 
 - **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `argent-react-native-profiler` and `argent-ios-profiler` skills).
 - **Repeating steps**: You have already performed a multi-step interaction sequence once and the task requires doing it again (comparison, retry, re-test).
