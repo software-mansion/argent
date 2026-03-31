@@ -262,6 +262,48 @@ const zedAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Gemini CLI adapter ────────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Global only: ~/.gemini/settings.json
+
+const geminiAdapter: McpConfigAdapter = {
+  name: "Gemini",
+
+  detect(): boolean {
+    return dirExists(path.join(homedir(), ".gemini"));
+  },
+
+  projectPath(): string | null {
+    return null;
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".gemini", "settings.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJson(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -270,6 +312,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   vscodeAdapter,
   windsurfAdapter,
   zedAdapter,
+  geminiAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
