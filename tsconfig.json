@@ -2,7 +2,6 @@
   "files": [],
   "references": [
     { "path": "packages/tool-server" },
-    { "path": "packages/ui" },
     { "path": "packages/mcp" }
   ]
 }
