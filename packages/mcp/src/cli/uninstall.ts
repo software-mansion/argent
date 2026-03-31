@@ -5,9 +5,7 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
-  detectAdapters,
   ALL_ADAPTERS,
-  removeClaudePermission,
 } from "./mcp-configs.js";
 import {
   detectPackageManager,
@@ -65,24 +63,20 @@ export async function uninstall(args: string[]): Promise<void> {
     }
   }
 
-  // ── Remove Claude permissions ───────────────────────────────────────────────
+  // ── Remove allowlists ──────────────────────────────────────────────────────
 
-  try {
-    removeClaudePermission(projectRoot, "local");
-    results.push(
-      `${pc.green("+")} Removed Claude Code permissions ${pc.dim("(local)")}`,
-    );
-  } catch {
-    // non-fatal
-  }
-
-  try {
-    removeClaudePermission(projectRoot, "global");
-    results.push(
-      `${pc.green("+")} Removed Claude Code permissions ${pc.dim("(global)")}`,
-    );
-  } catch {
-    // non-fatal
+  for (const adapter of ALL_ADAPTERS) {
+    if (!adapter.removeAllowlist) continue;
+    for (const s of ["local", "global"] as const) {
+      try {
+        adapter.removeAllowlist(projectRoot, s);
+        results.push(
+          `${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`,
+        );
+      } catch {
+        // non-fatal
+      }
+    }
   }
 
   if (results.length > 0) {

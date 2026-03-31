@@ -5,7 +5,6 @@ import {
   detectAdapters,
   ALL_ADAPTERS,
   getMcpEntry,
-  addClaudePermission,
   copyRulesAndAgents,
   type McpConfigAdapter,
 } from "./mcp-configs.js";
@@ -287,22 +286,67 @@ export async function init(args: string[]): Promise<void> {
     }
   }
 
-  // Claude permissions
-  const hasClaudeCode = selectedAdapters.some((a) => a.name === "Claude Code");
-  if (hasClaudeCode) {
-    try {
-      addClaudePermission(projectRoot, scope);
-      mcpResults.push(
-        `${pc.green("+")} Claude Code permissions ${pc.dim("(mcp__argent)")}`,
+  p.note(mcpResults.join("\n"), "MCP Configuration");
+
+  // ── Tool Auto-Approval ────────────────────────────────────────────────────
+
+  const adaptersWithAllowlist = selectedAdapters.filter((a) => a.addAllowlist);
+  const adaptersWithoutAllowlist = selectedAdapters.filter(
+    (a) => !a.addAllowlist,
+  );
+
+  let allowlistEnabled = false;
+
+  if (adaptersWithAllowlist.length > 0) {
+    p.log.info(
+      `By default, editors ask for confirmation before running each MCP tool.\n` +
+      `  Adding argent to the auto-approve allowlist lets tools run without\n` +
+      `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`,
+    );
+
+    if (nonInteractive) {
+      allowlistEnabled = true;
+    } else {
+      p.log.message(
+        pc.dim("  Press y for yes, n for no, enter to confirm."),
       );
-    } catch (err) {
-      mcpResults.push(
-        `${pc.red("x")} Claude permissions: ${pc.dim(String(err))}`,
-      );
+
+      const allowlistChoice = await p.confirm({
+        message: "Add argent tools to editor auto-approve lists? (recommended)",
+        initialValue: true,
+      });
+
+      if (p.isCancel(allowlistChoice)) {
+        p.cancel("Initialization cancelled.");
+        process.exit(0);
+      }
+
+      allowlistEnabled = allowlistChoice as boolean;
     }
   }
 
-  p.note(mcpResults.join("\n"), "MCP Configuration");
+  if (allowlistEnabled) {
+    const allowlistResults: string[] = [];
+
+    for (const adapter of adaptersWithAllowlist) {
+      try {
+        adapter.addAllowlist!(projectRoot, scope);
+        allowlistResults.push(`${pc.green("+")} ${adapter.name}`);
+      } catch (err) {
+        allowlistResults.push(
+          `${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`,
+        );
+      }
+    }
+
+    for (const adapter of adaptersWithoutAllowlist) {
+      allowlistResults.push(
+        `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no auto-approve API — configure manually)")}`,
+      );
+    }
+
+    p.note(allowlistResults.join("\n"), "Tool Auto-Approval");
+  }
 
   // ── Step 2: Skills Installation ─────────────────────────────────────────────
 
@@ -429,6 +473,7 @@ export async function init(args: string[]): Promise<void> {
 
   const summaryLines = [
     `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`,
+    `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
     `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
     `${pc.green("Rules & agents")} ${copyResults.length > 0 ? "copied" : "n/a"}`,
   ];

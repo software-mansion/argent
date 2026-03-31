@@ -4,7 +4,6 @@ import { execSync } from "node:child_process";
 import {
   detectAdapters,
   getMcpEntry,
-  addClaudePermission,
   copyRulesAndAgents,
 } from "./mcp-configs.js";
 import {
@@ -110,18 +109,15 @@ export async function update(args: string[]): Promise<void> {
     }
   }
 
-  // Refresh Claude permissions
-  const hasClaude = detected.some((a) => a.name === "Claude Code");
-  if (hasClaude) {
-    try {
-      addClaudePermission(projectRoot, "global");
-    } catch {
-      // non-fatal
-    }
-    try {
-      addClaudePermission(projectRoot, "local");
-    } catch {
-      // non-fatal
+  // Refresh allowlists
+  for (const adapter of detected) {
+    if (!adapter.addAllowlist) continue;
+    for (const s of ["global", "local"] as const) {
+      try {
+        adapter.addAllowlist(projectRoot, s);
+      } catch {
+        // non-fatal
+      }
     }
   }
 
