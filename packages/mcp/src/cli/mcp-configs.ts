@@ -270,7 +270,10 @@ const geminiAdapter: McpConfigAdapter = {
   name: "Gemini",
 
   detect(): boolean {
-    return dirExists(path.join(homedir(), ".gemini"));
+    return (
+      dirExists(path.join(homedir(), ".gemini")) ||
+      dirExists(path.join(process.cwd(), ".gemini"))
+    );
   },
 
   projectPath(root: string): string | null {

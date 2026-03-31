@@ -319,6 +319,17 @@ describe("Gemini adapter", () => {
     );
   });
 
+  it("detect() returns true when local .gemini dir exists", () => {
+    const localGemini = path.join(process.cwd(), ".gemini");
+    const existed = fs.existsSync(localGemini);
+    if (!existed) fs.mkdirSync(localGemini, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localGemini);
+    }
+  });
+
   it("globalPath returns ~/.gemini/settings.json", () => {
     expect(adapter.globalPath()).toBe(
       path.join(os.homedir(), ".gemini", "settings.json"),
