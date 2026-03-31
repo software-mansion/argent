@@ -3,7 +3,6 @@ export { ServiceState } from './types';
 export type {
   ServiceEvents,
   ServiceInstance,
-  ServiceDefinition,
   ServiceBlueprint,
   ServiceNode,
   ToolDefinition,
@@ -17,8 +16,6 @@ export { parseURN } from './urn';
 export {
   ServiceNotFoundError,
   ServiceInitializationError,
-  ServiceRuntimeError,
-  ServiceDisposalError,
   ToolNotFoundError,
   ToolExecutionError,
 } from './errors';
