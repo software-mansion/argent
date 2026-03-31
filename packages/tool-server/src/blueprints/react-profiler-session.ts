@@ -22,25 +22,6 @@ export const FIBER_ROOT_TRACKER_SCRIPT = `
   var orig = hook.onCommitFiberRoot;
   hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
     hook.__rn_mcp_roots__.add(root);
-
-    try {
-      var stats = [];
-      var stack = root && root.current ? [root.current] : [];
-      while (stack.length > 0) {
-        var fiber = stack.pop();
-        if (!fiber) continue;
-        var name = (fiber.type && (fiber.type.displayName || fiber.type.name)) || null;
-        if (name && typeof fiber.actualDuration === 'number' && fiber.actualDuration > 0) {
-          stats.push({ c: name, d: Math.round(fiber.actualDuration * 100) / 100 });
-        }
-        if (fiber.sibling) stack.push(fiber.sibling);
-        if (fiber.child) stack.push(fiber.child);
-      }
-      if (stats.length > 0) {
-        console.log('[rn-mcp:render]', JSON.stringify(stats));
-      }
-    } catch(e) {}
-
     if (typeof orig === 'function') orig.call(this, rendererID, root, priorityLevel);
   };
 })();
