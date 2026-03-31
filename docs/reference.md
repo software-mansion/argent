@@ -102,7 +102,6 @@ The **native binary** (`simulator-server` at repo root) that runs **per simulato
   - **React Profiler:** `react-profiler-start`, `react-profiler-stop`, `react-profiler-analyze`, `react-profiler-component-source`, `react-profiler-cpu-summary`, `react-profiler-renders`, `react-profiler-fiber-tree`.
   - **iOS Instruments Profiler:** `ios-profiler-start`, `ios-profiler-stop`, `ios-profiler-analyze`.
   - **License:** `activate-license-key`, `activate-sso`, `get-license-status`, `remove-license`.
-  - **Documentation:** `query-documentation`.
 
 ---
 

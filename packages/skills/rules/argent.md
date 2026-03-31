@@ -52,13 +52,13 @@ If `describe` is not sufficient ALWAYS do a followup of `component-tree` in reac
   </core_rules>
 
 <react_native_detection>
-Project type is determined by the `environment-inspector` subagent (see <subagents>).
+Project type is determined by the `argent-environment-inspector` subagent (see <subagents>).
 When the subagent result is available, use its `is_react_native` field as the authoritative
 source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding.
 
-When `is_react_native` is true: load `react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
+When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
 </react_native_detection>
 
 <skill_routing>
@@ -66,46 +66,46 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure, tool reference, and edge-case handling for each workflow.
 
 SIMULATOR SETUP
-Use skill: `simulator-setup`
+Use skill: `argent-simulator-setup`
 When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS
-Use skill: `simulator-interact`
+Use skill: `argent-simulator-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
 RUNNING / BUILDING / DEBUGGING A REACT NATIVE APP
-Use skill: `react-native-app-workflow`
+Use skill: `argent-react-native-app-workflow`
 When: Project is react-native, starting Metro or running iOS app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
 
 BREAKPOINTS, STEPPING, JS EVALUATION
-Use skill: `metro-debugger`
+Use skill: `argent-metro-debugger`
 When: Setting/removing breakpoints, pausing/stepping through JS, evaluating expressions, inspecting React component tree at source level, finding element placement via `debugger-component-tree`.
 
 END-TO-END UI TESTING
-Use skill: `test-ui-flow`
+Use skill: `argent-test-ui-flow`
 When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
 
 PERFORMANCE OPTIMIZATION
-Use skill: `react-native-optimization`
-When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `react-native-profiler` for measurement.
+Use skill: `argent-react-native-optimization`
+When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `argent-react-native-profiler` for measurement.
 
 APP & COMPONENT PROFILING
-Use skill: `react-native-profiler`
+Use skill: `argent-react-native-profiler`
 When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
 
 NATIVE iOS PROFILING
-Use skill: `ios-profiler`
-When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `react-native-profiler`.
+Use skill: `argent-ios-profiler`
+When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `argent-react-native-profiler`.
 
 RECORDING & REPLAYING FLOWS
-Use skill: `create-flow`
+Use skill: `argent-create-flow`
 When: A multi-step interaction sequence needs to be repeated — re-profiling after a fix, A/B comparisons, regression checks, user says "again" / "run that flow", or you worked through a complex path worth saving. Also use proactively: if you are about to repeat steps you already performed, record first, then replay.
 Prompt keywords: flow, repeat, test X times
 </skill_routing>
 
 <subagents>
 ENVIRONMENT INSPECTION AT SESSION START
-Use subagent: `environment-inspector`
+Use subagent: `argent-environment-inspector`
 When:
 - Environment context of the project is not yet known
 - No "Project Environment" section exists in project memory / `MEMORY.md` or you lack information about basic setup workflows
@@ -123,12 +123,12 @@ Most tools require a Pro license. If any tool returns "No Argent license found":
 
 WORKSPACE INFORMATION RETRIEVAL
 The `gather-workspace-data` tool provides a structured snapshot used internally by the
-`environment-inspector` subagent. Retrieve workspace information according to this priority:
+`argent-environment-inspector` subagent. Retrieve workspace information according to this priority:
 
 1. **Project memory / `MEMORY.md` already has a "Project Environment" section** →
    Use that context directly. Do NOT re-run the subagent or call the tool.
 2. **Subagent delegation is available** →
-   Run the `environment-inspector` subagent. Never call `gather-workspace-data` yourself;
+   Run the `argent-environment-inspector` subagent. Never call `gather-workspace-data` yourself;
    the subagent calls it internally and fills in gaps through further inspection.
 3. **Subagent delegation is NOT available** →
    Call `gather-workspace-data` directly as a first step, then fill in any gaps by
