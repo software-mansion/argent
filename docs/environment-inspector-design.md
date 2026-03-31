@@ -28,7 +28,7 @@ The first 200 lines of `MEMORY.md` are loaded automatically at the start of ever
 
 ```
 First session (memory directory empty):
-  main agent runs environment-inspector subagent (or inline)
+  main agent runs argent-environment-inspector subagent (or inline)
   → receives structured JSON result
   → writes compact summary to MEMORY.md  (fits well within 200 lines)
   → writes full JSON to environment.md   (read on demand if detail needed)
@@ -80,7 +80,7 @@ At session start on any React Native project:
 1. Check auto memory (MEMORY.md) for a "Project Environment" section.
 2. If present and not stale (package.json unchanged since inspected_at),
    use it as environment context for all tasks.
-3. If absent or stale, run the environment-inspector subagent, then write
+3. If absent or stale, run the argent-environment-inspector subagent, then write
    the compact summary to MEMORY.md and the full JSON to environment.md
    in ~/.claude/projects/<project>/memory/.
 ```
@@ -97,7 +97,7 @@ The project's `CLAUDE.md` is committed to git and shared with the team. Modifyin
 
 ```
 main agent
-  └─ delegates to → environment-inspector subagent  (Haiku, plan mode)
+  └─ delegates to → argent-environment-inspector subagent  (Haiku, plan mode)
                         │ 1. check project memory — if valid, return cached result
                         │ 2. if not cached: call gather-workspace-data MCP tool
                         │    returns raw file snapshot
@@ -113,7 +113,7 @@ main agent
 
 ### Fallback path — Cursor / environments without subagent support
 
-The main agent is told (via the subagent's description) that if it cannot delegate to `environment-inspector`, it should run the same checklist steps itself in the main thread using `gather-workspace-data` as the first call.
+The main agent is told (via the subagent's description) that if it cannot delegate to `argent-environment-inspector`, it should run the same checklist steps itself in the main thread using `gather-workspace-data` as the first call.
 
 No subprocess spawning, no Anthropic SDK dependency, no `claude` CLI detection. Simple.
 
@@ -123,7 +123,7 @@ No subprocess spawning, no Anthropic SDK dependency, no `claude` CLI detection. 
 
 | File | Purpose |
 |---|---|
-| `.claude/agents/environment-inspector.md` | Subagent definition — Haiku, plan mode, `memory: project`, mandates `gather-workspace-data` as first call when not cached |
+| `.claude/agents/argent-environment-inspector.md` | Subagent definition — Haiku, plan mode, `memory: project`, mandates `gather-workspace-data` as first call when not cached |
 | `packages/tool-server/src/utils/workspace-reader.ts` | Shared utility — deterministic file snapshot (package.json, metro config, app.json, eas.json, lockfiles, .env* files, tool versions) |
 | `packages/tool-server/src/tools/interactions/gather-workspace-data.ts` | MCP tool wrapping workspace-reader; used by subagent as step 1, callable by main agent directly in fallback |
 | `packages/tool-server/src/utils/setup-registry.ts` | Register the new tool |
@@ -136,7 +136,7 @@ The `inspect-environment` subprocess-based tool is **dropped**.
 
 ```yaml
 ---
-name: environment-inspector
+name: argent-environment-inspector
 description: >
   Inspects a React Native project's environment and returns structured JSON covering
   platform support, build and startup commands, Metro config, env resolution, key

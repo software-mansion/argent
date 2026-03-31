@@ -1,5 +1,5 @@
 ---
-name: simulator-setup
+name: argent-simulator-setup
 description: Set up and connect to an iOS simulator using argent MCP tools. Use when starting a new session, booting a simulator, getting a simulator UDID, or before any simulator interaction task.
 ---
 
