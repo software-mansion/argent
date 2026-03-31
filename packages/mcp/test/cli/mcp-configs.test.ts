@@ -11,6 +11,21 @@ import {
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
 
+// ── homedir mock ──────────────────────────────────────────────────────────────
+// Allows individual tests to redirect homedir() to a temp path so that
+// global-scope operations don't write into the real home directory.
+// The variable is read at call time, so TDZ is not a concern.
+
+let homedirOverride: string | undefined;
+
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return {
+    ...original,
+    homedir: vi.fn(() => homedirOverride ?? original.homedir()),
+  };
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let tmpDir: string;
@@ -46,9 +61,9 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all five adapters", () => {
+  it("contains all six adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed"]);
+    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini"]);
   });
 });
 
@@ -274,6 +289,127 @@ describe("Zed adapter", () => {
   });
 });
 
+// ── Gemini adapter ────────────────────────────────────────────────────────────
+
+describe("Gemini adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+
+  it("writes { mcpServers: { argent: ... } } without type", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).not.toHaveProperty("argent");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("projectPath returns .gemini/settings.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(
+      path.join("/foo", ".gemini", "settings.json"),
+    );
+  });
+
+  it("detect() returns true when local .gemini dir exists", () => {
+    const localGemini = path.join(process.cwd(), ".gemini");
+    const existed = fs.existsSync(localGemini);
+    if (!existed) fs.mkdirSync(localGemini, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localGemini);
+    }
+  });
+
+  it("globalPath returns ~/.gemini/settings.json", () => {
+    expect(adapter.globalPath()).toBe(
+      path.join(os.homedir(), ".gemini", "settings.json"),
+    );
+  });
+
+  it("preserves existing settings when writing", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { radon: { command: "npx" } }, security: { auth: "oauth" } }),
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("radon");
+    expect(servers).toHaveProperty("argent");
+    expect(config.security).toBeDefined();
+  });
+
+  it("addAllowlist sets trust:true on the argent entry (local)", () => {
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry.trust).toBe(true);
+  });
+
+  it("addAllowlist sets trust:true on the argent entry (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "global");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry.trust).toBe(true);
+  });
+
+  it("removeAllowlist deletes trust from the argent entry", () => {
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry).not.toHaveProperty("trust");
+  });
+
+  it("removeAllowlist is a no-op when file does not exist", () => {
+    expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
+  });
+});
+
 // ── Claude permissions ────────────────────────────────────────────────────────
 
 describe("addClaudePermission / removeClaudePermission", () => {
@@ -319,6 +455,10 @@ describe("addClaudePermission / removeClaudePermission", () => {
 describe("copyRulesAndAgents", () => {
   let rulesDir: string;
   let agentsDir: string;
+
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
 
   beforeEach(() => {
     rulesDir = path.join(tmpDir, "src-rules");
@@ -378,5 +518,55 @@ describe("copyRulesAndAgents", () => {
       agentsDir,
     );
     expect(results).toHaveLength(0);
+  });
+
+  it("copies rules and agents to .gemini/ for Gemini adapter (local)", () => {
+    const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    const results = copyRulesAndAgents(
+      [geminiAdapter],
+      tmpDir,
+      "local",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmpDir, ".gemini", "rules", "argent.md")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, ".gemini", "agents", "environment-inspector.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("copies rules and agents to ~/.gemini/ for Gemini adapter (global)", () => {
+    const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    homedirOverride = path.join(tmpDir, "home");
+    const results = copyRulesAndAgents(
+      [geminiAdapter],
+      tmpDir,
+      "global",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(homedirOverride, ".gemini", "rules", "argent.md"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(
+          homedirOverride,
+          ".gemini",
+          "agents",
+          "environment-inspector.md",
+        ),
+      ),
+    ).toBe(true);
   });
 });

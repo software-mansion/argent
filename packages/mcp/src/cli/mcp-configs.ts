@@ -1,7 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { MCP_SERVER_KEY, MCP_BINARY_NAME, PERMISSION_RULE, CURSOR_ALLOWLIST_PATTERN } from "./constants.js";
+import {
+  MCP_SERVER_KEY,
+  MCP_BINARY_NAME,
+  PERMISSION_RULE,
+  CURSOR_ALLOWLIST_PATTERN,
+} from "./constants.js";
 import { readJson, writeJson, dirExists } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -349,6 +354,78 @@ const zedAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Gemini CLI adapter ────────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project: <root>/.gemini/settings.json   Global: ~/.gemini/settings.json
+
+const geminiAdapter: McpConfigAdapter = {
+  name: "Gemini",
+
+  detect(): boolean {
+    return (
+      dirExists(path.join(homedir(), ".gemini")) ||
+      dirExists(path.join(process.cwd(), ".gemini"))
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".gemini", "settings.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".gemini", "settings.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJson(configPath, config);
+    return true;
+  },
+
+  addAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath =
+      scope === "global"
+        ? path.join(homedir(), ".gemini", "settings.json")
+        : path.join(root, ".gemini", "settings.json");
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
+    const entry = servers[MCP_SERVER_KEY];
+    if (!entry) return;
+    entry.trust = true;
+    writeJson(configPath, config);
+  },
+
+  removeAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath =
+      scope === "global"
+        ? path.join(homedir(), ".gemini", "settings.json")
+        : path.join(root, ".gemini", "settings.json");
+    if (!fs.existsSync(configPath)) return;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
+    const entry = servers?.[MCP_SERVER_KEY];
+    if (!entry?.trust) return;
+    delete entry.trust;
+    writeJson(configPath, config);
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -357,6 +434,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   vscodeAdapter,
   windsurfAdapter,
   zedAdapter,
+  geminiAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
@@ -364,9 +442,7 @@ export function detectAdapters(): McpConfigAdapter[] {
 }
 
 export function getAdapterByName(name: string): McpConfigAdapter | undefined {
-  return ALL_ADAPTERS.find(
-    (a) => a.name.toLowerCase() === name.toLowerCase(),
-  );
+  return ALL_ADAPTERS.find((a) => a.name.toLowerCase() === name.toLowerCase());
 }
 
 // ── Claude permissions helpers ────────────────────────────────────────────────
@@ -457,6 +533,18 @@ function getCopyTargets(
         });
         break;
       }
+      case "Gemini": {
+        const geminiBase =
+          scope === "global"
+            ? path.join(homedir(), ".gemini")
+            : path.join(root, ".gemini");
+        targets.push({
+          editorName: adapter.name,
+          rulesDir: path.join(geminiBase, "rules"),
+          agentsDir: path.join(geminiBase, "agents"),
+        });
+        break;
+      }
     }
   }
 
@@ -492,9 +580,7 @@ export function copyRulesAndAgents(
           results.push(`  Copied agents to ${target.agentsDir}`);
         }
       } catch (err) {
-        results.push(
-          `  Could not copy agents to ${target.agentsDir}: ${err}`,
-        );
+        results.push(`  Could not copy agents to ${target.agentsDir}: ${err}`);
       }
     }
   }
