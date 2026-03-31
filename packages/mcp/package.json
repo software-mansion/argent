@@ -29,7 +29,7 @@
     "skills/",
     "agents/",
     "rules/",
-    "scripts/"
+    "scripts/postinstall.cjs"
   ],
   "dependencies": {
     "@clack/prompts": "^1.1.0",
