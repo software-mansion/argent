@@ -18,24 +18,6 @@ export class ServiceInitializationError extends Error {
   }
 }
 
-export class ServiceRuntimeError extends Error {
-  public readonly serviceId: string;
-  constructor(serviceId: string, message: string, options?: { cause?: Error }) {
-    super(`[${serviceId}] ${message}`, options);
-    this.name = 'ServiceRuntimeError';
-    this.serviceId = serviceId;
-  }
-}
-
-export class ServiceDisposalError extends Error {
-  public readonly serviceId: string;
-  constructor(serviceId: string, message: string, options?: { cause?: Error }) {
-    super(`[${serviceId}] ${message}`, options);
-    this.name = 'ServiceDisposalError';
-    this.serviceId = serviceId;
-  }
-}
-
 // ── Tool Errors ──
 
 export class ToolNotFoundError extends Error {
