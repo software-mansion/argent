@@ -1,6 +1,7 @@
 {
   "name": "@argent/tool-server",
   "version": "0.3.0",
+  "private": true,
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
