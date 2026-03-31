@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { homedir } from "node:os";
-import { MCP_SERVER_KEY, MCP_BINARY_NAME, PERMISSION_RULE } from "./constants.js";
+import {
+  MCP_SERVER_KEY,
+  MCP_BINARY_NAME,
+  PERMISSION_RULE,
+} from "./constants.js";
 import { readJson, writeJson, dirExists } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -323,9 +327,7 @@ export function detectAdapters(): McpConfigAdapter[] {
 }
 
 export function getAdapterByName(name: string): McpConfigAdapter | undefined {
-  return ALL_ADAPTERS.find(
-    (a) => a.name.toLowerCase() === name.toLowerCase(),
-  );
+  return ALL_ADAPTERS.find((a) => a.name.toLowerCase() === name.toLowerCase());
 }
 
 // ── Claude permissions helpers ────────────────────────────────────────────────
@@ -416,7 +418,6 @@ function getCopyTargets(
         });
         break;
       }
-      // Windsurf, Zed, Gemini: no established rules/agents directory convention.
     }
   }
 
@@ -452,9 +453,7 @@ export function copyRulesAndAgents(
           results.push(`  Copied agents to ${target.agentsDir}`);
         }
       } catch (err) {
-        results.push(
-          `  Could not copy agents to ${target.agentsDir}: ${err}`,
-        );
+        results.push(`  Could not copy agents to ${target.agentsDir}: ${err}`);
       }
     }
   }
