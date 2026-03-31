@@ -11,6 +11,21 @@ import {
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
 
+// ── homedir mock ──────────────────────────────────────────────────────────────
+// Allows individual tests to redirect homedir() to a temp path so that
+// global-scope operations don't write into the real home directory.
+// The variable is read at call time, so TDZ is not a concern.
+
+let homedirOverride: string | undefined;
+
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return {
+    ...original,
+    homedir: vi.fn(() => homedirOverride ?? original.homedir()),
+  };
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let tmpDir: string;
@@ -399,6 +414,10 @@ describe("copyRulesAndAgents", () => {
   let rulesDir: string;
   let agentsDir: string;
 
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
   beforeEach(() => {
     rulesDir = path.join(tmpDir, "src-rules");
     agentsDir = path.join(tmpDir, "src-agents");
@@ -476,6 +495,35 @@ describe("copyRulesAndAgents", () => {
     expect(
       fs.existsSync(
         path.join(tmpDir, ".gemini", "agents", "environment-inspector.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("copies rules and agents to ~/.gemini/ for Gemini adapter (global)", () => {
+    const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    homedirOverride = path.join(tmpDir, "home");
+    const results = copyRulesAndAgents(
+      [geminiAdapter],
+      tmpDir,
+      "global",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(homedirOverride, ".gemini", "rules", "argent.md"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(
+          homedirOverride,
+          ".gemini",
+          "agents",
+          "environment-inspector.md",
+        ),
       ),
     ).toBe(true);
   });
