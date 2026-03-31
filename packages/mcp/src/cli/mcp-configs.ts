@@ -418,6 +418,18 @@ function getCopyTargets(
         });
         break;
       }
+      case "Gemini": {
+        const geminiBase =
+          scope === "global"
+            ? path.join(homedir(), ".gemini")
+            : path.join(root, ".gemini");
+        targets.push({
+          editorName: adapter.name,
+          rulesDir: path.join(geminiBase, "rules"),
+          agentsDir: path.join(geminiBase, "agents"),
+        });
+        break;
+      }
     }
   }
 
