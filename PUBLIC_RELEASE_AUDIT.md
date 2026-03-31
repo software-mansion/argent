@@ -376,10 +376,10 @@ Multiple `.catch(() => {})` in `TouchSurface.tsx` (lines 58, 64, 71, 81) and `Se
 - [ ] Remove the `// DEAD FOR NOW PASTE DOES NOT WORK (FILIP)` comment
 - [ ] Update `publishConfig` for public access
 - [ ] Rewrite README/INSTALL for public consumption
-- [ ] Global find-replace `RADON_` → `ARGENT_` for env vars
-- [ ] Rename `__radon_lite_*` and `__radon_network_*` globals
+- [x] Global find-replace `RADON_` → `ARGENT_` for env vars
+- [x] Rename `__radon_lite_*` and `__radon_network_*` globals
 - [ ] Remove or relocate internal docs from `docs/`
 - [ ] Fix hardcoded `/Users/pawel/` paths in test files
 - [ ] Update MCP server version from `0.1.0` to match package version
-- [ ] Rename `radon-skills` bin to `argent-skills`
-- [ ] Decide on "Radon Lite" vs "Argent" branding in UI
+- [x] Rename `radon-skills` bin to `argent-skills`
+- [x] Decide on "Radon Lite" vs "Argent" branding in UI (UI package removed)
