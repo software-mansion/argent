@@ -8,6 +8,7 @@ packages/*/node_modules/
 *.tgz
 .DS_Store
 1export
+packages/mcp/bin/
 packages/mcp/skills/
 packages/mcp/agents/
 packages/mcp/rules/

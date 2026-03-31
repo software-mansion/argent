@@ -14,7 +14,6 @@ The tools server spawns simulator-server processes on demand. The UI and MCP bri
 | `@argent/registry`    | `packages/registry`    | Core library: dependency-aware service lifecycle, blueprints, tools, URNs. No HTTP or simulator logic. |
 | `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (`GET /tools`, `POST /tools/:name`). Registers all blueprints and tools.    |
 | `@argent/mcp`         | `packages/mcp`         | MCP bridge — exposes all tools to AI assistants (Claude, Cursor) via Model Context Protocol.           |
-| `@argent/ui`          | `packages/ui`          | Web UI for simulator control and Metro debugging.                                                      |
 | `@argent/skills`      | `packages/skills`      | Markdown skill files that instruct AI agents when/how to use Argent tools.                             |
 
 ## Requirements
@@ -29,27 +28,16 @@ The tools server spawns simulator-server processes on demand. The UI and MCP bri
 npm install
 ```
 
-### Run the full app (tools server + UI)
+### Run the tools server
 
 ```bash
 npm run start
 ```
 
-This builds the registry, then starts both the tools server (port 3001) and the Vite UI dev server (port 5173) concurrently.
-
-Open **http://localhost:5173**, connect to the tools server (default URL is pre-filled), pick a simulator, boot it, and start a session.
-
-To run them in separate terminals instead:
+This builds the registry, then starts the tools server on port 3001.
 
 ```bash
-npm run start:tool-server   # API at http://localhost:3001
-npm run start:ui             # UI  at http://localhost:5173
-```
-
-### Run tools server only (no UI)
-
-```bash
-npm run start:tool-server
+npm run start:tool-server   # equivalent alias
 ```
 
 Test it:
@@ -62,19 +50,17 @@ curl -X POST http://localhost:3001/tools/list-simulators \
 
 ## Installing in a project
 
-To set up argent in another project so AI assistants (Claude, Cursor) can use it:
+The `argent` package is distributed via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) under the `@software-mansion` scope. Because the source repository is private, you must authenticate before installing.
+
+See **[INSTALL.md](./INSTALL.md)** for the full step-by-step guide (token setup, `.npmrc` configuration, and the install command).
+
+**Quick start** (after completing auth setup):
 
 ```bash
-node scripts/setup-project.cjs /path/to/project
+npx @software-mansion/argent install
 ```
 
-This builds and packs argent, installs it as a local dependency, copies skills to `.claude/skills/`, and registers the MCP server in both `.claude/mcp.json` and `.cursor/mcp.json`. Existing configs are merged, not overwritten.
-
-To install globally instead (configures `~/.claude.json` at the user level):
-
-```bash
-node scripts/setup-project.cjs --global
-```
+This installs the package from GitHub Packages and configures MCP servers in `.claude/mcp.json`, `.cursor/mcp.json`, and copies skills, agents, and rules into your workspace.
 
 ### VS Code launch configs
 
@@ -98,8 +84,8 @@ npm test -w @argent/tool-server        # tool-server tests (vitest)
 ### MCP package
 
 ```bash
-npm run build -w argent                # compile + bundle into single CJS file
-npm run pack:mcp                       # build and create argent-<version>.tgz
+npm run build -w @software-mansion/argent   # compile + bundle into single CJS file
+npm run pack:mcp                                  # build and create argent-<version>.tgz
 ```
 
 ## Simulator server API
