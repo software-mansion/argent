@@ -9,8 +9,56 @@ import {
   copyRulesAndAgents,
   type McpConfigAdapter,
 } from "./mcp-configs.js";
-import { SKILLS_DIR, RULES_DIR, AGENTS_DIR, getInstalledVersion } from "./utils.js";
+import {
+  SKILLS_DIR,
+  RULES_DIR,
+  AGENTS_DIR,
+  getInstalledVersion,
+  getLatestVersion,
+  detectPackageManager,
+  globalInstallCommand,
+} from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+
+function isGloballyInstalled(): boolean {
+  try {
+    const raw = execSync(
+      `npm list -g ${PACKAGE_NAME} --depth=0 --json`,
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    );
+    const data = JSON.parse(raw) as {
+      dependencies?: Record<string, unknown>;
+    };
+    return !!data?.dependencies?.[PACKAGE_NAME];
+  } catch {
+    return false;
+  }
+}
+
+function runShellCommand(cmd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const parts = cmd.split(" ");
+    const bin = parts[0]!;
+    const args = parts.slice(1);
+    const isWin = process.platform === "win32";
+    const child = spawn(isWin ? `${bin}.cmd` : bin, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: isWin,
+    });
+
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `Command exited with code ${code}`));
+    });
+
+    child.on("error", reject);
+  });
+}
 
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -21,6 +69,109 @@ export async function init(args: string[]): Promise<void> {
 
   const version = getInstalledVersion() ?? "unknown";
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
+
+  // ── Step 0: Install / Update Check ──────────────────────────────────────────
+
+  const globallyInstalled = isGloballyInstalled();
+
+  if (!globallyInstalled) {
+    type InstallScope = "global" | "local";
+    let installScope: InstallScope;
+
+    if (nonInteractive) {
+      installScope = "global";
+    } else {
+      const installChoice = await p.select({
+        message: "argent needs to be installed. How would you like to install it?",
+        options: [
+          {
+            value: "global" as const,
+            label: "Install globally (recommended)",
+            hint: "Makes the argent command available everywhere",
+          },
+          {
+            value: "local" as const,
+            label: "Install locally",
+            hint: "Installs into the current project's node_modules only",
+          },
+        ],
+      });
+
+      if (p.isCancel(installChoice)) {
+        p.cancel("Installation cancelled.");
+        process.exit(0);
+      }
+
+      installScope = installChoice as InstallScope;
+    }
+
+    if (installScope === "local") {
+      p.log.warn(
+        pc.yellow("Local installation means the argent binary will only be available inside this project."),
+      );
+    }
+
+    const pm = detectPackageManager();
+    const cmd =
+      installScope === "global"
+        ? globalInstallCommand(pm, PACKAGE_NAME)
+        : `${pm} install ${PACKAGE_NAME}`;
+    const spinner = p.spinner();
+    spinner.start(`Installing ${PACKAGE_NAME} ${installScope === "global" ? "globally" : "locally"}...`);
+    try {
+      await runShellCommand(cmd);
+      spinner.stop(pc.green(`Installed ${installScope === "global" ? "globally" : "locally"}.`));
+    } catch (err) {
+      spinner.stop(pc.red("Installation failed."));
+      p.log.error(`${err}`);
+      p.log.info(`Install argent manually with: ${pc.cyan(cmd)}`);
+      process.exit(1);
+    }
+  } else {
+    let latest: string | null = null;
+    const spinner = p.spinner();
+    spinner.start("Checking for updates...");
+    try {
+      latest = getLatestVersion();
+    } catch {
+      // Registry unreachable — silently skip
+    }
+    spinner.stop(pc.dim("Version check complete."));
+
+    if (latest && latest !== version) {
+      if (!nonInteractive) {
+        const updateChoice = await p.select({
+          message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
+          options: [
+            {
+              value: "update" as const,
+              label: `Update to v${latest} (recommended)`,
+            },
+            {
+              value: "skip" as const,
+              label: "Skip",
+              hint: "Continue with current version",
+            },
+          ],
+        });
+
+        if (!p.isCancel(updateChoice) && updateChoice === "update") {
+          const pm = detectPackageManager();
+          const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+          const updateSpinner = p.spinner();
+          updateSpinner.start(`Updating to v${latest}...`);
+          try {
+            await runShellCommand(cmd);
+            updateSpinner.stop(pc.green(`Updated to v${latest}.`));
+          } catch (err) {
+            updateSpinner.stop(pc.red("Update failed."));
+            p.log.error(`${err}`);
+            p.log.info(`You can update manually later: ${pc.cyan(cmd)}`);
+          }
+        }
+      }
+    }
+  }
 
   // ── Step 1: MCP Server Configuration ────────────────────────────────────────
 
@@ -286,7 +437,7 @@ export async function init(args: string[]): Promise<void> {
   p.outro(pc.green("argent is ready!"));
 }
 
-function printBanner(): void {
+export function printBanner(): void {
   const lines = [
     " █████╗ ██████╗  ██████╗ ███████╗███╗   ██╗████████╗",
     "██╔══██╗██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝",
