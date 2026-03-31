@@ -4,7 +4,6 @@ import { execSync } from "node:child_process";
 import {
   detectAdapters,
   getMcpEntry,
-  addClaudePermission,
   copyRulesAndAgents,
 } from "./mcp-configs.js";
 import {
@@ -16,6 +15,7 @@ import {
   AGENTS_DIR,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { killToolServer } from "../launcher.js";
 
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -69,6 +69,8 @@ export async function update(args: string[]): Promise<void> {
 
     p.log.info(`Running: ${pc.dim(cmd)}`);
 
+    await killToolServer();
+
     try {
       execSync(cmd, {
         stdio: "inherit",
@@ -107,18 +109,15 @@ export async function update(args: string[]): Promise<void> {
     }
   }
 
-  // Refresh Claude permissions
-  const hasClaude = detected.some((a) => a.name === "Claude Code");
-  if (hasClaude) {
-    try {
-      addClaudePermission(projectRoot, "global");
-    } catch {
-      // non-fatal
-    }
-    try {
-      addClaudePermission(projectRoot, "local");
-    } catch {
-      // non-fatal
+  // Refresh allowlists
+  for (const adapter of detected) {
+    if (!adapter.addAllowlist) continue;
+    for (const s of ["global", "local"] as const) {
+      try {
+        adapter.addAllowlist(projectRoot, s);
+      } catch {
+        // non-fatal
+      }
     }
   }
 

@@ -5,15 +5,14 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
-  detectAdapters,
   ALL_ADAPTERS,
-  removeClaudePermission,
 } from "./mcp-configs.js";
 import {
   detectPackageManager,
   globalUninstallCommand,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { killToolServer } from "../launcher.js";
 
 export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -64,24 +63,20 @@ export async function uninstall(args: string[]): Promise<void> {
     }
   }
 
-  // ── Remove Claude permissions ───────────────────────────────────────────────
+  // ── Remove allowlists ──────────────────────────────────────────────────────
 
-  try {
-    removeClaudePermission(projectRoot, "local");
-    results.push(
-      `${pc.green("+")} Removed Claude Code permissions ${pc.dim("(local)")}`,
-    );
-  } catch {
-    // non-fatal
-  }
-
-  try {
-    removeClaudePermission(projectRoot, "global");
-    results.push(
-      `${pc.green("+")} Removed Claude Code permissions ${pc.dim("(global)")}`,
-    );
-  } catch {
-    // non-fatal
+  for (const adapter of ALL_ADAPTERS) {
+    if (!adapter.removeAllowlist) continue;
+    for (const s of ["local", "global"] as const) {
+      try {
+        adapter.removeAllowlist(projectRoot, s);
+        results.push(
+          `${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`,
+        );
+      } catch {
+        // non-fatal
+      }
+    }
   }
 
   if (results.length > 0) {
@@ -196,6 +191,8 @@ export async function uninstall(args: string[]): Promise<void> {
     const pm = detectPackageManager();
     const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
     p.log.info(`Running: ${pc.dim(cmd)}`);
+
+    await killToolServer();
 
     try {
       execSync(cmd, { stdio: "inherit" });

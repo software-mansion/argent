@@ -157,6 +157,17 @@ async function clearState(): Promise<void> {
   }
 }
 
+export async function killToolServer(): Promise<void> {
+  const state = await readState();
+  if (!state) return;
+  try {
+    process.kill(state.pid, "SIGTERM");
+  } catch {
+    // already gone
+  }
+  await clearState();
+}
+
 export async function ensureToolsServer(): Promise<string> {
   const state = await readState();
 

@@ -101,7 +101,7 @@ export function globalInstallCommand(pm: PackageManager, pkg: string): string {
     case "bun":
       return `bun add -g ${pkg}`;
     default:
-      return `npm install -g --force ${pkg}`;
+      return `npm install -g ${pkg}`;
   }
 }
 
