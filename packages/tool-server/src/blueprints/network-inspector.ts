@@ -34,7 +34,7 @@ export const networkInspectorBlueprint: ServiceBlueprint<
     const ignore = () => {};
 
     // Inject the fetch-level network interceptor. Idempotent — the script
-    // guards itself with __radon_network_installed.
+    // guards itself with __argent_network_installed.
     await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(ignore);
 
     const api: NetworkInspectorApi = { port: debuggerApi.port, cdp };

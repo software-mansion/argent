@@ -78,7 +78,7 @@ describe("NetworkInspector blueprint", () => {
     expect(mockEvaluate).toHaveBeenCalledTimes(1);
     // Verify it called evaluate with a string containing the interceptor guard
     const script = mockEvaluate.mock.calls[0][0] as string;
-    expect(script).toContain("__radon_network_installed");
+    expect(script).toContain("__argent_network_installed");
     expect(script).toContain("globalThis.fetch");
   });
 

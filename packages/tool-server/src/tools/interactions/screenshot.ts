@@ -15,7 +15,7 @@ const zodSchema = z.object({
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to RADON_SCREENSHOT_SCALE env var, or 0.5 if unset. Use 1.0 for full resolution."
+      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.5 if unset. Use 1.0 for full resolution."
     ),
 });
 

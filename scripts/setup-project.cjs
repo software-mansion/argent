@@ -98,7 +98,7 @@ if (isGlobal) {
     type: "stdio",
     command: "node",
     args: [globalEntry],
-    env: { RADON_MCP_LOG: logFile },
+    env: { ARGENT_MCP_LOG: logFile },
   };
 
   registerMcp(path.join(os.homedir(), ".claude.json"), mcpEntry);
@@ -144,7 +144,7 @@ const mcpEntry = {
   type: "stdio",
   command: "node",
   args: [argentDist],
-  env: { RADON_MCP_LOG: logFile },
+  env: { ARGENT_MCP_LOG: logFile },
 };
 
 // Skills

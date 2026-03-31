@@ -317,6 +317,6 @@ export function makeComponentTreeScript(opts: {
     result.totalFibers = totalFibers;
     result.skippedCounts = skippedCounts;
   }
-  __radon_lite_callback(JSON.stringify({ requestId: REQUEST_ID, result: JSON.stringify(result) }));
+  __argent_callback(JSON.stringify({ requestId: REQUEST_ID, result: JSON.stringify(result) }));
 })()`;
 }

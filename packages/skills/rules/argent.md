@@ -72,7 +72,7 @@ Use skill: `argent-simulator-setup`
 When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
-Use skill: `simulator-interact`
+Use skill: `argent-simulator-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
 RUNNING / BUILDING / DEBUGGING A REACT NATIVE APP
