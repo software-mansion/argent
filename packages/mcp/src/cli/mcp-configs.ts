@@ -270,9 +270,7 @@ const geminiAdapter: McpConfigAdapter = {
   name: "Gemini",
 
   detect(): boolean {
-    // Check for the settings.json file, not just the directory — ~/.gemini can
-    // be created by Google Cloud SDK and other Google tooling unrelated to Gemini CLI.
-    return fs.existsSync(path.join(homedir(), ".gemini", "settings.json"));
+    return dirExists(path.join(homedir(), ".gemini"));
   },
 
   projectPath(): string | null {
