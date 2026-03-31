@@ -101,7 +101,7 @@ The analyze report includes **CPU hotspots per commit** — showing exactly whic
 
 ### Step 4: Assess results
 
-Analyze whether the results give you proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works. Make sure to give honest feedback and be ready to change the approach if needed.
+Analyze whether the results give you a proper image of what is wrong with the application - **do not assume improvement always exists**, verify results logically with reference to how react-native works. Make sure to give honest feedback and be ready to change the approach if needed.
 
 ### Step 5: Present findings and ask about next steps
 
