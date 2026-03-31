@@ -397,6 +397,33 @@ const geminiAdapter: McpConfigAdapter = {
     writeJson(configPath, config);
     return true;
   },
+
+  addAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath =
+      scope === "global"
+        ? path.join(homedir(), ".gemini", "settings.json")
+        : path.join(root, ".gemini", "settings.json");
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
+    const entry = servers[MCP_SERVER_KEY];
+    if (!entry) return;
+    entry.trust = true;
+    writeJson(configPath, config);
+  },
+
+  removeAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath =
+      scope === "global"
+        ? path.join(homedir(), ".gemini", "settings.json")
+        : path.join(root, ".gemini", "settings.json");
+    if (!fs.existsSync(configPath)) return;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
+    const entry = servers?.[MCP_SERVER_KEY];
+    if (!entry?.trust) return;
+    delete entry.trust;
+    writeJson(configPath, config);
+  },
 };
 
 // ── Registry ──────────────────────────────────────────────────────────────────

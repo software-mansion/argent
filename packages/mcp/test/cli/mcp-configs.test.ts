@@ -366,6 +366,48 @@ describe("Gemini adapter", () => {
     expect(servers).toHaveProperty("argent");
     expect(config.security).toBeDefined();
   });
+
+  it("addAllowlist sets trust:true on the argent entry (local)", () => {
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry.trust).toBe(true);
+  });
+
+  it("addAllowlist sets trust:true on the argent entry (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "global");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry.trust).toBe(true);
+  });
+
+  it("removeAllowlist deletes trust from the argent entry", () => {
+    const configPath = path.join(tmpDir, ".gemini", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const entry = (config.mcpServers as Record<string, unknown>)
+      .argent as Record<string, unknown>;
+    expect(entry).not.toHaveProperty("trust");
+  });
+
+  it("removeAllowlist is a no-op when file does not exist", () => {
+    expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
+  });
 });
 
 // ── Claude permissions ────────────────────────────────────────────────────────
