@@ -36,10 +36,6 @@ import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
-import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
-import { activateSsoTool } from "../tools/license/activate-sso";
-import { getLicenseStatusTool } from "../tools/license/get-license-status";
-import { removeLicenseTool } from "../tools/license/remove-license";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
 import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
@@ -109,10 +105,6 @@ export function createRegistry(): Registry {
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);
-  registry.registerTool(activateLicenseKeyTool);
-  registry.registerTool(activateSsoTool);
-  registry.registerTool(getLicenseStatusTool);
-  registry.registerTool(removeLicenseTool);
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
   registry.registerTool(reactProfilerAnalyzeTool);
