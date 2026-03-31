@@ -35,13 +35,20 @@ After presenting findings, ask the user whether to investigate further, implemen
 
 **Complete all steps in order — do not break mid-flow.**
 
-### Step 0: Ensure the target app is running
+### Step 0: Choose device and ensure the target app is running
 
-The `ios-profiler-start` tool **auto-detects** the running app on the simulator.
+**Simulator vs physical device:** Call `list-devices` to find a target device.
+
+- **Prefer simulators** for fast iteration, CI, and most development workflows.
+- **Use a physical device** (`include_physical_devices: true`) when the user explicitly asks for device profiling, or when you need accurate real-world data: CPU/GPU timings, thermal throttling, real memory behavior, or hardware-dependent features (camera, GPS, NFC, push notifications).
+
+> Physical devices do **not** support automated interaction (taps, swipes, screenshots, describe) — only profiling and debugging tools work. The user must navigate the device by hand.
+
+The `ios-profiler-start` tool **auto-detects** the running app on the simulator or device.
 You do not need to derive `app_process` manually — just make sure the app is launched.
 
-1. If the app is already running on the simulator, skip to Step 1 (do not pass `app_process`).
-2. If the app is not running, use `launch-app` with the correct bundle ID first.
+1. If the app is already running, skip to Step 1 (do not pass `app_process`).
+2. If the app is not running on a simulator, use `launch-app` with the correct bundle ID first. On a physical device, ask the user to launch the app.
 3. Only pass `app_process` explicitly if the tool reports multiple running user apps and you need to disambiguate.
 
 > **Note**: If multiple build flavors are installed (dev, staging, prod), the tool will detect whichever one is currently running. If both are running, it will ask you to specify.

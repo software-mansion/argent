@@ -24,7 +24,7 @@ const zodSchema = z.object({
     .optional()
     .default(false)
     .describe(
-      "Set to true to also scan for physical iOS devices connected via USB or Wi-Fi. This is slower (~5s) because it queries devicectl. Use when the user explicitly asks to test on a real device, or when the task requires device-specific hardware (camera, GPS, NFC, push notifications) or real-world performance profiling.",
+      "Also scan for physical iOS devices connected via USB or Wi-Fi. Slower (~5s), requires Xcode 15+.",
     ),
 });
 

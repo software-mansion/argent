@@ -9,6 +9,8 @@ If you delegate simulator tasks to sub-agents, make sure they have MCP permissio
 
 Use `list-devices` to find available simulators. **Pick the first result** if specific not specified by user — booted iPhones are listed first. If none are booted, use `boot-simulator` first.
 
+> **Physical devices** do not support interaction tools (taps, swipes, screenshots, describe). For physical device workflows, use profiling and debugging tools only — see `argent-ios-profiler` skill.
+
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
 ## 2. Best Practices
