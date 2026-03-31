@@ -59,7 +59,7 @@ async function fetchWithReconnect(
     // Network-level failure (e.g. ECONNREFUSED) — server may have idle-timed-out.
     // Attempt to restart it, then retry once.
     await reconnect();
-    return fetch(getUrl(), init); // TOOLS_URL is now updated
+    return fetch(getUrl(), init);
   }
 }
 
