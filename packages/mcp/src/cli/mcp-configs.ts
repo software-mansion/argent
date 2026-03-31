@@ -264,7 +264,7 @@ const zedAdapter: McpConfigAdapter = {
 
 // ── Gemini CLI adapter ────────────────────────────────────────────────────────
 // Format: { mcpServers: { argent: { command, args, env } } }
-// Global only: ~/.gemini/settings.json
+// Project: <root>/.gemini/settings.json   Global: ~/.gemini/settings.json
 
 const geminiAdapter: McpConfigAdapter = {
   name: "Gemini",
@@ -273,8 +273,8 @@ const geminiAdapter: McpConfigAdapter = {
     return dirExists(path.join(homedir(), ".gemini"));
   },
 
-  projectPath(): string | null {
-    return null;
+  projectPath(root: string): string | null {
+    return path.join(root, ".gemini", "settings.json");
   },
 
   globalPath(): string | null {

@@ -313,8 +313,10 @@ describe("Gemini adapter", () => {
     expect(adapter.remove(configPath)).toBe(false);
   });
 
-  it("projectPath returns null (global-only)", () => {
-    expect(adapter.projectPath("/foo")).toBeNull();
+  it("projectPath returns .gemini/settings.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(
+      path.join("/foo", ".gemini", "settings.json"),
+    );
   });
 
   it("globalPath returns ~/.gemini/settings.json", () => {
@@ -446,8 +448,9 @@ describe("copyRulesAndAgents", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("returns empty array for Gemini adapter (no rules/agents directory convention)", () => {
+  it("returns empty array for Gemini adapter (no rules/agents directory convention in getCopyTargets)", () => {
     const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    // scope: "global" — base is non-null (~/.gemini), but switch has no Gemini case → falls through → no targets
     const results = copyRulesAndAgents(
       [geminiAdapter],
       tmpDir,
