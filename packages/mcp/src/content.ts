@@ -4,7 +4,7 @@
  * Extracted so it can be tested independently of the MCP server wiring.
  */
 
-type ContentBlock =
+export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
 
