@@ -145,7 +145,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
 
     await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(ignore);
 
-    await sourceMaps.waitForPending();
+    // Let source maps load in the background – consumers that need them
+    // (e.g. debugger-set-breakpoint) already call waitForPending() themselves.
+    void sourceMaps.waitForPending();
 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
