@@ -1,5 +1,5 @@
 ---
-name: ios-profiler
+name: argent-ios-profiler
 description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks via xctrace. Use when diagnosing native-level performance issues on iOS simulators or devices.
 ---
 
@@ -25,9 +25,9 @@ After `ios-profiler-analyze` surfaces findings, use `profiler-stack-query` to dr
 
 After presenting findings, ask the user whether to investigate further, implement fixes, or stop. After applying fixes, always re-profile the same scenario and compare with `profiler-load`. Report honestly whether the target metric improved, regressed, or stayed flat. If the fix showed no net benefit or introduced regressions elsewhere, say so and reconsider.
 
-**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
+**Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `argent-create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
 
-> **Note:** The `react-native-profiler` instructs to starts iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
+> **Note:** The `argent-react-native-profiler` instructs to starts iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 
 ---
 
@@ -49,7 +49,7 @@ You do not need to derive `app_process` manually — just make sure the app is l
 ### Step 1: Start recording
 
 Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/argent-profiler-cwd/` with a timestamped filename.
-Let the user interact with the app or drive interaction via simulator tools (see `simulator-interact` skill).
+Let the user interact with the app or drive interaction via simulator tools (see `argent-simulator-interact` skill).
 
 ### Step 2: Stop and export
 

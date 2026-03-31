@@ -1,13 +1,13 @@
 ---
-name: react-native-optimization
-description: Optimize a React Native app for performance using argent profiler and debugger tools. Entry-point skill for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to `react-native-profiler` for measurement.
+name: argent-react-native-optimization
+description: Optimize a React Native app for performance using argent profiler and debugger tools. Entry-point skill for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to `argent-react-native-profiler` for measurement.
 ---
 
 ## 1. Tools
 
 This skill orchestrates tools from two measurement skills. Load them for full tool reference:
-- **`react-native-profiler`** — React/Hermes profiling (renders, commits, CPU).
-- **`ios-profiler`** — Native iOS profiling (CPU hotspots, UI hangs, memory leaks).
+- **`argent-react-native-profiler`** — React/Hermes profiling (renders, commits, CPU).
+- **`argent-ios-profiler`** — Native iOS profiling (CPU hotspots, UI hangs, memory leaks).
 
 On react-native apps, use both of the available tool workflows for best coverage.
 
@@ -23,11 +23,11 @@ Quick-access tools (no profiling session required):
 **Rule: Profile before optimizing.** Do not apply shotgun optimizations. Measure first, define what "good enough" looks like (target metric + threshold), fix the top offender, re-measure honestly.
 
 1. **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
-2. **Deep measure** — load `react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
+2. **Deep measure** — load `argent-react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
 3. **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
 4. **Verify correctness** - before attempting fixing, recollect the information from steps &1, &2, &3 and make logical conclusion whether the approach is worth undertaking
 5. **Fix** — apply one fix from §3. Validate with `debugger-evaluate` before committing.
-6. **Re-measure** — re-run step 1 or 2. Report whether the target metric improved, regressed, or stayed flat. Check whether the fix introduced regressions in other areas (e.g., fewer re-renders but higher CPU, or new jank in a different screen). If no net benefit or unacceptable tradeoffs, revert. **One fix per cycle** — never batch. When the measurement involves simulator interaction, record the interaction as a flow (`create-flow` skill) before the first run so all subsequent cycles replay identical steps. If a recorded flow breaks after applying a fix (e.g., UI layout changed), follow `create-flow` skill §10 to repair the flow rather than silently discarding it.
+6. **Re-measure** — re-run step 1 or 2. Report whether the target metric improved, regressed, or stayed flat. Check whether the fix introduced regressions in other areas (e.g., fewer re-renders but higher CPU, or new jank in a different screen). If no net benefit or unacceptable tradeoffs, revert. **One fix per cycle** — never batch. When the measurement involves simulator interaction, record the interaction as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps. If a recorded flow breaks after applying a fix (e.g., UI layout changed), follow `argent-create-flow` skill §10 to repair the flow rather than silently discarding it.
 
 ---
 

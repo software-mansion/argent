@@ -1,5 +1,5 @@
 ---
-name: metro-debugger
+name: argent-metro-debugger
 description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, setting breakpoints, pausing JS execution, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
 ---
 
@@ -68,7 +68,7 @@ Set to `true` only when debugging filter behavior — e.g., an expected componen
 
 1. **`debugger-status` first when something fails** — it runs discovery, connection, and returns diagnostics.
 2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on simulator, then retry `debugger-status`.
-3. **Never assume one failure is permanent** — follow recovery steps before asking the user. For starting Metro and full failure recovery, see `react-native-app-workflow` and `references/failure-scenarios.md`.
+3. **Never assume one failure is permanent** — follow recovery steps before asking the user. For starting Metro and full failure recovery, see `argent-react-native-app-workflow` and `references/failure-scenarios.md`.
 
 ---
 

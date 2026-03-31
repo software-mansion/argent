@@ -1,5 +1,5 @@
 ---
-name: environment-inspector
+name: argent-environment-inspector
 description: >
   Inspects a mobile app project's environment and returns structured JSON covering
   project type, platform support, build and startup commands, bundler config, env

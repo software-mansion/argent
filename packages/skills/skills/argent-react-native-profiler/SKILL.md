@@ -1,9 +1,9 @@
 ---
-name: react-native-profiler
+name: argent-react-native-profiler
 description: Profile a React Native Hermes app to measure re-render and CPU performance using argent profiler tools. Use during optimization to measure before/after, spot slow components, diagnose re-renders, check CPU hotspots, or produce a ranked issue report.
 ---
 
-This skill is complementary to `react-native-optimization`, not a replacement for it.
+This skill is complementary to `argent-react-native-optimization`, not a replacement for it.
 
 ## 2. Tool Overview
 
@@ -28,7 +28,7 @@ This skill is complementary to `react-native-optimization`, not a replacement fo
 | `profiler-combined-report` | Cross-correlated report when both React Profiler and iOS Instruments ran in parallel.              |
 | `profiler-load`            | List and reload previous profiling sessions from disk for re-investigation with query tools.       |
 
-For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `ios-profiler` skill.
+For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-ios-profiler` skill.
 
 ---
 
@@ -37,7 +37,7 @@ For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `ios-pr
 Follow these rules throughout the profiling workflow:
 
 - Start `react-profiler-start` and `ios-profiler-start` in parallel (two tool calls in one message). This gives best coverage.
-- If the user only wants iOS-only, use the `ios-profiler` skill workflow. Only skip `ios-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
+- If the user only wants iOS-only, use the `argent-ios-profiler` skill workflow. Only skip `ios-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
 
 ### After analysis: ask about next steps
 
@@ -63,7 +63,7 @@ When you apply a fix, always re-profile the same scenario afterward. Compare bef
 
 ### Use flows for reproducible profiling
 
-When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as a flow** using the `create-flow` skill before the first profiling run. Then replay the same flow for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
+When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as a flow** using the `argent-create-flow` skill before the first profiling run. Then replay the same flow for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
 - You are about to re-profile after applying a fix (Step 8).
 - The user asks you to compare multiple profiling sessions.
 - The interaction path is more than 2-3 steps long.
@@ -77,7 +77,7 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 ### Step 1: Start profiling
 
 Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
-- if user asked you to perform the profiling, determine how to profile yourself using tools described in `simulator-interact` skill.
+- if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
 
 #### Annotate every interaction
@@ -135,7 +135,7 @@ This is useful for before/after comparisons: profile, fix, re-profile, then relo
 
 If fix is present, read the source code of the identified bottleneck using `react-profiler-component-source` or the Read tool. Apply the fix, then re-profile (Step 1 -> user interaction -> Step 2 -> Step 3 -> Step 4). Report whether the target metric improved, stayed flat, or regressed. Also check whether the fix introduced regressions in other metrics (e.g., render count dropped but CPU time increased, or a different component now re-renders more). If the fix showed no net benefit or unacceptable tradeoffs, revert and reconsider.
 
-**Tip:** If the interaction sequence was recorded as a flow (see "Use flows for reproducible profiling" above), replay it with `flow-execute` instead of manually repeating the steps. This guarantees identical interaction conditions for the comparison. If the flow fails during replay (e.g., a UI fix changed the layout), follow `create-flow` skill §10 (Flow Self-Improvement) to diagnose and repair the flow before retrying the profiling cycle.
+**Tip:** If the interaction sequence was recorded as a flow (see "Use flows for reproducible profiling" above), replay it with `flow-execute` instead of manually repeating the steps. This guarantees identical interaction conditions for the comparison. If the flow fails during replay (e.g., a UI fix changed the layout), follow `argent-create-flow` skill §10 (Flow Self-Improvement) to diagnose and repair the flow before retrying the profiling cycle.
 
 If the user stated that he does not wish for changes, present the profiling report and skip the fix but suggest it to the user.
 

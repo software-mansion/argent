@@ -1,5 +1,5 @@
 ---
-name: react-native-app-workflow
+name: argent-react-native-app-workflow
 description: Step-by-step workflows for developing or debugging React Native apps with iOS simulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
@@ -7,7 +7,7 @@ description: Step-by-step workflows for developing or debugging React Native app
 
 ### 1.1 Explore Configuration (MANDATORY — Do This First)
 
-**Before running commands**, read the project's build and run configuration from the `environment-inspector` subagent result.
+**Before running commands**, read the project's build and run configuration from the `argent-environment-inspector` subagent result.
 
 Do NOT default to `npx react-native start` or `npx react-native run-ios` without first checking for custom scripts and workflows.
 
@@ -55,7 +55,7 @@ Optional: specify device or simulator, e.g. `npx react-native run-ios --simulato
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If simulator not booted: use the `boot-simulator` tool with proper UUID. Refer to the `simulator-setup` skill.
+- [ ] If simulator not booted: use the `boot-simulator` tool with proper UUID. Refer to the `argent-simulator-setup` skill.
 
 ---
 
@@ -144,7 +144,7 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | Stop simulator server      | `stop-simulator-server` tool (for a specific UDID)     |
 | Stop all simulator servers | `stop-all-simulator-servers` tool                      |
 
-For full simulator setup workflow, refer to the `simulator-setup` skill.
+For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
 ---
 
@@ -161,13 +161,13 @@ For full simulator setup workflow, refer to the `simulator-setup` skill.
 | **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                       |
 | **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                |
 
-For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `metro-debugger` skill.
+For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `argent-metro-debugger` skill.
 
 ### 4.2 JS Console Logs (Log Registry)
 
 Logs are written to a flat log file on disk under `~/.argent/tmp/`. Use the **log-registry → grep** pattern instead of reading logs inline.
 
-For the full workflow, flat entry format, and grep examples, see `metro-debugger` skill §5.
+For the full workflow, flat entry format, and grep examples, see `argent-metro-debugger` skill §5.
 
 ### 4.3 Do not try to use the DevMenu in React Native apps by default.
 
@@ -177,11 +177,11 @@ Use the argent tools instead.
 
 ## 5. Testing the App
 
-Check the `environment-inspector` result for test commands. For interactive UI testing with automatic screenshot verification, use the `test-ui-flow` skill.
+Check the `argent-environment-inspector` result for test commands. For interactive UI testing with automatic screenshot verification, use the `argent-test-ui-flow` skill.
 
 - **Unit tests**: Look for Jest in `package.json` (`"test": "jest"`, `jest` config). Run: `npm test` or `yarn test`.
 - **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
-- **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `test-ui-flow` skill.
+- **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `argent-test-ui-flow` skill.
 
 ### 5.2 Running Tests (Typical)
 
@@ -227,11 +227,10 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 
 | Skill                    | When to use                                                                    |
 | ------------------------ | ------------------------------------------------------------------------------ |
-| `simulator-setup`        | Initial simulator boot and connection setup                                    |
-| `simulator-interact`     | Tapping, swiping, typing, hardware buttons, gestures on the simulator          |
-| `simulator-screenshot`   | Capturing screenshots of the simulator screen                                  |
-| `metro-debugger`         | Full Metro CDP debugging: breakpoints, stepping, component inspection          |
-| `react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                  |
-| `test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
+| `argent-simulator-setup`        | Initial simulator boot and connection setup                                    |
+| `argent-simulator-interact`     | Tapping, swiping, typing, hardware buttons, gestures on the simulator          |
+| `argent-metro-debugger`         | Full Metro CDP debugging: breakpoints, stepping, component inspection          |
+| `argent-react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                  |
+| `argent-test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
 
 Ask the user before running tests: confirm which test suite (unit, E2E, or both), whether to use existing CI commands, and whether they want you to run existing tests, write new ones, or explore test cases yourself.
