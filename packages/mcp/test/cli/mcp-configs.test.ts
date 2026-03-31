@@ -46,9 +46,9 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all five adapters", () => {
+  it("contains all six adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed"]);
+    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini"]);
   });
 });
 
@@ -274,6 +274,72 @@ describe("Zed adapter", () => {
   });
 });
 
+// ── Gemini adapter ────────────────────────────────────────────────────────────
+
+describe("Gemini adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+
+  it("writes { mcpServers: { argent: ... } } without type", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent-mcp");
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).not.toHaveProperty("argent");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("projectPath returns null (global-only)", () => {
+    expect(adapter.projectPath("/foo")).toBeNull();
+  });
+
+  it("globalPath returns ~/.gemini/settings.json", () => {
+    expect(adapter.globalPath()).toBe(
+      path.join(os.homedir(), ".gemini", "settings.json"),
+    );
+  });
+
+  it("preserves existing settings when writing", () => {
+    const configPath = path.join(tmpDir, "settings.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { radon: { command: "npx" } }, security: { auth: "oauth" } }),
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("radon");
+    expect(servers).toHaveProperty("argent");
+    expect(config.security).toBeDefined();
+  });
+});
+
 // ── Claude permissions ────────────────────────────────────────────────────────
 
 describe("addClaudePermission / removeClaudePermission", () => {
@@ -374,6 +440,18 @@ describe("copyRulesAndAgents", () => {
       [windsurfAdapter],
       tmpDir,
       "local",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns empty array for Gemini adapter (no rules/agents directory convention)", () => {
+    const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
+    const results = copyRulesAndAgents(
+      [geminiAdapter],
+      tmpDir,
+      "global",
       rulesDir,
       agentsDir,
     );

@@ -270,7 +270,9 @@ const geminiAdapter: McpConfigAdapter = {
   name: "Gemini",
 
   detect(): boolean {
-    return dirExists(path.join(homedir(), ".gemini"));
+    // Check for the settings.json file, not just the directory — ~/.gemini can
+    // be created by Google Cloud SDK and other Google tooling unrelated to Gemini CLI.
+    return fs.existsSync(path.join(homedir(), ".gemini", "settings.json"));
   },
 
   projectPath(): string | null {
@@ -413,6 +415,7 @@ function getCopyTargets(
         });
         break;
       }
+      // Windsurf, Zed, Gemini: no established rules/agents directory convention.
     }
   }
 
