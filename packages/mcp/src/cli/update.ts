@@ -16,6 +16,7 @@ import {
   AGENTS_DIR,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { killToolServer } from "../launcher.js";
 
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -68,6 +69,8 @@ export async function update(args: string[]): Promise<void> {
     }
 
     p.log.info(`Running: ${pc.dim(cmd)}`);
+
+    await killToolServer();
 
     try {
       execSync(cmd, {

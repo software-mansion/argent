@@ -14,6 +14,7 @@ import {
   globalUninstallCommand,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { killToolServer } from "../launcher.js";
 
 export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -196,6 +197,8 @@ export async function uninstall(args: string[]): Promise<void> {
     const pm = detectPackageManager();
     const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
     p.log.info(`Running: ${pc.dim(cmd)}`);
+
+    await killToolServer();
 
     try {
       execSync(cmd, { stdio: "inherit" });
