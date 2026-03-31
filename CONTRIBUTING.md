@@ -50,7 +50,7 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 |---|---|---|
 | `@argent/registry` | `packages/registry` | Core library: dependency-aware service lifecycle, blueprints, tools, URNs |
 | `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (port 3001). Registers all blueprints and tools |
-| `@argent/mcp` | `packages/mcp` | MCP bridge — exposes tools to AI assistants via Model Context Protocol |
+| `@software-mansion/argent` | `packages/mcp` | MCP bridge — exposes tools to AI assistants via Model Context Protocol |
 | `@argent/ui` | `packages/ui` | Web UI for simulator control and Metro debugging (Vite + React) |
 | `@argent/skills` | `packages/skills` | Markdown skill files that instruct AI agents how to use Argent tools |
 
