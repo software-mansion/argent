@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
 - **macOS** with Xcode installed (required for `xcrun simctl` and iOS simulator support)
 - **Node.js 18+**
-- The `simulator-server` binary at the repo root (arm64 macOS, included in the repo)
+- The `simulator-server` binary (arm64 macOS, installed separately via `npx @software-mansion/argent install`)
 
 ---
 
@@ -51,8 +51,7 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 | `@argent/registry` | `packages/registry` | Core library: dependency-aware service lifecycle, blueprints, tools, URNs |
 | `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (port 3001). Registers all blueprints and tools |
 | `@software-mansion/argent` | `packages/mcp` | MCP bridge — exposes tools to AI assistants via Model Context Protocol |
-| `@argent/ui` | `packages/ui` | Web UI for simulator control and Metro debugging (Vite + React) |
-| `@argent/skills` | `packages/skills` | Markdown skill files that instruct AI agents how to use Argent tools |
+| `@argent/skills` | `packages/skills` | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools |
 
 The `tsconfig.json` at the root uses TypeScript project references; `tsconfig.base.json` holds shared compiler options (`strict`, `ES2022`, etc.).
 
@@ -71,7 +70,6 @@ To build a specific package:
 ```bash
 npm run build -w @argent/registry
 npm run build -w @argent/tool-server
-npm run build -w @argent/ui
 ```
 
 To build and bundle the distributable MCP package:
@@ -86,25 +84,13 @@ npm run pack:mcp
 
 ## Running the project
 
-**Full stack (tools server + UI):**
+**Start the tools server:**
 
 ```bash
 npm run start
 ```
 
-This builds the registry, then concurrently starts the tools server on port 3001 and the Vite UI dev server on port 5173.
-
-**Tools server only (no UI):**
-
-```bash
-npm run start:tool-server
-```
-
-**UI only:**
-
-```bash
-npm run start:ui
-```
+This builds the registry, then starts the tools server on port 3001.
 
 Verify the tools server is up:
 
@@ -123,7 +109,6 @@ Run tests for a specific package:
 ```bash
 npm test -w @argent/registry
 npm test -w @argent/tool-server
-npm test -w @argent/ui
 ```
 
 Run tests in watch mode during development:
@@ -133,14 +118,12 @@ npm run test:watch -w @argent/registry
 npm run test:watch -w @argent/tool-server
 ```
 
-There are also integration/e2e tests in `packages/tool-server/test/` (e.g. `metro-cdp-verify.ts`, `test-breakpoint-e2e.ts`). These require a running simulator and are not part of the standard `vitest run` suite — see the files for individual instructions.
-
 ---
 
 ## Code style
 
 - **TypeScript strict mode** is enabled across all packages (`"strict": true` in `tsconfig.base.json`). All code must compile without errors.
-- **Target:** ES2022 with CommonJS modules (except `@argent/ui` and `@software-mansion/argent` which use ESM).
+- **Target:** ES2022 with CommonJS modules (except `@software-mansion/argent` which uses ESM).
 - Prefer explicit types over `any`. Use Zod schemas for runtime validation where the codebase already does so.
 - Keep commits focused. Prefix commit messages with a type: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. This feeds the auto-generated changelog on release.
 
