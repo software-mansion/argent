@@ -35,10 +35,10 @@ afterEach(() => {
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
 
 describe("getMcpEntry", () => {
-  it("returns an entry with argent-mcp as command", () => {
+  it("returns an entry with argent as command", () => {
     const entry = getMcpEntry();
-    expect(entry.command).toBe("argent-mcp");
-    expect(entry.args).toEqual([]);
+    expect(entry.command).toBe("argent");
+    expect(entry.args).toEqual(["mcp"]);
     expect(entry.env).toHaveProperty("RADON_MCP_LOG");
   });
 });
@@ -67,7 +67,7 @@ describe("Cursor adapter", () => {
     const servers = config.mcpServers as Record<string, unknown>;
     expect(servers).toHaveProperty("argent");
     const argent = servers.argent as Record<string, unknown>;
-    expect(argent.command).toBe("argent-mcp");
+    expect(argent.command).toBe("argent");
     expect(argent).not.toHaveProperty("type");
   });
 
@@ -137,7 +137,7 @@ describe("Claude Code adapter", () => {
     const servers = config.mcpServers as Record<string, unknown>;
     const argent = servers.argent as Record<string, unknown>;
     expect(argent.type).toBe("stdio");
-    expect(argent.command).toBe("argent-mcp");
+    expect(argent.command).toBe("argent");
   });
 
   it("removes argent entry", () => {
@@ -207,7 +207,7 @@ describe("Windsurf adapter", () => {
     const config = readJsonFile(configPath);
     const argent = (config.mcpServers as Record<string, unknown>)
       .argent as Record<string, unknown>;
-    expect(argent.command).toBe("argent-mcp");
+    expect(argent.command).toBe("argent");
     expect(argent).not.toHaveProperty("type");
   });
 
@@ -236,7 +236,7 @@ describe("Zed adapter", () => {
     const servers = config.context_servers as Record<string, unknown>;
     const argent = servers.argent as Record<string, unknown>;
     expect(argent.source).toBe("custom");
-    expect(argent.command).toBe("argent-mcp");
+    expect(argent.command).toBe("argent");
   });
 
   it("merges into existing settings.json", () => {

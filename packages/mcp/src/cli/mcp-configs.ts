@@ -27,7 +27,7 @@ function buildMcpEntry(): McpServerEntry {
   const logFile = path.join(homedir(), ".argent", "mcp-calls.log");
   return {
     command: MCP_BINARY_NAME,
-    args: [],
+    args: ["mcp"],
     env: { RADON_MCP_LOG: logFile },
   };
 }

@@ -8,5 +8,5 @@ export const PACKAGE_NAME = "@software-mansion/argent";
 // third-party dependencies resolve from npmjs.org normally.
 export const NPM_REGISTRY = "https://npm.pkg.github.com";
 export const MCP_SERVER_KEY = "argent";
-export const MCP_BINARY_NAME = "argent-mcp";
+export const MCP_BINARY_NAME = "argent";
 export const PERMISSION_RULE = "mcp__argent";
