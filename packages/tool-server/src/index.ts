@@ -19,7 +19,7 @@ const registry = createRegistry();
 attachRegistryLogger(registry);
 
 // `shutdown` captures `httpHandle` and `server` by closure; safe because it is
-// only invoked asynchronously after both are initialised.
+// only invoked asynchronously after both are initialized.
 const shutdown = async () => {
   httpHandle.dispose();
   await registry.dispose();

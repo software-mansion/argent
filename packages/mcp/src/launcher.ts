@@ -80,7 +80,7 @@ function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> 
       env: {
         ...process.env,
         PORT: String(port),
-        RADON_SIMULATOR_SERVER_DIR: BINARY_DIR,
+        ARGENT_SIMULATOR_SERVER_DIR: BINARY_DIR,
       },
     });
 
@@ -155,6 +155,17 @@ async function clearState(): Promise<void> {
   } catch {
     // already gone
   }
+}
+
+export async function killToolServer(): Promise<void> {
+  const state = await readState();
+  if (!state) return;
+  try {
+    process.kill(state.pid, "SIGTERM");
+  } catch {
+    // already gone
+  }
+  await clearState();
 }
 
 export async function ensureToolsServer(): Promise<string> {

@@ -11,10 +11,10 @@ import {
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
 // Binary lives at workspace root (four levels up from dist/blueprints at runtime).
-// When bundled by esbuild, __dirname is dist/ — use RADON_SIMULATOR_SERVER_DIR env var instead.
+// When bundled by esbuild, __dirname is dist/ — use ARGENT_SIMULATOR_SERVER_DIR env var instead.
 const getPaths = () => {
   const BINARY_DIR =
-    process.env.RADON_SIMULATOR_SERVER_DIR ??
+    process.env.ARGENT_SIMULATOR_SERVER_DIR ??
     path.join(__dirname, "..", "..", "..", "..");
   const BINARY_PATH = path.join(BINARY_DIR, "simulator-server");
   return { BINARY_PATH, BINARY_DIR };

@@ -87,7 +87,7 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
   - `mcp__argent__debugger-inspect-element`
   - etc.
 - **What you need to do**:
-  1. Run the tools server (e.g. port 3001) and ensure MCP is configured to use `RADON_TOOLS_URL=http://localhost:3001` (or the same URL your client uses).
+  1. Run the tools server (e.g. port 3001) and ensure MCP is configured to use `ARGENT_TOOLS_URL=http://localhost:3001` (or the same URL your client uses).
   2. In your **agent permissions / allow list**, add the debugger tools you want the agent to call, e.g.:
     - `mcp__argent__debugger-connect`
     - `mcp__argent__debugger-status`
@@ -107,14 +107,14 @@ Breakpoints are set by **source** file and line (e.g. `App.tsx` line 21). The se
 
 - **Skills** are instructions or docs that tell an agent *when* and *how* to use tools (e.g. “use MCP tools only for simulator”, “call debugger-connect before setting breakpoints”).
 - Current skills in this repo (`packages/skills/skills/`):
-  - `simulator-setup` — Boot a simulator and start the simulator-server.
-  - `simulator-interact` — Tap, swipe, gestures, keyboard, and other device interactions.
-  - `test-ui-flow` — Interact-screenshot-verify loop template.
-  - `create-flow` — Record and replay reusable interaction flows for creating repeatable testing scenarios.
-  - `metro-debugger` — CDP debugging workflow: connect, breakpoints, inspect, console.
-  - `react-native-app-workflow` — Full RN development lifecycle (start, debug, build, test).
-  - `react-native-optimization` — Entry-point for all performance work: optimization workflow, fix reference, sub-agent dispatch.
-  - `react-native-profiler` — both per-component and app-wide performance profiling achieved with `react-profiler-start` / `react-profiler-stop` / `react-profiler-analyze` workflow.
-  - `ios-profiler` — native profiling for iOS via `ios-profiler-start` / `ios-profiler-stop` / `ios-profiler-analyze`.
-- Skills are installed into the user's skills directory via the `radon-skills` CLI and referenced in the agent configuration so the model has access to them.
+  - `argent-simulator-setup` — Boot a simulator and start the simulator-server.
+  - `argent-simulator-interact` — Tap, swipe, gestures, keyboard, and other device interactions.
+  - `argent-test-ui-flow` — Interact-screenshot-verify loop template.
+  - `argent-create-flow` — Record and replay reusable interaction flows for creating repeatable testing scenarios.
+  - `argent-metro-debugger` — CDP debugging workflow: connect, breakpoints, inspect, console.
+  - `argent-react-native-app-workflow` — Full RN development lifecycle (start, debug, build, test).
+  - `argent-react-native-optimization` — Entry-point for all performance work: optimization workflow, fix reference, sub-agent dispatch.
+  - `argent-react-native-profiler` — both per-component and app-wide performance profiling achieved with `react-profiler-start` / `react-profiler-stop` / `react-profiler-analyze` workflow.
+  - `argent-ios-profiler` — native profiling for iOS via `ios-profiler-start` / `ios-profiler-stop` / `ios-profiler-analyze`.
+- Skills are installed into the user's skills directory via the `argent-skills` CLI and referenced in the agent configuration so the model has access to them.
 
