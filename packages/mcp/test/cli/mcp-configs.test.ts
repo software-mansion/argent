@@ -459,16 +459,24 @@ describe("copyRulesAndAgents", () => {
     expect(results).toHaveLength(0);
   });
 
-  it("returns empty array for Gemini adapter (no rules/agents directory convention in getCopyTargets)", () => {
+  it("copies rules and agents to .gemini/ for Gemini adapter (local)", () => {
     const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
-    // scope: "global" — base is non-null (~/.gemini), but switch has no Gemini case → falls through → no targets
     const results = copyRulesAndAgents(
       [geminiAdapter],
       tmpDir,
-      "global",
+      "local",
       rulesDir,
       agentsDir,
     );
-    expect(results).toHaveLength(0);
+    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmpDir, ".gemini", "rules", "argent.md")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, ".gemini", "agents", "environment-inspector.md"),
+      ),
+    ).toBe(true);
   });
 });
