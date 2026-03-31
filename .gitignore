@@ -26,6 +26,7 @@ packages/*/node_modules/
 1export
 
 # MCP package generated assets (copied/bundled at build time)
+packages/mcp/bin/
 packages/mcp/skills/
 packages/mcp/agents/
 packages/mcp/rules/
