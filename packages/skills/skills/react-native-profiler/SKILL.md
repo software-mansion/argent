@@ -105,7 +105,7 @@ Analyse whether the results give you proper image of what is wrong with the appl
 
 ### Step 5: Present findings and ask about next steps
 
-Present a concise summary of the key findings - present whether possibilites for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop. 
+Present a concise summary of the key findings - present whether possibilities for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop. 
 
 ### Step 6: Drill-down investigation (iterative)
 
@@ -118,7 +118,7 @@ Based on findings from the report, use query tools to investigate deeper:
 - **Who triggered whom?** -> `profiler-commit-query` mode=`cascade_tree` — visual parent-child cascade.
 - **iOS hang details?** -> `profiler-stack-query` mode=`hang_stacks` — native call stacks during a hang.
 
-Repeat as needed until you identify the root cause function and file, refering to step &4 for honest evaluation. After each round of investigation, ask the user if they want to continue digging or move to fixing.
+Repeat as needed until you identify the root cause function and file, referring to step &4 for honest evaluation. After each round of investigation, ask the user if they want to continue digging or move to fixing.
 
 ### Step 7: Reload a previous session
 

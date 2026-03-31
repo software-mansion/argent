@@ -27,7 +27,7 @@ After presenting findings, ask the user whether to investigate further, implemen
 
 **Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
 
-> **Note:** The `react-native-profiler` instructs to starts iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
+> **Note:** The `react-native-profiler` instructs to start iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 
 ---
 
