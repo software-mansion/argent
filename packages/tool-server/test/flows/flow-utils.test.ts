@@ -118,9 +118,9 @@ describe("parseFlow", () => {
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello" }]);
   });
 
-  it("throws on unrecognised entries", () => {
+  it("throws on unrecognized entries", () => {
     const content = 'executionPrerequisite: ""\nsteps:\n  - bogus: line\n';
-    expect(() => parseFlow(content)).toThrow("Unrecognised flow entry");
+    expect(() => parseFlow(content)).toThrow("Unrecognized flow entry");
   });
 
   it("throws when content is not an object with steps", () => {
