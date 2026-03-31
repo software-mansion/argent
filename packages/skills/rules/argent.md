@@ -41,7 +41,7 @@ If `describe` is not sufficient ALWAYS do a followup of `component-tree` in reac
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
-  For example, if you've used `describe`and it was insufficient - then try `component-tree` if in react-native app. Based on which was more successful - use the preferred option in the future.
+  For example, if you've used `describe` and it was insufficient - then try `component-tree` if in react-native app. Based on which was more successful - use the preferred option in the future.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
