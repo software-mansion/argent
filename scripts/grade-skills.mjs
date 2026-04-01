@@ -236,5 +236,13 @@ console.log(" Criterion breakdown:\n");
 console.log(renderTable(summaryRows, summaryColumns));
 console.log();
 
-// Always exit 0 — informational only
+// Fail if any skill scores below 10.0
+const failing = allResults.filter((r) => parseFloat(r.score) < 10.0);
+if (failing.length > 0) {
+  console.error(
+    ` ✗ ${failing.length} skill(s) scored below 10.0: ${failing.map((r) => r.name).join(", ")}`
+  );
+  process.exit(1);
+}
+console.log(" ✓ All skills scored 10.0 / 10\n");
 process.exit(0);
