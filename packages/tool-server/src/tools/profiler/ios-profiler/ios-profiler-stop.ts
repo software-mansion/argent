@@ -20,9 +20,12 @@ export const iosInstrumentsStopTool: ToolDefinition<
   }
 > = {
   id: "ios-profiler-stop",
-  description: `Stop iOS Instruments profiling and export trace data to XML files.
-Sends SIGINT to the running xctrace process, waits for it to finish packaging the trace,
-then exports CPU, hangs, and leaks data. Call ios-profiler-start first.`,
+  description: `Stop iOS Instruments profiling and export the collected trace data to XML files for analysis.
+Use when the profiling interaction is complete and you are ready to analyze results with ios-profiler-analyze. Sends SIGINT to xctrace, waits for packaging, then exports CPU, hang, and leak data.
+
+Parameters: device_id — the simulator or device UDID used when starting (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890).
+Example: { "device_id": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890" }
+Returns { traceFile, exportedFiles: { cpu, hangs, leaks }, exportDiagnostics }. Fails if no active profiling session exists — call ios-profiler-start first.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

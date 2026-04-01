@@ -101,8 +101,12 @@ const zodSchema = z.object({
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
-  description: `Walk the live React fiber tree to collect component render counts and durations.
-Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.`,
+  description: `Get render counts and durations for all React components from the live fiber tree as a ranked markdown table.
+Use when you want a quick snapshot of which components are rendering most frequently without needing a full profiling session. Works on any live connected app.
+
+Parameters: port — Metro TCP port (default 8081); top_n — number of top components to return (default 20).
+Example: { "port": 8081, "top_n": 20 }
+Returns a markdown table with columns: Component, Renders, Total (ms), Self Base (ms). Requires a live Metro connection. If the React DevTools hook is missing, try calling react-profiler-start first. Fails if Metro is not running.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

@@ -20,9 +20,12 @@ export const debuggerStatusTool: ToolDefinition<
   }
 > = {
   id: "debugger-status",
-  description: `Get JS runtime debugger connection status and diagnostic info.
-Connects to the debugger if not already connected (idempotent with debugger-connect).
-Includes source map readiness status for breakpoint resolution.`,
+  description: `Get the current JS runtime debugger connection status and diagnostic information.
+Use when checking whether the debugger is connected, verifying source maps are loaded before setting breakpoints, or diagnosing why breakpoints are not resolving.
+
+Parameters: port — Metro server TCP port (default 8081, e.g. 8081).
+Example: { "port": 8081 }
+Returns { port, projectRoot, deviceName, connected, loadedScripts, enabledDomains, sourceMapReady }. Auto-connects if not already connected. Fails if Metro is not running on the specified port.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

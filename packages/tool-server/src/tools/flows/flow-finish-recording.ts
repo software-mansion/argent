@@ -17,7 +17,12 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "flow-finish-recording",
-  description: `Finish recording the active flow. Returns a summary of all recorded steps. You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
+  description: `Finish recording the active flow and close the recording session, returning a summary of all recorded steps.
+Use when you have added all desired steps and are ready to save the flow for later replay with flow-execute. You can still edit the .yaml file directly after finishing to remove or reorder steps.
+
+Parameters: none — this tool takes no parameters (call with an empty object).
+Example: {}
+Returns { message, path, executionPrerequisite, steps: <count>, summary: [...], flowFile }. Fails if no active recording session exists (error: "no active flow") — call flow-start-recording first to begin a session.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {

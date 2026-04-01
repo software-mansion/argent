@@ -93,8 +93,11 @@ export const iosInstrumentsStartTool: ToolDefinition<
 > = {
   id: "ios-profiler-start",
   description: `Start iOS Instruments profiling via xctrace on a booted simulator or connected device.
-Auto-detects the running app process unless app_process is explicitly provided.
-After starting, let the user interact with the app, then call ios-profiler-stop.`,
+Use when measuring native iOS CPU usage, UI hangs, or memory leaks — especially alongside react-profiler-start for a complete picture. Auto-detects the running app process unless app_process is provided.
+
+Parameters: device_id — simulator or device UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); project_root — absolute path to project root (trace output saved to <project_root>/argent-profiler-cwd/); app_process — optional CFBundleExecutable name; template_path — optional .tracetemplate path.
+Example: { "device_id": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "project_root": "/Users/dev/MyApp" }
+Returns { status: "recording", pid, traceFile }. After starting, let the user interact with the app, then call ios-profiler-stop. Fails if no user app is running — call launch-app first.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

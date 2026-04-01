@@ -22,10 +22,12 @@ export const gestureSwipeTool: ToolDefinition<
   { swiped: boolean; timestampMs: number }
 > = {
   id: "gesture-swipe",
-  description: `Perform a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
-Generates interpolated Move events for a natural feel (~60fps).
-Swipe up (fromY > toY) to scroll content down.
-Swipe down (fromY < toY) to scroll content up.`,
+  description: `Send a smooth straight-line swipe gesture between two normalized coordinates on the simulator screen.
+Use when scrolling lists, swiping between pages, or performing any linear drag. All positions are 0.0–1.0 screen fractions (not pixels). For complex paths use gesture-custom; for pinch use gesture-pinch.
+
+Parameters: udid; fromX, fromY — start position; toX, toY — end position; durationMs — optional gesture duration in ms (default 300).
+Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } — swipes up (scrolls content down).
+Returns { swiped: true, timestampMs }. Fails if the simulator-server cannot start or the simulator is not booted.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

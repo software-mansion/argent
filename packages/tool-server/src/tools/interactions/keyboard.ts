@@ -161,11 +161,12 @@ export const keyboardTool: ToolDefinition<
   { typed: string; keys: number }
 > = {
   id: "keyboard",
-  description: `Type text or press special keys on the simulator using keyboard events.
-Use instead of paste when paste is unreliable or unsupported by the focused field.
-- text: types a string character by character (supports uppercase, digits, common punctuation)
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
-Provide text, key, or both.`,
+  description: `Type text or press special keys on the simulator using hardware keyboard events.
+Use when entering text character-by-character, pressing Enter to submit a form, pressing Escape to dismiss a modal, or when paste is unreliable for the focused field.
+
+Parameters: udid; text — string to type (e.g. "Hello World"); key — named key to press (enter, escape, backspace, tab, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12); delayMs — optional ms between key presses (default 50).
+Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "text": "user@example.com" } or { "udid": "...", "key": "enter" }
+Returns { typed, keys }. Fails with "No keycode for character" if an unsupported character is provided (only ASCII printable chars are supported — use paste for Unicode). Fails with "Unknown key" if an unrecognized key name is passed. Fails if the simulator-server cannot start.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

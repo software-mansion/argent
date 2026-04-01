@@ -9,19 +9,12 @@ const zodSchema = z.object({
 
 export const describeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "describe",
-  description: `Get the iOS accessibility element tree for the simulator screen.
-Returns a JSON tree of UI elements with roles, labels, identifiers, values, and
-frame coordinates in normalized [0,1] space (fractions of the screen, not pixels)—the same space as tap/swipe/gesture and simulator-server touch input.
+  description: `Get the iOS accessibility element tree for the current simulator screen.
+Use when you need to find exact tap coordinates before calling gesture-tap or any gesture tool. Returns roles, labels, identifiers, and frame coordinates in normalized 0.0–1.0 space. Compute tap X as frame.x + frame.width/2, tap Y as frame.y + frame.height/2.
 
-Use this to find exact tap targets: \`frame.x + frame.width/2\` gives the tap X,
-\`frame.y + frame.height/2\` gives the tap Y.
-
-For React Native apps, the debugger-component-tree tool is also available and returns React component names with tap coordinates.
-
-Only supported on iOS simulators. On first use, macOS may require granting
-Accessibility permission to the simulator-server binary. If this happens,
-the tool will automatically open System Settings and Finder with step-by-step
-instructions — follow them and retry.`,
+Parameters: udid — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890). No other parameters needed.
+Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890" }
+Returns a JSON accessibility tree. For React Native apps, also consider debugger-component-tree for React-specific component names. On macOS, may prompt for Accessibility permission on first use — follow the on-screen instructions and retry if the tool fails.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

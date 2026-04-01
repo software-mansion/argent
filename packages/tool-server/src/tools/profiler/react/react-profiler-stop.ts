@@ -22,9 +22,12 @@ export function createReactProfilerStopTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
-    description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
-Call react-profiler-start first, then exercise the app, then call this.`,
+    description: `Stop CPU profiling and collect the Hermes CPU profile and React commit tree, storing results for analysis.
+Use when the interaction-under-profile is complete, to capture the data before calling react-profiler-analyze or react-profiler-cpu-summary.
+
+Parameters: port — Metro TCP port (default 8081, e.g. 8081).
+Example: { "port": 8081 }
+Returns a record with session metadata (files saved, commit count, etc.). Fails if no active profiling session exists — call react-profiler-start first.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

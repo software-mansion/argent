@@ -312,13 +312,12 @@ function formatBytes(bytes: number): string {
 
 export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-stack-query",
-  description: `Query iOS Instruments trace data for iterative investigation of native performance.
-Requires ios-profiler-stop → ios-profiler-analyze to have been called first.
-Modes:
-- hang_stacks: Full CPU context during a specific hang (by hang_index).
-- function_callers: Who calls a specific native function and what it calls.
-- thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details, optionally filtered by object_type.`,
+  description: `Query iOS Instruments trace data in targeted modes for deep-dive native performance investigation.
+Use when ios-profiler-analyze has identified hangs, CPU hotspots, or memory leaks and you need stack traces or call relationships for a specific finding.
+
+Parameters: device_id — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); mode — hang_stacks (CPU stacks for hang #0), function_callers (who calls "objc_msgSend"), thread_breakdown (CPU by thread), leak_stacks (leak details for "UIImage"); hang_index, function_name, thread, object_type — mode-specific; top_n (default 20).
+Example: { "device_id": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "mode": "hang_stacks", "hang_index": 0 }
+Returns a markdown string with stacks, callers, or breakdown. Requires ios-profiler-stop and ios-profiler-analyze to have been called first. Fails if no iOS profiler session data is in memory.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

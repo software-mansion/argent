@@ -11,7 +11,12 @@ const zodSchema = z.object({
 
 export const bootSimulatorTool: ToolDefinition<{ udid: string }> = {
   id: "boot-simulator",
-  description: "Boot an iOS simulator by UDID",
+  description: `Start an iOS simulator by UDID and open the Simulator.app window.
+Use when the target simulator is in the Shutdown state and must be running before calling simulator-server, launch-app, or any interaction tool.
+
+Parameters: udid — the simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890). Use list-simulators to discover available UDIDs.
+Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890" }
+Returns { udid, booted: true } on success. If the simulator is already booted the tool succeeds silently. Throws if the UDID is invalid or Xcode is not installed.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params, _options) {

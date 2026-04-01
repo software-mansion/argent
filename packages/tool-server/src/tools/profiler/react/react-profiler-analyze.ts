@@ -52,18 +52,12 @@ export const reactProfilerAnalyzeTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-analyze",
-  description: `Analyze stored profiling data and return a markdown performance report.
-Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }.
-The report is structured around hot React commits (≥16ms absolute floor) with per-commit
-render cascades, root cause identification, and a top components table.
-Raw profiling data is saved to disk with a unique session timestamp for later reload via profiler-load.
-After presenting the report, ask the user whether to investigate further (drill-down with
-profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile for comparison.
-Requires react-profiler-stop to have been called first.
-Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
-the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
-where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
-is returned by react-profiler-start.`,
+  description: `Analyze stored React profiling data and return a structured markdown performance report.
+Use when you have called react-profiler-stop and want to identify slow React commits, rendering bottlenecks, and top re-rendering components. Raw session data is also saved to disk for later reload.
+
+Parameters: port — Metro TCP port (default 8081); annotations — optional array of { offsetMs, label } to annotate commits with user actions (offsetMs = tapTimestampMs - startedAtEpochMs).
+Example: { "port": 8081, "annotations": [{ "offsetMs": 350, "label": "Tapped submit button" }] }
+Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }. Requires react-profiler-stop to have been called first. For deeper investigation use profiler-cpu-query or profiler-commit-query. Fails if no profiling data is stored in the session.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

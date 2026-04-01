@@ -24,8 +24,12 @@ export const screenshotTool: ToolDefinition<
   { url: string; path: string }
 > = {
   id: "screenshot",
-  description: `Take a screenshot of the simulator screen. Returns { url, path }.
-The MCP adapter returns this as a visible image.`,
+  description: `Capture a screenshot of the simulator screen and return it as a visible image.
+Use when capturing a baseline before interactions, verifying UI state after a delay, or when no interaction tool was just called (interaction tools return a screenshot automatically).
+
+Parameters: udid — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); rotation — optional orientation override (Portrait, LandscapeLeft, LandscapeRight, PortraitUpsideDown); scale — optional scale factor 0.01–1.0 (default 0.5).
+Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "scale": 0.5 }
+Returns { url, path } where url is a data URI and path is the saved file. Fails if the simulator is not booted or the simulator-server cannot start.`,
   zodSchema,
   outputHint: "image",
   services: (params) => ({

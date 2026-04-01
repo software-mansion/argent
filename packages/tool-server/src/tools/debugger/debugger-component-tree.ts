@@ -513,22 +513,13 @@ const zodSchema = z.object({
 
 export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "debugger-component-tree",
-  description: `Describe the current screen of a running React Native app as a compact text tree.
-Only shows on-screen components with unique positions — off-screen (scrolled) content,
-full-screen transparent wrappers, and implementation-detail components are pruned.
+  description: `Get the current screen of a running React Native app as a compact text tree with tap coordinates.
+Use when discovering tap targets in a React Native app before calling gesture-tap or any gesture tool. This is the preferred element discovery tool for React Native (use describe for non-RN iOS apps).
 
-Each visible component is listed with its name, text content, and normalized
-tap coordinates in [0,1] space (fractions of the screen, not pixels—same space as tap/swipe/gesture and simulator-server touch).
-
-This is the preferred element discovery tool for React Native apps. More information in react-native-app-workflow skill.
-
-Workflow:
-  1. Call this tool to get the component tree.
-  2. Find the desired element by name, text, testID, or accessibilityLabel.
-  3. Use the (tap: x,y) coordinates directly with the tap tool.
-
-Call again after navigation or state changes since positions may shift.
-Set includeSkipped=true to see a summary of all filtered components.`,
+Each visible component includes its name, text content, testID, and normalized (tap: x,y) coordinates in 0.0–1.0 space. Workflow: call this tool → find the element → use its (tap: x,y) with gesture-tap.
+Parameters: port — Metro TCP port (default 8081, e.g. 8081); onScreenOnly — boolean (default true); maxNodes — optional cap; includeSkipped — optional debug flag.
+Example: { "port": 8081 }
+Returns a text tree string. Call again after navigation since positions change. Fails if Metro is not running on the specified port — ensure the app is started with Metro first. If the debugger cannot connect, call debugger-connect first to diagnose.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

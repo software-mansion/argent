@@ -11,8 +11,12 @@ export const flowInsertEchoTool: ToolDefinition<
   { message: string; flowFile: string }
 > = {
   id: "flow-add-echo",
-  description: `Append an echo step to the active flow. Echo steps print a message when
-the flow is replayed — useful as labels between tool calls.`,
+  description: `Add an echo (label) step to the active flow recording that prints a message during replay.
+Use when you want to annotate a flow with progress markers like "Navigated to Settings" or "Login complete" for clarity during replay.
+
+Parameters: message — the label text to print during replay (e.g. "Tapping the login button").
+Example: { "message": "Entering credentials" }
+Returns { message, flowFile }. Echo steps do not execute any tool; they only print text during replay. Fails if no active recording session exists (error: "no active flow") — call flow-start-recording first.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

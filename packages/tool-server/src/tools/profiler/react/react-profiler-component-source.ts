@@ -15,9 +15,12 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
-  description: `AST lookup via tree-sitter: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
-Call per-finding after react-profiler-analyze to inspect source before proposing a fix.
-Returns found: false if the component is not in user-owned code (e.g. node_modules).`,
+  description: `Find a React component's source file, line number, memoization status, and 50 lines of code via AST analysis.
+Use when react-profiler-analyze identifies a slow component and you want to inspect its implementation before proposing a fix.
+
+Parameters: port — Metro TCP port (default 8081); component_name — React component name (e.g. "ProductList"); project_root — absolute path to the RN project root (e.g. /Users/dev/MyApp).
+Example: { "port": 8081, "component_name": "ProductList", "project_root": "/Users/dev/MyApp" }
+Returns { found: true, filePath, line, isMemoized, hasUseCallback, hasUseMemo, source } or { found: false } if the component is in node_modules or cannot be located. Fails if project_root does not exist.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

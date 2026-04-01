@@ -152,18 +152,12 @@ export const debuggerInspectElementTool: ToolDefinition<
   | { error: string }
 > = {
   id: "debugger-inspect-element",
-  description: `Inspect the React component hierarchy at a screen coordinate (x, y).
-Returns components from the tapped element upward through its parent hierarchy,
-each with its source file:line and a code fragment.
+  description: `Inspect the React component hierarchy at a specific screen coordinate (x, y) and return each component's source file, line number, and a code fragment.
+Use when you want to identify which component owns a given screen region, trace the source file of a rendered element, or investigate the parent hierarchy of a tapped UI element.
 
-The first items (lowest indices) are the most specific — the exact component under
-the tap point and its direct parents. Higher indices are broader context (page, navigator).
-Default shows 35 items which covers all app-specific code; use maxItems=70+ to also
-see the navigation/screen structure.
-
-Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
-Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.
-Set includeSkipped=true to see filtered items annotated with skip reasons.`,
+Parameters: port (default 8081); x, y — logical device screen coordinates (not normalized, actual pixel coords from the device); contextLines — source lines around component definition (default 3); maxItems — hierarchy depth (default 35); resolveSourceMaps (default true); includeSkipped (default false).
+Example: { "port": 8081, "x": 200, "y": 450 }
+Returns { x, y, items: [{ name, source: { file, line, column }, code }] }. Fails if Metro is not running on the specified port — start Metro first. If the connection is lost, call debugger-connect first to reconnect.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

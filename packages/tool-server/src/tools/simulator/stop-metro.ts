@@ -17,12 +17,12 @@ export const stopMetroTool: ToolDefinition<
   { stopped: boolean; port: number; pids: number[] }
 > = {
   id: "stop-metro",
-  description:
-    "Kill the Metro bundler process listening on a given port (default 8081). " +
-    "This is DESTRUCTIVE — it kills whatever process holds that port. " +
-    "Always ask the user for confirmation before calling this tool, by following message:" +
-    "'Would you like to stop the Metro bundler process listening on the requested port?" +
-    "This action is destructive, before continuing please confirm this is the action you want to take.'",
+  description: `Stop (kill) the Metro bundler process listening on a given port.
+Use when you need to free the Metro port, restart the bundler from scratch, or clean up after a session ends. This is DESTRUCTIVE — always ask the user for confirmation before calling.
+
+Parameters: port — TCP port Metro is listening on (default 8081, e.g. 8081 or 8088).
+Example: { "port": 8081 }
+Returns { stopped: boolean, port, pids: [...] } with the process IDs that were killed. If no process is found on that port, returns stopped: false. Fails if the port is out of range (1–65535).`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

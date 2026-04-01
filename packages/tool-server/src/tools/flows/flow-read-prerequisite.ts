@@ -13,8 +13,11 @@ export const flowReadPrerequisiteTool: ToolDefinition<
 > = {
   id: "flow-read-prerequisite",
   description: `Read the execution prerequisite of a saved flow without running it.
-Returns the prerequisite description so you can verify the required state
-is met before calling flow-execute.`,
+Use when you want to check what app/simulator state is required before running a flow, so you can prepare the correct state before calling flow-execute with prerequisiteAcknowledged: true.
+
+Parameters: name — the name of the flow to inspect (e.g. "settings-explore").
+Example: { "name": "login-flow" }
+Returns { flow, executionPrerequisite }. Fails if the flow file does not exist in the .argent/ directory — verify the flow name or list available flows with profiler-load (mode: list).`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
