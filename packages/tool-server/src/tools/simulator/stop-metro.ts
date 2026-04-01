@@ -21,8 +21,8 @@ export const stopMetroTool: ToolDefinition<
     "Kill the Metro bundler process listening on a given port (default 8081). " +
     "This is DESTRUCTIVE — it kills whatever process holds that port. " +
     "Always ask the user for confirmation before calling this tool, by following message:" +
-    "'Would you like to stop the Metro bundler process listening on port ${port}?" +
-    "This action is desctructive, before continuing please confirm this is the action you want to take.'",
+    "'Would you like to stop the Metro bundler process listening on the requested port?" +
+    "This action is destructive, before continuing please confirm this is the action you want to take.'",
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

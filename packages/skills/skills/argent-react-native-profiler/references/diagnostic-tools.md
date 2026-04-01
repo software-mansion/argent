@@ -24,7 +24,7 @@ Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm Rea
 { "port": 8081, "level": "error", "limit": 50 }
 ```
 
-Call `debugger-console-logs`. Filter by `level`: `"error"`, `"warn"`, `"log"`, or omit to get all.
+Call `debugger-log-registry`. Filter by `level`: `"error"`, `"warn"`, `"log"`, or omit to get all.
 
 ---
 

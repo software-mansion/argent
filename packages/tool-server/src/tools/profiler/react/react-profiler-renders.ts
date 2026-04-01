@@ -35,7 +35,7 @@ const COLLECT_RENDERS_SCRIPT = `
       if (fiber.sibling) walkFiber(fiber.sibling, depth);
     }
 
-    var roots = hook.__rn_mcp_roots__ || hook._fiberRoots || hook.fiberRoots;
+    var roots = hook.__argent_roots__ || hook._fiberRoots || hook.fiberRoots;
     if (roots) {
       var iter = roots.values ? roots.values() : Object.values(roots);
       for (var root of iter) {

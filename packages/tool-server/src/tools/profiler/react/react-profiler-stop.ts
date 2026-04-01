@@ -73,7 +73,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
       // Step 1: Check hook status (small CDP call, non-fatal if hook absent)
       try {
         const hookStatus = (await cdp.evaluate(
-          `JSON.stringify({ installed: typeof globalThis.__RN_DEVTOOLS_MCP_COMMITS__ !== 'undefined', count: globalThis.__RN_DEVTOOLS_MCP_COMMITS__?.length ?? 0 })`,
+          `JSON.stringify({ installed: typeof globalThis.__ARGENT_DEVTOOLS_COMMITS__ !== 'undefined', count: globalThis.__ARGENT_DEVTOOLS_COMMITS__?.length ?? 0 })`,
         )) as string | undefined;
 
         if (hookStatus) {
@@ -99,7 +99,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         // A single lightweight CDP call iterates all commits in-place and returns
         // only aggregated data (~50KB), avoiding transfer of the full dataset.
         const heatScript = `(function() {
-        var commits = globalThis.__RN_DEVTOOLS_MCP_COMMITS__;
+        var commits = globalThis.__ARGENT_DEVTOOLS_COMMITS__;
         var heat = {};
         var compiler = false;
         for (var i = 0; i < commits.length; i++) {
@@ -143,9 +143,9 @@ Call react-profiler-start first, then exercise the app, then call this.`,
             const fallbackScript = `(function() {
             try {
               var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-              if (hook && hook.__rn_mcp_roots__) {
+              if (hook && hook.__argent_roots__) {
                 var found = false;
-                hook.__rn_mcp_roots__.forEach(function(root) {
+                hook.__argent_roots__.forEach(function(root) {
                   if (found) return;
                   try {
                     var fstack = root.current ? [root.current] : [];
@@ -218,7 +218,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
           for (let start = 0; start < commitCount; start += CHUNK_SIZE) {
             const end = start + CHUNK_SIZE;
             const chunkResult = (await cdp.send("Runtime.evaluate", {
-              expression: `JSON.stringify(globalThis.__RN_DEVTOOLS_MCP_COMMITS__.slice(${start}, ${end}))`,
+              expression: `JSON.stringify(globalThis.__ARGENT_DEVTOOLS_COMMITS__.slice(${start}, ${end}))`,
               returnByValue: true,
               timeout: 30000,
             })) as { result?: { value?: string } };

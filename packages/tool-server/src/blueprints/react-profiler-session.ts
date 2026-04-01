@@ -10,18 +10,18 @@ export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
 /**
  * Injected once on connect — tracks fiber root commits for get_react_renders
- * and get_fiber_tree. Idempotent (guard via __rn_mcp_installed__).
+ * and get_fiber_tree. Idempotent (guard via __argent_profiler_installed__).
  */
 export const FIBER_ROOT_TRACKER_SCRIPT = `
 (function() {
   var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook || hook.__rn_mcp_installed__) return;
-  hook.__rn_mcp_installed__ = true;
-  hook.__rn_mcp_roots__ = new Set();
+  if (!hook || hook.__argent_profiler_installed__) return;
+  hook.__argent_profiler_installed__ = true;
+  hook.__argent_roots__ = new Set();
 
   var orig = hook.onCommitFiberRoot;
   hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
-    hook.__rn_mcp_roots__.add(root);
+    hook.__argent_roots__.add(root);
     if (typeof orig === 'function') orig.call(this, rendererID, root, priorityLevel);
   };
 })();

@@ -28,7 +28,7 @@ BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extr
 
 If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
 
-If `describe` fails because of permissions / accesisibility issues - stop your tasks, inform the user about the issue and how it should be fixed.
+If `describe` fails because of permissions / accessibility issues - stop your tasks, inform the user about the issue and how it should be fixed.
 </tapping_rule>
 
 <skill_reading_rule>
@@ -51,7 +51,7 @@ If `describe` fails because of permissions / accesisibility issues - stop your t
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
-- ALWAYS use `run-sequence` when performing multiple sequentialsimulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
+- ALWAYS use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
   </important_rules>
 

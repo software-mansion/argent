@@ -25,9 +25,9 @@ platform directory presence (ios/, android/), lockfile type, .env file keys (no 
 installed CLI tool versions, scripts/ directory listing, husky hooks, CI config type,
 Makefile targets, lint-staged config, and a list of detected config files.
 
-DO NOT RUN THIS TOOL IF YOU ARE THE MAIN AGENT AND THIS TASK CAN BE DELAGATED TO A SUBAGENT.
+DO NOT RUN THIS TOOL IF YOU ARE THE MAIN AGENT AND THIS TASK CAN BE DELEGATED TO A SUBAGENT.
 
-If you are a subagent tasked with exploring the project environemnt, run this as the first step. The snapshot
+If you are a subagent tasked with exploring the project environment, run this as the first step. The snapshot
 provides the raw data needed to determine the project type (React Native, Expo,
 Flutter, native iOS/Android, or other), build commands, startup scripts, platform
 support, package manager, and QA tooling. Follow up with Read/Glob/Grep for deeper

@@ -36,10 +36,10 @@ const server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
   const addr = server.address();
   const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
   process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
-  console.log(`  GET  http://127.0.0.1:${boundPort}/tools`);
-  console.log(`  POST http://127.0.0.1:${boundPort}/tools/:name`);
+  process.stderr.write(`  GET  http://127.0.0.1:${boundPort}/tools\n`);
+  process.stderr.write(`  POST http://127.0.0.1:${boundPort}/tools/:name\n`);
   if (idleTimeoutMs > 0) {
-    console.log(`  Idle timeout: ${idleMinutes}min`);
+    process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
   }
 });
 
