@@ -142,10 +142,6 @@ npm run test:watch -w @argent/tool-server
 6. **Open the PR** against `main` and fill in the description with context on what changed and why.
 7. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).
 
-### Release process
-
-Maintainers handle releases by bumping the version in `packages/mcp/package.json` and pushing a `v*` tag. See [RELEASING.md](./RELEASING.md) for the full process.
-
 ---
 
 ## Questions?
