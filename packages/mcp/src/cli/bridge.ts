@@ -10,8 +10,5 @@ export async function bridge(_args: string[]): Promise<void> {
   console.log(
     "commands directly through the argent CLI instead of via HTTP.\n",
   );
-  console.log(
-    `See ${pc.cyan("docs/cli-bridge-guide.md")} for the planned architecture.\n`,
-  );
   process.exit(0);
 }
