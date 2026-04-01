@@ -337,12 +337,7 @@ function shortenUrl(url: string): string {
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
-  description: `Query Hermes CPU profile data in targeted modes for iterative performance investigation.
-Use when react-profiler-analyze has identified hot commits and you need to drill down into specific JS CPU hotspots, time windows, or call relationships.
-
-Parameters: port (default 8081); mode — top_functions (global hotspots), time_window (CPU in a ms range), call_tree (callers/callees of "parseJSON"), component_cpu (CPU for "ProductList" across its commits); time_window_ms, function_name, component_name — mode-specific; top_n (default 15).
-Example: { "port": 8081, "mode": "call_tree", "function_name": "parseJSON" }
-Returns a markdown table or tree. Requires react-profiler-stop to have been called first. Fails if no CPU profile is stored in the session.`,
+  description: `Profile Hermes CPU sampling data to find JS execution hotspots across functions and threads. Use when you want to diagnose slow JS execution, e.g. mode "call_tree" for a function like renderItem. Parameters: port, mode, and optional params like function_name or component_name. Returns a markdown CPU flamegraph breakdown. Fails if react-profiler-stop has not been called first. Modes: top_functions, time_window, call_tree, component_cpu.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

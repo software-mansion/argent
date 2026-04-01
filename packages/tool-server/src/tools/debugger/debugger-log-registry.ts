@@ -16,12 +16,11 @@ export const debuggerLogRegistryTool: ToolDefinition<
   LogRegistryResponse
 > = {
   id: "debugger-log-registry",
-  description: `Get a summary of all console logs captured from the running React Native app.
-Use when investigating errors, warnings, or unexpected app behavior — call this first for an overview, then read the returned log file path for full details.
-
-Parameters: port — Metro server TCP port (default 8081, e.g. 8081).
-Example: { "port": 8081 }
-Returns { logFilePath, counts: { debug, info, warn, error }, clusters: [...] } where clusters group similar messages by pattern. Auto-connects to debugger if needed. Returns an error if Metro is not running — call debugger-connect first.`,
+  description: `Get a summary of all console logs captured from the React Native app. Use when diagnosing errors, warnings, or unexpected app behavior by reviewing captured log output.
+Accepts: port (default 8081, e.g. 8082 for a secondary Metro instance).
+Returns the log file path, entry counts by level such as "warn" or "error", and message clusters grouped by similarity.
+Use this tool first to get an overview, then read the returned file path for details.
+Fails if no debugger connection can be established.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

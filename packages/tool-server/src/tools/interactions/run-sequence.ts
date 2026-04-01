@@ -50,13 +50,40 @@ export function createRunSequenceTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute multiple simulator interaction steps in a single call without observing the screen between them.
-Use when all steps are known in advance and no intermediate screen state needs checking — e.g. scrolling a list multiple times, typing text then pressing enter, or rotating back and forth. Do NOT use if any step depends on the result of a previous one; call tools individually instead.
+    description: `Execute multiple simulator interaction steps in a single call.
+Use when you need sequential actions and do NOT need to observe the screen between them
+(e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
+A screenshot is captured only once after the entire sequence completes.
 
-Parameters: udid — shared simulator UDID; steps — array of { tool, args (udid auto-injected), delayMs? }.
-Allowed tools: gesture-tap { x, y }, gesture-swipe { fromX, fromY, toX, toY }, gesture-custom { events, interpolate? }, gesture-pinch { centerX, centerY, startDistance, endDistance }, gesture-rotate { centerX, centerY, radius, startAngle, endAngle }, button { button }, keyboard { text?, key? }, rotate { orientation }.
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "steps": [{ "tool": "keyboard", "args": { "text": "hello" } }, { "tool": "keyboard", "args": { "key": "enter" } }] }
-Returns { completed, total, steps: [...results] }. Stops on the first error and returns partial results. Fails if an unlisted tool name is provided.`,
+ONLY use this when every step is known in advance. If any step depends on the
+result of a previous one (e.g. tapping a menu item that only appears after
+a prior tap), use individual tool calls instead.
+
+Allowed tools and their args (udid is auto-injected, do NOT include it in args):
+
+  gesture-tap:    { x: number, y: number }
+  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }
+  gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }
+  gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }
+  gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }
+  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }
+  keyboard:       { text?: string, key?: string, delayMs?: number }
+  rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }
+
+Example — scroll down three times:
+  { "udid": "<UDID>", "steps": [
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
+  ]}
+
+Example — type text and submit:
+  { "udid": "<UDID>", "steps": [
+    { "tool": "keyboard", "args": { "text": "hello world" } },
+    { "tool": "keyboard", "args": { "key": "enter" } }
+  ]}
+
+Stops on the first error and returns partial results.`,
     zodSchema,
     services: (params) => ({
       simulatorServer: `SimulatorServer:${params.udid}`,

@@ -15,13 +15,18 @@ export const openUrlTool: ToolDefinition<
   { opened: boolean; url: string }
 > = {
   id: "open-url",
-  description: `Open a URL or URL scheme on the simulator, launching the appropriate app.
-Use when navigating to a web page in Safari, deep-linking into an app via its URL scheme, or opening system apps without knowing their bundle ID.
+  description: `Open a URL or URL scheme on the simulator.
+Use when you need to navigate to a web page or launch an app via its scheme, e.g. "https://example.com" or "settings://".
+Accepts: udid, url (such as "maps://?q=Paris"). Returns the opened url.
+Fails if the udid is invalid or the URL scheme is not registered on the simulator.
 
-Parameters: udid — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); url — the URL or scheme to open.
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "url": "https://example.com" }
-Common schemes: messages://, settings://, maps://?q=coffee, tel://555-1234.
-Returns { opened: true, url }. Fails if the URL scheme is not registered on the simulator or the simulator is not booted.`,
+Common URL schemes:
+- messages://              — Messages app
+- settings://              — Settings app
+- maps://?q=<query>        — Maps with a search query
+- tel://<number>           — Phone app
+- mailto:<address>         — Mail app
+- https://...              — Opens in Safari`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

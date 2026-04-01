@@ -115,12 +115,7 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
 
 export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-cpu-summary",
-  description: `Return a ranked table of Hermes CPU hotspot functions sorted by self-time.
-Use when investigating JS CPU usage not tied to React rendering — such as regex slowness, cryptography, or heavy data processing. For general React performance analysis use react-profiler-analyze instead.
-
-Parameters: port — Metro TCP port (default 8081); top_n — number of top functions to return (default 20); react_only — optional boolean to filter to React-internal functions only.
-Example: { "port": 8081, "top_n": 20 }
-Returns a markdown table of top functions with self-time and call counts. Requires react-profiler-stop to have been called first. Fails if no CPU profile is stored in the session.`,
+  description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time). Use when you need to investigate JS CPU hotspots NOT tied to React rendering, e.g. regex slowness or heavy computations. Parameters: port and optional top_n. Returns a markdown table of hotspot functions ranked by self-time. FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call as part of a normal profiling session. Fails if react-profiler-stop has not been called.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

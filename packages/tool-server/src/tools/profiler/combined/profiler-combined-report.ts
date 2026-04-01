@@ -40,12 +40,7 @@ interface HangCommitCorrelation {
 
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-combined-report",
-  description: `Generate a cross-correlated performance report that maps iOS Instruments UI hangs to React commits using wall-clock time alignment.
-Use when you ran react-profiler-start and ios-profiler-start in parallel on the same session and want to see which React commits coincide with native hangs.
-
-Parameters: port — Metro TCP port (default 8081); device_id — iOS simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890).
-Example: { "port": 8081, "device_id": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890" }
-Returns a markdown report correlating native hangs with React commits. Requires both react-profiler-analyze and ios-profiler-analyze to have been called first. Fails if either profiler's analysis data is missing from the session.`,
+  description: `Generate a cross-correlated report combining React Profiler and iOS Instruments data. Use when both profilers were run in parallel on the same session, e.g. to correlate a UI hang with a React commit. Parameters: port and device_id. Returns a combined markdown report mapping iOS Instruments hangs to React commits using wall-clock time alignment. Requires both react-profiler-analyze and ios-profiler-analyze to have been called first. Fails if either profiler session has no analyzed data.`,
   zodSchema,
   services: (params) => ({
     reactSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

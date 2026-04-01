@@ -15,13 +15,23 @@ export const launchAppTool: ToolDefinition<
   { launched: boolean; bundleId: string }
 > = {
   id: "launch-app",
-  description: `Start an app on the simulator by bundle ID. Prefer this over tapping home-screen icons — it is instant and reliable.
-Use when starting any app session, switching to a different app, or after reinstall/restart to bring the app to the foreground.
+  description: `Open an app on the simulator by bundleId.
+Prefer this over tapping home-screen icons — it is instant and reliable.
+Use when you need to open an app at the start of a session or after restart, e.g. "com.apple.mobilesafari" to open Safari.
+Accepts: udid, bundleId (e.g. "com.apple.mobilesafari"). Returns the launched bundle ID. Fails if the bundle ID is not installed on the simulator.
 
-Parameters: udid — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); bundleId — the app's bundle identifier.
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "bundleId": "com.apple.mobilesafari" }
-Common IDs: com.apple.MobileSMS (Messages), com.apple.Preferences (Settings), com.apple.Maps.
-Returns { launched: true, bundleId }. Fails if the app is not installed — call reinstall-app first.`,
+Common bundle IDs:
+- Messages:  com.apple.MobileSMS
+- Safari:    com.apple.mobilesafari
+- Settings:  com.apple.Preferences
+- Maps:      com.apple.Maps
+- Camera:    com.apple.camera
+- Photos:    com.apple.Photos
+- Mail:      com.apple.mobilemail
+- Notes:     com.apple.mobilenotes
+- Clock:     com.apple.mobiletimer
+- Calendar:  com.apple.mobilecal
+- Contacts:  com.apple.MobileAddressBook`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

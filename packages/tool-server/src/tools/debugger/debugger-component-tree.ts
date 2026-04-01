@@ -513,13 +513,11 @@ const zodSchema = z.object({
 
 export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "debugger-component-tree",
-  description: `Get the current screen of a running React Native app as a compact text tree with tap coordinates.
-Use when discovering tap targets in a React Native app before calling gesture-tap or any gesture tool. This is the preferred element discovery tool for React Native (use describe for non-RN iOS apps).
-
-Each visible component includes its name, text content, testID, and normalized (tap: x,y) coordinates in 0.0–1.0 space. Workflow: call this tool → find the element → use its (tap: x,y) with gesture-tap.
-Parameters: port — Metro TCP port (default 8081, e.g. 8081); onScreenOnly — boolean (default true); maxNodes — optional cap; includeSkipped — optional debug flag.
-Example: { "port": 8081 }
-Returns a text tree string. Call again after navigation since positions change. Fails if Metro is not running on the specified port — ensure the app is started with Metro first. If the debugger cannot connect, call debugger-connect first to diagnose.`,
+  description: `Inspect the current React Native screen as a compact component tree. Use when you need tap coordinates or element names for React Native UI interactions.
+Accepts: port (default 8081), onScreenOnly, maxNodes, includeSkipped.
+Each component lists its name, text, and tap coordinates, e.g. Button "Submit" (tap: 0.50,0.72).
+Returns a text tree with component names and normalized tap coordinates for gesture-tap.
+Fails if Metro debugger is not connected or the app is not running.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

@@ -24,12 +24,9 @@ export const reinstallAppTool: ToolDefinition<
   { reinstalled: boolean; bundleId: string }
 > = {
   id: "reinstall-app",
-  description: `Run a full app reinstall on the simulator: uninstall the existing version then install fresh from a .app bundle path.
-Use when the app binary has been rebuilt (e.g. after a native code change), or to clear app data and the container directory for a clean slate.
-
-Parameters: udid — simulator UDID; bundleId — the app's bundle ID (e.g. com.example.MyApp); appPath — absolute path to the .app bundle (e.g. /path/to/MyApp.app).
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "bundleId": "com.example.MyApp", "appPath": "/path/to/Debug-iphonesimulator/MyApp.app" }
-Returns { reinstalled: true, bundleId }. If the app was not installed the uninstall step is silently skipped. Fails if appPath does not exist or the simulator is not booted.`,
+  description: `Update (reinstall) an app on the simulator: uninstall by bundleId, then install from appPath.
+Use when you need a clean install after rebuilding, e.g. appPath like "./build/Products/Debug-iphonesimulator/MyApp.app".
+Accepts: udid, bundleId, appPath. Returns the reinstalled bundle ID. Fails if the appPath does not exist or is not a valid .app bundle.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

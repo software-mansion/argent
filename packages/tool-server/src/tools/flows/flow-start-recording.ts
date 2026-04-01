@@ -23,12 +23,7 @@ export const flowStartRecordingTool: ToolDefinition<
   { message: string; previousFlow?: string; flowFile: string }
 > = {
   id: "flow-start-recording",
-  description: `Start recording a new named flow and create its .yaml file in the .argent/ directory.
-Use when you want to capture a reusable sequence of MCP tool calls that can be replayed later with flow-execute — for regression testing, A/B profiling, or repeating multi-step UI interactions.
-
-Parameters: name — flow name used as the file key (e.g. "settings-explore"); executionPrerequisite — required app state before the flow can run (e.g. "App on home screen after a fresh reload").
-Example: { "name": "login-flow", "executionPrerequisite": "App on login screen" }
-Returns { message, flowFile }. After starting, append steps with flow-add-step, add labels with flow-add-echo, then call flow-finish-recording. Fails if the .argent/ directory cannot be created (permissions error). If a step was recorded by mistake, edit the .yaml file directly to remove it.`,
+  description: `Start recording a new flow. Use when you want to script a repeatable sequence of simulator interactions, e.g. a "login-flow". Parameters: name and executionPrerequisite (required app state). Returns { message, flowFile }. Creates a .yaml file in the .argent/ directory. Fails if another flow recording is already active. After starting, use flow-add-step to append tool calls — each step is executed LIVE so you can verify it works before it gets recorded.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

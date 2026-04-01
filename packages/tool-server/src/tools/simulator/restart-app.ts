@@ -15,12 +15,9 @@ export const restartAppTool: ToolDefinition<
   { restarted: boolean; bundleId: string }
 > = {
   id: "restart-app",
-  description: `Terminate and relaunch an app on the simulator by bundle ID.
-Use when you need a clean app state without a full reinstall — for example after JS-only code changes, to reset in-memory state, or to reproduce a cold-start scenario.
-
-Parameters: udid — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); bundleId — the app's bundle ID (e.g. com.example.MyApp).
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "bundleId": "com.example.MyApp" }
-Returns { restarted: true, bundleId }. If the app is not running the terminate step is silently skipped. Fails if the app is not installed — call reinstall-app first.`,
+  description: `Terminate and relaunch an app on the simulator by bundleId.
+Use when you need a clean in-memory restart without reinstalling (e.g. after code changes, or to reset in-memory state such as navigation stack).
+Accepts: udid, bundleId (e.g. "com.apple.mobilesafari"). Returns the restarted bundle ID. Fails if udid is invalid or the bundle ID is not installed.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

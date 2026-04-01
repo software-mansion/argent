@@ -101,12 +101,7 @@ const zodSchema = z.object({
 
 export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "react-profiler-fiber-tree",
-  description: `Get the live React fiber tree as a JSON component hierarchy with render durations.
-Use when tracing the ancestry of a library component identified by react-profiler-analyze, or to verify whether React Compiler is active on a component (look for useMemoCache in the tree).
-
-Parameters: port — Metro TCP port (default 8081); max_depth — tree depth limit (default 10); filter — optional regex string to filter component names (e.g. "Product").
-Example: { "port": 8081, "max_depth": 10, "filter": "Product" }
-Returns a JSON tree of { name, tag, actualDuration, children }. Fails if the React DevTools hook is not present (error: "React DevTools hook not present") — call react-profiler-start first to re-inject the hook. Fails if Metro is not running — call debugger-connect first.`,
+  description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy. Use when you need to trace component ancestry or verify React Compiler activation, e.g. checking if useMemoCache is present on a component. Parameters: port, optional max_depth, and optional filter (component name string). Returns a JSON fiber tree. Fails if Metro is not connected. Useful when a finding is a library component and you need to see its parent chain.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

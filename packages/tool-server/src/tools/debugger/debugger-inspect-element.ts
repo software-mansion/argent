@@ -152,12 +152,10 @@ export const debuggerInspectElementTool: ToolDefinition<
   | { error: string }
 > = {
   id: "debugger-inspect-element",
-  description: `Inspect the React component hierarchy at a specific screen coordinate (x, y) and return each component's source file, line number, and a code fragment.
-Use when you want to identify which component owns a given screen region, trace the source file of a rendered element, or investigate the parent hierarchy of a tapped UI element.
-
-Parameters: port (default 8081); x, y — logical device screen coordinates (not normalized, actual pixel coords from the device); contextLines — source lines around component definition (default 3); maxItems — hierarchy depth (default 35); resolveSourceMaps (default true); includeSkipped (default false).
-Example: { "port": 8081, "x": 200, "y": 450 }
-Returns { x, y, items: [{ name, source: { file, line, column }, code }] }. Fails if Metro is not running on the specified port — start Metro first. If the connection is lost, call debugger-connect first to reconnect.`,
+  description: `Inspect the React component hierarchy at a screen coordinate (x, y). Use when you need the source file for a visible UI element or the component stack at a given point.
+Accepts: x, y (required, e.g. x=200, y=400), port (default 8081), contextLines, maxItems, resolveSourceMaps, includeSkipped.
+Returns { x, y, items } where each item has name, source (file:line), and code fragment, from most specific to root.
+Fails if no component exists at the given coordinates or Metro is not connected.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

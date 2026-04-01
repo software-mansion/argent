@@ -12,12 +12,9 @@ const zodSchema = z.object({
 
 export const rotateTool: ToolDefinition<z.infer<typeof zodSchema>, { orientation: string }> = {
   id: "rotate",
-  description: `Set the simulator screen to the specified orientation.
-Use when testing landscape layouts, responsive UI, or reproducing orientation-specific bugs.
-
-Parameters: udid — simulator UDID (e.g. A1B2C3D4-E5F6-7890-ABCD-EF1234567890); orientation — one of Portrait, LandscapeLeft, LandscapeRight, PortraitUpsideDown.
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "orientation": "LandscapeLeft" }
-Returns { orientation } confirming the new orientation. Requires a running simulator-server (started automatically). Fails if the simulator is not booted.`,
+  description: `Set the simulator orientation to a target value such as "LandscapeLeft" or "Portrait".
+Use when you need to test layout in landscape mode, e.g. to verify responsive UI or reproduce a rotation bug.
+Accepts: udid, orientation (one of Portrait, LandscapeLeft, LandscapeRight, PortraitUpsideDown). Returns the new orientation. Fails if the udid is invalid or the simulator-server is not running.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

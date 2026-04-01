@@ -153,12 +153,7 @@ export function createReactProfilerStartTool(registry: Registry): ToolDefinition
 > {
   return {
     id: "react-profiler-start",
-    description: `Start CPU profiling and React commit capture on the connected Hermes JS runtime.
-Use when measuring React component render performance, identifying slow commits, or profiling CPU hotspots in JS. Auto-connects to Metro if not already connected. Recommend asking the user if they also want ios-profiler-start for native data.
-
-Parameters: port — Metro TCP port (default 8081, e.g. 8081); project_root — absolute path to project root for saving session files.
-Example: { "port": 8081, "project_root": "/Users/dev/MyApp" }
-Returns { startedAtEpochMs, hermes_version, detected_architecture }. After starting, ask the user to perform the interaction to profile, then call react-profiler-stop. Fails if Metro is not running — ensure the app is running with Metro first.`,
+    description: `Start CPU profiling and React commit capture on the connected Hermes runtime. Use when you want to begin a profiling session, e.g. before a slow list scroll. Parameters: port (Metro port, e.g. 8081). Returns { startedAtEpochMs } for annotation offsets. Auto-connects to Metro if not already connected. Fails if Metro is unreachable or Hermes debugger cannot connect. Ask the user if they also want native iOS profiling (ios-profiler-start). After starting, call react-profiler-stop.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

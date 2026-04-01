@@ -44,12 +44,15 @@ export const gesturePinchTool: ToolDefinition<
   { pinched: boolean; timestampMs: number }
 > = {
   id: "gesture-pinch",
-  description: `Send a smooth two-finger pinch gesture to zoom in or out on a specific area of the simulator screen.
-Use when you need to scale content with a two-finger pinch — e.g. zooming into a map region, enlarging a photo, or triggering a zoom gesture on a web view. Use gesture-tap for single taps, gesture-swipe for scrolling, gesture-rotate for rotation.
-
-Parameters: udid; centerX, centerY — normalized pinch center 0.0–1.0 (e.g. 0.5, 0.5 for screen center); startDistance, endDistance — initial and final finger separation as screen fraction (startDistance > endDistance = zoom out; startDistance < endDistance = zoom in); angle — axis in degrees (default 0 = horizontal); durationMs — optional ms (default 300).
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "centerX": 0.5, "centerY": 0.5, "startDistance": 0.2, "endDistance": 0.6 } — zoom in at center.
-Returns { pinched: true, timestampMs }. Fails if the simulator-server cannot start or the simulator is not booted.`,
+  description: `Execute a smooth two-finger pinch gesture. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
+startDistance > endDistance = pinch in (zoom out).
+startDistance < endDistance = pinch out (zoom in).
+Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
+Auto-generates interpolated frames at ~60fps for a natural feel.
+The angle parameter controls the axis (0 = horizontal, 90 = vertical).
+Use when you need to zoom in or zoom out on maps, photos, or web views, e.g. to test pinch-to-zoom.
+Accepts: centerX, centerY, startDistance, endDistance, angle (optional), durationMs (optional).
+Returns the pinch result. Fails if udid is invalid or the simulator is not running.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

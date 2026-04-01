@@ -10,12 +10,7 @@ export function createStopAllSimulatorServersTool(
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
-    description: `Stop all running simulator-server processes and native devtools services and free their resources.
-Use when the session ends, the user says they are done, or before a fresh setup to ensure no stale servers are running.
-
-Parameters: none — this tool takes no parameters (udid is not needed; all active servers are stopped regardless of UDID).
-Example: {}
-Returns { stopped: [...urns] } listing all server URNs that were shut down (e.g. ["SimulatorServer:A1B2C3D4-E5F6-7890-ABCD-EF1234567890"]). If no servers are running returns { stopped: [] }. Never fails even if no servers were active.`,
+    description: "Stop all running simulator-server processes and native devtools services, freeing associated resources. Use when your session ends or the user says they are done. Takes no parameters. Returns the list of stopped server URNs such as \"SimulatorServer:UDID\". Fails silently if no servers are running.",
     services: () => ({}),
     async execute() {
       const snapshot = registry.getSnapshot();

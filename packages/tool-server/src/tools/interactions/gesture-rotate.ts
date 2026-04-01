@@ -34,12 +34,15 @@ export const gestureRotateTool: ToolDefinition<
   { rotated: boolean; timestampMs: number }
 > = {
   id: "gesture-rotate",
-  description: `Send a smooth two-finger rotation gesture to spin content on the simulator screen around a center point.
-Use when triggering an iOS rotation gesture — e.g. rotating a map orientation, spinning an image, or testing a UIRotationGestureRecognizer. Use gesture-pinch for zooming, gesture-swipe for scrolling, gesture-tap for tapping.
-
-Parameters: udid; centerX, centerY — normalized rotation center 0.0–1.0 (e.g. 0.5, 0.5); radius — normalized finger distance from center (e.g. 0.15 = 15% of screen); startAngle, endAngle — in degrees (0 = right, 90 = down, endAngle > startAngle = clockwise); durationMs — optional ms (default 300).
-Example: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "centerX": 0.5, "centerY": 0.5, "radius": 0.15, "startAngle": 0, "endAngle": 90 } — 90° clockwise rotation.
-Returns { rotated: true, timestampMs }. Fails if the simulator-server cannot start or the simulator is not booted.`,
+  description: `Execute a smooth two-finger rotation gesture. All positions and radius are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
+Two fingers are placed opposite each other at the given radius from the center,
+then rotated from startAngle to endAngle.
+endAngle > startAngle = clockwise rotation.
+Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise rotation at screen center.
+Auto-generates interpolated frames at ~60fps for a natural feel.
+Use when you need to rotate a map, image, or any rotatable view, e.g. to test rotation gestures.
+Accepts: centerX, centerY, radius, startAngle, endAngle, durationMs (optional).
+Returns the rotation result. Fails if udid is invalid or the simulator is not running.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

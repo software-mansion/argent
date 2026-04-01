@@ -12,12 +12,10 @@ export const debuggerEvaluateTool: ToolDefinition<
   { result: unknown }
 > = {
   id: "debugger-evaluate",
-  description: `Execute arbitrary JavaScript in the React Native app's JS runtime via CDP and return the result.
-Use when inspecting runtime state, reading global variables, calling app functions, or verifying logic without modifying source code.
-
-Parameters: port — Metro server TCP port (default 8081); expression — any valid JavaScript expression (e.g. "typeof globalThis.__fbBatchedBridge").
-Example: { "port": 8081, "expression": "JSON.stringify(window.__MY_DEBUG_STATE)" }
-Returns { result }. Auto-connects to debugger if not already connected. Returns an error if Metro is not running or the expression throws — call debugger-connect first if the auto-connect fails.`,
+  description: `Execute arbitrary JavaScript in the React Native app's JS runtime via CDP. Use when you need to inspect state, call functions, or test expressions at runtime.
+Accepts: expression (required, e.g. "global.__DEV__") and port (default 8081).
+Returns the evaluation result as { result }. The app must be connected via debugger-connect first (auto-connects if needed).
+Fails if the runtime is paused at a breakpoint or the expression throws an unhandled error.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

@@ -104,12 +104,7 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Get full details of a specific network request by its requestId, including headers, status, timing, and response body.
-Use when you need to inspect the exact request/response payload for a specific API call identified in view-network-logs.
-
-Parameters: port — Metro TCP port (default 8081); requestId — the ID string from view-network-logs (e.g. "abc-123"); includeBody — whether to include response body (default true, truncated at 1000 chars).
-Example: { "port": 8081, "requestId": "abc-123-def-456" }
-Returns { requestId, state, request: { url, method, headers }, response: { status, headers, body } }. Sensitive headers (auth, cookie, token) are redacted. Returns an error string if the requestId is not found — call view-network-logs first to get valid IDs.`,
+  description: `Get full details of a specific network request by its requestId (from view-network-logs). Use when you need to inspect headers, status, or response body for a specific request, e.g. to debug an auth failure or malformed payload. Parameters: requestId and port. Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body. Fails if the requestId does not exist. Large response bodies are truncated.`,
   zodSchema,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}`,

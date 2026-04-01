@@ -43,13 +43,27 @@ const zodSchema = z.object({
 
 export const gestureCustomTool: ToolDefinition<z.infer<typeof zodSchema>, { events: number }> = {
   id: "gesture-custom",
-  description: `Send a custom sequence of touch events for complex or non-standard gestures.
-Use when you need a long press, drag-and-drop, non-linear swipe path, or any gesture that gesture-tap/gesture-swipe/gesture-pinch/gesture-rotate cannot express. All x/y values are normalized 0.0–1.0 screen fractions (not pixels).
+  description: `Send a sequence of touch events for complex gestures.
+Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
+For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
+For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
+All x/y values are normalized 0.0–1.0 (screen fractions, not pixels), matching simulator-server touch input. delayMs controls the delay before each event (default 16ms ≈ 60fps).
+Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
 
-Parameters: udid; events — array of { type: "Down"|"Move"|"Up", x, y, x2?, y2?, delayMs? }; interpolate — optional number of intermediate Move frames to auto-insert between keyframes.
-Example long-press at center: { "events": [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}] }
-Example pinch-zoom: { "events": [{"type":"Down","x":0.4,"y":0.5,"x2":0.6,"y2":0.5},{"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}], "interpolate": 10 }
-Returns { events: <count> }. Fails if the simulator-server cannot start or the simulator is not booted.`,
+Example long-press at center:
+  [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
+
+Example smooth scroll down:
+  [{"type":"Down","x":0.5,"y":0.7},
+   {"type":"Move","x":0.5,"y":0.6},{"type":"Move","x":0.5,"y":0.5},{"type":"Move","x":0.5,"y":0.4},
+   {"type":"Up","x":0.5,"y":0.3}]
+
+Example pinch-to-zoom (with interpolate:10 for smoothness):
+  events: [{"type":"Down","x":0.4,"y":0.5,"x2":0.6,"y2":0.5},
+           {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
+  interpolate: 10
+
+Returns the count of touch events sent. Fails if udid is invalid or event coordinates are out of range.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

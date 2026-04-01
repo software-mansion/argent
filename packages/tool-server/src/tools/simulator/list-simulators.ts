@@ -21,12 +21,7 @@ const zodSchema = z.object({});
 
 export const listSimulatorsTool: ToolDefinition = {
   id: "list-simulators",
-  description: `List all available iOS simulators with their name, UDID, runtime, and current state (Booted/Shutdown).
-Use when you need to find a simulator UDID before calling boot-simulator, simulator-server, or any tool that requires a udid parameter.
-
-No parameters required.
-Example output entry: { "udid": "A1B2C3D4-E5F6-7890-ABCD-EF1234567890", "name": "iPhone 16 Pro", "state": "Booted", "runtime": "com.apple.CoreSimulator.SimRuntime.iOS-18-4" }
-Returns { simulators: [...] } sorted with Booted simulators first. Returns an error if xcrun is unavailable (Xcode not installed).`,
+  description: "List all available iOS simulators with their current state. Use when you need to find a simulator UDID or check which simulators are booted. Takes no parameters. Returns `{ simulators }` — e.g. state is \"Booted\" or \"Shutdown\". Fails if xcrun simctl is unavailable.",
   zodSchema,
   services: () => ({}),
   async execute(_services, _params, _options) {
