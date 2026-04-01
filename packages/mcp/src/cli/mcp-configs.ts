@@ -7,7 +7,7 @@ import {
   PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
-import { readJson, writeJson, dirExists } from "./utils.js";
+import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -426,6 +426,51 @@ const geminiAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Codex CLI adapter ────────────────────────────────────────────────────────
+// Format (TOML): [mcp_servers.argent] command = "argent" args = ["mcp"] env = { ... }
+// Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
+
+const codexAdapter: McpConfigAdapter = {
+  name: "Codex",
+
+  detect(): boolean {
+    return (
+      dirExists(path.join(homedir(), ".codex")) ||
+      dirExists(path.join(process.cwd(), ".codex"))
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".codex", "config.toml");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".codex", "config.toml");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readToml(configPath);
+    const servers = (config.mcp_servers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcp_servers = servers;
+    writeToml(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readToml(configPath);
+    const servers = config.mcp_servers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeToml(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -435,6 +480,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   windsurfAdapter,
   zedAdapter,
   geminiAdapter,
+  codexAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
@@ -542,6 +588,18 @@ function getCopyTargets(
           editorName: adapter.name,
           rulesDir: path.join(geminiBase, "rules"),
           agentsDir: path.join(geminiBase, "agents"),
+        });
+        break;
+      }
+      case "Codex": {
+        const codexBase =
+          scope === "global"
+            ? path.join(homedir(), ".codex")
+            : path.join(root, ".codex");
+        targets.push({
+          editorName: adapter.name,
+          rulesDir: path.join(codexBase, "rules"),
+          agentsDir: path.join(codexBase, "agents"),
         });
         break;
       }

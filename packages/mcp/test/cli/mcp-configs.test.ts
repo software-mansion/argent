@@ -61,9 +61,9 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all six adapters", () => {
+  it("contains all seven adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini"]);
+    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini", "Codex"]);
   });
 });
 
@@ -410,6 +410,80 @@ describe("Gemini adapter", () => {
   });
 });
 
+// ── Codex adapter ────────────────────────────────────────────────────────────
+
+describe("Codex adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+
+  it("writes [mcp_servers.argent] in TOML format", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("[mcp_servers.argent]");
+    expect(content).toContain('command = "argent"');
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).not.toContain("[mcp_servers.argent]");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.toml"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, "[mcp_servers]\n");
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("projectPath returns .codex/config.toml under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(
+      path.join("/foo", ".codex", "config.toml"),
+    );
+  });
+
+  it("detect() returns true when local .codex dir exists", () => {
+    const localCodex = path.join(process.cwd(), ".codex");
+    const existed = fs.existsSync(localCodex);
+    if (!existed) fs.mkdirSync(localCodex, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localCodex);
+    }
+  });
+
+  it("globalPath returns ~/.codex/config.toml", () => {
+    expect(adapter.globalPath()).toBe(
+      path.join(os.homedir(), ".codex", "config.toml"),
+    );
+  });
+
+  it("preserves existing settings when writing", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'model = "o3"\n\n[mcp_servers.other]\ncommand = "npx"\n',
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain('model = "o3"');
+    expect(content).toContain("[mcp_servers.other]");
+    expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
 // ── Claude permissions ────────────────────────────────────────────────────────
 
 describe("addClaudePermission / removeClaudePermission", () => {
@@ -563,6 +637,56 @@ describe("copyRulesAndAgents", () => {
         path.join(
           homedirOverride,
           ".gemini",
+          "agents",
+          "environment-inspector.md",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("copies rules and agents to .codex/ for Codex adapter (local)", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    const results = copyRulesAndAgents(
+      [codexAdapter],
+      tmpDir,
+      "local",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(
+      fs.existsSync(path.join(tmpDir, ".codex", "rules", "argent.md")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, ".codex", "agents", "environment-inspector.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("copies rules and agents to ~/.codex/ for Codex adapter (global)", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    homedirOverride = path.join(tmpDir, "home");
+    const results = copyRulesAndAgents(
+      [codexAdapter],
+      tmpDir,
+      "global",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results.some((r) => r.includes("rules"))).toBe(true);
+    expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(homedirOverride, ".codex", "rules", "argent.md"),
+      ),
+    ).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(
+          homedirOverride,
+          ".codex",
           "agents",
           "environment-inspector.md",
         ),
