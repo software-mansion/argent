@@ -591,14 +591,87 @@ function getCopyTargets(
         });
         break;
       }
-      // Codex: .codex/rules/ is for execpolicy (Starlark security rules),
-      // not model instructions. Codex uses AGENTS.md files and
-      // .agents/skills/ for context injection — no directory copy target.
     }
   }
 
   return targets;
 }
+
+// ── Codex developer_instructions helpers ─────────────────────────────────────
+// Codex has no rules/ directory for model instructions. Instead we inject
+// rule content into the `developer_instructions` field of config.toml,
+// delimited by markers so we can update/remove without touching user content.
+
+const ARGENT_RULES_START = "# --- argent rules (managed by argent init — do not edit) ---";
+const ARGENT_RULES_END = "# --- end argent rules ---";
+
+function stripFrontmatter(content: string): string {
+  const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+  return match ? content.slice(match[0].length).trim() : content.trim();
+}
+
+function readAndConcatRules(rulesDir: string): string | null {
+  if (!fs.existsSync(rulesDir)) return null;
+  const files = fs.readdirSync(rulesDir).filter((f) => f.endsWith(".md")).sort();
+  if (files.length === 0) return null;
+  const parts: string[] = [];
+  for (const file of files) {
+    const raw = fs.readFileSync(path.join(rulesDir, file), "utf8");
+    const stripped = stripFrontmatter(raw);
+    if (stripped) parts.push(stripped);
+  }
+  return parts.length > 0 ? parts.join("\n\n") : null;
+}
+
+function injectArgentSection(existing: string | undefined, rules: string): string {
+  const section = `${ARGENT_RULES_START}\n${rules}\n${ARGENT_RULES_END}`;
+  if (!existing) return section;
+  // Replace existing argent section if present
+  const re = new RegExp(
+    `${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}`,
+  );
+  if (re.test(existing)) return existing.replace(re, section);
+  // Append after user content
+  return `${existing}\n\n${section}`;
+}
+
+function removeArgentSection(existing: string): string {
+  const re = new RegExp(
+    `\\n*${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}\\n*`,
+  );
+  return existing.replace(re, "").trim();
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function injectCodexRules(configPath: string, rulesDir: string): string | null {
+  const rules = readAndConcatRules(rulesDir);
+  if (!rules) return null;
+  const config = readToml(configPath);
+  const existing = config.developer_instructions as string | undefined;
+  config.developer_instructions = injectArgentSection(existing, rules);
+  writeToml(configPath, config);
+  return configPath;
+}
+
+export function removeCodexRules(configPath: string): boolean {
+  if (!fs.existsSync(configPath)) return false;
+  const config = readToml(configPath);
+  const existing = config.developer_instructions as string | undefined;
+  if (!existing || !existing.includes(ARGENT_RULES_START)) return false;
+  const cleaned = removeArgentSection(existing);
+  if (cleaned) {
+    config.developer_instructions = cleaned;
+  } else {
+    delete config.developer_instructions;
+  }
+  writeToml(configPath, config);
+  return true;
+}
+
+// ── Copy orchestrator ────────────────────────────────────────────────────────
 
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
@@ -631,6 +704,22 @@ export function copyRulesAndAgents(
       } catch (err) {
         results.push(`  Could not copy agents to ${target.agentsDir}: ${err}`);
       }
+    }
+  }
+
+  // Codex: inject rules into developer_instructions in config.toml
+  for (const adapter of adapters) {
+    if (adapter.name !== "Codex") continue;
+    const configPath =
+      scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
+    if (!configPath) continue;
+    try {
+      const injected = injectCodexRules(configPath, rulesDir);
+      if (injected) {
+        results.push(`  Injected rules into ${configPath} (developer_instructions)`);
+      }
+    } catch (err) {
+      results.push(`  Could not inject rules into ${configPath}: ${err}`);
     }
   }
 

@@ -6,6 +6,7 @@ import { execSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
   ALL_ADAPTERS,
+  removeCodexRules,
 } from "./mcp-configs.js";
 import {
   detectPackageManager,
@@ -154,6 +155,20 @@ export async function uninstall(args: string[]): Promise<void> {
         }
       } catch (err) {
         pruneResults.push(`${pc.red("x")} Could not remove ${label}: ${err}`);
+      }
+    }
+
+    // Codex: remove argent rules from developer_instructions in config.toml
+    for (const configPath of [
+      path.join(projectRoot, ".codex", "config.toml"),
+      path.join(homedir(), ".codex", "config.toml"),
+    ]) {
+      try {
+        if (removeCodexRules(configPath)) {
+          pruneResults.push(`${pc.green("+")} Removed argent rules from ${configPath}`);
+        }
+      } catch (err) {
+        pruneResults.push(`${pc.red("x")} Could not clean ${configPath}: ${err}`);
       }
     }
 
