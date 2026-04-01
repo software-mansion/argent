@@ -2,6 +2,7 @@ import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
+import { startUpdateChecker } from "./utils/update-checker";
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -16,10 +17,12 @@ const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
 
 const registry = createRegistry();
 attachRegistryLogger(registry);
+const updateChecker = startUpdateChecker();
 
 // `shutdown` captures `httpHandle` and `server` by closure; safe because it is
 // only invoked asynchronously after both are initialized.
 const shutdown = async () => {
+  updateChecker.dispose();
   httpHandle.dispose();
   await registry.dispose();
   server.close();
