@@ -116,9 +116,9 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
     const port = parseInt(payload, 10);
 
     const metro = await discoverMetro(port);
-    const selected = selectTarget(metro.targets, port, options);
+    const selected = await selectTarget(metro.targets, port, options);
 
-    const cdp = new CDPClient(selected.webSocketUrl);
+    const cdp = new CDPClient(selected.webSocketUrl, { skipOriginHeader: selected.isExpoGo });
     await cdp.connect();
 
     const sourceMaps = new SourceMapsRegistry(metro.projectRoot);
