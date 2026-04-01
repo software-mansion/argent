@@ -363,7 +363,7 @@ export async function init(args: string[]): Promise<void> {
       options: [
         {
           value: "default" as const,
-          label: "Default (recommended)",
+          label: "Automatic",
           hint: "Installs all skills automatically with npx skills",
         },
         {
