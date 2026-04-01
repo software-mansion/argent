@@ -53,7 +53,6 @@ jobs:
 
           print()
           print(f'  Description score: {description_score:.1f} / 10')
-          print(f'  Baseline:          3.3 / 10')
           print()
 
           col_name  = 36
@@ -90,12 +89,11 @@ jobs:
           print(sep)
           print()
 
-          if description_score < 3.0:
-              print(f'ERROR: description_score {description_score:.1f} is below the regression threshold of 3.0')
-              print('       Baseline is 3.3 — a drop below 3.0 indicates a regression.')
+          if description_score < 10.0:
+              print(f'ERROR: description_score {description_score:.1f} is below the required threshold of 10.0')
               sys.exit(1)
           else:
-              print('OK: description score is at or above the regression threshold (3.0).')
+              print('OK: description score is 10.0 / 10.')
           "
 
       - name: Upload SpiderShield report
