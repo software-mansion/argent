@@ -74,52 +74,35 @@ export async function init(args: string[]): Promise<void> {
   const globallyInstalled = isGloballyInstalled();
 
   if (!globallyInstalled) {
-    type InstallScope = "global" | "local";
-    let installScope: InstallScope;
-
-    if (nonInteractive) {
-      installScope = "global";
-    } else {
+    if (!nonInteractive) {
       const installChoice = await p.select({
-        message: "argent needs to be installed. How would you like to install it?",
+        message: "argent is not installed globally. Would you like to install it?",
         options: [
           {
             value: "global" as const,
-            label: "Install globally (recommended)",
+            label: "Install globally",
             hint: "Makes the argent command available everywhere",
           },
           {
-            value: "local" as const,
-            label: "Install locally",
-            hint: "Installs into the current project's node_modules only",
+            value: "cancel" as const,
+            label: "Cancel",
           },
         ],
       });
 
-      if (p.isCancel(installChoice)) {
+      if (p.isCancel(installChoice) || installChoice === "cancel") {
         p.cancel("Installation cancelled.");
         process.exit(0);
       }
-
-      installScope = installChoice as InstallScope;
-    }
-
-    if (installScope === "local") {
-      p.log.warn(
-        pc.yellow("Local installation means the argent binary will only be available inside this project."),
-      );
     }
 
     const pm = detectPackageManager();
-    const cmd =
-      installScope === "global"
-        ? globalInstallCommand(pm, PACKAGE_NAME)
-        : `${pm} install ${PACKAGE_NAME}`;
+    const cmd = globalInstallCommand(pm, PACKAGE_NAME);
     const spinner = p.spinner();
-    spinner.start(`Installing ${PACKAGE_NAME} ${installScope === "global" ? "globally" : "locally"}...`);
+    spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     try {
       await runShellCommand(cmd);
-      spinner.stop(pc.green(`Installed ${installScope === "global" ? "globally" : "locally"}.`));
+      spinner.stop(pc.green("Installed globally."));
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
