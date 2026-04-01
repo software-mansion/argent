@@ -1,4 +1,4 @@
-name: Description Quality
+name: Tool Description Quality
 
 on:
   push:
@@ -6,15 +6,11 @@ on:
       - main
     paths:
       - 'packages/tool-server/src/tools/**'
-      - 'packages/skills/skills/**/SKILL.md'
       - 'scripts/extract-tools.mjs'
-      - 'scripts/grade-skills.mjs'
   pull_request:
     paths:
       - 'packages/tool-server/src/tools/**'
-      - 'packages/skills/skills/**/SKILL.md'
       - 'scripts/extract-tools.mjs'
-      - 'scripts/grade-skills.mjs'
 
 jobs:
   tool-descriptions:
@@ -45,7 +41,6 @@ jobs:
         run: spidershield scan packages/tool-server --tools-json tools.json --format json > spidershield-report.json
 
       - name: Check description score (regression gate)
-        continue-on-error: false
         run: |
           python3 -c "
           import json, sys
@@ -54,14 +49,13 @@ jobs:
               report = json.load(f)
 
           description_score = report.get('description_score', 0)
-          tools = report.get('tools', [])
+          tools = report.get('tool_scores', [])
 
           print()
           print(f'  Description score: {description_score:.1f} / 10')
           print(f'  Baseline:          3.3 / 10')
           print()
 
-          # Per-tool table
           col_name  = 36
           col_score =  7
           col_verb  = 17
@@ -76,10 +70,10 @@ jobs:
 
           def row(name, score, verb, trig):
               return (
-                  '| ' + name[:col_name].ljust(col_name)   + ' '
+                  '| ' + name[:col_name].ljust(col_name)        + ' '
                   '| ' + str(score)[:col_score].rjust(col_score) + ' '
-                  '| ' + str(verb)[:col_verb].ljust(col_verb)   + ' '
-                  '| ' + str(trig)[:col_trig].ljust(col_trig)   + ' |'
+                  '| ' + str(verb)[:col_verb].ljust(col_verb)    + ' '
+                  '| ' + str(trig)[:col_trig].ljust(col_trig)    + ' |'
               )
 
           print(sep)
@@ -110,19 +104,3 @@ jobs:
         with:
           name: tool-description-report
           path: spidershield-report.json
-
-  skill-descriptions:
-    name: Skill description quality (informational)
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Grade skill descriptions
-        run: node scripts/grade-skills.mjs
