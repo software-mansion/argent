@@ -33,8 +33,16 @@ export function makeComponentTreeScript(opts: {
   var useFabric = typeof nativeFabricUIManager !== 'undefined';
   var UIManagerMod;
   if (!useFabric) {
-    for (var i = 0; i < 300; i++) {
-      try { var m = __r(i); if (m && m.UIManager) { UIManagerMod = m.UIManager; break; } } catch(e) {}
+    if (typeof __r.getModules === 'function') {
+      var _mods = __r.getModules();
+      for (var _entry of _mods) {
+        if (!_entry[1].isInitialized) continue;
+        try { var m = __r(_entry[0]); if (m && m.UIManager) { UIManagerMod = m.UIManager; break; } } catch(e) {}
+      }
+    } else {
+      for (var i = 0; i < 300; i++) {
+        try { var m = __r(i); if (m && m.UIManager) { UIManagerMod = m.UIManager; break; } } catch(e) {}
+      }
     }
     if (!UIManagerMod) return JSON.stringify({ error: 'Could not find UIManager' });
   }
@@ -136,18 +144,27 @@ export function makeComponentTreeScript(opts: {
   // --- Screen dimensions via Dimensions API (reliable fallback) ---
   var screenW = 0, screenH = 0;
   try {
-    for (var i = 0; i < 500; i++) {
-      try {
-        var m = __r(i);
-        if (m && m.Dimensions) {
-          var win = m.Dimensions.get('window');
-          if (win && win.width > 0 && win.height > 0) {
-            screenW = Math.round(win.width);
-            screenH = Math.round(win.height);
-            break;
-          }
+    function _findDimensions(mod) {
+      if (mod && mod.Dimensions) {
+        var win = mod.Dimensions.get('window');
+        if (win && win.width > 0 && win.height > 0) {
+          screenW = Math.round(win.width);
+          screenH = Math.round(win.height);
+          return true;
         }
-      } catch(e) {}
+      }
+      return false;
+    }
+    if (typeof __r.getModules === 'function') {
+      var _dMods = __r.getModules();
+      for (var _dEntry of _dMods) {
+        if (!_dEntry[1].isInitialized) continue;
+        try { if (_findDimensions(__r(_dEntry[0]))) break; } catch(e) {}
+      }
+    } else {
+      for (var i = 0; i < 500; i++) {
+        try { if (_findDimensions(__r(i))) break; } catch(e) {}
+      }
     }
   } catch(e) {}
 
