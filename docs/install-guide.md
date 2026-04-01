@@ -1,54 +1,73 @@
 # Installing Argent
 
-## From the GitHub Packages registry
+## Default installation
 
-### 1. Configure the scoped registry (one-time)
+```bash
+npx @software-mansion/argent init
+```
 
-Add to your **global** `~/.npmrc`:
+The CLI will walk you through installing the package globally, configuring the MCP server for your editor, and setting up skills, rules, and agents.
+
+Alternatively, you may run:
+
+```bash
+npm i -g @software-mansion/argent
+argent init
+```
+
+### .npmrc setup (required before first install)
+
+Argent is distributed via GitHub Packages. Add the following to your **global** `~/.npmrc`:
 
 ```ini
 @software-mansion:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=<GITHUB_PAT>
 ```
 
-Replace `<GITHUB_PAT>` with a token generated in the step below.
+To generate a `<GITHUB_PAT>`:
 
-### Generating a GitHub PAT
+1. Go to **GitHub > Settings > Developer settings > Personal access tokens > Tokens (classic)**.
+2. Create a token with the `**read:packages`** scope.
+3. If your org enforces SSO, click **Configure SSO** and authorise `software-mansion`.
 
-1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)** ([direct link](https://github.com/settings/tokens)).
-2. Click **Generate new token (classic)**.
-3. Give it a descriptive name (e.g. `argent-install`).
-4. Select the **`read:packages`** scope — no other scopes are needed.
-5. Click **Generate token** and copy it immediately (it won't be shown again).
-6. If the `software-mansion` org enforces SSO, click **Configure SSO** next to the token and authorise it for `software-mansion`.
+> Never commit `.npmrc` files containing tokens.
 
-### 2. Install and set up
+---
+
+## Installation from a tarball
+
+If you have a pre-built `.tgz` (e.g. from CI or `npm pack`):
 
 ```bash
-npm install -g @software-mansion/argent
+npx @software-mansion/argent init --from ./software-mansion-argent-<version>.tgz
+```
+
+No registry auth is needed when installing from a local file.
+
+```bash
+npm i -g PATH_TO_TAR
 argent init
 ```
 
 ---
 
-## From a local `.tar` file
-
-If you have a pre-built tarball (e.g. from `npm pack` or a CI artifact):
+## Updating / Removing
 
 ```bash
-npm install -g ./software-mansion-argent-0.3.1.tgz
-argent init
+npx @software-mansion/argent update   # pull latest version and refresh workspace files
+npx @software-mansion/argent remove   # unregister MCP server and uninstall (--prune to also delete skills/rules/agents)
 ```
-
-Replace the filename with the actual tarball path. No registry configuration or auth token is needed — npm installs directly from the file.
 
 ---
 
-## Verify
+## Caveat: `describe` tool and macOS Accessibility permissions
 
-```bash
-argent --version
-which argent-mcp
-```
+The `describe` tool reads the iOS Simulator's UI accessibility tree. On first use, macOS will require you to grant **Accessibility permission** to the `simulator-server` binary.
 
-Both commands should succeed. After `argent init`, your editor's MCP config will be set up automatically.
+When this happens, Argent automatically opens System Settings and reveals the binary in Finder. To grant access:
+
+1. In **System Settings > Privacy & Security > Accessibility**, click the **+** button.
+2. Navigate to the `simulator-server` binary shown in the Finder window (or use **Cmd+Shift+G** and paste the path).
+3. Toggle the switch **ON** for `simulator-server`.
+
+The tool works immediately after granting permission — no restart needed.
