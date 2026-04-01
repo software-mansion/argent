@@ -644,7 +644,7 @@ describe("copyRulesAndAgents", () => {
     ).toBe(true);
   });
 
-  it("copies rules and agents to .codex/ for Codex adapter (local)", () => {
+  it("returns empty array for Codex adapter (no rules/agents dir support)", () => {
     const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
     const results = copyRulesAndAgents(
       [codexAdapter],
@@ -653,44 +653,6 @@ describe("copyRulesAndAgents", () => {
       rulesDir,
       agentsDir,
     );
-    expect(results.some((r) => r.includes("rules"))).toBe(true);
-    expect(results.some((r) => r.includes("agents"))).toBe(true);
-    expect(
-      fs.existsSync(path.join(tmpDir, ".codex", "rules", "argent.md")),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(tmpDir, ".codex", "agents", "environment-inspector.md"),
-      ),
-    ).toBe(true);
-  });
-
-  it("copies rules and agents to ~/.codex/ for Codex adapter (global)", () => {
-    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
-    homedirOverride = path.join(tmpDir, "home");
-    const results = copyRulesAndAgents(
-      [codexAdapter],
-      tmpDir,
-      "global",
-      rulesDir,
-      agentsDir,
-    );
-    expect(results.some((r) => r.includes("rules"))).toBe(true);
-    expect(results.some((r) => r.includes("agents"))).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(homedirOverride, ".codex", "rules", "argent.md"),
-      ),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(
-          homedirOverride,
-          ".codex",
-          "agents",
-          "environment-inspector.md",
-        ),
-      ),
-    ).toBe(true);
+    expect(results).toHaveLength(0);
   });
 });

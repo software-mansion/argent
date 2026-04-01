@@ -591,18 +591,9 @@ function getCopyTargets(
         });
         break;
       }
-      case "Codex": {
-        const codexBase =
-          scope === "global"
-            ? path.join(homedir(), ".codex")
-            : path.join(root, ".codex");
-        targets.push({
-          editorName: adapter.name,
-          rulesDir: path.join(codexBase, "rules"),
-          agentsDir: path.join(codexBase, "agents"),
-        });
-        break;
-      }
+      // Codex: .codex/rules/ is for execpolicy (Starlark security rules),
+      // not model instructions. Codex uses AGENTS.md files and
+      // .agents/skills/ for context injection — no directory copy target.
     }
   }
 
