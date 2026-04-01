@@ -15,9 +15,7 @@ const zodSchema = z.object({
 export const buttonTool: ToolDefinition<z.infer<typeof zodSchema>, { pressed: string }> = {
   id: "button",
   description: `Press a simulator hardware button. Sends Down then Up events automatically.
-Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.
-Use when you need to navigate home, trigger the app switcher, or simulate hardware keys such as volumeUp or power.
-Accepts: button (e.g. "home"), udid. Returns the pressed button name. Fails if the udid is invalid or the simulator is not running.`,
+Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

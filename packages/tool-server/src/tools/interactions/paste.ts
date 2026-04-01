@@ -10,10 +10,9 @@ const zodSchema = z.object({
 
 export const pasteTool: ToolDefinition<z.infer<typeof zodSchema>, { pasted: boolean }> = {
   id: "paste",
-  description: `Fill a focused text field on the simulator by pasting text (fastest text entry method).
-Use when you need to fill a text input quickly, e.g. entering a long email or password. Tap the text field first to focus it, then call paste.
-Accepts: udid, text (the string to paste, such as "hello@example.com"). Returns the paste result.
-Fails if no field is focused. If paste doesn't work for a particular field, use the keyboard tool instead.`,
+  description: `Paste text into the focused field on the simulator (fastest text entry).
+Tap the text field first to focus it, then call paste.
+If paste doesn't work for a particular field, use the keyboard tool instead.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

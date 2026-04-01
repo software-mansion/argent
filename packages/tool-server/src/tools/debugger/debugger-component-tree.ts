@@ -513,11 +513,22 @@ const zodSchema = z.object({
 
 export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "debugger-component-tree",
-  description: `Inspect the current React Native screen as a compact component tree. Use when you need tap coordinates or element names for React Native UI interactions.
-Accepts: port (default 8081), onScreenOnly, maxNodes, includeSkipped.
-Each component lists its name, text, and tap coordinates, e.g. Button "Submit" (tap: 0.50,0.72).
-Returns a text tree with component names and normalized tap coordinates for gesture-tap.
-Fails if Metro debugger is not connected or the app is not running.`,
+  description: `Describe the current screen of a running React Native app as a compact text tree.
+Only shows on-screen components with unique positions — off-screen (scrolled) content,
+full-screen transparent wrappers, and implementation-detail components are pruned.
+
+Each visible component is listed with its name, text content, and normalized
+tap coordinates in [0,1] space (fractions of the screen, not pixels—same space as tap/swipe/gesture and simulator-server touch).
+
+This is the preferred element discovery tool for React Native apps. More information in react-native-app-workflow skill.
+
+Workflow:
+  1. Call this tool to get the component tree.
+  2. Find the desired element by name, text, testID, or accessibilityLabel.
+  3. Use the (tap: x,y) coordinates directly with the tap tool.
+
+Call again after navigation or state changes since positions may shift.
+Set includeSkipped=true to see a summary of all filtered components.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

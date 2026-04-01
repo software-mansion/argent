@@ -312,7 +312,13 @@ function formatBytes(bytes: number): string {
 
 export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-stack-query",
-  description: `Query iOS Instruments trace data for iterative investigation of native performance. Use when ios-profiler-analyze has found hangs or leaks and you want to drill deeper, e.g. mode "hang_stacks" with hang_index 0. Parameters: device_id, mode, and optional params like function_name or object_type. Returns a detailed markdown stack report → callers, threads, or leak details. Requires ios-profiler-stop → ios-profiler-analyze first. Fails if analyzed data is not in session.`,
+  description: `Query iOS Instruments trace data for iterative investigation of native performance.
+Requires ios-profiler-stop → ios-profiler-analyze to have been called first.
+Modes:
+- hang_stacks: Full CPU context during a specific hang (by hang_index).
+- function_callers: Who calls a specific native function and what it calls.
+- thread_breakdown: CPU time split by thread, optionally filtered.
+- leak_stacks: Memory leak details, optionally filtered by object_type.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

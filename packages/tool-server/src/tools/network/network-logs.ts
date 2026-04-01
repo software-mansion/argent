@@ -67,7 +67,10 @@ const zodSchema = z.object({
 
 export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
-  description: `List captured network (HTTP) requests from the running React Native app. Use when you want to inspect what API calls the app is making, e.g. to debug a failing fetch or slow endpoint. Parameters: port and optional page. Returns a paginated list of requests with method, URL, status, resource type, size, and duration. Each entry includes a requestId for use with view-network-request-details. Fails if Metro is not connected. Network interception captures fetch() calls injected into the JS runtime.`,
+  description: `View captured network (HTTP) requests from the running React Native app.
+Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
+Each entry includes a requestId that can be passed to view-network-request-details for full details.
+Network interception is injected into the JS runtime — it captures fetch() calls.`,
   zodSchema,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}`,

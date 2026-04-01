@@ -11,10 +11,9 @@ export const simulatorServerTool: ToolDefinition<
   { udid: string; apiUrl: string }
 > = {
   id: "simulator-server",
-  description: `Get (or start) the simulator-server for a given udid — SETUP ONLY.
-Use when you need to verify the server is running or retrieve its apiUrl (e.g. "http://127.0.0.1:PORT") before custom HTTP calls.
+  description: `SETUP ONLY — Get (or start) the simulator-server for a UDID.
 Do not call this during interaction tasks; tap, swipe, paste, screenshot, and all other tools start the server automatically.
-Accepts: udid. Returns the apiUrl. Fails if the simulator is not booted or UDID is invalid.`,
+Returns { apiUrl }.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: {

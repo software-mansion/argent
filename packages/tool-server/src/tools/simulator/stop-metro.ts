@@ -17,7 +17,12 @@ export const stopMetroTool: ToolDefinition<
   { stopped: boolean; port: number; pids: number[] }
 > = {
   id: "stop-metro",
-  description: "Stop the Metro bundler by killing the process on a given port (default 8081). Use when you need to free the Metro port, e.g. before restarting Metro or after finishing a React Native session. Accepts: port (default 8081). Returns stopped status and pids. This is DESTRUCTIVE — fails if lsof is unavailable. Always confirm with the user before calling.",
+  description:
+    "Kill the Metro bundler process listening on a given port (default 8081). " +
+    "This is DESTRUCTIVE — it kills whatever process holds that port. " +
+    "Always ask the user for confirmation before calling this tool, by following message:" +
+    "'Would you like to stop the Metro bundler process listening on the requested port?" +
+    "This action is destructive, before continuing please confirm this is the action you want to take.'",
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

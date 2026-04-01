@@ -11,7 +11,8 @@ export const flowInsertEchoTool: ToolDefinition<
   { message: string; flowFile: string }
 > = {
   id: "flow-add-echo",
-  description: `Add an echo step to the active flow. Use when you want to insert a human-readable label between tool calls, e.g. "Navigating to settings". Parameters: message (string label to print on replay). Returns { message, flowFile }. Fails if no flow recording is active. Echo steps print the message when the flow is replayed — useful as section labels between tool calls.`,
+  description: `Append an echo step to the active flow. Echo steps print a message when
+the flow is replayed — useful as labels between tool calls.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

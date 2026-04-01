@@ -281,7 +281,13 @@ async function loadInstrumentsSession(
 
 export const profilerLoadTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-load",
-  description: `Retrieve previously saved profiling data from disk for re-investigation with query tools. Use when you want to revisit an earlier profiling session without re-profiling, e.g. mode "load_react" with a session_id like "2024-01-01T12". Parameters: project_root, mode, and optional session_id and device_id. Returns a summary of available sessions or a load confirmation. Fails if session_id is missing when required or the session directory does not exist.`,
+  description: `Load previously saved profiling data from disk for re-investigation with query tools.
+Use this when you want to revisit an earlier profiling session without re-profiling the app.
+Modes:
+- list: Show all available profiling sessions in the project's debug directory.
+- load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
+- load_instruments: Re-parse iOS Instruments XML files into memory. Requires session_id and device_id.
+After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-query to investigate.`,
   zodSchema,
   services: (params) => {
     const svcs: Record<string, string> = {};

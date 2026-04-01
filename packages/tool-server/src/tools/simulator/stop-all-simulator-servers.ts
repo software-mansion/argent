@@ -10,7 +10,9 @@ export function createStopAllSimulatorServersTool(
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
-    description: "Stop all running simulator-server processes and native devtools services, freeing associated resources. Use when your session ends or the user says they are done. Takes no parameters. Returns the list of stopped server URNs such as \"SimulatorServer:UDID\". Fails silently if no servers are running.",
+    description:
+      "Stop all running simulator-server processes and native devtools services. " +
+      "Call this when your session ends or the user says they are done, to free resources.",
     services: () => ({}),
     async execute() {
       const snapshot = registry.getSnapshot();

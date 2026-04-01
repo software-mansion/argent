@@ -337,7 +337,13 @@ function shortenUrl(url: string): string {
 
 export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
-  description: `Profile Hermes CPU sampling data to find JS execution hotspots across functions and threads. Use when you want to diagnose slow JS execution, e.g. mode "call_tree" for a function like renderItem. Parameters: port, mode, and optional params like function_name or component_name. Returns a markdown CPU flamegraph breakdown. Fails if react-profiler-stop has not been called first. Modes: top_functions, time_window, call_tree, component_cpu.`,
+  description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
+Requires react-profiler-stop (and ideally react-profiler-analyze) to have been called first.
+Modes:
+- top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
+- time_window: CPU breakdown for a specific time range (e.g. during a slow commit or hang).
+- call_tree: For a given function_name, show its callees and optionally callers.
+- component_cpu: For a given component_name, aggregate CPU activity across all its commits.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

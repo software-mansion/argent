@@ -17,7 +17,12 @@ export const iosInstrumentsAnalyzeTool: ToolDefinition<
   IosProfilerAnalyzeResult
 > = {
   id: "ios-profiler-analyze",
-  description: `Analyze exported iOS Instruments trace data and return an LLM-optimized markdown report. Use when ios-profiler-stop has been called and you want to surface performance findings, e.g. CPU hotspots and UI hangs. Parameters: device_id (UDID). Returns a structured markdown report with severity indicators, tables, and actionable suggestions for CPU, hangs, and leaks. Fails if ios-profiler-stop has not been called yet (no exported files found).`,
+  description: `Analyze exported iOS Instruments trace data and return an LLM-optimized markdown report.
+Parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
+Returns a structured markdown report with severity indicators, tables, and actionable suggestions.
+After presenting the report, ask the user whether to investigate further (drill-down with
+profiler-stack-query for hang stacks, CPU context, leak details) or implement fixes and re-profile.
+Call ios-profiler-stop first to export the trace data.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

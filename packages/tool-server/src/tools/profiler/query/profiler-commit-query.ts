@@ -315,7 +315,13 @@ function getTopComponents(
 
 export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-commit-query",
-  description: `Debug React commit records to trace which components re-rendered and why. Use when react-profiler-analyze has surfaced hot commits and you want to investigate a component cascade or time range, e.g. mode "by_component" with component_name "FeedList". Parameters: port, mode, and mode-specific params like component_name or commit_index. Returns a markdown report. Fails if react-profiler-stop has not been called yet. Modes: by_component, by_time_range, by_index, cascade_tree.`,
+  description: `Query React commit data for iterative investigation of render performance.
+Requires react-profiler-stop to have been called first.
+Modes:
+- by_component: All commits where a specific component rendered, with causes and durations.
+- by_time_range: What happened in a specific time window.
+- by_index: Full detail dump of a single commit (all components, props changed, parent cascade).
+- cascade_tree: Parent-child cascade tree for a commit showing who triggered whom.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

@@ -15,10 +15,8 @@ export const launchAppTool: ToolDefinition<
   { launched: boolean; bundleId: string }
 > = {
   id: "launch-app",
-  description: `Open an app on the simulator by bundleId.
+  description: `Launch an app on the simulator by bundle ID.
 Prefer this over tapping home-screen icons — it is instant and reliable.
-Use when you need to open an app at the start of a session or after restart, e.g. "com.apple.mobilesafari" to open Safari.
-Accepts: udid, bundleId (e.g. "com.apple.mobilesafari"). Returns the launched bundle ID. Fails if the bundle ID is not installed on the simulator.
 
 Common bundle IDs:
 - Messages:  com.apple.MobileSMS

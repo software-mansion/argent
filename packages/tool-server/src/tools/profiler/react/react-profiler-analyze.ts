@@ -52,7 +52,18 @@ export const reactProfilerAnalyzeTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-analyze",
-  description: `Analyze stored profiling data and return a markdown performance report. Use when react-profiler-stop has been called and you want to surface hot commits, e.g. after a slow scroll. Parameters: port and optional annotations (Array of {offsetMs, label}). Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }. Fails if react-profiler-stop was not called first (no profiling data stored). Report shows hot React commits (>=16ms) with render cascades and root cause analysis.`,
+  description: `Analyze stored profiling data and return a markdown performance report.
+Returns { report, reportFile, hotCommitsTotal, hotCommitsShown, sessionFiles }.
+The report is structured around hot React commits (≥16ms absolute floor) with per-commit
+render cascades, root cause identification, and a top components table.
+Raw profiling data is saved to disk with a unique session timestamp for later reload via profiler-load.
+After presenting the report, ask the user whether to investigate further (drill-down with
+profiler-cpu-query / profiler-commit-query) or implement fixes and re-profile for comparison.
+Requires react-profiler-stop to have been called first.
+Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
+the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
+where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
+is returned by react-profiler-start.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

@@ -21,7 +21,7 @@ const zodSchema = z.object({});
 
 export const listSimulatorsTool: ToolDefinition = {
   id: "list-simulators",
-  description: "List all available iOS simulators with their current state. Use when you need to find a simulator UDID or check which simulators are booted. Takes no parameters. Returns `{ simulators }` — e.g. state is \"Booted\" or \"Shutdown\". Fails if xcrun simctl is unavailable.",
+  description: "List all available iOS simulators with their current state",
   zodSchema,
   services: () => ({}),
   async execute(_services, _params, _options) {

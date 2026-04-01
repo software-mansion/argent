@@ -61,9 +61,7 @@ Example smooth scroll down:
 Example pinch-to-zoom (with interpolate:10 for smoothness):
   events: [{"type":"Down","x":0.4,"y":0.5,"x2":0.6,"y2":0.5},
            {"type":"Up","x":0.2,"y":0.5,"x2":0.8,"y2":0.5}]
-  interpolate: 10
-
-Returns the count of touch events sent. Fails if udid is invalid or event coordinates are out of range.`,
+  interpolate: 10`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

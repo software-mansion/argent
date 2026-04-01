@@ -17,10 +17,9 @@ export const debuggerConnectTool: ToolDefinition<
   }
 > = {
   id: "debugger-connect",
-  description: `Connect to a running Metro dev server's CDP WebSocket endpoint to start a JS debugging session. Use when opening a new debug session or before calling other debugger-* tools.
-Accepts: port (default 8081, e.g. 8081 for the standard Metro instance).
-Returns { port, projectRoot, deviceName, isNewDebugger, connected }. Idempotent: if already connected, returns the existing session.
-Fails if Metro is not running or no JS app is attached to the debug endpoint.`,
+  description: `Connect to a running Metro dev server's CDP debugger endpoint.
+Returns connection info. If already connected, returns the existing connection.
+This must be called before using other debugger-* tools (or they auto-connect).`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

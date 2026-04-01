@@ -22,7 +22,9 @@ export function createReactProfilerStopTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
-    description: `Stop CPU profiling and collect the cpuProfile and React commit tree. Use when the user has finished the interaction to profile, e.g. after a scroll gesture. Parameters: port (e.g. 8081). Returns { sessionPaths } with paths to saved cpuProfile and commit data. Stores results for later use by react-profiler-analyze or react-profiler-cpu-summary. Fails if no active profiling session is found or the CDP connection was lost.`,
+    description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
+Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
+Call react-profiler-start first, then exercise the app, then call this.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

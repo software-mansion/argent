@@ -15,7 +15,9 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
-  description: `Inspect the source of a React component via AST lookup using tree-sitter. Use when react-profiler-analyze identifies a hot component and you need to see its implementation, e.g. component_name "FeedItem". Parameters: component_name, port, and project_root. Returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source. Returns found: false if component is not in user-owned code (e.g. node_modules). Fails if project_root is invalid.`,
+  description: `AST lookup via tree-sitter: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
+Call per-finding after react-profiler-analyze to inspect source before proposing a fix.
+Returns found: false if the component is not in user-owned code (e.g. node_modules).`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

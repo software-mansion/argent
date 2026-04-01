@@ -104,7 +104,9 @@ export const networkRequestTool: ToolDefinition<
   NetworkRequestDetails | string
 > = {
   id: "view-network-request-details",
-  description: `Get full details of a specific network request by its requestId (from view-network-logs). Use when you need to inspect headers, status, or response body for a specific request, e.g. to debug an auth failure or malformed payload. Parameters: requestId and port. Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body. Fails if the requestId does not exist. Large response bodies are truncated.`,
+  description: `Get full details of a specific network request by its requestId (from view-network-logs).
+Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
+Large response bodies are truncated. Use this after view-network-logs to inspect individual requests.`,
   zodSchema,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}`,

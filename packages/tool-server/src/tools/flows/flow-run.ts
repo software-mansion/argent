@@ -35,7 +35,13 @@ export function createRunFlowTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "flow-execute",
-    description: `Run a saved flow from the .argent/ directory. Use when you want to replay a recorded sequence, e.g. a "login-flow". Parameters: name (flow name) and optional prerequisiteAcknowledged (boolean). Returns the result of every step, including images. Tool calls dispatched through the registry, echo steps print a message. Fails if the flow file does not exist or a prerequisite is unacknowledged. Use flow-read-prerequisite to inspect the prerequisite first.`,
+    description: `Run a saved flow from the .argent/ directory.
+Each step is executed in order: tool calls are dispatched through the registry,
+echo steps print a message. Returns the result of every step, including images.
+
+If the flow has an execution prerequisite and prerequisiteAcknowledged is not
+set to true, the tool returns a notice with the prerequisite instead of running.
+Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

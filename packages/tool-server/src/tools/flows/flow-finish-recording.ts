@@ -17,7 +17,7 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "flow-finish-recording",
-  description: `Finish recording the active flow. Use when you have added all desired steps and want to save the flow for later replay, e.g. after recording a login sequence. Parameters: none. Returns { message, path, steps, summary, flowFile }. You can still edit the .yaml file directly afterwards to remove or reorder steps. Fails if no flow recording is active.`,
+  description: `Finish recording the active flow. Returns a summary of all recorded steps. You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {

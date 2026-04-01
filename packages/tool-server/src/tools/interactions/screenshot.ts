@@ -24,9 +24,8 @@ export const screenshotTool: ToolDefinition<
   { url: string; path: string }
 > = {
   id: "screenshot",
-  description: `Capture a screenshot of the simulator screen. Returns a url and path — the MCP adapter returns this as a visible image.
-Use when you need a baseline before any interaction, or to verify screen state after a delay, e.g. after launching an app.
-Accepts: udid, optional scale (e.g. 0.5 for half resolution), optional rotation override such as "LandscapeLeft". Fails if the simulator is not booted.`,
+  description: `Take a screenshot of the simulator screen. Returns { url, path }.
+The MCP adapter returns this as a visible image.`,
   zodSchema,
   outputHint: "image",
   services: (params) => ({

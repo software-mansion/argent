@@ -115,7 +115,12 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
 
 export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-cpu-summary",
-  description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time). Use when you need to investigate JS CPU hotspots NOT tied to React rendering, e.g. regex slowness or heavy computations. Parameters: port and optional top_n. Returns a markdown table of hotspot functions ranked by self-time. FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call as part of a normal profiling session. Fails if react-profiler-stop has not been called.`,
+  description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
+FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.
+Use react-profiler-analyze instead; it covers all React rendering performance analysis.
+Only call react-profiler-cpu-summary when you specifically need to investigate JS CPU hotspots
+that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
+Call react-profiler-stop first. Reads directly from the stored cpuProfile.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

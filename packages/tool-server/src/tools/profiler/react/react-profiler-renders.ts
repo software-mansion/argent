@@ -101,7 +101,8 @@ const zodSchema = z.object({
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
-  description: `Scan the live React fiber tree to collect component render counts and durations. Use when you want a quick overview of which components re-render most, e.g. to spot an offender like HeaderBar re-rendering on every keystroke. Parameters: port and optional top_n. Returns a markdown table of the top re-rendering components. Fails if Metro is not connected. No profiling session required — works on a live connected app.`,
+  description: `Walk the live React fiber tree to collect component render counts and durations.
+Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
