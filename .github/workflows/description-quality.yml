@@ -1,0 +1,128 @@
+name: Description Quality
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/tool-server/src/tools/**'
+      - 'packages/skills/skills/**/SKILL.md'
+      - 'scripts/extract-tools.mjs'
+      - 'scripts/grade-skills.mjs'
+  pull_request:
+    paths:
+      - 'packages/tool-server/src/tools/**'
+      - 'packages/skills/skills/**/SKILL.md'
+      - 'scripts/extract-tools.mjs'
+      - 'scripts/grade-skills.mjs'
+
+jobs:
+  tool-descriptions:
+    name: Tool description quality (SpiderShield)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install SpiderShield
+        run: pip install spidershield==0.3.4
+
+      - name: Extract tool descriptions
+        run: node scripts/extract-tools.mjs > tools.json
+
+      - name: Run SpiderShield scan
+        run: spidershield scan packages/tool-server --tools-json tools.json --format json > spidershield-report.json
+
+      - name: Check description score (regression gate)
+        continue-on-error: false
+        run: |
+          python3 -c "
+          import json, sys
+
+          with open('spidershield-report.json') as f:
+              report = json.load(f)
+
+          description_score = report.get('description_score', 0)
+          tools = report.get('tools', [])
+
+          print()
+          print(f'  Description score: {description_score:.1f} / 10')
+          print(f'  Baseline:          3.3 / 10')
+          print()
+
+          # Per-tool table
+          col_name  = 36
+          col_score =  7
+          col_verb  = 17
+          col_trig  = 20
+
+          sep = (
+              '+' + '-' * (col_name  + 2) +
+              '+' + '-' * (col_score + 2) +
+              '+' + '-' * (col_verb  + 2) +
+              '+' + '-' * (col_trig  + 2) + '+'
+          )
+
+          def row(name, score, verb, trig):
+              return (
+                  '| ' + name[:col_name].ljust(col_name)   + ' '
+                  '| ' + str(score)[:col_score].rjust(col_score) + ' '
+                  '| ' + str(verb)[:col_verb].ljust(col_verb)   + ' '
+                  '| ' + str(trig)[:col_trig].ljust(col_trig)   + ' |'
+              )
+
+          print(sep)
+          print(row('Tool', 'Score', 'has_action_verb', 'has_scenario_trigger'))
+          print(sep)
+
+          for t in tools:
+              name  = t.get('tool_name', t.get('name', ''))
+              score = t.get('overall_score', t.get('score', 'n/a'))
+              verb  = t.get('has_action_verb', 'n/a')
+              trig  = t.get('has_scenario_trigger', 'n/a')
+              print(row(name, score, verb, trig))
+
+          print(sep)
+          print()
+
+          if description_score < 3.0:
+              print(f'ERROR: description_score {description_score:.1f} is below the regression threshold of 3.0')
+              print('       Baseline is 3.3 — a drop below 3.0 indicates a regression.')
+              sys.exit(1)
+          else:
+              print('OK: description score is at or above the regression threshold (3.0).')
+          "
+
+      - name: Upload SpiderShield report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tool-description-report
+          path: spidershield-report.json
+
+  skill-descriptions:
+    name: Skill description quality (informational)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Grade skill descriptions
+        run: node scripts/grade-skills.mjs
