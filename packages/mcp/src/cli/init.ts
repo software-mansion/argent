@@ -59,8 +59,15 @@ function runShellCommand(cmd: string): Promise<void> {
   });
 }
 
+function extractFlag(args: string[], flag: string): string | null {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx + 1 >= args.length) return null;
+  return args[idx + 1]!;
+}
+
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const fromTar = extractFlag(args, "--from");
 
   printBanner();
 
@@ -97,7 +104,8 @@ export async function init(args: string[]): Promise<void> {
     }
 
     const pm = detectPackageManager();
-    const cmd = globalInstallCommand(pm, PACKAGE_NAME);
+    const installTarget = fromTar ?? PACKAGE_NAME;
+    const cmd = globalInstallCommand(pm, installTarget);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     try {
