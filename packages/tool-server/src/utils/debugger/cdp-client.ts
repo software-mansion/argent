@@ -59,17 +59,27 @@ export class CDPClient {
   private enabledDomains = new Set<string>();
   private wsUrl: string;
 
-  constructor(wsUrl: string) {
+  private skipOriginHeader: boolean;
+
+  constructor(wsUrl: string, { skipOriginHeader = false }: { skipOriginHeader?: boolean } = {}) {
     this.wsUrl = wsUrl;
+    this.skipOriginHeader = skipOriginHeader;
   }
 
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Do not send an Origin header — Expo's dev server rejects WebSocket
-      // connections whose Origin doesn't exactly match its serverBaseUrl
-      // (typically 127.0.0.1 vs localhost mismatch). Omitting Origin bypasses
-      // the check, which is safe since we only connect locally.
-      const ws = new WebSocket(this.wsUrl);
+      // RN >= 0.85 Metro requires an Origin header to accept WebSocket connections.
+      // Expo's dev server rejects connections whose Origin doesn't exactly match its
+      // serverBaseUrl (typically a 127.0.0.1 vs localhost mismatch), so we skip the
+      // header for Expo Go targets. For all other targets we send it.
+      let ws: WebSocket;
+      if (this.skipOriginHeader) {
+        ws = new WebSocket(this.wsUrl);
+      } else {
+        const { protocol, host } = new URL(this.wsUrl);
+        const origin = (protocol === "wss:" ? "https://" : "http://") + host;
+        ws = new WebSocket(this.wsUrl, { headers: { Origin: origin } });
+      }
       this.ws = ws;
 
       const onOpen = () => {
