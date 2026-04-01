@@ -101,18 +101,6 @@ The simulator-server binary is normally spawned by the tools server. To run it s
 | `--replay` / `--no-replay`             | `REPLAY`       | `true`  | Rolling replay buffer |
 | `--show-touches` / `--no-show-touches` | `SHOW_TOUCHES` | `true`  | Touch pointer overlay |
 
-### License (Pro features)
-
-Screenshot, recording, and replay require a Pro/Team/Enterprise JWT. Free-tier endpoints (touch, keys, buttons, rotate, paste, scroll, MJPEG stream) work without one.
-
-```bash
-curl http://localhost:3000/fingerprint                    # 1. get machine fingerprint
-curl -X POST http://localhost:3000/token/activate \
-  -H "Content-Type: application/json" \
-  -d '{"licenseKey": "<your-key>"}'                       # 2. activate license
-# 3. pass returned token when creating a session, or PUT /sessions/:id/token
-```
-
 ### Quick reference (curl)
 
 ```bash

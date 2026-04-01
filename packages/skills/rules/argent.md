@@ -118,13 +118,6 @@ When:
 </subagents>
 
 <important_usage_caveats>
-LICENSE
-Most tools require a Pro license. If any tool returns "No Argent license found":
-
-1. Call `activate-sso` — opens a browser for sign-in and returns { success: true, plan }.
-2. If the browser cannot open, it returns `{ ssoUrl }` — show that URL to the user.
-3. Alternatively, call `activate-license-key` with the user's license key.
-
 WORKSPACE INFORMATION RETRIEVAL
 The `gather-workspace-data` tool provides a structured snapshot used internally by the
 `argent-environment-inspector` subagent. Retrieve workspace information according to this priority:
