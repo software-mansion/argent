@@ -63,7 +63,9 @@ Requires react-profiler-stop to have been called first.
 Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
 the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
 where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
-is returned by react-profiler-start.`,
+is returned by react-profiler-start.
+Use when the profiling session is complete and you need to interpret the collected data.
+Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

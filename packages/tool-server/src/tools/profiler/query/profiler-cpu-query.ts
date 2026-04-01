@@ -343,7 +343,10 @@ Modes:
 - top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
 - time_window: CPU breakdown for a specific time range (e.g. during a slow commit or hang).
 - call_tree: For a given function_name, show its callees and optionally callers.
-- component_cpu: For a given component_name, aggregate CPU activity across all its commits.`,
+- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
+Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
+Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
+Fails if no CPU profile is stored — run react-profiler-stop first.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

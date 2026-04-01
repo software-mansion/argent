@@ -321,7 +321,10 @@ Modes:
 - by_component: All commits where a specific component rendered, with causes and durations.
 - by_time_range: What happened in a specific time window.
 - by_index: Full detail dump of a single commit (all components, props changed, parent cascade).
-- cascade_tree: Parent-child cascade tree for a commit showing who triggered whom.`,
+- cascade_tree: Parent-child cascade tree for a commit showing who triggered whom.
+Use when drilling into specific components or time windows after react-profiler-analyze.
+Returns a markdown table or tree of commit data matching the requested mode.
+Fails if react-profiler-stop has not been called or no commit data is stored.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

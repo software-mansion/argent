@@ -101,8 +101,10 @@ const zodSchema = z.object({
 
 export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
-  description: `Walk the live React fiber tree to collect component render counts and durations.
-Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.`,
+  description: `Scan the live React fiber tree to collect component render counts and durations.
+Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.
+Use when you want a quick snapshot of render counts without a full profiling session.
+Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

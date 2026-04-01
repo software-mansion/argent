@@ -18,8 +18,7 @@ export const debuggerLogRegistryTool: ToolDefinition<
   id: "debugger-log-registry",
   description: `Get a summary of all console logs captured from the React Native app.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity).
-Use this tool first to get an overview, then grep or tail the returned file path for details.
-The app must be connected via debugger-connect first (auto-connects if needed).`,
+Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Fails if no log data has been captured yet.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

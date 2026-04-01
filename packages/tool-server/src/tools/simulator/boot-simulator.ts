@@ -11,7 +11,7 @@ const zodSchema = z.object({
 
 export const bootSimulatorTool: ToolDefinition<{ udid: string }> = {
   id: "boot-simulator",
-  description: "Boot an iOS simulator by UDID",
+  description: "Start an iOS simulator by UDID. Use when the target simulator is in Shutdown state before starting a session. Returns when the simulator is ready. Fails if the UDID is invalid or Xcode tools are not installed.",
   zodSchema,
   services: () => ({}),
   async execute(_services, params, _options) {

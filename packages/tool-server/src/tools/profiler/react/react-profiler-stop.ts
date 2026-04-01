@@ -24,7 +24,10 @@ export function createReactProfilerStopTool(
     id: "react-profiler-stop",
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
 Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
-Call react-profiler-start first, then exercise the app, then call this.`,
+Call react-profiler-start first, then exercise the app, then call this.
+Use when the user has finished the interaction to profile and you need to end the recording.
+Returns { duration_ms, sample_count, fiber_renders_captured, hot_commit_indices } summarizing the session.
+Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

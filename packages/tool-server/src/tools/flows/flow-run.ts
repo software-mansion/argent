@@ -38,6 +38,8 @@ export function createRunFlowTool(
     description: `Run a saved flow from the .argent/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
 echo steps print a message. Returns the result of every step, including images.
+Use when you want to replay a recorded flow or run a scripted sequence of simulator actions.
+Fails if the flow file does not exist or a step tool raises an error (execution stops at that step).
 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not
 set to true, the tool returns a notice with the prerequisite instead of running.
