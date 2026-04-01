@@ -8,6 +8,8 @@ import {
   addClaudePermission,
   removeClaudePermission,
   copyRulesAndAgents,
+  injectCodexRules,
+  removeCodexRules,
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
 
@@ -61,9 +63,9 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all six adapters", () => {
+  it("contains all seven adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini"]);
+    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini", "Codex"]);
   });
 });
 
@@ -410,6 +412,80 @@ describe("Gemini adapter", () => {
   });
 });
 
+// ── Codex adapter ────────────────────────────────────────────────────────────
+
+describe("Codex adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+
+  it("writes [mcp_servers.argent] in TOML format", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("[mcp_servers.argent]");
+    expect(content).toContain('command = "argent"');
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).not.toContain("[mcp_servers.argent]");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.toml"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, "[mcp_servers]\n");
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("projectPath returns .codex/config.toml under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(
+      path.join("/foo", ".codex", "config.toml"),
+    );
+  });
+
+  it("detect() returns true when local .codex dir exists", () => {
+    const localCodex = path.join(process.cwd(), ".codex");
+    const existed = fs.existsSync(localCodex);
+    if (!existed) fs.mkdirSync(localCodex, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localCodex);
+    }
+  });
+
+  it("globalPath returns ~/.codex/config.toml", () => {
+    expect(adapter.globalPath()).toBe(
+      path.join(os.homedir(), ".codex", "config.toml"),
+    );
+  });
+
+  it("preserves existing settings when writing", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'model = "o3"\n\n[mcp_servers.other]\ncommand = "npx"\n',
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain('model = "o3"');
+    expect(content).toContain("[mcp_servers.other]");
+    expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
 // ── Claude permissions ────────────────────────────────────────────────────────
 
 describe("addClaudePermission / removeClaudePermission", () => {
@@ -568,5 +644,114 @@ describe("copyRulesAndAgents", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("injects Codex rules into developer_instructions in config.toml (local)", () => {
+    const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
+    // Pre-create the config.toml so the adapter can find it
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "");
+
+    const results = copyRulesAndAgents(
+      [codexAdapter],
+      tmpDir,
+      "local",
+      rulesDir,
+      agentsDir,
+    );
+    expect(results.some((r) => r.includes("developer_instructions"))).toBe(true);
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("argent rules");
+    expect(content).toContain("developer_instructions");
+  });
+});
+
+// ── Codex developer_instructions injection ──────────────────────────────────
+
+describe("injectCodexRules / removeCodexRules", () => {
+  let rulesDir: string;
+
+  beforeEach(() => {
+    rulesDir = path.join(tmpDir, "src-rules");
+    fs.mkdirSync(rulesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rulesDir, "argent.md"),
+      "---\ndescription: Test rule\nalwaysApply: true\n---\n\nUse argent tools for simulator control.",
+    );
+  });
+
+  it("injects rules content with frontmatter stripped", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    injectCodexRules(configPath, rulesDir);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Use argent tools for simulator control.");
+    expect(content).not.toContain("alwaysApply");
+    expect(content).toContain("argent rules");
+  });
+
+  it("preserves existing developer_instructions", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, 'developer_instructions = "Always use TypeScript."\n');
+
+    injectCodexRules(configPath, rulesDir);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Always use TypeScript.");
+    expect(content).toContain("Use argent tools for simulator control.");
+  });
+
+  it("replaces existing argent section on re-inject", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    injectCodexRules(configPath, rulesDir);
+
+    // Update rule content and re-inject
+    fs.writeFileSync(path.join(rulesDir, "argent.md"), "Updated rule content.");
+    injectCodexRules(configPath, rulesDir);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Updated rule content.");
+    expect(content).not.toContain("Use argent tools for simulator control.");
+    // Should only have one pair of markers
+    expect(content.split("argent rules").length - 1).toBe(2); // start + end
+  });
+
+  it("removeCodexRules strips argent section", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, 'developer_instructions = "Always use TypeScript."\n');
+    injectCodexRules(configPath, rulesDir);
+
+    const removed = removeCodexRules(configPath);
+    expect(removed).toBe(true);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("Always use TypeScript.");
+    expect(content).not.toContain("argent rules");
+  });
+
+  it("removeCodexRules deletes field when only argent content remains", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    injectCodexRules(configPath, rulesDir);
+
+    removeCodexRules(configPath);
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).not.toContain("developer_instructions");
+  });
+
+  it("removeCodexRules returns false when no argent section exists", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(configPath, 'model = "o3"\n');
+    expect(removeCodexRules(configPath)).toBe(false);
+  });
+
+  it("removeCodexRules returns false for non-existent file", () => {
+    expect(removeCodexRules(path.join(tmpDir, "nope.toml"))).toBe(false);
+  });
+
+  it("returns null when rulesDir does not exist", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    expect(injectCodexRules(configPath, path.join(tmpDir, "nonexistent"))).toBeNull();
   });
 });
