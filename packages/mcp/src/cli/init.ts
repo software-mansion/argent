@@ -92,7 +92,7 @@ export async function init(args: string[]): Promise<void> {
           },
           {
             value: "cancel" as const,
-            label: "Cancel",
+            label: "Cancel installation",
           },
         ],
       });
