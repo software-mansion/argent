@@ -161,7 +161,7 @@ describe("CDPClient", () => {
             JSON.stringify({
               method: "Runtime.bindingCalled",
               params: {
-                name: "__radon_lite_callback",
+                name: "__argent_callback",
                 payload: JSON.stringify({
                   requestId: "req-123",
                   type: "inspect_result",

@@ -24,9 +24,9 @@ describe("makeNetworkLogReadScript", () => {
     expect(script3000).not.toContain("localhost:8081");
   });
 
-  it("reads from __radon_network_log", () => {
+  it("reads from __argent_network_log", () => {
     const script = makeNetworkLogReadScript(0, 50, 8081);
-    expect(script).toContain("globalThis.__radon_network_log");
+    expect(script).toContain("globalThis.__argent_network_log");
   });
 
   it("returns interceptorInstalled: false when no log exists", () => {
@@ -72,9 +72,9 @@ describe("makeNetworkDetailReadScript", () => {
     expect(script).toContain("rn-net-\\\\test");
   });
 
-  it("reads from __radon_network_by_id", () => {
+  it("reads from __argent_network_by_id", () => {
     const script = makeNetworkDetailReadScript("rn-net-1");
-    expect(script).toContain("globalThis.__radon_network_by_id");
+    expect(script).toContain("globalThis.__argent_network_by_id");
   });
 
   it("includes responseBody in the detail output", () => {

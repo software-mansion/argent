@@ -12,7 +12,6 @@ Argent MCP tools are the preferred form of interaction with the application.
 </description>
 
 <argent_use_cases>
-
 - User mentions iOS simulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in the simulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
@@ -21,17 +20,22 @@ Argent MCP tools are the preferred form of interaction with the application.
   </argent_use_cases>
 
 <tapping_rule>
-**HARD RULE: NEVER derive tap coordinates from a screenshot.**
+**HARD RULE: Never derive tap coordinates from a screenshot.**
 BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extract coordinates from the result. This is not optional. Whenever something changed YOU MUST first call `describe` or `component-tree` to not try and hallucinate the positions of the elements. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
-`describe` is good for system-level components
+`describe` is good for system-level components.
 `component-tree` is good for react-native specific components
 
 If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
+
+If `describe` fails because of permissions / accesisibility issues - stop your tasks, inform the user about the issue and how it should be fixed.
 </tapping_rule>
 
-<core_rules>
+<skill_reading_rule>
+**HARD RULE**: Always read relevant skills for guidance before executing argent-mcp tool using in skill_routing reference.
+</skill_reading_rule>
 
+<important_rules>
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
@@ -41,15 +45,15 @@ If `describe` is not sufficient ALWAYS do a followup of `component-tree` in reac
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
-  For example, if you've used `describe`and it was insufficient - then try `component-tree` if in react-native app. Based on which was more succesful - use the preffered option in the future.
+  For example, if you've used `describe` and it was insufficient - then try `component-tree` if in react-native app. Based on which was more successful - use the preferred option in the future.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If any of the tooling fails because of permissions / accessibility error, **inform the user immediately** and provide instructions on possible solutions. Do not assume that the tool is unusable. Examples, where such may occur: `describe`.
-- Before executing argent-mcp tool **always** read relevant skills for guidance, as in skill_routing section.
+- ALWAYS use `run-sequence` when performing multiple sequentialsimulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
-  </core_rules>
+  </important_rules>
 
 <react_native_detection>
 Project type is determined by the `argent-environment-inspector` subagent (see <subagents>).
@@ -69,7 +73,7 @@ SIMULATOR SETUP
 Use skill: `argent-simulator-setup`
 When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
-TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS
+TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Use skill: `argent-simulator-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 

@@ -21,13 +21,6 @@ export interface ServiceInstance<T = unknown> {
   events: TypedEventEmitter<ServiceEvents>;
 }
 
-export interface ServiceDefinition<T = unknown> {
-  id: string;
-  description?: string;
-  dependencies?: string[];
-  factory(deps: Record<string, unknown>): Promise<ServiceInstance<T>>;
-}
-
 /** URN (Uniform Resource Name) for parameterized service instances, e.g. "sim-server:device1". */
 export type URN = string;
 

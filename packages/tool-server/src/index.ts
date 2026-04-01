@@ -1,7 +1,6 @@
 import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
-import { validateStoredToken } from "./utils/license";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -19,7 +18,7 @@ const registry = createRegistry();
 attachRegistryLogger(registry);
 
 // `shutdown` captures `httpHandle` and `server` by closure; safe because it is
-// only invoked asynchronously after both are initialised.
+// only invoked asynchronously after both are initialized.
 const shutdown = async () => {
   httpHandle.dispose();
   await registry.dispose();
@@ -42,18 +41,6 @@ const server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
   if (idleTimeoutMs > 0) {
     console.log(`  Idle timeout: ${idleMinutes}min`);
   }
-});
-
-validateStoredToken().then((valid) => {
-  if (valid) {
-    console.log("  License token valid.");
-  } else {
-    console.log(
-      "  No valid license found. Tools will prompt for activation on first use."
-    );
-  }
-}).catch((err) => {
-  console.error("  License validation error:", err);
 });
 
 // ── Lifecycle ───────────────────────────────────────────────────────

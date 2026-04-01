@@ -156,7 +156,7 @@ registry.registerTool(createReactProfilerStopTool(registry));
 
 ---
 
-## Expected behaviour after these changes
+## Expected behavior after these changes
 
 | Scenario | Before | After |
 |---|---|---|

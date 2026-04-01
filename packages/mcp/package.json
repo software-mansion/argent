@@ -1,18 +1,17 @@
 {
   "name": "@software-mansion/argent",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
   "bin": {
     "argent": "dist/cli.js",
-    "argent-mcp": "dist/index.js",
     "argent-simulator-server": "bin/simulator-server"
   },
   "scripts": {
     "build": "npm run build:mcp && npm run build:tools-bundle",
     "build:mcp": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:tools-bundle": "node scripts/bundle-tools.cjs",
-    "dev": "node --loader ts-node/esm src/index.ts",
+    "dev": "node --loader ts-node/esm src/cli.ts mcp",
     "test": "vitest run",
     "test:watch": "vitest",
     "observe": "node scripts/observe.cjs",

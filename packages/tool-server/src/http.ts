@@ -1,51 +1,8 @@
-import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response } from "express";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
-import { readToken } from "./utils/license";
 import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
-
-// ── License gate ────────────────────────────────────────────────────
-
-const LICENSE_EXEMPT_TOOLS = new Set([
-  "activate-license-key",
-  "activate-sso",
-  "get-license-status",
-  "remove-license",
-  "stop-simulator-server",
-  "stop-all-simulator-servers",
-  "stop-metro",
-  "flow-start-recording",
-  "flow-add-step",
-  "flow-add-echo",
-  "flow-finish-recording",
-  "flow-read-prerequisite",
-  "flow-execute",
-  "gather-workspace-data",
-]);
-
-async function licenseGate(req: Request, res: Response, next: NextFunction) {
-  const name = req.params.name!;
-
-  if (LICENSE_EXEMPT_TOOLS.has(name)) {
-    next();
-    return;
-  }
-
-  const token = await readToken();
-
-  if (!token) {
-    res.status(402).json({
-      error:
-        "No Argent license found. Call the activate-sso tool to open a browser sign-in flow, or activate-license-key if you have a license key.",
-    });
-    return;
-  }
-
-  // Inject keychain token as default; non-empty explicit token in body takes precedence
-  req.body = { ...req.body, token: req.body.token || token };
-  next();
-}
 
 // ── HTTP app ────────────────────────────────────────────────────────
 
@@ -126,7 +83,6 @@ export function createHttpApp(
       idleTimer.touch();
       next();
     },
-    licenseGate,
     async (req: Request, res: Response) => {
       const name = req.params.name!;
 
