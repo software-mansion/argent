@@ -23,10 +23,12 @@ Argent MCP tools are the preferred form of interaction with the application.
 **HARD RULE: Never derive tap coordinates from a screenshot.**
 BEFORE EVERY TAP, you MUST call `describe` or `debugger-component-tree` and extract coordinates from the result. This is not optional. Whenever something changed YOU MUST first call `describe` or `component-tree` to not try and hallucinate the positions of the elements. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
-`describe` is good for system-level components
+`describe` is good for system-level components.
 `component-tree` is good for react-native specific components
 
 If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
+
+If `describe` fails because of permissions / accesisibility issues - stop your tasks, inform the user about the issue and how it should be fixed.
 </tapping_rule>
 
 <skill_reading_rule>
