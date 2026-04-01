@@ -21,8 +21,8 @@ export function createIdleTimer(
     const cb = onIdle;
     interval = setInterval(() => {
       if (Date.now() - lastActivityAt >= timeoutMs) {
-        console.log(
-          `[argent] No activity for ${Math.round(timeoutMs / 60_000)}min — shutting down`,
+        process.stderr.write(
+          `[argent] No activity for ${Math.round(timeoutMs / 60_000)}min — shutting down\n`,
         );
         cb();
       }

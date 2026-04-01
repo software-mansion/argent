@@ -147,7 +147,7 @@ describe("detectPackageManager", () => {
 
 describe("globalInstallCommand", () => {
   it("npm", () => {
-    expect(globalInstallCommand("npm", "pkg")).toBe("npm install -g --force pkg");
+    expect(globalInstallCommand("npm", "pkg")).toBe("npm install -g pkg");
   });
   it("yarn", () => {
     expect(globalInstallCommand("yarn", "pkg")).toBe("yarn global add pkg");

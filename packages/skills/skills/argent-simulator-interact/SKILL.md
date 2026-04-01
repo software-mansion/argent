@@ -171,14 +171,14 @@ Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs 
 ## 8. Action Sequencing with `run-sequence`
 
 Use `run-sequence` to batch multiple interaction steps into **a single tool call**. Only one screenshot is returned — after all steps complete. Use cases:
-scrolling mutliple tines, typing and submitting automatically, known sequence of multiplte taps, rotating device back and forth.
+scrolling multiple times, typing and submitting automatically, known sequence of multiple taps, rotating device back and forth.
 
 Do **not** use `run-sequence` when any step depends on observing the result of a previous step
 
 ### Use cases
 
 Use the sequencing when:
-- Knowing that some action needs multiple steps without necesserily immediate insight of screenshot
+- Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
 - "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
 - form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
 - "submit form" → fill all fields in sequence, tap submit

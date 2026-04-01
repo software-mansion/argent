@@ -69,7 +69,7 @@ function buildFiberTreeScript(maxDepth: number, filter: string): string {
       return 1 + countNodes(fiber.child, depth + 1) + countNodes(fiber.sibling, depth);
     }
 
-    var roots = hook.__rn_mcp_roots__ || hook._fiberRoots || hook.fiberRoots;
+    var roots = hook.__argent_roots__ || hook._fiberRoots || hook.fiberRoots;
     if (!roots || roots.size === 0) return JSON.stringify([]);
 
     var iter = roots.values ? roots.values() : Object.values(roots);

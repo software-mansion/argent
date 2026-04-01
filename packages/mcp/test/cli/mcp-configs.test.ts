@@ -355,14 +355,14 @@ describe("Gemini adapter", () => {
     const configPath = path.join(tmpDir, "settings.json");
     fs.writeFileSync(
       configPath,
-      JSON.stringify({ mcpServers: { radon: { command: "npx" } }, security: { auth: "oauth" } }),
+      JSON.stringify({ mcpServers: { "other-tool": { command: "npx" } }, security: { auth: "oauth" } }),
     );
 
     adapter.write(configPath, getMcpEntry());
 
     const config = readJsonFile(configPath);
     const servers = config.mcpServers as Record<string, unknown>;
-    expect(servers).toHaveProperty("radon");
+    expect(servers).toHaveProperty("other-tool");
     expect(servers).toHaveProperty("argent");
     expect(config.security).toBeDefined();
   });

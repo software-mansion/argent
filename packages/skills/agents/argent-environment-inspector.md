@@ -30,7 +30,7 @@ not write files — the main agent handles persistence.
 
 Provide useful environment context regardless of the project type. You have
 deep introspection tools at your disposal - `gather-workspace-data`, which provides heuristical
-context about the workspace structure. If any of the informaiton is not gotten from the tool,
+context about the workspace structure. If any of the information is not retrieved from the tool,
 but required by the main agent, fill it in by manual inspection of the project.
 
 ## Execution steps

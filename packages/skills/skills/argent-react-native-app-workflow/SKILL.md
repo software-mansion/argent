@@ -213,7 +213,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Boot simulator                | `boot-simulator` tool                          |
 | Take screenshot               | `screenshot` tool                              |
 | Describe screen (a11y tree)   | `describe` tool                                |
-| Read JS console logs          | `debugger-console-logs` tool                   |
+| Read JS console logs          | `debugger-log-registry` tool                   |
 | Reload JS bundle              | `debugger-reload-metro` tool                   |
 | Check Metro status            | `debugger-status` tool                         |
 | Inspect React component tree  | `debugger-component-tree` tool                 |
