@@ -247,7 +247,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
         .slice(0, 15);
 
-      const debugDir = await getDebugDir(api.projectRoot);
+      const debugDir = await getDebugDir();
 
       const cpuProfilePath = await writeDumpCompact(
         debugDir,

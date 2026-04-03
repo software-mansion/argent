@@ -15,7 +15,7 @@ export async function runPipeline(
   options?: { debugDumps?: boolean },
 ): Promise<PipelineOutput> {
   const debugDumps = options?.debugDumps ?? false;
-  const debugDir = await getDebugDir(input.sessionMeta.projectRoot);
+  const debugDir = await getDebugDir();
 
   const sessionContext = await detectSessionContext(input);
 

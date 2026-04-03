@@ -15,11 +15,6 @@ import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/ind
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the RN project root (debug files are in /tmp/argent-profiler-cwd/)",
-    ),
   mode: z
     .enum(["list", "load_react", "load_instruments"])
     .describe(
@@ -322,7 +317,7 @@ After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-
     return svcs;
   },
   async execute(services, params) {
-    const debugDir = await getDebugDir(params.project_root);
+    const debugDir = await getDebugDir();
 
     switch (params.mode) {
       case "list":

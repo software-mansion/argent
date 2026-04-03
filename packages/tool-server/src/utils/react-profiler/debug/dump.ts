@@ -7,10 +7,8 @@ const DEBUG_DIR_NAME = "argent-profiler-cwd";
 
 /**
  * Returns (and creates if needed) /tmp/argent-profiler-cwd/.
- * The projectRoot parameter is kept for API compatibility but is no longer
- * used to determine the output directory.
  */
-export async function getDebugDir(_projectRoot: string): Promise<string> {
+export async function getDebugDir(): Promise<string> {
   const dir = join(tmpdir(), DEBUG_DIR_NAME);
   await fs.mkdir(dir, { recursive: true });
   return dir;
