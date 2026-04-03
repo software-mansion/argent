@@ -106,7 +106,7 @@ if (submoduleReady) {
 // ── Step 2: Build MCP TypeScript ─────────────────────────────────────────────
 
 console.log("Building MCP TypeScript...");
-execSync("npm run build:mcp -w @software-mansion/argent", {
+execSync("npm run build:mcp -w @swmansion/argent", {
   cwd: ROOT,
   stdio: "inherit",
 });

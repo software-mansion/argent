@@ -50,12 +50,12 @@ curl -X POST http://localhost:3001/tools/list-simulators \
 
 ## Installing in a project
 
-The `argent` package is distributed via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) under the `@software-mansion` scope. Because the source repository is private, you must authenticate before installing.
+The `argent` package is distributed via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) under the `@swmansion` scope. Because the source repository is private, you must authenticate before installing.
 
 **Quick start** (after completing auth setup):
 
 ```bash
-npx @software-mansion/argent install
+npx @swmansion/argent install
 ```
 
 This installs the package from GitHub Packages and configures MCP servers in `.claude/mcp.json`, `.cursor/mcp.json`, and copies skills, agents, and rules into your workspace.
@@ -82,7 +82,7 @@ npm test -w @argent/tool-server        # tool-server tests (vitest)
 ### MCP package
 
 ```bash
-npm run build -w @software-mansion/argent   # compile + bundle into single CJS file
+npm run build -w @swmansion/argent   # compile + bundle into single CJS file
 npm run pack:mcp                                  # build and create argent-<version>.tgz
 ```
 

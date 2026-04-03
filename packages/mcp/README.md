@@ -10,14 +10,14 @@ MCP server for iOS Simulator control — tap, swipe, screenshot, profile, and de
 
 ## Installation
 
-Argent is distributed as `@software-mansion/argent` via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry).
+Argent is distributed as `@swmansion/argent` via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry).
 
 ### 1. Authenticate with GitHub Packages
 
 Add the following to your global `~/.npmrc` (create it if it does not exist), replacing `<GITHUB_PAT>` with a Personal Access Token that has the `read:packages` scope:
 
 ```ini
-@software-mansion:registry=https://npm.pkg.github.com
+@swmansion:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=<GITHUB_PAT>
 ```
 
@@ -26,7 +26,7 @@ Add the following to your global `~/.npmrc` (create it if it does not exist), re
 ### 2. Install and initialise
 
 ```bash
-npx @software-mansion/argent init
+npx @swmansion/argent init
 ```
 
 This installs the package globally, registers the MCP server with your editor, and copies skills, rules, and agents into your workspace.
@@ -34,7 +34,7 @@ This installs the package globally, registers the MCP server with your editor, a
 Alternatively:
 
 ```bash
-npm i -g @software-mansion/argent
+npm i -g @swmansion/argent
 argent init
 ```
 
@@ -43,7 +43,7 @@ argent init
 If you have a pre-built `.tgz` (e.g. from CI or `npm pack`), no registry auth is needed:
 
 ```bash
-npx @software-mansion/argent init --from ./software-mansion-argent-<version>.tgz
+npx @swmansion/argent init --from ./swmansion-argent-<version>.tgz
 ```
 
 ## Supported editors

@@ -42,8 +42,8 @@ describe("update — install command generation", () => {
 });
 
 describe("update — constants are correct", () => {
-  it("PACKAGE_NAME is @software-mansion/argent", () => {
-    expect(PACKAGE_NAME).toBe("@software-mansion/argent");
+  it("PACKAGE_NAME is @swmansion/argent", () => {
+    expect(PACKAGE_NAME).toBe("@swmansion/argent");
   });
 
   it("NPM_REGISTRY is the GitHub packages registry", () => {
