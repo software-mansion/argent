@@ -62,6 +62,7 @@ import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
+import { dismissUpdateTool } from "../tools/system/dismiss-update";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -136,6 +137,7 @@ export function createRegistry(): Registry {
 
   // System tools
   registry.registerTool(updateArgentTool);
+  registry.registerTool(dismissUpdateTool);
 
   return registry;
 }

@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import type { Registry } from "@argent/registry";
 
+let suppressed = false;
+
 // Mock update-checker before any imports that use it transitively.
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({
@@ -9,11 +11,14 @@ vi.mock("../src/utils/update-checker", () => ({
     latestVersion: null,
     currentVersion: "1.0.0",
   })),
+  isUpdateNoteSuppressed: vi.fn(() => suppressed),
+  suppressUpdateNote: vi.fn(),
 }));
 
-import { getUpdateState } from "../src/utils/update-checker";
+import { getUpdateState, suppressUpdateNote } from "../src/utils/update-checker";
 
 const mockGetUpdateState = vi.mocked(getUpdateState);
+const mockSuppressUpdateNote = vi.mocked(suppressUpdateNote);
 
 function stubRegistry(toolResult: unknown = { ok: true }): Registry {
   return {
@@ -40,12 +45,13 @@ describe("HTTP update note injection", () => {
 
   beforeEach(async () => {
     request = await import("supertest").then((m) => m.default);
-    // Reset to "no update" default before each test.
+    suppressed = false;
     mockGetUpdateState.mockReturnValue({
       updateAvailable: false,
       latestVersion: null,
       currentVersion: "1.0.0",
     });
+    mockSuppressUpdateNote.mockClear();
   });
 
   afterEach(() => {
@@ -136,6 +142,40 @@ describe("HTTP update note injection", () => {
     expect(res.body.note).toContain("update-argent");
   });
 
+  it("note mentions `dismiss-update` tool", async () => {
+    mockGetUpdateState.mockReturnValue({
+      updateAvailable: true,
+      latestVersion: "1.2.3",
+      currentVersion: "1.0.0",
+    });
+
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({})
+      .expect(200);
+
+    expect(res.body.note).toContain("dismiss-update");
+  });
+
+  it("note instructs agent to persist the update info", async () => {
+    mockGetUpdateState.mockReturnValue({
+      updateAvailable: true,
+      latestVersion: "1.2.3",
+      currentVersion: "1.0.0",
+    });
+
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({})
+      .expect(200);
+
+    expect(res.body.note).toContain("Save a note");
+  });
+
   it("does NOT include a note on 500 error responses", async () => {
     const errorRegistry = {
       getSnapshot: vi.fn(() => ({ services: new Map(), namespaces: [], tools: ["test-tool"] })),
@@ -185,7 +225,6 @@ describe("HTTP update note injection", () => {
   });
 
   it("note says 'unknown' when latestVersion is null but updateAvailable is true", async () => {
-    // Edge case: updateAvailable is true but latestVersion somehow ended up null.
     mockGetUpdateState.mockReturnValue({
       updateAvailable: true,
       latestVersion: null,
@@ -202,5 +241,56 @@ describe("HTTP update note injection", () => {
     expect(res.body).toHaveProperty("note");
     expect(res.body.note).toContain("unknown");
     expect(res.body.note).not.toContain("null");
+  });
+
+  // ── Suppression behavior ──────────────────────────────────────────
+
+  it("calls suppressUpdateNote after delivering a note", async () => {
+    mockGetUpdateState.mockReturnValue({
+      updateAvailable: true,
+      latestVersion: "1.2.3",
+      currentVersion: "1.0.0",
+    });
+
+    handle = createHttpApp(stubRegistry());
+
+    await request(handle.app)
+      .post("/tools/test-tool")
+      .send({})
+      .expect(200);
+
+    expect(mockSuppressUpdateNote).toHaveBeenCalledOnce();
+    expect(mockSuppressUpdateNote).toHaveBeenCalledWith(30 * 60 * 1000);
+  });
+
+  it("does NOT include a note when suppressed", async () => {
+    suppressed = true;
+    mockGetUpdateState.mockReturnValue({
+      updateAvailable: true,
+      latestVersion: "1.2.3",
+      currentVersion: "1.0.0",
+    });
+
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app)
+      .post("/tools/test-tool")
+      .send({})
+      .expect(200);
+
+    expect(res.body).toHaveProperty("data");
+    expect(res.body).not.toHaveProperty("note");
+    expect(mockSuppressUpdateNote).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call suppressUpdateNote when no update is available", async () => {
+    handle = createHttpApp(stubRegistry());
+
+    await request(handle.app)
+      .post("/tools/test-tool")
+      .send({})
+      .expect(200);
+
+    expect(mockSuppressUpdateNote).not.toHaveBeenCalled();
   });
 });
