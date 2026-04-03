@@ -48,7 +48,7 @@ You do not need to derive `app_process` manually — just make sure the app is l
 
 ### Step 1: Start recording
 
-Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/argent-profiler-cwd/` with a timestamped filename.
+Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `argent-simulator-interact` skill).
 
 ### Step 2: Stop and export
