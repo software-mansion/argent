@@ -106,7 +106,8 @@ export const networkRequestTool: ToolDefinition<
   id: "view-network-request-details",
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
-Large response bodies are truncated. Use this after view-network-logs to inspect individual requests.`,
+Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}`,

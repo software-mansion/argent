@@ -162,10 +162,11 @@ export const keyboardTool: ToolDefinition<
 > = {
   id: "keyboard",
   description: `Type text or press special keys on the simulator using keyboard events.
-Use instead of paste when paste is unreliable or unsupported by the focused field.
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
+Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator server is not running.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
-Provide text, key, or both.`,
+Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

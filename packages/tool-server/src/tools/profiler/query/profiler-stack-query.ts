@@ -318,7 +318,10 @@ Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls a specific native function and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details, optionally filtered by object_type.`,
+- leak_stacks: Memory leak details, optionally filtered by object_type.
+Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after ios-profiler-analyze.
+Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
+Fails if ios-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

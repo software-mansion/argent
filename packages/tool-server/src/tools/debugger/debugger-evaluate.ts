@@ -13,7 +13,7 @@ export const debuggerEvaluateTool: ToolDefinition<
 > = {
   id: "debugger-evaluate",
   description: `Execute arbitrary JavaScript in the React Native app's JS runtime via CDP.
-Returns the evaluation result. The app must be connected via debugger-connect first (auto-connects if needed).`,
+Returns the evaluation result as a JSON-serializable value. Use when you need to read app state, call app functions, or test logic at runtime. Fails if the expression throws or the runtime is not connected.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

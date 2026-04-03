@@ -20,7 +20,7 @@ export function createFlowAddStepTool(
 > {
   return {
     id: "flow-add-step",
-    description: `Execute a tool call and record it as a step in the active flow.\nThe tool call is run immediately. If it succeeds the step is recorded; if it fails an error is returned and nothing is recorded.\nIf a step was recorded by mistake, edit the .yaml file directly to remove it.`,
+    description: `Execute a tool call and record it as a step in the active flow. Use when recording a flow with flow-start-recording and you want to run and capture each action. Returns { message, toolResult, flowFile } on success. If it fails an error is returned and nothing is recorded. Error if the tool name is not found in the registry or arguments are invalid JSON.\nIf a step was recorded by mistake, edit the .yaml file directly to remove it.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

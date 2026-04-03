@@ -24,6 +24,9 @@ export const flowStartRecordingTool: ToolDefinition<
 > = {
   id: "flow-start-recording",
   description: `Start recording a new flow. Creates a .yaml file in the .argent/ directory.
+Use when you want to capture a reusable sequence of simulator interactions for later replay.
+Returns { message, flowFile } and optionally { previousFlow } if a prior recording was abandoned.
+Fails if the .argent/ directory cannot be created or the flow file cannot be written.
 
 After starting, use flow-add-step to append tool calls — each step is executed
 LIVE so you can verify it works before it gets recorded. Use flow-add-echo

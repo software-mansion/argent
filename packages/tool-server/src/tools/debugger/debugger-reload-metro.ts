@@ -12,9 +12,8 @@ export const debuggerReloadMetroTool: ToolDefinition<
   { reloaded: boolean; port: number; method: "cdp" | "http" }
 > = {
   id: "debugger-reload-metro",
-  description: `Ask the Metro server currently in use to reload the connected app's JS bundle.
-Equivalent to pressing "r" in the Metro terminal. Use after code changes or to get a clean app state without restarting the native process.
-Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Bridgeless), then falls back to Metro's HTTP /reload endpoint for older setups.`,
+  description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method } indicating which reload path was used. Fails if Metro is not running on the given port.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
