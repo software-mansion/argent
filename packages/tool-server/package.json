@@ -1,6 +1,6 @@
 {
   "name": "@argent/tool-server",
-  "version": "0.3.0",
+  "version": "0.3.3",
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@argent/registry": "file:../registry",
+    "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@clack/prompts": "^1.1.0",
     "express": "^4.19.2",
     "source-map-js": "^1.2.1",

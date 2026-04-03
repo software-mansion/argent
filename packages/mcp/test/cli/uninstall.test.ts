@@ -37,7 +37,7 @@ describe("uninstall — MCP entry removal", () => {
       const config = readJsonFile(configPath);
       // Check that argent is gone from whichever key this adapter uses
       const allValues = Object.values(config).filter(
-        (v) => typeof v === "object" && v !== null,
+        (v) => typeof v === "object" && v !== null
       ) as Record<string, unknown>[];
       for (const section of allValues) {
         expect(section).not.toHaveProperty("argent");
@@ -47,9 +47,7 @@ describe("uninstall — MCP entry removal", () => {
 
   it("handles removal from non-existent files gracefully", () => {
     for (const adapter of ALL_ADAPTERS) {
-      expect(adapter.remove(path.join(tmpDir, "nonexistent.json"))).toBe(
-        false,
-      );
+      expect(adapter.remove(path.join(tmpDir, "nonexistent.json"))).toBe(false);
     }
   });
 });
@@ -63,8 +61,7 @@ describe("uninstall — permissions cleanup", () => {
 
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
     const config = readJsonFile(settingsPath);
-    const allow = (config.permissions as Record<string, unknown>)
-      .allow as string[];
+    const allow = (config.permissions as Record<string, unknown>).allow as string[];
     expect(allow).not.toContain("mcp__argent");
   });
 

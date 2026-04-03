@@ -12,12 +12,8 @@ describe("NetworkInspector blueprint", () => {
   });
 
   it("getURN returns correct format", () => {
-    expect(networkInspectorBlueprint.getURN("8081")).toBe(
-      "NetworkInspector:8081"
-    );
-    expect(networkInspectorBlueprint.getURN("3000")).toBe(
-      "NetworkInspector:3000"
-    );
+    expect(networkInspectorBlueprint.getURN("8081")).toBe("NetworkInspector:8081");
+    expect(networkInspectorBlueprint.getURN("3000")).toBe("NetworkInspector:3000");
   });
 
   it("declares JsRuntimeDebugger as a dependency via getDependencies", () => {
@@ -35,9 +31,7 @@ describe("NetworkInspector blueprint", () => {
   });
 
   it("factory reuses the CDP client from the debugger dependency (does NOT create its own)", async () => {
-    const mockEvaluate = vi.fn().mockResolvedValue(
-      JSON.stringify({ installed: true })
-    );
+    const mockEvaluate = vi.fn().mockResolvedValue(JSON.stringify({ installed: true }));
     const mockCdp = {
       evaluate: mockEvaluate,
       events: { on: vi.fn() },
@@ -47,10 +41,7 @@ describe("NetworkInspector blueprint", () => {
       cdp: mockCdp,
     };
 
-    const instance = await networkInspectorBlueprint.factory(
-      { debugger: mockDebuggerApi },
-      "8081"
-    );
+    const instance = await networkInspectorBlueprint.factory({ debugger: mockDebuggerApi }, "8081");
 
     // The API's cdp should be the SAME object as the debugger's cdp
     expect(instance.api.cdp).toBe(mockCdp);
@@ -58,9 +49,7 @@ describe("NetworkInspector blueprint", () => {
   });
 
   it("factory injects the network interceptor script via cdp.evaluate", async () => {
-    const mockEvaluate = vi.fn().mockResolvedValue(
-      JSON.stringify({ installed: true })
-    );
+    const mockEvaluate = vi.fn().mockResolvedValue(JSON.stringify({ installed: true }));
     const mockCdp = {
       evaluate: mockEvaluate,
       events: { on: vi.fn() },
@@ -70,10 +59,7 @@ describe("NetworkInspector blueprint", () => {
       cdp: mockCdp,
     };
 
-    await networkInspectorBlueprint.factory(
-      { debugger: mockDebuggerApi },
-      "8081"
-    );
+    await networkInspectorBlueprint.factory({ debugger: mockDebuggerApi }, "8081");
 
     expect(mockEvaluate).toHaveBeenCalledTimes(1);
     // Verify it called evaluate with a string containing the interceptor guard
@@ -94,10 +80,7 @@ describe("NetworkInspector blueprint", () => {
     };
 
     // Should not throw
-    const instance = await networkInspectorBlueprint.factory(
-      { debugger: mockDebuggerApi },
-      "8081"
-    );
+    const instance = await networkInspectorBlueprint.factory({ debugger: mockDebuggerApi }, "8081");
     expect(instance.api).toBeDefined();
     expect(instance.api.port).toBe(8081);
   });
@@ -114,10 +97,7 @@ describe("NetworkInspector blueprint", () => {
       cdp: mockCdp,
     };
 
-    const instance = await networkInspectorBlueprint.factory(
-      { debugger: mockDebuggerApi },
-      "8081"
-    );
+    const instance = await networkInspectorBlueprint.factory({ debugger: mockDebuggerApi }, "8081");
 
     await instance.dispose();
     expect(mockDisconnect).not.toHaveBeenCalled();
@@ -140,10 +120,7 @@ describe("NetworkInspector blueprint", () => {
       cdp: mockCdp,
     };
 
-    const instance = await networkInspectorBlueprint.factory(
-      { debugger: mockDebuggerApi },
-      "8081"
-    );
+    const instance = await networkInspectorBlueprint.factory({ debugger: mockDebuggerApi }, "8081");
 
     const terminatedHandler = vi.fn();
     instance.events.on("terminated", terminatedHandler);
@@ -195,12 +172,8 @@ describe("NetworkInspector blueprint", () => {
     expect(api.cdp).toBe(mockCdp);
 
     // Both services should be RUNNING
-    expect(registry.getServiceState("JsRuntimeDebugger:8081")).toBe(
-      ServiceState.RUNNING
-    );
-    expect(registry.getServiceState("NetworkInspector:8081")).toBe(
-      ServiceState.RUNNING
-    );
+    expect(registry.getServiceState("JsRuntimeDebugger:8081")).toBe(ServiceState.RUNNING);
+    expect(registry.getServiceState("NetworkInspector:8081")).toBe(ServiceState.RUNNING);
 
     await registry.dispose();
   });
@@ -222,10 +195,7 @@ describe("NetworkInspector blueprint", () => {
       cdp: mockCdp,
     };
 
-    const instance = await networkInspectorBlueprint.factory(
-      { debugger: mockDebuggerApi },
-      "8081"
-    );
+    const instance = await networkInspectorBlueprint.factory({ debugger: mockDebuggerApi }, "8081");
 
     const terminatedHandler = vi.fn();
     instance.events.on("terminated", terminatedHandler);
@@ -245,16 +215,13 @@ describe("NetworkInspector blueprint", () => {
     const fs = await import("node:fs/promises");
     const path = await import("node:path");
     const source = await fs.readFile(
-      path.resolve(
-        __dirname,
-        "../../src/blueprints/network-inspector.ts"
-      ),
+      path.resolve(__dirname, "../../src/blueprints/network-inspector.ts"),
       "utf-8"
     );
 
     // Must NOT import from discovery or target-selection (that would mean it creates its own connection)
-    expect(source).not.toContain("from \"../utils/debugger/discovery\"");
-    expect(source).not.toContain("from \"../utils/debugger/target-selection\"");
+    expect(source).not.toContain('from "../utils/debugger/discovery"');
+    expect(source).not.toContain('from "../utils/debugger/target-selection"');
     // Must NOT construct new CDPClient (only imports the type)
     expect(source).not.toContain("new CDPClient");
     // Should use type-only import for CDPClient

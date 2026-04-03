@@ -17,11 +17,6 @@ const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the user's project root directory. Output files will be saved to <project_root>/argent-profiler-cwd/.",
-    ),
   app_process: z
     .string()
     .optional()
@@ -31,9 +26,7 @@ const zodSchema = z.object({
   template_path: z
     .string()
     .optional()
-    .describe(
-      "Path to an Instruments .tracetemplate file (defaults to bundled Argent template)",
-    ),
+    .describe("Path to an Instruments .tracetemplate file (defaults to bundled Argent template)"),
 });
 
 export const iosInstrumentsStartTool: ToolDefinition<
@@ -52,9 +45,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
     const api = services.session as IosProfilerSessionApi;
 
     if (api.profilingActive) {
-      throw new Error(
-        `An iOS profiling session is already running (PID: ${api.xctracePid}).`,
-      );
+      throw new Error(`An iOS profiling session is already running (PID: ${api.xctracePid}).`);
     }
 
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
@@ -67,7 +58,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
         : await detectRunningAppOnDevice(params.device_id);
     }
 
-    const debugDir = await getDebugDir(params.project_root);
+    const debugDir = await getDebugDir();
     const timestamp = new Date()
       .toISOString()
       .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
@@ -95,10 +86,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
       xctraceProcess.stdout.on("data", (data: Buffer) => {
         const output = data.toString();
 
-        if (
-          output.includes("Ctrl-C to stop") ||
-          output.includes("Starting recording")
-        ) {
+        if (output.includes("Ctrl-C to stop") || output.includes("Starting recording")) {
           api.profilingActive = true;
           api.wallClockStartMs = Date.now();
           if (api.xctracePid) {
@@ -109,7 +97,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
                 api.xctracePid = null;
                 api.recordingTimeout = null;
               },
-              10 * 60 * 1000,
+              10 * 60 * 1000
             );
             resolve({
               status: "recording",

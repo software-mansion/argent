@@ -19,35 +19,38 @@ const timeRangeSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  mode: z.enum(["by_component", "by_time_range", "by_index", "cascade_tree"]).describe(
-    "Query mode: by_component (commits for a component), by_time_range (commits in a window), " +
-    "by_index (full detail for one commit), cascade_tree (parent-child cascade for a commit)",
-  ),
-  component_name: z.string().optional().describe(
-    "Component name for by_component mode",
-  ),
-  time_range_ms: timeRangeSchema.optional().describe(
-    "Time range filter for by_time_range mode",
-  ),
-  commit_index: z.coerce.number().int().optional().describe(
-    "Commit index for by_index and cascade_tree modes",
-  ),
-  top_n: z.coerce.number().int().positive().default(20).describe(
-    "Max results to return (default 20)",
-  ),
+  mode: z
+    .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
+    .describe(
+      "Query mode: by_component (commits for a component), by_time_range (commits in a window), " +
+        "by_index (full detail for one commit), cascade_tree (parent-child cascade for a commit)"
+    ),
+  component_name: z.string().optional().describe("Component name for by_component mode"),
+  time_range_ms: timeRangeSchema.optional().describe("Time range filter for by_time_range mode"),
+  commit_index: z.coerce
+    .number()
+    .int()
+    .optional()
+    .describe("Commit index for by_index and cascade_tree modes"),
+  top_n: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(20)
+    .describe("Max results to return (default 20)"),
 });
 
 async function getCommitTree(api: ReactProfilerSessionApi): Promise<DevToolsCommitTree> {
   const sessionPaths = api.sessionPaths ?? getCachedProfilerPaths(api.port);
   if (!sessionPaths?.commitsPath) {
     throw new Error(
-      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
+      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first."
     );
   }
   const onDisk = await readCommitTree(sessionPaths.commitsPath);
   if (onDisk.commits.length === 0) {
     throw new Error(
-      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
+      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first."
     );
   }
   return { commits: onDisk.commits, hookNames: new Map() };
@@ -73,7 +76,7 @@ function formatReason(commit: DevToolsFiberCommit): string {
 function renderByComponent(
   commits: DevToolsFiberCommit[],
   componentName: string,
-  topN: number,
+  topN: number
 ): string {
   const matching = commits.filter((c) => c.componentName === componentName);
   if (matching.length === 0) {
@@ -115,7 +118,7 @@ function renderByComponent(
 
   for (const c of sortedCommits) {
     lines.push(
-      `| #${c.commitIndex} | ${c.instances} | ${c.totalDuration.toFixed(1)} | ${c.commitDuration.toFixed(1)} | ${c.timestamp.toFixed(0)} | ${c.reason} | \`${c.parentName}\` |`,
+      `| #${c.commitIndex} | ${c.instances} | ${c.totalDuration.toFixed(1)} | ${c.commitDuration.toFixed(1)} | ${c.timestamp.toFixed(0)} | ${c.reason} | \`${c.parentName}\` |`
     );
   }
 
@@ -126,11 +129,9 @@ function renderByTimeRange(
   commits: DevToolsFiberCommit[],
   start: number,
   end: number,
-  topN: number,
+  topN: number
 ): string {
-  const matching = commits.filter(
-    (c) => c.timestamp >= start && c.timestamp <= end,
-  );
+  const matching = commits.filter((c) => c.timestamp >= start && c.timestamp <= end);
 
   if (matching.length === 0) {
     return `_No commits found in the range ${start.toFixed(0)}ms → ${end.toFixed(0)}ms._`;
@@ -166,10 +167,14 @@ function renderByTimeRange(
   ];
 
   for (const s of summaries) {
-    lines.push(`### Commit #${s.commitIndex} — ${s.commitDuration.toFixed(1)}ms (t=${s.timestamp.toFixed(0)}ms, ${s.componentCount} components)`);
+    lines.push(
+      `### Commit #${s.commitIndex} — ${s.commitDuration.toFixed(1)}ms (t=${s.timestamp.toFixed(0)}ms, ${s.componentCount} components)`
+    );
     lines.push("");
     for (const comp of s.topComponents) {
-      lines.push(`- \`${comp.name}\` ×${comp.count} ${comp.totalDuration.toFixed(1)}ms — ${comp.reason}`);
+      lines.push(
+        `- \`${comp.name}\` ×${comp.count} ${comp.totalDuration.toFixed(1)}ms — ${comp.reason}`
+      );
     }
     lines.push("");
   }
@@ -177,10 +182,7 @@ function renderByTimeRange(
   return lines.join("\n");
 }
 
-function renderByIndex(
-  commits: DevToolsFiberCommit[],
-  commitIndex: number,
-): string {
+function renderByIndex(commits: DevToolsFiberCommit[], commitIndex: number): string {
   const matching = commits.filter((c) => c.commitIndex === commitIndex);
   if (matching.length === 0) {
     return `_Commit #${commitIndex} not found in stored data._`;
@@ -205,7 +207,7 @@ function renderByIndex(
     const parent = c.parentName ?? "—";
     const compiler = c.isCompilerOptimized ? "✓" : "";
     lines.push(
-      `| \`${c.componentName}\` | ${c.actualDuration.toFixed(1)} | ${c.selfDuration.toFixed(1)} | ${reason} | \`${parent}\` | ${compiler} |`,
+      `| \`${c.componentName}\` | ${c.actualDuration.toFixed(1)} | ${c.selfDuration.toFixed(1)} | ${reason} | \`${parent}\` | ${compiler} |`
     );
   }
 
@@ -213,7 +215,9 @@ function renderByIndex(
   const withRootCause = matching.find((c) => c.rootCauseParent);
   if (withRootCause?.rootCauseChain && withRootCause.rootCauseChain.length > 0) {
     lines.push("");
-    lines.push(`**Root cause chain:** ${withRootCause.rootCauseChain.map((n) => `\`${n}\``).join(" → ")} → \`${withRootCause.rootCauseParent}\``);
+    lines.push(
+      `**Root cause chain:** ${withRootCause.rootCauseChain.map((n) => `\`${n}\``).join(" → ")} → \`${withRootCause.rootCauseParent}\``
+    );
     if (withRootCause.rootCauseReason) {
       lines.push(`**Root cause reason:** ${withRootCause.rootCauseReason}`);
     }
@@ -222,10 +226,7 @@ function renderByIndex(
   return lines.join("\n");
 }
 
-function renderCascadeTree(
-  commits: DevToolsFiberCommit[],
-  commitIndex: number,
-): string {
+function renderCascadeTree(commits: DevToolsFiberCommit[], commitIndex: number): string {
   const matching = commits.filter((c) => c.commitIndex === commitIndex);
   if (matching.length === 0) {
     return `_Commit #${commitIndex} not found in stored data._`;
@@ -249,10 +250,7 @@ function renderCascadeTree(
     }
   }
 
-  const lines: string[] = [
-    `## Cascade Tree — Commit #${commitIndex}`,
-    "",
-  ];
+  const lines: string[] = [`## Cascade Tree — Commit #${commitIndex}`, ""];
 
   // Deduplicate: group by component name at same level
   const rendered = new Set<string>();
@@ -288,9 +286,12 @@ function renderCascadeTree(
 
 function getTopComponents(
   entries: DevToolsFiberCommit[],
-  topN: number,
+  topN: number
 ): { name: string; count: number; totalDuration: number; reason: string }[] {
-  const byName = new Map<string, { count: number; totalDuration: number; first: DevToolsFiberCommit }>();
+  const byName = new Map<
+    string,
+    { count: number; totalDuration: number; first: DevToolsFiberCommit }
+  >();
   for (const e of entries) {
     const existing = byName.get(e.componentName);
     if (existing) {
@@ -312,10 +313,7 @@ function getTopComponents(
     }));
 }
 
-export const profilerCommitQueryTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-commit-query",
   description: `Query React commit data for iterative investigation of render performance.
 Requires react-profiler-stop to have been called first.
@@ -348,7 +346,7 @@ Modes:
           commitTree.commits,
           params.time_range_ms.start,
           params.time_range_ms.end,
-          params.top_n,
+          params.top_n
         );
       }
 

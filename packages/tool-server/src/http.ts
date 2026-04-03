@@ -1,51 +1,8 @@
-import express, { Request, Response, NextFunction } from "express";
+import express, { Request, Response } from "express";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
-import { readToken } from "./utils/license";
 import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
-
-// ── License gate ────────────────────────────────────────────────────
-
-const LICENSE_EXEMPT_TOOLS = new Set([
-  "activate-license-key",
-  "activate-sso",
-  "get-license-status",
-  "remove-license",
-  "stop-simulator-server",
-  "stop-all-simulator-servers",
-  "stop-metro",
-  "flow-start-recording",
-  "flow-add-step",
-  "flow-add-echo",
-  "flow-finish-recording",
-  "flow-read-prerequisite",
-  "flow-execute",
-  "gather-workspace-data",
-]);
-
-async function licenseGate(req: Request, res: Response, next: NextFunction) {
-  const name = req.params.name!;
-
-  if (LICENSE_EXEMPT_TOOLS.has(name)) {
-    next();
-    return;
-  }
-
-  const token = await readToken();
-
-  if (!token) {
-    res.status(402).json({
-      error:
-        "No Argent license found. Call the activate-sso tool to open a browser sign-in flow, or activate-license-key if you have a license key.",
-    });
-    return;
-  }
-
-  // Inject keychain token as default; non-empty explicit token in body takes precedence
-  req.body = { ...req.body, token: req.body.token || token };
-  next();
-}
 
 // ── HTTP app ────────────────────────────────────────────────────────
 
@@ -63,17 +20,11 @@ export interface HttpAppHandle {
   getLastActivityAt: () => number;
 }
 
-export function createHttpApp(
-  registry: Registry,
-  options?: HttpAppOptions,
-): HttpAppHandle {
+export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   app.use(express.json());
 
-  const idleTimer = createIdleTimer(
-    options?.idleTimeoutMs ?? 0,
-    options?.onIdle,
-  );
+  const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -88,8 +39,7 @@ export function createHttpApp(
 
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();
-    const services: Record<string, { state: string; dependents: string[] }> =
-      {};
+    const services: Record<string, { state: string; dependents: string[] }> = {};
     for (const [urn, data] of snapshot.services) {
       services[urn] = { state: data.state, dependents: [...data.dependents] };
     }
@@ -126,7 +76,6 @@ export function createHttpApp(
       idleTimer.touch();
       next();
     },
-    licenseGate,
     async (req: Request, res: Response) => {
       const name = req.params.name!;
 
@@ -163,7 +112,7 @@ export function createHttpApp(
         }
         res.status(500).json({ error: formatErrorForAgent(err) });
       }
-    },
+    }
   );
 
   if (options?.onShutdown) {

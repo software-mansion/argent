@@ -31,9 +31,7 @@ then exports CPU, hangs, and leaks data. Call ios-profiler-start first.`,
     const api = services.session as IosProfilerSessionApi;
 
     if (!api.profilingActive || !api.xctracePid || !api.traceFile) {
-      throw new Error(
-        "No active iOS profiling session found. Call ios-profiler-start first.",
-      );
+      throw new Error("No active iOS profiling session found. Call ios-profiler-start first.");
     }
 
     if (api.recordingTimeout) {
@@ -59,9 +57,7 @@ then exports CPU, hangs, and leaks data. Call ios-profiler-start first.`,
     api.profilingActive = false;
     api.xctracePid = null;
 
-    const { files: exportedFiles, diagnostics } = exportIosTraceData(
-      api.traceFile,
-    );
+    const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile);
     api.exportedFiles = exportedFiles;
 
     return {

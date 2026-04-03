@@ -28,9 +28,7 @@ function isSensitiveHeader(name: string): boolean {
   return SENSITIVE_HEADER_PATTERNS.some((p) => lower.includes(p));
 }
 
-function redactHeaders(
-  headers: Record<string, string> | undefined,
-): Record<string, string> {
+function redactHeaders(headers: Record<string, string> | undefined): Record<string, string> {
   if (!headers) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
@@ -44,17 +42,11 @@ const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  requestId: z
-    .string()
-    .describe(
-      "The requestId from view-network-logs to get full details for",
-    ),
-  includeBody: z
-    .coerce.boolean()
+  requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
+  includeBody: z.coerce
+    .boolean()
     .default(true)
-    .describe(
-      "Whether to include the response body (if captured). Defaults to true.",
-    ),
+    .describe("Whether to include the response body (if captured). Defaults to true."),
 });
 
 interface RawEntry {

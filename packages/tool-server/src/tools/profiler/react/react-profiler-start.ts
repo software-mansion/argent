@@ -1,9 +1,5 @@
 import { z } from "zod";
-import {
-  type Registry,
-  type ToolDefinition,
-  ServiceState,
-} from "@argent/registry";
+import { type Registry, type ToolDefinition, ServiceState } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -13,10 +9,10 @@ import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-de
 
 const COMMIT_CAPTURE_SCRIPT = `
 (function __argent_commitCaptureInit() {
-  globalThis.__RN_DEVTOOLS_MCP_COMMITS__ = [];
+  globalThis.__ARGENT_DEVTOOLS_COMMITS__ = [];
   var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return;
-  hook.__rn_mcp_commit_capture__ = true;
+  hook.__argent_commit_capture__ = true;
   var origOnCommit = hook.onCommitFiberRoot;
   var commitIndex = 0;
 
@@ -105,7 +101,7 @@ const COMMIT_CAPTURE_SCRIPT = `
             }
           }
           var parentName = __argent_getNearestParentName(fiber);
-          globalThis.__RN_DEVTOOLS_MCP_COMMITS__.push({
+          globalThis.__ARGENT_DEVTOOLS_COMMITS__.push({
             commitIndex: idx,
             timestamp: ts,
             componentName: name,
@@ -146,9 +142,7 @@ function safeGetState(registry: Registry, urn: string): ServiceState | null {
   }
 }
 
-export function createReactProfilerStartTool(
-  registry: Registry,
-): ToolDefinition<
+export function createReactProfilerStartTool(registry: Registry): ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     started_at: string;
@@ -185,11 +179,7 @@ After starting, ask the user to perform the interaction to profile, then call re
         while (Date.now() < deadline) {
           const jsdState = safeGetState(registry, jsdUrn);
           const psState = safeGetState(registry, psUrn);
-          if (
-            jsdState !== ServiceState.TERMINATING &&
-            psState !== ServiceState.TERMINATING
-          )
-            break;
+          if (jsdState !== ServiceState.TERMINATING && psState !== ServiceState.TERMINATING) break;
           await new Promise((r) => setTimeout(r, 50));
         }
       }
@@ -218,7 +208,7 @@ After starting, ask the user to perform the interaction to profile, then call re
 
         if (!api.cdp.isConnected()) {
           throw new Error(
-            "CDP connection not available. The Hermes runtime may still be loading. Call react-profiler-start again.",
+            "CDP connection not available. The Hermes runtime may still be loading. Call react-profiler-start again."
           );
         }
       }
@@ -246,17 +236,14 @@ After starting, ask the user to perform the interaction to profile, then call re
       const verifyResult = (await cdp.evaluate(`
         JSON.stringify({
           hookExists: typeof globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ !== 'undefined',
-          arrayCreated: Array.isArray(globalThis.__RN_DEVTOOLS_MCP_COMMITS__),
-          hookPatched: !!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__?.__rn_mcp_commit_capture__
+          arrayCreated: Array.isArray(globalThis.__ARGENT_DEVTOOLS_COMMITS__),
+          hookPatched: !!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__?.__argent_commit_capture__
         })
       `)) as string | undefined;
 
       let commitCaptureVerification: Record<string, boolean> | null = null;
       if (verifyResult) {
-        commitCaptureVerification = JSON.parse(verifyResult) as Record<
-          string,
-          boolean
-        >;
+        commitCaptureVerification = JSON.parse(verifyResult) as Record<string, boolean>;
       }
 
       // Enable React profiling via DevTools hook (best-effort)
@@ -274,7 +261,7 @@ After starting, ask the user to perform the interaction to profile, then call re
             }
           }
           undefined
-        `,
+        `
         )
         .catch(ignore);
 

@@ -1,8 +1,4 @@
-import {
-  TypedEventEmitter,
-  type ServiceBlueprint,
-  type ServiceEvents,
-} from "@argent/registry";
+import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
 import { selectTarget } from "../utils/debugger/target-selection";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
@@ -48,7 +44,7 @@ function formatConsoleArgs(params: ConsoleAPICalledParams): string {
 
 function createConsoleLogServer(
   consoleEvents: TypedEventEmitter<ConsoleLogEvents>,
-  logWriter: LogFileWriter,
+  logWriter: LogFileWriter
 ): Promise<{ url: string; close: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
     const server = http.createServer();
@@ -102,10 +98,7 @@ export interface JsRuntimeDebuggerApi {
   consoleSocketUrl: string;
 }
 
-export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
-  JsRuntimeDebuggerApi,
-  string
-> = {
+export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
   namespace: JS_RUNTIME_DEBUGGER_NAMESPACE,
 
   getURN(port: string) {
@@ -124,11 +117,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
     const sourceMaps = new SourceMapsRegistry(metro.projectRoot);
 
     cdp.events.on("scriptParsed", (script) => {
-      sourceMaps.registerFromScriptParsed(
-        script.url,
-        script.scriptId,
-        script.sourceMapURL
-      );
+      sourceMaps.registerFromScriptParsed(script.url, script.scriptId, script.sourceMapURL);
     });
 
     const ignore = () => {};
@@ -137,9 +126,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<
     await cdp.send("Runtime.enable");
     await cdp.send("Debugger.enable", { maxScriptsCacheSize: 100_000_000 });
     await cdp.send("Debugger.setPauseOnExceptions", { state: "none" });
-    await cdp
-      .send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 })
-      .catch(ignore);
+    await cdp.send("Debugger.setAsyncCallStackDepth", { maxDepth: 32 }).catch(ignore);
     await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
     await cdp.addBinding("__argent_callback");
 

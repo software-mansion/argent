@@ -26,13 +26,7 @@ export interface WorkspaceSnapshot {
   ios_workspace: string | null;
   has_podfile: boolean;
 
-  lockfile:
-    | "yarn.lock"
-    | "package-lock.json"
-    | "pnpm-lock.yaml"
-    | "bun.lockb"
-    | "bun.lock"
-    | null;
+  lockfile: "yarn.lock" | "package-lock.json" | "pnpm-lock.yaml" | "bun.lockb" | "bun.lock" | null;
 
   env_files: EnvFileInfo[];
 
@@ -67,9 +61,7 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
-async function readJsonFile(
-  path: string,
-): Promise<Record<string, unknown> | null> {
+async function readJsonFile(path: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = await readFile(path, "utf-8");
     return JSON.parse(raw) as Record<string, unknown>;
@@ -100,31 +92,23 @@ const COMMAND_TIMEOUT_MS = 3_000;
 export function runVersionCommand(
   cmd: string,
   args: string[],
-  cwd: string,
+  cwd: string
 ): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = execFile(
-      cmd,
-      args,
-      { cwd, timeout: COMMAND_TIMEOUT_MS },
-      (err, stdout) => {
-        if (err) {
-          resolve(null);
-          return;
-        }
-        resolve(stdout.trim().replace(/^v/, ""));
-      },
-    );
+    const child = execFile(cmd, args, { cwd, timeout: COMMAND_TIMEOUT_MS }, (err, stdout) => {
+      if (err) {
+        resolve(null);
+        return;
+      }
+      resolve(stdout.trim().replace(/^v/, ""));
+    });
     child.on("error", () => resolve(null));
   });
 }
 
 // ── Metro port extraction ────────────────────────────────────────────
 
-const METRO_PORT_PATTERNS = [
-  /server\s*:\s*\{[^}]*?port\s*:\s*(\d+)/s,
-  /port\s*:\s*(\d+)/,
-];
+const METRO_PORT_PATTERNS = [/server\s*:\s*\{[^}]*?port\s*:\s*(\d+)/s, /port\s*:\s*(\d+)/];
 
 export function extractMetroPort(configText: string): number | null {
   for (const pattern of METRO_PORT_PATTERNS) {
@@ -178,14 +162,12 @@ const LOCKFILES = [
 
 type LockfileName = (typeof LOCKFILES)[number];
 
-async function detectLockfile(
-  workspacePath: string,
-): Promise<LockfileName | null> {
+async function detectLockfile(workspacePath: string): Promise<LockfileName | null> {
   const checks = await Promise.all(
     LOCKFILES.map(async (name) => ({
       name,
       exists: await exists(join(workspacePath, name)),
-    })),
+    }))
   );
   return checks.find((c) => c.exists)?.name ?? null;
 }
@@ -208,9 +190,7 @@ const CI_CONFIGS = [
   { path: ".gitlab-ci.yml", label: "gitlab-ci" },
 ] as const;
 
-async function detectCiConfig(
-  workspacePath: string,
-): Promise<string | null> {
+async function detectCiConfig(workspacePath: string): Promise<string | null> {
   for (const ci of CI_CONFIGS) {
     if (await exists(join(workspacePath, ci.path))) return ci.label;
   }
@@ -234,13 +214,9 @@ const LINT_STAGED_FILES = [
 
 async function detectLintStagedConfig(
   workspacePath: string,
-  packageJson: Record<string, unknown> | null,
+  packageJson: Record<string, unknown> | null
 ): Promise<Record<string, unknown> | string | null> {
-  if (
-    packageJson &&
-    typeof packageJson === "object" &&
-    "lint-staged" in packageJson
-  ) {
+  if (packageJson && typeof packageJson === "object" && "lint-staged" in packageJson) {
     return packageJson["lint-staged"] as Record<string, unknown>;
   }
   for (const file of LINT_STAGED_FILES) {
@@ -287,19 +263,16 @@ const CONFIG_FILES = [
   "Makefile",
 ];
 
-async function detectConfigFiles(
-  workspacePath: string,
-): Promise<string[]> {
+async function detectConfigFiles(workspacePath: string): Promise<string[]> {
   const results = await Promise.allSettled(
     CONFIG_FILES.map(async (file) => {
       if (await exists(join(workspacePath, file))) return file;
       return null;
-    }),
+    })
   );
   return results
     .filter(
-      (r): r is PromiseFulfilledResult<string> =>
-        r.status === "fulfilled" && r.value !== null,
+      (r): r is PromiseFulfilledResult<string> => r.status === "fulfilled" && r.value !== null
     )
     .map((r) => r.value);
 }
@@ -317,14 +290,12 @@ const VERSION_COMMANDS: [string, string, string[]][] = [
   ["expo", "expo", ["--version"]],
 ];
 
-async function detectToolVersions(
-  cwd: string,
-): Promise<Record<string, string | null>> {
+async function detectToolVersions(cwd: string): Promise<Record<string, string | null>> {
   const results = await Promise.allSettled(
     VERSION_COMMANDS.map(async ([key, cmd, args]) => {
       const version = await runVersionCommand(cmd, args, cwd);
       return [key, version] as const;
-    }),
+    })
   );
   const versions: Record<string, string | null> = {};
   for (const r of results) {
@@ -337,14 +308,10 @@ async function detectToolVersions(
 
 // ── .env files ───────────────────────────────────────────────────────
 
-async function detectEnvFiles(
-  workspacePath: string,
-): Promise<EnvFileInfo[]> {
+async function detectEnvFiles(workspacePath: string): Promise<EnvFileInfo[]> {
   const entries = await listDir(workspacePath);
   if (!entries) return [];
-  const envFileNames = entries.filter(
-    (e) => e === ".env" || e.startsWith(".env."),
-  );
+  const envFileNames = entries.filter((e) => e === ".env" || e.startsWith(".env."));
   const results = await Promise.all(
     envFileNames.map(async (name) => {
       const content = await readTextFile(join(workspacePath, name));
@@ -352,16 +319,14 @@ async function detectEnvFiles(
         name,
         keys: content ? extractEnvKeys(content) : [],
       };
-    }),
+    })
   );
   return results;
 }
 
 // ── Main reader ──────────────────────────────────────────────────────
 
-export async function readWorkspaceSnapshot(
-  workspacePath: string,
-): Promise<WorkspaceSnapshot> {
+export async function readWorkspaceSnapshot(workspacePath: string): Promise<WorkspaceSnapshot> {
   const [
     packageJson,
     appJson,
@@ -384,10 +349,10 @@ export async function readWorkspaceSnapshot(
     readJsonFile(join(workspacePath, "eas.json")),
     readJsonFile(join(workspacePath, "tsconfig.json")),
     readTextFile(join(workspacePath, "metro.config.js")).then(
-      (r) => r ?? readTextFile(join(workspacePath, "metro.config.ts")),
+      (r) => r ?? readTextFile(join(workspacePath, "metro.config.ts"))
     ),
     readTextFile(join(workspacePath, "babel.config.js")).then(
-      (r) => r ?? readTextFile(join(workspacePath, "babel.config.cjs")),
+      (r) => r ?? readTextFile(join(workspacePath, "babel.config.cjs"))
     ),
     isDirectory(join(workspacePath, "ios")),
     isDirectory(join(workspacePath, "android")),
@@ -401,21 +366,16 @@ export async function readWorkspaceSnapshot(
   ]);
 
   const iosDir = join(workspacePath, "ios");
-  const [iosWorkspace, hasPodfile, makefileText, lintStagedConfig] =
-    await Promise.all([
-      hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
-      exists(join(workspacePath, "ios", "Podfile")),
-      readTextFile(join(workspacePath, "Makefile")),
-      detectLintStagedConfig(workspacePath, packageJson),
-    ]);
+  const [iosWorkspace, hasPodfile, makefileText, lintStagedConfig] = await Promise.all([
+    hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
+    exists(join(workspacePath, "ios", "Podfile")),
+    readTextFile(join(workspacePath, "Makefile")),
+    detectLintStagedConfig(workspacePath, packageJson),
+  ]);
 
-  const metroPort = metroConfigRaw
-    ? extractMetroPort(metroConfigRaw)
-    : null;
+  const metroPort = metroConfigRaw ? extractMetroPort(metroConfigRaw) : null;
 
-  const makefileTargets = makefileText
-    ? extractMakefileTargets(makefileText)
-    : null;
+  const makefileTargets = makefileText ? extractMakefileTargets(makefileText) : null;
 
   return {
     workspace_path: workspacePath,

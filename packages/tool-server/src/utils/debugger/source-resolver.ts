@@ -15,10 +15,7 @@ export interface SourceResolver {
     col: number,
     methodName?: string
   ): Promise<SourceLocation | null>;
-  readSourceFragment(
-    location: SourceLocation,
-    contextLines?: number
-  ): Promise<string | null>;
+  readSourceFragment(location: SourceLocation, contextLines?: number): Promise<string | null>;
 }
 
 interface StackFrame {
@@ -33,14 +30,10 @@ interface StackFrame {
  * Frame[0] is React internal, frame[1] is the JSX call-site in parent.
  */
 export function parseDebugStack(stack: string): StackFrame[] {
-  const lines = stack
-    .split("\n")
-    .filter((l) => l.trim().startsWith("at "));
+  const lines = stack.split("\n").filter((l) => l.trim().startsWith("at "));
 
   return lines.map((line) => {
-    const match = line
-      .trim()
-      .match(/at (?:([^\s(]+) \()?([^)]+):(\d+):(\d+)\)?/);
+    const match = line.trim().match(/at (?:([^\s(]+) \()?([^)]+):(\d+):(\d+)\)?/);
     if (!match) return { fn: "unknown", file: "", line: 0, col: 0 };
     return {
       fn: match[1] || "anonymous",
@@ -71,10 +64,7 @@ export function normalizeBundleUrl(rawUrl: string, port: number): string {
   return url;
 }
 
-export function createSourceResolver(
-  port: number,
-  projectRoot: string
-): SourceResolver {
+export function createSourceResolver(port: number, projectRoot: string): SourceResolver {
   async function symbolicateFrame(
     bundleUrl: string,
     lineNumber: number,
@@ -102,9 +92,7 @@ export function createSourceResolver(
 
       if (frame.file.includes("node_modules")) return null;
 
-      const relFile = frame.file
-        .replace(projectRoot + "/", "")
-        .replace(/^\/+/, "");
+      const relFile = frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "");
 
       return {
         file: relFile,
@@ -126,10 +114,7 @@ export function createSourceResolver(
 
     symbolicate: symbolicateFrame,
 
-    async readSourceFragment(
-      location: SourceLocation,
-      contextLines = 3
-    ): Promise<string | null> {
+    async readSourceFragment(location: SourceLocation, contextLines = 3): Promise<string | null> {
       try {
         const absPath = path.isAbsolute(location.file)
           ? location.file

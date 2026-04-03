@@ -1,5 +1,10 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
+import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
+import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
+import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
+import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
@@ -23,23 +28,13 @@ import { createRunSequenceTool } from "../tools/interactions/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
-import { debuggerSetBreakpointTool } from "../tools/debugger/debugger-set-breakpoint";
-import { debuggerRemoveBreakpointTool } from "../tools/debugger/debugger-remove-breakpoint";
-import { debuggerPauseTool } from "../tools/debugger/debugger-pause";
-import { debuggerResumeTool } from "../tools/debugger/debugger-resume";
 import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
-import { debuggerStepTool } from "../tools/debugger/debugger-step";
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
-import { debuggerConsoleListenTool } from "../tools/debugger/debugger-console-listen";
 import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { describeTool } from "../tools/interactions/describe";
-import { activateLicenseKeyTool } from "../tools/license/activate-license-key";
-import { activateSsoTool } from "../tools/license/activate-sso";
-import { getLicenseStatusTool } from "../tools/license/get-license-status";
-import { removeLicenseTool } from "../tools/license/remove-license";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
 import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
@@ -75,6 +70,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(iosInstrumentsSessionBlueprint);
+  registry.registerBlueprint(nativeDevtoolsBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(bootSimulatorTool);
@@ -96,23 +92,13 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
   registry.registerTool(debuggerEvaluateTool);
-  registry.registerTool(debuggerSetBreakpointTool);
-  registry.registerTool(debuggerRemoveBreakpointTool);
-  registry.registerTool(debuggerPauseTool);
-  registry.registerTool(debuggerResumeTool);
   registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(debuggerStepTool);
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
-  registry.registerTool(debuggerConsoleListenTool);
   registry.registerTool(debuggerLogRegistryTool);
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(describeTool);
-  registry.registerTool(activateLicenseKeyTool);
-  registry.registerTool(activateSsoTool);
-  registry.registerTool(getLicenseStatusTool);
-  registry.registerTool(removeLicenseTool);
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
   registry.registerTool(reactProfilerAnalyzeTool);
@@ -129,6 +115,10 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerCombinedReportTool);
   registry.registerTool(profilerLoadTool);
   registry.registerTool(gatherWorkspaceDataTool);
+  registry.registerTool(nativeDevtoolsStatusTool);
+  registry.registerTool(nativeNetworkLogsTool);
+  registry.registerTool(nativeFindViewsTool);
+  registry.registerTool(nativeFullHierarchyTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));

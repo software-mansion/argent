@@ -55,7 +55,7 @@ You do not need to derive `app_process` manually — just make sure the app is l
 
 ### Step 1: Start recording
 
-Call `ios-profiler-start` with `device_id` (simulator UDID) and `project_root` (absolute path to the user's project root). The tool auto-detects the running app and saves the trace to `<project_root>/argent-profiler-cwd/` with a timestamped filename.
+Call `ios-profiler-start` with `device_id` (simulator UDID). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `argent-simulator-interact` skill).
 
 ### Step 2: Stop and export
@@ -78,7 +78,7 @@ Use `profiler-stack-query` to investigate specific findings. See §3 Investigati
 
 To revisit a previous trace:
 
-1. Call `profiler-load` mode=`list` project_root=`<path>` to see available sessions.
+1. Call `profiler-load` mode=`list` to see available sessions.
 2. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to re-parse the XML files.
 3. Use `profiler-stack-query` to investigate the reloaded data.
 

@@ -31,9 +31,7 @@ Call ios-profiler-stop first to export the trace data.`,
     const api = services.session as IosProfilerSessionApi;
 
     if (!api.exportedFiles) {
-      throw new Error(
-        "No exported trace data found. Call ios-profiler-stop first.",
-      );
+      throw new Error("No exported trace data found. Call ios-profiler-stop first.");
     }
 
     const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
@@ -50,8 +48,7 @@ Call ios-profiler-stop first to export the trace data.`,
         "Check ios-profiler-stop output for exportDiagnostics.";
     }
     if (!api.exportedFiles.hangs) {
-      exportErrors.hangs =
-        "Hangs export failed — no potential-hangs table found in trace.";
+      exportErrors.hangs = "Hangs export failed — no potential-hangs table found in trace.";
     }
 
     const payload = {

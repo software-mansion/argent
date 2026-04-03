@@ -54,7 +54,7 @@ Prevents the pipeline from always finding "something" even in perfectly smooth s
 
 ### Cap + persist full report
 
-Top 10 hot commits in inline response to stay token-efficient. Full markdown written to `argent-profiler-cwd/react-profiler-report.md` for agent to re-query without re-running profiling. Agent can use the Read tool directly on the file.
+Top 10 hot commits in inline response to stay token-efficient. Full markdown written to `/tmp/argent-profiler-cwd/react-profiler-report.md` for agent to re-query without re-running profiling. Agent can use the Read tool directly on the file.
 
 ### Findings threshold: renders ≥ 3 OR maxDuration ≥ 30ms
 

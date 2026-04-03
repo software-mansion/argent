@@ -10,7 +10,7 @@ function entry(
   name: string,
   parentIdx: number,
   rect: RawEntry["rect"] = null,
-  extra: Partial<Pick<RawEntry, "testID" | "accLabel" | "text">> = {},
+  extra: Partial<Pick<RawEntry, "testID" | "accLabel" | "text">> = {}
 ): RawEntry {
   return { id, name, rect, parentIdx, ...extra };
 }

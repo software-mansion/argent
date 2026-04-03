@@ -2,17 +2,10 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer } from "./launcher.js";
-import {
-  toMcpContent,
-  flowRunToMcpContent,
-  type FlowExecuteResult,
-} from "./content.js";
+import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "./content.js";
 import {
   autoScreenshotEnabled,
   getUdidFromArgs,
@@ -28,9 +21,7 @@ export async function startMcpServer(): Promise<void> {
     try {
       TOOLS_URL = await ensureToolsServer();
     } catch (err) {
-      process.stderr.write(
-        `[argent] Failed to start tools server: ${err}\n`,
-      );
+      process.stderr.write(`[argent] Failed to start tools server: ${err}\n`);
       process.exit(1);
     }
   }
@@ -51,10 +42,7 @@ export async function startMcpServer(): Promise<void> {
     return reconnectPromise;
   }
 
-  async function fetchWithReconnect(
-    getUrl: () => string,
-    init?: RequestInit,
-  ): Promise<Response> {
+  async function fetchWithReconnect(getUrl: () => string, init?: RequestInit): Promise<Response> {
     try {
       return await fetch(getUrl(), init);
     } catch {
@@ -63,8 +51,7 @@ export async function startMcpServer(): Promise<void> {
     }
   }
 
-  const LOG_FILE =
-    process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
+  const LOG_FILE = process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
   let logDirReady = false;
 
   async function spyLog(entry: Record<string, unknown>) {
@@ -94,25 +81,21 @@ export async function startMcpServer(): Promise<void> {
 
   async function callTool(
     name: string,
-    args: unknown,
+    args: unknown
   ): Promise<{ result: unknown; outputHint?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
-    const res = await fetchWithReconnect(
-      () => `${TOOLS_URL}/tools/${name}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(args ?? {}),
-      },
-    );
+    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args ?? {}),
+    });
     const json = (await res.json()) as {
       data?: unknown;
       error?: string;
       message?: string;
     };
-    if (!res.ok)
-      throw new Error(json.error ?? json.message ?? res.statusText);
+    if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
     return { result: json.data, outputHint: meta?.outputHint };
   }
 
@@ -123,10 +106,9 @@ export async function startMcpServer(): Promise<void> {
       instructions:
         "Argent — iOS Simulator Control for interacting, testing, profiling and debugging mobile applications. " +
         "Always use discovery tools (describe / debugger-component-tree / screenshot) before tapping — never guess coordinates. " +
-        "License errors: call activate-sso or activate-license-key. " +
         "On session end: call stop-all-simulator-servers and perform any necessary cleanup. " +
         "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
-    },
+    }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -154,10 +136,7 @@ export async function startMcpServer(): Promise<void> {
       args: params.arguments,
     });
     try {
-      const { result, outputHint } = await callTool(
-        params.name,
-        params.arguments,
-      );
+      const { result, outputHint } = await callTool(params.name, params.arguments);
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",
@@ -177,20 +156,13 @@ export async function startMcpServer(): Promise<void> {
           : await toMcpContent(result, outputHint);
 
       const udid = getUdidFromArgs(params.arguments);
-      if (
-        autoScreenshotEnabled() &&
-        udid &&
-        shouldAutoScreenshot(params.name)
-      ) {
+      if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
         const delayMs = getAutoScreenshotDelayMs(params.name);
         if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(
-            screenshotResult.result,
-            "image",
-          );
+          const screenshotContent = await toMcpContent(screenshotResult.result, "image");
           content = [
             ...content,
             {

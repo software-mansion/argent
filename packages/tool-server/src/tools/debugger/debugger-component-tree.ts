@@ -25,7 +25,7 @@ export interface RawResult {
 
 function rectsOverlap(
   a: { x: number; y: number; w: number; h: number },
-  b: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number }
 ): boolean {
   return (
     Math.abs(a.x - b.x) < 8 &&
@@ -37,7 +37,7 @@ function rectsOverlap(
 
 export function buildTextTree(
   data: RawResult,
-  opts: { onScreenOnly: boolean; maxNodes?: number; includeSkipped?: boolean },
+  opts: { onScreenOnly: boolean; maxNodes?: number; includeSkipped?: boolean }
 ): string {
   const { screenW, screenH, components } = data;
 
@@ -66,8 +66,7 @@ export function buildTextTree(
     while (effectiveParentIdx >= 0 && removed.has(effectiveParentIdx)) {
       effectiveParentIdx = components[effectiveParentIdx].parentIdx;
     }
-    const parent =
-      effectiveParentIdx >= 0 ? components[effectiveParentIdx] : null;
+    const parent = effectiveParentIdx >= 0 ? components[effectiveParentIdx] : null;
     if (
       parent &&
       parent.name === c.name &&
@@ -79,7 +78,7 @@ export function buildTextTree(
       filterStats.sameNameDedup.count++;
       filterStats.sameNameDedup.names.set(
         c.name,
-        (filterStats.sameNameDedup.names.get(c.name) ?? 0) + 1,
+        (filterStats.sameNameDedup.names.get(c.name) ?? 0) + 1
       );
     }
   }
@@ -190,11 +189,7 @@ export function buildTextTree(
       }
       const a = components[ancestor];
       const aDisplay = a.text ?? a.accLabel;
-      if (
-        aDisplay &&
-        aDisplay.length >= cDisplay.length &&
-        aDisplay.includes(cDisplay)
-      ) {
+      if (aDisplay && aDisplay.length >= cDisplay.length && aDisplay.includes(cDisplay)) {
         removed.add(c.id);
         filterStats.ancestorText.count++;
         break;
@@ -214,8 +209,7 @@ export function buildTextTree(
     while (effectiveParentIdx >= 0 && removed.has(effectiveParentIdx)) {
       effectiveParentIdx = components[effectiveParentIdx].parentIdx;
     }
-    const parent =
-      effectiveParentIdx >= 0 ? components[effectiveParentIdx] : null;
+    const parent = effectiveParentIdx >= 0 ? components[effectiveParentIdx] : null;
     if (parent && parent.rect && rectsOverlap(parent.rect, c.rect)) {
       removed.add(c.id);
       filterStats.contentFreeWrapper.count++;
@@ -391,12 +385,8 @@ export function buildTextTree(
         cur = childrenOf.get(cur)![0];
       }
       const indent = "  ".repeat(depth);
-      lines.push(
-        `${indent}${formatLabel(c)}`,
-      );
-      lines.push(
-        `${indent}  ... via ${chainLen} wrapper${chainLen > 1 ? "s" : ""}`,
-      );
+      lines.push(`${indent}${formatLabel(c)}`);
+      lines.push(`${indent}  ... via ${chainLen} wrapper${chainLen > 1 ? "s" : ""}`);
       renderNode(cur, depth + 1);
       return;
     }
@@ -430,7 +420,7 @@ export function buildTextTree(
   if (collapsedCount > 0) {
     lines.push("");
     lines.push(
-      `... ${collapsedCount} wrapper node${collapsedCount > 1 ? "s" : ""} collapsed. Call without maxNodes to see full tree.`,
+      `... ${collapsedCount} wrapper node${collapsedCount > 1 ? "s" : ""} collapsed. Call without maxNodes to see full tree.`
     );
   }
 
@@ -452,10 +442,7 @@ export function buildTextTree(
     }
 
     if (data.skippedCounts && Object.keys(data.skippedCounts).length > 0) {
-      const jsTotal = Object.values(data.skippedCounts).reduce(
-        (a, b) => a + b,
-        0,
-      );
+      const jsTotal = Object.values(data.skippedCounts).reduce((a, b) => a + b, 0);
       const top = Object.entries(data.skippedCounts)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10)
@@ -470,17 +457,13 @@ export function buildTextTree(
         const detail = Array.from(filterStats.sameNameDedup.names.entries())
           .map(([name, count]) => `${name} x${count}`)
           .join(", ");
-        lines.push(
-          `  Same-name dedup: ${filterStats.sameNameDedup.count} (${detail})`,
-        );
+        lines.push(`  Same-name dedup: ${filterStats.sameNameDedup.count} (${detail})`);
       }
       if (filterStats.offScreen.count > 0) {
         lines.push(`  Off-screen: ${filterStats.offScreen.count}`);
       }
       if (filterStats.fullScreenWrapper.count > 0) {
-        lines.push(
-          `  Full-screen wrapper: ${filterStats.fullScreenWrapper.count}`,
-        );
+        lines.push(`  Full-screen wrapper: ${filterStats.fullScreenWrapper.count}`);
       }
       if (filterStats.sameTestID.count > 0) {
         lines.push(`  Same-testID chain: ${filterStats.sameTestID.count}`);
@@ -489,14 +472,10 @@ export function buildTextTree(
         lines.push(`  Ancestor text dedup: ${filterStats.ancestorText.count}`);
       }
       if (filterStats.contentFreeWrapper.count > 0) {
-        lines.push(
-          `  Content-free wrapper: ${filterStats.contentFreeWrapper.count}`,
-        );
+        lines.push(`  Content-free wrapper: ${filterStats.contentFreeWrapper.count}`);
       }
       if (filterStats.soleChildLeaf.count > 0) {
-        lines.push(
-          `  Sole-child leaf: ${filterStats.soleChildLeaf.count}`,
-        );
+        lines.push(`  Sole-child leaf: ${filterStats.soleChildLeaf.count}`);
       }
     }
   }
@@ -512,7 +491,7 @@ const zodSchema = z.object({
     .describe(
       "When true (default), only components visible on screen are returned. " +
         "Set to false to include all mounted components including those scrolled " +
-        "off-screen. Useful when you need to understand the full page structure.",
+        "off-screen. Useful when you need to understand the full page structure."
     ),
   maxNodes: z.coerce
     .number()
@@ -520,22 +499,19 @@ const zodSchema = z.object({
     .describe(
       "Maximum total nodes to include. When exceeded, intermediate single-child " +
         "wrapper chains are collapsed to preserve both root structure and leaf elements. " +
-        "Default: no limit.",
+        "Default: no limit."
     ),
   includeSkipped: z
     .boolean()
     .default(false)
     .describe(
       "When true, appends a summary of all filtered components: total fiber count, " +
-      "JS-side skip counts by name, and TS-side filter pass removals. " +
-      "Useful for understanding what was pruned from the tree."
+        "JS-side skip counts by name, and TS-side filter pass removals. " +
+        "Useful for understanding what was pruned from the tree."
     ),
 });
 
-export const debuggerComponentTreeTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "debugger-component-tree",
   description: `Describe the current screen of a running React Native app as a compact text tree.
 Only shows on-screen components with unique positions — off-screen (scrolled) content,

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 
 // ── Package root resolution ───────────────────────────────────────────────────
 // tsc compiles src/cli/utils.ts -> dist/cli/utils.js.
@@ -22,15 +23,28 @@ export const SKILLS_DIR = path.join(PACKAGE_ROOT, "skills");
 export const RULES_DIR = path.join(PACKAGE_ROOT, "rules");
 export const AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
 
+// ── TOML helpers ─────────────────────────────────────────────────────────────
+
+export function readToml(filePath: string): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    return parseToml(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+export function writeToml(filePath: string, data: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, stringifyToml(data) + "\n");
+}
+
 // ── JSON helpers ──────────────────────────────────────────────────────────────
 
 export function readJson(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -73,10 +87,9 @@ export function getInstalledVersion(): string | null {
 }
 
 export function getLatestVersion(): string {
-  const result = execSync(
-    `npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`,
-    { encoding: "utf8" },
-  );
+  const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
+    encoding: "utf8",
+  });
   return result.trim();
 }
 
@@ -101,14 +114,11 @@ export function globalInstallCommand(pm: PackageManager, pkg: string): string {
     case "bun":
       return `bun add -g ${pkg}`;
     default:
-      return `npm install -g --force ${pkg}`;
+      return `npm install -g ${pkg}`;
   }
 }
 
-export function globalUninstallCommand(
-  pm: PackageManager,
-  pkg: string,
-): string {
+export function globalUninstallCommand(pm: PackageManager, pkg: string): string {
   switch (pm) {
     case "yarn":
       return `yarn global remove ${pkg}`;

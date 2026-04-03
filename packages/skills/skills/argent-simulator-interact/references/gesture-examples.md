@@ -19,7 +19,14 @@ Pinch in (zoom out):
 Vertical pinch (angle = 90):
 
 ```json
-{ "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "startDistance": 0.2, "endDistance": 0.6, "angle": 90 }
+{
+  "udid": "<UDID>",
+  "centerX": 0.5,
+  "centerY": 0.5,
+  "startDistance": 0.2,
+  "endDistance": 0.6,
+  "angle": 90
+}
 ```
 
 ## gesture-rotate — Two-finger rotation
@@ -27,13 +34,27 @@ Vertical pinch (angle = 90):
 Clockwise 90 degrees:
 
 ```json
-{ "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "radius": 0.15, "startAngle": 0, "endAngle": 90 }
+{
+  "udid": "<UDID>",
+  "centerX": 0.5,
+  "centerY": 0.5,
+  "radius": 0.15,
+  "startAngle": 0,
+  "endAngle": 90
+}
 ```
 
 Counter-clockwise 45 degrees:
 
 ```json
-{ "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "radius": 0.15, "startAngle": 0, "endAngle": -45 }
+{
+  "udid": "<UDID>",
+  "centerX": 0.5,
+  "centerY": 0.5,
+  "radius": 0.15,
+  "startAngle": 0,
+  "endAngle": -45
+}
 ```
 
 ## gesture-custom — Custom touch sequences
@@ -45,7 +66,7 @@ Counter-clockwise 45 degrees:
   "udid": "<UDID>",
   "events": [
     { "type": "Down", "x": 0.5, "y": 0.5 },
-    { "type": "Up",   "x": 0.5, "y": 0.5, "delayMs": 800 }
+    { "type": "Up", "x": 0.5, "y": 0.5, "delayMs": 800 }
   ]
 }
 ```
@@ -58,7 +79,7 @@ Counter-clockwise 45 degrees:
   "events": [
     { "type": "Down", "x": 0.4, "y": 0.5, "x2": 0.6, "y2": 0.5 },
     { "type": "Move", "x": 0.2, "y": 0.5, "x2": 0.8, "y2": 0.5 },
-    { "type": "Up",   "x": 0.2, "y": 0.5, "x2": 0.8, "y2": 0.5 }
+    { "type": "Up", "x": 0.2, "y": 0.5, "x2": 0.8, "y2": 0.5 }
   ]
 }
 ```
@@ -70,7 +91,7 @@ Counter-clockwise 45 degrees:
   "udid": "<UDID>",
   "events": [
     { "type": "Down", "x": 0.4, "y": 0.5, "x2": 0.6, "y2": 0.5 },
-    { "type": "Up",   "x": 0.2, "y": 0.5, "x2": 0.8, "y2": 0.5 }
+    { "type": "Up", "x": 0.2, "y": 0.5, "x2": 0.8, "y2": 0.5 }
   ],
   "interpolate": 15
 }
@@ -85,7 +106,7 @@ Counter-clockwise 45 degrees:
     { "type": "Down", "x": 0.3, "y": 0.4 },
     { "type": "Move", "x": 0.3, "y": 0.4, "delayMs": 500 },
     { "type": "Move", "x": 0.7, "y": 0.6 },
-    { "type": "Up",   "x": 0.7, "y": 0.6 }
+    { "type": "Up", "x": 0.7, "y": 0.6 }
   ]
 }
 ```

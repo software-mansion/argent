@@ -14,7 +14,7 @@ const zodSchema = z.object({
   executionPrerequisite: z
     .string()
     .describe(
-      'Describes the required app/simulator state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")',
+      'Describes the required app/simulator state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")'
     ),
 });
 

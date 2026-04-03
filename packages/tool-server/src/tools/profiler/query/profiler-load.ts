@@ -15,37 +15,30 @@ import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/ind
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the RN project root (debug files are in <project_root>/argent-profiler-cwd/)",
-    ),
   mode: z
     .enum(["list", "load_react", "load_instruments"])
     .describe(
       "list: show available sessions on disk. " +
         "load_react: load a React profiler session into memory for query tools. " +
-        "load_instruments: re-parse iOS Instruments XML files into memory for query tools.",
+        "load_instruments: re-parse iOS Instruments XML files into memory for query tools."
     ),
   session_id: z
     .string()
     .optional()
     .describe(
       "Timestamp-based session identifier (e.g. '20250313-143022') from the list output. " +
-        "Required for load_react and load_instruments modes.",
+        "Required for load_react and load_instruments modes."
     ),
   port: z.coerce
     .number()
     .default(8081)
     .describe(
-      "Metro port — the loaded React data is cached under this port for query tools (default 8081)",
+      "Metro port — the loaded React data is cached under this port for query tools (default 8081)"
     ),
   device_id: z
     .string()
     .optional()
-    .describe(
-      "iOS Simulator UDID — required for load_instruments to populate the iOS session",
-    ),
+    .describe("iOS Simulator UDID — required for load_instruments to populate the iOS session"),
 });
 
 async function listSessions(debugDir: string): Promise<string> {
@@ -101,9 +94,7 @@ async function listSessions(debugDir: string): Promise<string> {
     lines.push("### iOS Instruments Sessions", "");
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
-    for (const [sid, files] of [...instrumentsSessions.entries()]
-      .sort()
-      .reverse()) {
+    for (const [sid, files] of [...instrumentsSessions.entries()].sort().reverse()) {
       const hasCpu = files.some((f) => f.includes("_raw_cpu.xml"));
       const hasHangs = files.some((f) => f.includes("_raw_hangs.xml"));
       const hasLeaks = files.some((f) => f.includes("_raw_leaks.xml"));
@@ -119,7 +110,7 @@ async function listSessions(debugDir: string): Promise<string> {
   }
 
   lines.push(
-    "_Use `load_react` or `load_instruments` with the session_id to load data for query tools._",
+    "_Use `load_react` or `load_instruments` with the session_id to load data for query tools._"
   );
 
   return lines.join("\n");
@@ -128,17 +119,11 @@ async function listSessions(debugDir: string): Promise<string> {
 async function loadReactSession(
   debugDir: string,
   sessionId: string,
-  port: number,
+  port: number
 ): Promise<string> {
   const cpuPath = path.join(debugDir, `react-profiler-${sessionId}_cpu.json`);
-  const commitsPath = path.join(
-    debugDir,
-    `react-profiler-${sessionId}_commits.json`,
-  );
-  const cpuIndexPath = path.join(
-    debugDir,
-    `react-profiler-${sessionId}_cpu-index.json`,
-  );
+  const commitsPath = path.join(debugDir, `react-profiler-${sessionId}_commits.json`);
+  const cpuIndexPath = path.join(debugDir, `react-profiler-${sessionId}_cpu-index.json`);
 
   // Verify files exist without reading full contents
   let hasCpu = false;
@@ -166,7 +151,7 @@ async function loadReactSession(
   if (!hasCpu && !hasCommits) {
     throw new Error(
       `No data found for React session "${sessionId}". ` +
-        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`,
+        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`
     );
   }
 
@@ -234,18 +219,12 @@ async function loadReactSession(
 async function loadInstrumentsSession(
   debugDir: string,
   sessionId: string,
-  api: IosProfilerSessionApi,
+  api: IosProfilerSessionApi
 ): Promise<string> {
   // Find exported XML files for this session
   const cpuXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_cpu.xml`);
-  const hangsXml = path.join(
-    debugDir,
-    `ios-profiler-${sessionId}_raw_hangs.xml`,
-  );
-  const leaksXml = path.join(
-    debugDir,
-    `ios-profiler-${sessionId}_raw_leaks.xml`,
-  );
+  const hangsXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_hangs.xml`);
+  const leaksXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_leaks.xml`);
 
   const files: Record<string, string | null> = {
     cpu: null,
@@ -277,12 +256,11 @@ async function loadInstrumentsSession(
   if (!files.cpu && !files.hangs && !files.leaks) {
     throw new Error(
       `No iOS Instruments XML files found for session "${sessionId}". ` +
-        `Expected files matching ios-profiler-${sessionId}_raw_*.xml in ${debugDir}`,
+        `Expected files matching ios-profiler-${sessionId}_raw_*.xml in ${debugDir}`
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
-    await runIosProfilerPipeline(files);
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
 
   api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
   api.exportedFiles = files;
@@ -301,10 +279,7 @@ async function loadInstrumentsSession(
   return lines.join("\n");
 }
 
-export const profilerLoadTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const profilerLoadTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-load",
   description: `Load previously saved profiling data from disk for re-investigation with query tools.
 Use this when you want to revisit an earlier profiling session without re-profiling the app.
@@ -322,7 +297,7 @@ After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-
     return svcs;
   },
   async execute(services, params) {
-    const debugDir = await getDebugDir(params.project_root);
+    const debugDir = await getDebugDir();
 
     switch (params.mode) {
       case "list":
@@ -331,7 +306,7 @@ After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-
       case "load_react": {
         if (!params.session_id) {
           throw new Error(
-            "load_react mode requires the session_id parameter. Use list mode first.",
+            "load_react mode requires the session_id parameter. Use list mode first."
           );
         }
         return loadReactSession(debugDir, params.session_id, params.port);
@@ -340,13 +315,11 @@ After loading, use profiler-cpu-query, profiler-commit-query, or profiler-stack-
       case "load_instruments": {
         if (!params.session_id) {
           throw new Error(
-            "load_instruments mode requires the session_id parameter. Use list mode first.",
+            "load_instruments mode requires the session_id parameter. Use list mode first."
           );
         }
         if (!params.device_id) {
-          throw new Error(
-            "load_instruments mode requires the device_id parameter.",
-          );
+          throw new Error("load_instruments mode requires the device_id parameter.");
         }
         const api = services.session as IosProfilerSessionApi;
         return loadInstrumentsSession(debugDir, params.session_id, api);

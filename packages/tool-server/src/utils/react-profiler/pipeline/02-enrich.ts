@@ -23,15 +23,10 @@ function topN<K>(freq: Map<K, number>, n: number): K[] {
     .map(([k]) => k);
 }
 
-function dominantReason(
-  histogram: Record<ReRenderReason, number>,
-): ReRenderReason {
+function dominantReason(histogram: Record<ReRenderReason, number>): ReRenderReason {
   let best: ReRenderReason = "unknown";
   let bestCount = -1;
-  for (const [reason, count] of Object.entries(histogram) as [
-    ReRenderReason,
-    number,
-  ][]) {
+  for (const [reason, count] of Object.entries(histogram) as [ReRenderReason, number][]) {
     if (count > bestCount) {
       bestCount = count;
       best = reason;
@@ -54,7 +49,7 @@ function topParent(parentFreq: Map<string, number>): string | undefined {
 
 function bestRootCause(
   votes: Map<string, RootCauseVote>,
-  hookTypeNames: string[] | undefined,
+  hookTypeNames: string[] | undefined
 ): EnrichedComponent["parentTrigger"] {
   if (votes.size === 0) return undefined;
 
@@ -71,9 +66,7 @@ function bestRootCause(
 
   // Resolve hook names from the root cause component's hookTypes
   const ht = bestData.hookTypes ?? hookTypeNames;
-  const changedHookNames = ht
-    ? bestData.changedHooks.map((idx) => ht[idx] ?? `hook[${idx}]`)
-    : [];
+  const changedHookNames = ht ? bestData.changedHooks.map((idx) => ht[idx] ?? `hook[${idx}]`) : [];
 
   const result: NonNullable<EnrichedComponent["parentTrigger"]> = {
     component: bestParent,
@@ -104,9 +97,7 @@ export function enrich(input: ReduceOutput): EnrichOutput {
     const dp = dr === "parent" ? topParent(acc.parentFreq) : undefined;
     const isCompilerOptimized = acc.compilerOptimizedCount > n / 2;
     const parentTrigger =
-      dr === "parent"
-        ? bestRootCause(acc.rootCauseVotes, acc.hookTypeNames)
-        : undefined;
+      dr === "parent" ? bestRootCause(acc.rootCauseVotes, acc.hookTypeNames) : undefined;
 
     const enriched: EnrichedComponent = {
       name,
@@ -124,8 +115,7 @@ export function enrich(input: ReduceOutput): EnrichOutput {
       lastCommitTs: acc.lastCommitTs,
     };
     if (dp !== undefined) enriched.dominantParent = dp;
-    if (acc.hookTypeNames !== undefined)
-      enriched.hookTypeNames = acc.hookTypeNames;
+    if (acc.hookTypeNames !== undefined) enriched.hookTypeNames = acc.hookTypeNames;
     if (parentTrigger !== undefined) enriched.parentTrigger = parentTrigger;
 
     components.set(name, enriched);

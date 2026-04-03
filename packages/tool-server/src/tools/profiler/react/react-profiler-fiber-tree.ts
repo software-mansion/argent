@@ -69,7 +69,7 @@ function buildFiberTreeScript(maxDepth: number, filter: string): string {
       return 1 + countNodes(fiber.child, depth + 1) + countNodes(fiber.sibling, depth);
     }
 
-    var roots = hook.__rn_mcp_roots__ || hook._fiberRoots || hook.fiberRoots;
+    var roots = hook.__argent_roots__ || hook._fiberRoots || hook.fiberRoots;
     if (!roots || roots.size === 0) return JSON.stringify([]);
 
     var iter = roots.values ? roots.values() : Object.values(roots);
@@ -96,16 +96,10 @@ const zodSchema = z.object({
     .positive()
     .default(10)
     .describe("Maximum tree depth to traverse (default 10)"),
-  filter: z
-    .string()
-    .optional()
-    .describe("Regex string to filter component names"),
+  filter: z.string().optional().describe("Regex string to filter component names"),
 });
 
-export const reactProfilerFiberTreeTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  unknown
-> = {
+export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "react-profiler-fiber-tree",
   description: `Walk the React fiber tree and return a JSON representation of the component hierarchy.
 Use to trace ancestry when a finding is a library component, or to check for useMemoCache hook (confirms React Compiler is active on a component).`,
@@ -134,9 +128,7 @@ Use to trace ancestry when a finding is a library component, or to check for use
     let result = await evalFiberTree();
 
     if (result?.exceptionDetails) {
-      throw new Error(
-        `Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`,
-      );
+      throw new Error(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`);
     }
 
     if (!result?.result?.value) {
@@ -164,7 +156,7 @@ Use to trace ancestry when a finding is a library component, or to check for use
       throw new Error(
         HOOK_NOT_PRESENT_ERRORS.has(errorMsg)
           ? HOOK_MISSING_MESSAGE
-          : `Fiber tree error: ${errorMsg}`,
+          : `Fiber tree error: ${errorMsg}`
       );
     }
 

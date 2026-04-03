@@ -7,11 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  url: z
-    .string()
-    .describe(
-      "URL or URL scheme to open (e.g. https://example.com or messages://)"
-    ),
+  url: z.string().describe("URL or URL scheme to open (e.g. https://example.com or messages://)"),
 });
 
 export const openUrlTool: ToolDefinition<
@@ -32,12 +28,7 @@ Common URL schemes:
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    await execFileAsync("xcrun", [
-      "simctl",
-      "openurl",
-      params.udid,
-      params.url,
-    ]);
+    await execFileAsync("xcrun", ["simctl", "openurl", params.udid, params.url]);
     return { opened: true, url: params.url };
   },
 };

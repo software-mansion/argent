@@ -115,11 +115,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
  * Returns JSON with the entries array and total count.
  * Accepts optional start index and limit for pagination.
  */
-export function makeNetworkLogReadScript(
-  start: number,
-  limit: number,
-  metroPort: number,
-): string {
+export function makeNetworkLogReadScript(start: number, limit: number, metroPort: number): string {
   return `(function() {
   var log = globalThis.__argent_network_log;
   if (!log) return JSON.stringify({ entries: [], total: 0, interceptorInstalled: false });

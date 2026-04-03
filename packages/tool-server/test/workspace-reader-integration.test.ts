@@ -24,32 +24,32 @@ beforeAll(async () => {
 
   // ── package.json ───────────────────────────────────────────────
   await writeJson(projectDir, "package.json", {
-    name: "IntegrationTestApp",
-    version: "2.1.0",
-    scripts: {
-      start: "react-native start",
+    "name": "IntegrationTestApp",
+    "version": "2.1.0",
+    "scripts": {
+      "start": "react-native start",
       "start:local": "LOCAL_API=true react-native start",
-      ios: "react-native run-ios",
-      android: "react-native run-android",
-      test: "jest",
-      lint: "eslint .",
+      "ios": "react-native run-ios",
+      "android": "react-native run-android",
+      "test": "jest",
+      "lint": "eslint .",
       "lint:fix": "eslint . --fix",
-      tsc: "tsc --noEmit",
-      format: "prettier --write .",
+      "tsc": "tsc --noEmit",
+      "format": "prettier --write .",
     },
-    dependencies: {
-      react: "18.2.0",
+    "dependencies": {
+      "react": "18.2.0",
       "react-native": "0.74.2",
       "react-native-reanimated": "^3.8.0",
       "@react-navigation/native": "^6.1.9",
-      zustand: "^4.5.0",
+      "zustand": "^4.5.0",
       "react-native-config": "^1.5.0",
     },
-    devDependencies: {
-      typescript: "^5.4.0",
-      jest: "^29.7.0",
-      eslint: "^8.57.0",
-      prettier: "^3.2.0",
+    "devDependencies": {
+      "typescript": "^5.4.0",
+      "jest": "^29.7.0",
+      "eslint": "^8.57.0",
+      "prettier": "^3.2.0",
       "lint-staged": { "*.{ts,tsx}": ["eslint --fix", "prettier --write"] },
     },
     "lint-staged": {
@@ -74,7 +74,7 @@ const config = {
 };
 
 module.exports = mergeConfig(getDefaultConfig(__dirname), config);
-`,
+`
   );
 
   // ── Babel config ───────────────────────────────────────────────
@@ -84,7 +84,7 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), config);
   presets: ['module:@react-native/babel-preset'],
   plugins: ['react-native-reanimated/plugin'],
 };
-`,
+`
   );
 
   // ── tsconfig.json ──────────────────────────────────────────────
@@ -129,7 +129,7 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), config);
   // ── jest config ────────────────────────────────────────────────
   await writeText(
     join(projectDir, "jest.config.js"),
-    `module.exports = { preset: 'react-native', testPathIgnorePatterns: ['/node_modules/', '/e2e/'] };`,
+    `module.exports = { preset: 'react-native', testPathIgnorePatterns: ['/node_modules/', '/e2e/'] };`
   );
 
   // ── iOS directory ──────────────────────────────────────────────
@@ -138,14 +138,14 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), config);
   });
   await writeText(
     join(projectDir, "ios", "Podfile"),
-    `platform :ios, '14.0'\nuse_frameworks! :linkage => :static\n`,
+    `platform :ios, '14.0'\nuse_frameworks! :linkage => :static\n`
   );
 
   // ── Android directory ──────────────────────────────────────────
   await mkdir(join(projectDir, "android", "app"), { recursive: true });
   await writeText(
     join(projectDir, "android", "build.gradle"),
-    `buildscript { ext { buildToolsVersion = "34.0.0" } }`,
+    `buildscript { ext { buildToolsVersion = "34.0.0" } }`
   );
 
   // ── Yarn lockfile ──────────────────────────────────────────────
@@ -154,42 +154,33 @@ module.exports = mergeConfig(getDefaultConfig(__dirname), config);
   // ── .env files ─────────────────────────────────────────────────
   await writeText(
     join(projectDir, ".env"),
-    "API_URL=https://api.production.example.com\nANALYTICS_KEY=prod_key_123\n",
+    "API_URL=https://api.production.example.com\nANALYTICS_KEY=prod_key_123\n"
   );
   await writeText(
     join(projectDir, ".env.local"),
-    "API_URL=http://localhost:3000\nDEBUG_MODE=true\n",
+    "API_URL=http://localhost:3000\nDEBUG_MODE=true\n"
   );
 
   // ── Makefile ───────────────────────────────────────────────────
   await writeText(
     join(projectDir, "Makefile"),
-    `setup:\n\tyarn install\n\tcd ios && pod install\n\nlint:\n\tyarn lint\n\ntest:\n\tyarn test\n\ntypecheck:\n\tyarn tsc\n`,
+    `setup:\n\tyarn install\n\tcd ios && pod install\n\nlint:\n\tyarn lint\n\ntest:\n\tyarn test\n\ntypecheck:\n\tyarn tsc\n`
   );
 
   // ── scripts/ directory ─────────────────────────────────────────
   await mkdir(join(projectDir, "scripts"));
-  await writeText(
-    join(projectDir, "scripts", "seed-data.sh"),
-    "#!/bin/bash\necho seeding",
-  );
-  await writeText(
-    join(projectDir, "scripts", "migrate.js"),
-    "// migration script",
-  );
+  await writeText(join(projectDir, "scripts", "seed-data.sh"), "#!/bin/bash\necho seeding");
+  await writeText(join(projectDir, "scripts", "migrate.js"), "// migration script");
 
   // ── .husky/ directory ──────────────────────────────────────────
   await mkdir(join(projectDir, ".husky"));
-  await writeText(
-    join(projectDir, ".husky", "pre-commit"),
-    "#!/usr/bin/env sh\nnpx lint-staged",
-  );
+  await writeText(join(projectDir, ".husky", "pre-commit"), "#!/usr/bin/env sh\nnpx lint-staged");
 
   // ── GitHub Actions CI ──────────────────────────────────────────
   await mkdir(join(projectDir, ".github", "workflows"), { recursive: true });
   await writeText(
     join(projectDir, ".github", "workflows", "ci.yml"),
-    "name: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n",
+    "name: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n"
   );
 
   // ── .vscode/launch.json ────────────────────────────────────────
@@ -238,9 +229,7 @@ describe("workspace-reader integration (realistic RN project)", () => {
 
     // tsconfig
     expect(snap.tsconfig).toBeDefined();
-    expect(
-      (snap.tsconfig!.compilerOptions as Record<string, unknown>).strict,
-    ).toBe(true);
+    expect((snap.tsconfig!.compilerOptions as Record<string, unknown>).strict).toBe(true);
 
     // Platform directories
     expect(snap.has_ios_dir).toBe(true);
@@ -282,7 +271,7 @@ describe("workspace-reader integration (realistic RN project)", () => {
 
     // Makefile targets
     expect(snap.makefile_targets).toEqual(
-      expect.arrayContaining(["setup", "lint", "test", "typecheck"]),
+      expect.arrayContaining(["setup", "lint", "test", "typecheck"])
     );
 
     // lint-staged config
@@ -302,7 +291,7 @@ describe("workspace-reader integration (realistic RN project)", () => {
         "jest.config.js",
         "Makefile",
         ".vscode/launch.json",
-      ]),
+      ])
     );
   });
 

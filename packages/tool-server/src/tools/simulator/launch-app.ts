@@ -7,9 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  bundleId: z
-    .string()
-    .describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
+  bundleId: z.string().describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
 });
 
 export const launchAppTool: ToolDefinition<
@@ -35,12 +33,7 @@ Common bundle IDs:
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    await execFileAsync("xcrun", [
-      "simctl",
-      "launch",
-      params.udid,
-      params.bundleId,
-    ]);
+    await execFileAsync("xcrun", ["simctl", "launch", params.udid, params.bundleId]);
     return { launched: true, bundleId: params.bundleId };
   },
 };

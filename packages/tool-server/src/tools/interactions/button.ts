@@ -8,22 +8,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   button: z
-    .enum([
-      "home",
-      "back",
-      "power",
-      "volumeUp",
-      "volumeDown",
-      "appSwitch",
-      "actionButton",
-    ])
+    .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
     .describe("Hardware button to press"),
 });
 
-export const buttonTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  { pressed: string }
-> = {
+export const buttonTool: ToolDefinition<z.infer<typeof zodSchema>, { pressed: string }> = {
   id: "button",
   description: `Press a simulator hardware button. Sends Down then Up events automatically.
 Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.`,

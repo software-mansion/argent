@@ -1,0 +1,133 @@
+name: Tool Description Quality
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "packages/tool-server/src/tools/**"
+      - "scripts/extract-tools.mjs"
+  pull_request:
+    paths:
+      - "packages/tool-server/src/tools/**"
+      - "scripts/extract-tools.mjs"
+
+jobs:
+  tool-descriptions:
+    name: Tool description quality (SpiderShield)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SpiderShield
+        run: pip install spidershield==0.3.4
+
+      - name: Extract tool descriptions
+        run: node scripts/extract-tools.mjs > tools.json
+
+      - name: Run SpiderShield scan
+        run: spidershield scan packages/tool-server --tools-json tools.json --format json > spidershield-report.json
+
+      - name: Check description score (regression gate)
+        run: |
+          python3 -c "
+          import json, sys
+
+          # Custom scoring — SpiderShield criteria we exclude:
+          #   has_param_docs    (redundant: MCP agents already receive the full inputSchema)
+          #   has_param_examples (notation varies per harness; punishes valid descriptions)
+          #
+          # Remaining weights scaled proportionally to keep max at 10.0:
+          #   has_action_verb      2.0  (was 1.5)
+          #   has_scenario_trigger 3.5  (was 2.5, bumped — most impactful for tool selection)
+          #   has_return_docs      1.5  (was 1.0)
+          #   has_error_guidance   1.0  (unchanged)
+          #   disambiguation       1.5  (was 1.0)
+          #   length               0.5  (unchanged)
+          #   total                10.0
+
+          W_VERB   = 2.0
+          W_SCENE  = 3.5
+          W_RETURN = 1.5
+          W_ERROR  = 1.0
+          W_DISAMB = 1.5
+          W_LEN    = 0.5
+
+          THRESHOLD = 9.9
+
+          with open('spidershield-report.json') as f:
+              report = json.load(f)
+
+          tools = report.get('tool_scores', [])
+
+          col_w = [36, 6, 5, 9, 7, 6, 7]
+          headers = ['Tool', 'Score', 'Verb', 'Scenario', 'Returns', 'Error', 'Disamb']
+          sep = '+' + '+'.join('-' * (w + 2) for w in col_w) + '+'
+
+          def fmt_row(*cells):
+              return '|' + '|'.join(
+                  ' ' + str(c)[:col_w[i]].ljust(col_w[i]) + ' '
+                  for i, c in enumerate(cells)
+              ) + '|'
+
+          print()
+          print(sep)
+          print(fmt_row(*headers))
+          print(sep)
+
+          custom_scores = []
+          for t in tools:
+              disamb = t.get('disambiguation_score', 1.0)
+              s = min(
+                  (1.0 if t['has_action_verb']      else 0.0) * W_VERB
+                + (1.0 if t['has_scenario_trigger'] else 0.0) * W_SCENE
+                + (1.0 if t['has_return_docs']      else 0.0) * W_RETURN
+                + (1.0 if t['has_error_guidance']   else 0.0) * W_ERROR
+                + disamb * W_DISAMB
+                + W_LEN,
+                10.0,
+              )
+              custom_scores.append(s)
+              print(fmt_row(
+                  t['tool_name'],
+                  f'{s:.1f}',
+                  'Y' if t['has_action_verb']      else 'N',
+                  'Y' if t['has_scenario_trigger'] else 'N',
+                  'Y' if t['has_return_docs']      else 'N',
+                  'Y' if t['has_error_guidance']   else 'N',
+                  f\"{disamb:.2f}\",
+              ))
+
+          print(sep)
+
+          avg = sum(custom_scores) / len(custom_scores) if custom_scores else 0.0
+          print()
+          print(f'  Average score : {avg:.2f} / 10')
+          print(f'  Threshold     : {THRESHOLD}')
+          print()
+
+          if avg < THRESHOLD:
+              print(f'ERROR: average score {avg:.2f} is below threshold {THRESHOLD}')
+              sys.exit(1)
+          else:
+              print(f'OK: score {avg:.2f} meets threshold ({THRESHOLD}).')
+          "
+
+      - name: Upload SpiderShield report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tool-description-report
+          path: spidershield-report.json

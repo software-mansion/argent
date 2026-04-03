@@ -1,8 +1,5 @@
 export class TypedEventEmitter<
-  T extends Record<string, (...args: any[]) => void> = Record<
-    string,
-    (...args: any[]) => void
-  >,
+  T extends Record<string, (...args: any[]) => void> = Record<string, (...args: any[]) => void>,
 > {
   private listeners = new Map<keyof T, Set<Function>>();
 

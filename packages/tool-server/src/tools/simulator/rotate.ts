@@ -10,10 +10,7 @@ const zodSchema = z.object({
     .describe("Target orientation"),
 });
 
-export const rotateTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  { orientation: string }
-> = {
+export const rotateTool: ToolDefinition<z.infer<typeof zodSchema>, { orientation: string }> = {
   id: "rotate",
   description: `Rotate the simulator to a given orientation.`,
   zodSchema,

@@ -49,12 +49,8 @@ describe("discoverMetro", () => {
   });
 
   it("throws when project root header is missing", async () => {
-    mockFetch.mockResolvedValueOnce(
-      new Response("packager-status:running")
-    );
-    await expect(discoverMetro(8081)).rejects.toThrow(
-      "X-React-Native-Project-Root"
-    );
+    mockFetch.mockResolvedValueOnce(new Response("packager-status:running"));
+    await expect(discoverMetro(8081)).rejects.toThrow("X-React-Native-Project-Root");
   });
 
   it("throws when no targets are found", async () => {

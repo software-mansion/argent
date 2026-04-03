@@ -8,24 +8,16 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const eventSchema = z.object({
   type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
-  x: z.number().describe(
-    "Normalized x 0.0–1.0 (not pixels; same as tap/swipe)",
-  ),
-  y: z.number().describe(
-    "Normalized y 0.0–1.0 (not pixels; same as tap/swipe)",
-  ),
+  x: z.number().describe("Normalized x 0.0–1.0 (not pixels; same as tap/swipe)"),
+  y: z.number().describe("Normalized y 0.0–1.0 (not pixels; same as tap/swipe)"),
   x2: z
     .number()
     .optional()
-    .describe(
-      "Second touch x for two-finger gestures: normalized 0.0–1.0 (not pixels)",
-    ),
+    .describe("Second touch x for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
   y2: z
     .number()
     .optional()
-    .describe(
-      "Second touch y for two-finger gestures: normalized 0.0–1.0 (not pixels)",
-    ),
+    .describe("Second touch y for two-finger gestures: normalized 0.0–1.0 (not pixels)"),
   delayMs: z
     .number()
     .optional()
@@ -37,7 +29,7 @@ const zodSchema = z.object({
   events: z
     .array(eventSchema)
     .describe(
-      "Sequence of touch events; x/y (and optional second touch) are normalized 0.0–1.0, not pixels",
+      "Sequence of touch events; x/y (and optional second touch) are normalized 0.0–1.0, not pixels"
     ),
   interpolate: z
     .number()
@@ -49,10 +41,7 @@ const zodSchema = z.object({
     ),
 });
 
-export const gestureCustomTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  { events: number }
-> = {
+export const gestureCustomTool: ToolDefinition<z.infer<typeof zodSchema>, { events: number }> = {
   id: "gesture-custom",
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).

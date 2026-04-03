@@ -152,14 +152,14 @@ For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
 ### 4.1 Where to Look
 
-| Problem type                      | Tool / Where to look                                                                                        |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Problem type                      | Tool / Where to look                                                                                                                            |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search. Use `debugger-console-listen` for real-time logs. |
-| **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.  |
-| **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree. |
-| **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                        |
-| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                       |
-| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                |
+| **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.                                      |
+| **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree.                                     |
+| **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                            |
+| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                                                           |
+| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                                                    |
 
 For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `argent-metro-debugger` skill.
 
@@ -186,6 +186,7 @@ Check the `argent-environment-inspector` result for test commands. For interacti
 ### 5.2 Running Tests (Typical)
 
 If the user's intent is ambiguous (run existing tests, write new tests, or find missing coverage), clarify before proceeding.
+
 - **Jest**: `npm test` or `npx jest`.
 - **Detox (example)**:
   - Build: `detox build --configuration ios.sim.release` (or debug).
@@ -225,12 +226,12 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 
 ## Related Skills
 
-| Skill                    | When to use                                                                    |
-| ------------------------ | ------------------------------------------------------------------------------ |
-| `argent-simulator-setup`        | Initial simulator boot and connection setup                                    |
-| `argent-simulator-interact`     | Tapping, swiping, typing, hardware buttons, gestures on the simulator          |
-| `argent-metro-debugger`         | Full Metro CDP debugging: breakpoints, stepping, component inspection          |
-| `argent-react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                  |
-| `argent-test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
+| Skill                          | When to use                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| `argent-simulator-setup`       | Initial simulator boot and connection setup                                     |
+| `argent-simulator-interact`    | Tapping, swiping, typing, hardware buttons, gestures on the simulator           |
+| `argent-metro-debugger`        | Full Metro CDP debugging: breakpoints, stepping, component inspection           |
+| `argent-react-native-profiler` | Profiling performance, finding re-render issues, CPU hotspots                   |
+| `argent-test-ui-flow`          | Interactive UI testing with automatic screenshot verification after each action |
 
 Ask the user before running tests: confirm which test suite (unit, E2E, or both), whether to use existing CI commands, and whether they want you to run existing tests, write new ones, or explore test cases yourself.

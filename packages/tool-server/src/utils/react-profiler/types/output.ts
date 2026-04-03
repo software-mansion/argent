@@ -1,17 +1,17 @@
 export type ReRenderReason =
-  | 'parent'
-  | 'props'
-  | 'hooks'
-  | 'context'
-  | 'state'
-  | 'force_update'
-  | 'unknown';
+  | "parent"
+  | "props"
+  | "hooks"
+  | "context"
+  | "state"
+  | "force_update"
+  | "unknown";
 
 export interface HotCommitComponentEntry {
   name: string;
-  selfDurationMs: number;  // total across all instances in this commit
-  count: number;           // number of fiber instances (>1 = list items etc.)
-  isFirstMount?: boolean;  // true = initial render (mount), not a re-render
+  selfDurationMs: number; // total across all instances in this commit
+  count: number; // number of fiber instances (>1 = list items etc.)
+  isFirstMount?: boolean; // true = initial render (mount), not a re-render
   reason?: ReRenderReason;
   topChangedProps?: string[];
   topChangedHookNames?: string[];
@@ -28,18 +28,18 @@ export interface CpuCommitHotspot {
 
 export interface HotCommitSummary {
   commitIndex: number;
-  timestampMs: number;    // performance.now() from device (absolute)
+  timestampMs: number; // performance.now() from device (absolute)
   totalRenderMs: number;
   isMargin: boolean;
-  tier: 'hot' | 'warm' | null;  // null = margin; hot = >50ms, warm = 16-50ms
-  isInitialRender?: boolean;    // true when the commit is dominated by first-mount renders
+  tier: "hot" | "warm" | null; // null = margin; hot = >50ms, warm = 16-50ms
+  isInitialRender?: boolean; // true when the commit is dominated by first-mount renders
   rootCauseComponent?: string;
   rootCauseReason?: ReRenderReason;
   rootCauseChangedProps?: string[];
   rootCauseChangedHookNames?: string[];
-  components: HotCommitComponentEntry[];  // grouped by name, sorted by selfDurationMs DESC (capped at 15)
-  totalComponentCount: number;            // total before cap (for "... and N more" display)
-  cpuHotspots?: CpuCommitHotspot[];       // top JS functions by self-time during this commit's time window
+  components: HotCommitComponentEntry[]; // grouped by name, sorted by selfDurationMs DESC (capped at 15)
+  totalComponentCount: number; // total before cap (for "... and N more" display)
+  cpuHotspots?: CpuCommitHotspot[]; // top JS functions by self-time during this commit's time window
 }
 
 export interface ComponentFinding {

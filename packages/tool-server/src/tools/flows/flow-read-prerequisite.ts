@@ -4,9 +4,7 @@ import type { ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe('Name of the flow to inspect (e.g. "settings-explore")'),
+  name: z.string().describe('Name of the flow to inspect (e.g. "settings-explore")'),
 });
 
 export const flowReadPrerequisiteTool: ToolDefinition<

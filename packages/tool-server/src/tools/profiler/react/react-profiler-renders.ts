@@ -35,7 +35,7 @@ const COLLECT_RENDERS_SCRIPT = `
       if (fiber.sibling) walkFiber(fiber.sibling, depth);
     }
 
-    var roots = hook.__rn_mcp_roots__ || hook._fiberRoots || hook.fiberRoots;
+    var roots = hook.__argent_roots__ || hook._fiberRoots || hook.fiberRoots;
     if (roots) {
       var iter = roots.values ? roots.values() : Object.values(roots);
       for (var root of iter) {
@@ -84,7 +84,7 @@ function renderMarkdownTable(entries: RenderEntry[]): string {
   const sep = "|---|---|---|---|";
   const rows = entries.map(
     (e) =>
-      `| \`${e.component}\` | ${e.renderCount} | ${e.totalActualDuration_ms.toFixed(2)} | ${e.selfBaseDuration_ms.toFixed(2)} |`,
+      `| \`${e.component}\` | ${e.renderCount} | ${e.totalActualDuration_ms.toFixed(2)} | ${e.selfBaseDuration_ms.toFixed(2)} |`
   );
   return [header, sep, ...rows].join("\n");
 }
@@ -99,10 +99,7 @@ const zodSchema = z.object({
     .describe("Number of top re-rendering components to return (default 20)"),
 });
 
-export const reactProfilerRendersTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-renders",
   description: `Walk the live React fiber tree to collect component render counts and durations.
 Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.`,
@@ -130,9 +127,7 @@ Returns a markdown table of the top re-rendering components. No profiling sessio
     let result = await evalRenders();
 
     if (result?.exceptionDetails) {
-      throw new Error(
-        `Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`,
-      );
+      throw new Error(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`);
     }
 
     if (!result?.result?.value) {
@@ -142,10 +137,7 @@ Returns a markdown table of the top re-rendering components. No profiling sessio
     let parsed = JSON.parse(result.result.value) as ParsedRenders;
 
     function getErrorString(p: ParsedRenders): string | null {
-      if (
-        "error" in p &&
-        typeof (p as { error?: unknown }).error === "string"
-      ) {
+      if ("error" in p && typeof (p as { error?: unknown }).error === "string") {
         return (p as { error: string }).error;
       }
       return null;
@@ -166,7 +158,7 @@ Returns a markdown table of the top re-rendering components. No profiling sessio
       throw new Error(
         HOOK_NOT_PRESENT_ERRORS.has(errorStr)
           ? HOOK_MISSING_MESSAGE
-          : `React hook error: ${errorStr}`,
+          : `React hook error: ${errorStr}`
       );
     }
 

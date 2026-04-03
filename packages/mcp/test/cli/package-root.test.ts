@@ -19,17 +19,14 @@ function writeFile(p: string, content: string): void {
 }
 
 function writePkg(dir: string, name: string, version = "1.0.0"): void {
-  writeFile(
-    path.join(dir, "package.json"),
-    JSON.stringify({ name, version }),
-  );
+  writeFile(path.join(dir, "package.json"), JSON.stringify({ name, version }));
 }
 
 function writeSkills(pkgRoot: string): void {
   mkdirp(path.join(pkgRoot, "skills", "simulator-interact"));
   writeFile(
     path.join(pkgRoot, "skills", "simulator-interact", "SKILL.md"),
-    "---\nname: simulator-interact\ndescription: test\n---\n",
+    "---\nname: simulator-interact\ndescription: test\n---\n"
   );
 }
 
@@ -73,8 +70,14 @@ describe("global install — nvm", () => {
   it("resolves from nvm global layout", () => {
     const pkgRoot = path.join(
       tmpDir,
-      ".nvm", "versions", "node", "v22.0.0",
-      "lib", "node_modules", "@software-mansion", "argent",
+      ".nvm",
+      "versions",
+      "node",
+      "v22.0.0",
+      "lib",
+      "node_modules",
+      "@software-mansion",
+      "argent"
     );
     writePkg(pkgRoot, PACKAGE_NAME);
     writeSkills(pkgRoot);
@@ -90,8 +93,14 @@ describe("global install — pnpm", () => {
   it("resolves from pnpm global layout", () => {
     const pkgRoot = path.join(
       tmpDir,
-      ".local", "share", "pnpm", "global", "5",
-      "node_modules", "@software-mansion", "argent",
+      ".local",
+      "share",
+      "pnpm",
+      "global",
+      "5",
+      "node_modules",
+      "@software-mansion",
+      "argent"
     );
     writePkg(pkgRoot, PACKAGE_NAME);
     writeSkills(pkgRoot);
@@ -106,8 +115,12 @@ describe("global install — yarn classic", () => {
   it("resolves from yarn global layout", () => {
     const pkgRoot = path.join(
       tmpDir,
-      ".config", "yarn", "global",
-      "node_modules", "@software-mansion", "argent",
+      ".config",
+      "yarn",
+      "global",
+      "node_modules",
+      "@software-mansion",
+      "argent"
     );
     writePkg(pkgRoot, PACKAGE_NAME);
     writeSkills(pkgRoot);
@@ -131,12 +144,10 @@ describe("local install — npm workspaces (hoisted)", () => {
         name: "my-monorepo",
         private: true,
         workspaces: ["packages/*"],
-      }),
+      })
     );
 
-    const pkgRoot = path.join(
-      monorepo, "node_modules", "@software-mansion", "argent",
-    );
+    const pkgRoot = path.join(monorepo, "node_modules", "@software-mansion", "argent");
     writePkg(pkgRoot, PACKAGE_NAME);
     writeSkills(pkgRoot);
 
@@ -158,9 +169,12 @@ describe("local install — pnpm (symlinked from store)", () => {
 
     const storePkg = path.join(
       project,
-      "node_modules", ".pnpm",
+      "node_modules",
+      ".pnpm",
       "@software-mansion+argent@0.3.1",
-      "node_modules", "@software-mansion", "argent",
+      "node_modules",
+      "@software-mansion",
+      "argent"
     );
     writePkg(storePkg, PACKAGE_NAME, "0.3.1");
     writeSkills(storePkg);
@@ -177,25 +191,24 @@ describe("local install — pnpm (symlinked from store)", () => {
     // Real location in the .pnpm store
     const storePkg = path.join(
       project,
-      "node_modules", ".pnpm",
+      "node_modules",
+      ".pnpm",
       "@software-mansion+argent@0.3.1",
-      "node_modules", "@software-mansion", "argent",
+      "node_modules",
+      "@software-mansion",
+      "argent"
     );
     writePkg(storePkg, PACKAGE_NAME, "0.3.1");
     writeSkills(storePkg);
     mkdirp(path.join(storePkg, "dist", "cli"));
 
     // Create the symlink at the standard location
-    const symlinkDir = path.join(
-      project, "node_modules", "@software-mansion",
-    );
+    const symlinkDir = path.join(project, "node_modules", "@software-mansion");
     mkdirp(symlinkDir);
     fs.symlinkSync(storePkg, path.join(symlinkDir, "argent"), "dir");
 
     // When Node resolves import.meta.dirname, it uses the real path
-    const realDistCli = fs.realpathSync(
-      path.join(symlinkDir, "argent", "dist", "cli"),
-    );
+    const realDistCli = fs.realpathSync(path.join(symlinkDir, "argent", "dist", "cli"));
 
     const resolved = resolvePackageRoot(realDistCli);
     expect(fs.existsSync(path.join(resolved, "skills"))).toBe(true);
@@ -212,9 +225,12 @@ describe("local install — yarn PnP (unplugged)", () => {
 
     const pkgRoot = path.join(
       project,
-      ".yarn", "unplugged",
+      ".yarn",
+      "unplugged",
       "@software-mansion-argent-npm-0.3.1-abc123",
-      "node_modules", "@software-mansion", "argent",
+      "node_modules",
+      "@software-mansion",
+      "argent"
     );
     writePkg(pkgRoot, PACKAGE_NAME, "0.3.1");
     writeSkills(pkgRoot);
@@ -283,9 +299,7 @@ describe("actual environment — this monorepo", () => {
     // resolvePackageRoot("src/cli/") -> packages/mcp/
     // We can't test the exact constant (it's evaluated at import time),
     // but we can test the function with the known source layout.
-    const srcCli = path.resolve(
-      import.meta.dirname, "..", "..", "src", "cli",
-    );
+    const srcCli = path.resolve(import.meta.dirname, "..", "..", "src", "cli");
     const resolved = resolvePackageRoot(srcCli);
     const resolvedPkg = path.join(resolved, "package.json");
 

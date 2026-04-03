@@ -1,8 +1,6 @@
 import { z } from "zod";
 
-export function zodObjectToJsonSchema(
-  schema: z.ZodObject<any>
-): Record<string, unknown> {
+export function zodObjectToJsonSchema(schema: z.ZodObject<any>): Record<string, unknown> {
   const shape = schema.shape as Record<string, z.ZodTypeAny>;
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
@@ -25,8 +23,7 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
   if (type instanceof z.ZodString) return { type: "string" };
   if (type instanceof z.ZodNumber) return { type: "number" };
   if (type instanceof z.ZodBoolean) return { type: "boolean" };
-  if (type instanceof z.ZodOptional)
-    return zodTypeToJsonSchema(type.unwrap());
+  if (type instanceof z.ZodOptional) return zodTypeToJsonSchema(type.unwrap());
   if (type instanceof z.ZodArray) {
     return { type: "array", items: zodTypeToJsonSchema(type.element) };
   }
