@@ -82,12 +82,12 @@ Call `profiler-combined-report` when both React Profiler and iOS Instruments ran
 ## Session reload
 
 ```json
-{ "project_root": "/path/to/app", "mode": "list" }
+{ "mode": "list" }
 ```
 
 Call `profiler-load`. Modes:
 
-- `list` — show all saved profiling sessions (React + iOS) in the project's debug directory.
+- `list` — show all saved profiling sessions (React + iOS) in `/tmp/argent-profiler-cwd/`.
 - `load_react` — reload a React profiler session by `session_id`. Populates the in-memory cache for `profiler-cpu-query` and `profiler-commit-query`.
 - `load_instruments` — re-parse iOS Instruments XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
 

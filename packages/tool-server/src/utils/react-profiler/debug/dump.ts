@@ -1,14 +1,15 @@
 import { promises as fs } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 import type { HermesCpuProfile, DevToolsFiberCommit } from "../types/input";
 
 const DEBUG_DIR_NAME = "argent-profiler-cwd";
 
 /**
- * Returns (and creates if needed) <projectRoot>/argent-profiler-cwd/.
+ * Returns (and creates if needed) /tmp/argent-profiler-cwd/.
  */
-export async function getDebugDir(projectRoot: string): Promise<string> {
-  const dir = join(projectRoot, DEBUG_DIR_NAME);
+export async function getDebugDir(): Promise<string> {
+  const dir = join(tmpdir(), DEBUG_DIR_NAME);
   await fs.mkdir(dir, { recursive: true });
   return dir;
 }

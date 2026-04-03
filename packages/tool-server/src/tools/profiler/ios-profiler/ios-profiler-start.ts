@@ -12,11 +12,6 @@ const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the user's project root directory. Output files will be saved to <project_root>/argent-profiler-cwd/.",
-    ),
   app_process: z
     .string()
     .optional()
@@ -123,7 +118,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
     const appProcess = params.app_process ?? detectRunningApp(params.device_id);
 
-    const debugDir = await getDebugDir(params.project_root);
+    const debugDir = await getDebugDir();
     const timestamp = new Date()
       .toISOString()
       .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
