@@ -1,7 +1,7 @@
 # Phase 2: Semantic Sweep
 
 Work through each area. Do not skip.
-Consult fix-reference.md for how to fix confirmed issues.
+See [fix-reference.md](fix-reference.md) for concrete fix patterns per finding.
 
 ## Checklist
 
