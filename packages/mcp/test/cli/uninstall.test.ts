@@ -8,10 +8,12 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../../src/cli/mcp-configs.js";
+import { readToml } from "../../src/cli/utils.js";
 
 let tmpDir: string;
 
-function readJsonFile(filePath: string): Record<string, unknown> {
+function readConfigFile(filePath: string): Record<string, unknown> {
+  if (filePath.endsWith(".toml")) return readToml(filePath);
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
@@ -34,7 +36,7 @@ describe("uninstall — MCP entry removal", () => {
       adapter.write(configPath, getMcpEntry());
       expect(adapter.remove(configPath)).toBe(true);
 
-      const config = readJsonFile(configPath);
+      const config = readConfigFile(configPath);
       // Check that argent is gone from whichever key this adapter uses
       const allValues = Object.values(config).filter(
         (v) => typeof v === "object" && v !== null
@@ -60,7 +62,7 @@ describe("uninstall — permissions cleanup", () => {
     removeClaudePermission(tmpDir, "local");
 
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    const config = readJsonFile(settingsPath);
+    const config = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
     const allow = (config.permissions as Record<string, unknown>).allow as string[];
     expect(allow).not.toContain("mcp__argent");
   });
