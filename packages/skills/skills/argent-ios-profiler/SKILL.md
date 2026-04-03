@@ -71,7 +71,7 @@ Use `profiler-stack-query` to investigate specific findings. See §3 Investigati
 
 To revisit a previous trace:
 
-1. Call `profiler-load` mode=`list` project_root=`<path>` to see available sessions.
+1. Call `profiler-load` mode=`list` to see available sessions.
 2. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to re-parse the XML files.
 3. Use `profiler-stack-query` to investigate the reloaded data.
 
