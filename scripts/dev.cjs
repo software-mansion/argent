@@ -6,12 +6,13 @@
  * Full dev mode — no packing, no global install needed.
  *
  * What it does:
- *   1. Builds MCP TypeScript (tsc only, no esbuild tool-server bundle)
- *   2. Sets up packages/mcp/bin/ and packages/mcp/dist/ for local use
- *   3. Patches ~/.claude.json to point the argent MCP at the local dist
- *   4. Starts the tool-server from source via ts-node (no build needed)
- *   5. Writes ~/.argent/tool-server.json so the local MCP picks it up
- *   6. On exit: restores ~/.claude.json and stops the tool-server
+ *   1. Builds native devtools dylibs (libInjectionBootstrap, libNativeDevtoolsIos, libKeyboardPatch)
+ *   2. Builds MCP TypeScript (tsc only, no esbuild tool-server bundle)
+ *   3. Sets up packages/mcp/bin/ and packages/mcp/dist/ for local use
+ *   4. Patches ~/.claude.json to point the argent MCP at the local dist
+ *   5. Starts the tool-server from source via ts-node (no build needed)
+ *   6. Writes ~/.argent/tool-server.json so the local MCP picks it up
+ *   7. On exit: restores ~/.claude.json and stops the tool-server
  *
  * Usage:
  *   npm run dev
@@ -26,6 +27,7 @@ const os = require("os");
 const ROOT = path.resolve(__dirname, "..");
 const MCP_PKG = path.join(ROOT, "packages", "mcp");
 const TOOL_SERVER_PKG = path.join(ROOT, "packages", "tool-server");
+const NATIVE_DEVTOOLS_PKG = path.join(ROOT, "packages", "native-devtools-ios");
 const STATE_DIR = path.join(os.homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const CLAUDE_JSON = path.join(os.homedir(), ".claude.json");
@@ -59,7 +61,23 @@ async function waitForHttp(url, timeoutMs = 20_000) {
   return false;
 }
 
-// ── Step 1: Build MCP TypeScript ──────────────────────────────────────────────
+// ── Step 1: Build native devtools dylibs ─────────────────────────────────────
+
+console.log("Initialising argent-private submodule...");
+execSync("git submodule update --init packages/argent-private", {
+  cwd: ROOT,
+  stdio: "inherit",
+});
+console.log("✓ Submodule ready\n");
+
+console.log("Building native devtools dylibs...");
+execSync("bash scripts/build.sh dev", {
+  cwd: NATIVE_DEVTOOLS_PKG,
+  stdio: "inherit",
+});
+console.log("✓ Native devtools dylibs built\n");
+
+// ── Step 2: Build MCP TypeScript ─────────────────────────────────────────────
 
 console.log("Building MCP TypeScript...");
 execSync("npm run build:mcp -w @software-mansion/argent", {
@@ -68,7 +86,7 @@ execSync("npm run build:mcp -w @software-mansion/argent", {
 });
 console.log("✓ MCP TypeScript built\n");
 
-// ── Step 2: Set up packages/mcp/bin/ and skills/rules/agents ─────────────────
+// ── Step 3: Set up packages/mcp/bin/ and skills/rules/agents ─────────────────
 
 const BIN_DIR = path.join(MCP_PKG, "bin");
 const BIN_SRC = path.join(ROOT, "simulator-server");
@@ -107,7 +125,7 @@ if (!fs.existsSync(STUB)) {
   );
 }
 
-// ── Step 3: Patch ~/.claude.json to use local MCP dist ───────────────────────
+// ── Step 4: Patch ~/.claude.json to use local MCP dist ───────────────────────
 
 const LOCAL_MCP_ENTRY = path.join(MCP_PKG, "dist", "cli.js");
 const LOG_FILE = path.join(STATE_DIR, "mcp-calls.log");
@@ -159,7 +177,7 @@ process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 process.on("exit", cleanup);
 
 async function main() {
-  // ── Step 4: Kill any existing registered tool-server ───────────────────────
+  // ── Step 5: Kill any existing registered tool-server ───────────────────────
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   const existingState = readJson(STATE_FILE);
@@ -170,7 +188,7 @@ async function main() {
   }
   try { fs.unlinkSync(STATE_FILE); } catch {}
 
-  // ── Step 5: Start tool-server from source ──────────────────────────────────
+  // ── Step 6: Start tool-server from source ──────────────────────────────────
 
   console.log(`Starting dev tool-server on port ${PORT}...`);
 
@@ -199,7 +217,7 @@ async function main() {
     }
   });
 
-  // ── Step 6: Wait for tool-server to be ready ───────────────────────────────
+  // ── Step 7: Wait for tool-server to be ready ───────────────────────────────
 
   process.stdout.write("Waiting for tool-server");
   const ready = await waitForHttp(`http://127.0.0.1:${PORT}/tools`);
@@ -210,7 +228,7 @@ async function main() {
   }
   console.log(" ready.");
 
-  // ── Step 7: Write state file ────────────────────────────────────────────────
+  // ── Step 8: Write state file ────────────────────────────────────────────────
 
   writeJson(STATE_FILE, {
     port: PORT,

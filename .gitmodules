@@ -1,0 +1,3 @@
+[submodule "packages/argent-private"]
+	path = packages/argent-private
+	url = git@github.com:software-mansion-labs/argent-private.git
