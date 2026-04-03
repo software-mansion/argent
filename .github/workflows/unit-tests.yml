@@ -25,8 +25,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Build registry
+        run: npm run build -w packages/registry
 
       - name: Run tests
         run: npm test --workspaces --if-present
