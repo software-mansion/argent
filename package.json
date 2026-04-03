@@ -7,6 +7,10 @@
     "start": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "pack:mcp": "npm run build -w @software-mansion/argent && npm pack -w @software-mansion/argent --pack-destination .",
-    "dev": "node scripts/dev.cjs"
+    "dev": "node scripts/dev.cjs",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "prettier": "^3.0.0"
   }
 }

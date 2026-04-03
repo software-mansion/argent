@@ -1,5 +1,10 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
+import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
+import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
+import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
+import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
+import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
@@ -65,6 +70,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(iosInstrumentsSessionBlueprint);
+  registry.registerBlueprint(nativeDevtoolsBlueprint);
 
   registry.registerTool(listSimulatorsTool);
   registry.registerTool(bootSimulatorTool);
@@ -109,6 +115,10 @@ export function createRegistry(): Registry {
   registry.registerTool(profilerCombinedReportTool);
   registry.registerTool(profilerLoadTool);
   registry.registerTool(gatherWorkspaceDataTool);
+  registry.registerTool(nativeDevtoolsStatusTool);
+  registry.registerTool(nativeNetworkLogsTool);
+  registry.registerTool(nativeFindViewsTool);
+  registry.registerTool(nativeFullHierarchyTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));

@@ -63,19 +63,38 @@ async function waitForHttp(url, timeoutMs = 20_000) {
 
 // ── Step 1: Build native devtools dylibs ─────────────────────────────────────
 
-console.log("Initialising argent-private submodule...");
-execSync("git submodule update --init packages/argent-private", {
-  cwd: ROOT,
-  stdio: "inherit",
-});
-console.log("✓ Submodule ready\n");
+const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
+const DYLIBS_EXIST = fs.existsSync(path.join(DYLIBS_DIR, "libNativeDevtoolsIos.dylib"));
 
-console.log("Building native devtools dylibs...");
-execSync("bash scripts/build.sh dev", {
-  cwd: NATIVE_DEVTOOLS_PKG,
-  stdio: "inherit",
-});
-console.log("✓ Native devtools dylibs built\n");
+// Try to init the submodule and rebuild. Failure is non-fatal if pre-built
+// dylibs are already present — developers without argent-private access can
+// still work on Argent using the committed binaries.
+let submoduleReady = false;
+try {
+  execSync("git submodule update --init packages/argent-private", {
+    cwd: ROOT,
+    stdio: "pipe",
+  });
+  submoduleReady = true;
+} catch {
+  if (DYLIBS_EXIST) {
+    console.warn("⚠ argent-private submodule unavailable — using pre-built dylibs\n");
+  } else {
+    console.error("✗ argent-private submodule unavailable and no pre-built dylibs found.");
+    console.error("  Grant SSH access to github.com/software-mansion-labs/argent-private");
+    console.error("  or obtain pre-built dylibs and place them in packages/native-devtools-ios/dylibs/");
+    process.exit(1);
+  }
+}
+
+if (submoduleReady) {
+  console.log("Building native devtools dylibs...");
+  execSync("bash scripts/build.sh dev", {
+    cwd: NATIVE_DEVTOOLS_PKG,
+    stdio: "inherit",
+  });
+  console.log("✓ Native devtools dylibs built\n");
+}
 
 // ── Step 2: Build MCP TypeScript ─────────────────────────────────────────────
 

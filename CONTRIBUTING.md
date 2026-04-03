@@ -38,6 +38,22 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
    npm install
    ```
 
+3. **Start the dev environment:**
+
+   ```bash
+   npm run dev
+   ```
+
+   This builds the native devtools dylibs (if the private submodule is available, otherwise uses pre-built binaries), compiles the MCP TypeScript, patches `~/.claude.json` to point at the local MCP, and starts the tool-server from source via `ts-node`. Press `Ctrl+C` to stop — the script automatically restores your global Argent configuration.
+
+   To use a different port:
+
+   ```bash
+   PORT=4000 npm run dev
+   ```
+
+   > **Note:** `packages/argent-private` is a private git submodule that holds the ObjC source for the native devtools dylibs. If you don't have SSH access to it, `npm run dev` will use the pre-built dylibs committed to the repository — everything else works normally.
+
 That's it — no separate install steps per package are needed.
 
 ---
@@ -52,12 +68,23 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 | `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (port 3001). Registers all blueprints and tools |
 | `@software-mansion/argent` | `packages/mcp` | MCP bridge — exposes tools to AI assistants via Model Context Protocol |
 | `@argent/skills` | `packages/skills` | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools |
+| `@argent/native-devtools-ios` | `packages/native-devtools-ios` | Pre-built dylibs for iOS simulator injection (view hierarchy, network inspection). ObjC source lives in `packages/argent-private` _(private submodule)_ |
 
 The `tsconfig.json` at the root uses TypeScript project references; `tsconfig.base.json` holds shared compiler options (`strict`, `ES2022`, etc.).
 
 ---
 
 ## Building
+
+### Local development (recommended)
+
+```bash
+npm run dev
+```
+
+Builds everything and starts the tool-server from source. See [Setting up the dev environment](#setting-up-the-dev-environment) for details.
+
+### Full build
 
 Build all packages at once using TypeScript project references:
 
@@ -84,7 +111,9 @@ npm run pack:mcp
 
 ## Running the project
 
-**Start the tools server:**
+For day-to-day development, use `npm run dev` (see [Setting up the dev environment](#setting-up-the-dev-environment)).
+
+**Production-like start** (builds bundles first, then starts from compiled output):
 
 ```bash
 npm run start
