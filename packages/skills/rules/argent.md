@@ -12,6 +12,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 </description>
 
 <argent_use_cases>
+
 - User mentions iOS simulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in the simulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
@@ -36,6 +37,7 @@ If `describe` fails because of permissions / accessibility issues - stop your ta
 </skill_reading_rule>
 
 <important_rules>
+
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.

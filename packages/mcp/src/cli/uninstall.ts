@@ -4,14 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
-import {
-  ALL_ADAPTERS,
-  removeCodexRules,
-} from "./mcp-configs.js";
-import {
-  detectPackageManager,
-  globalUninstallCommand,
-} from "./utils.js";
+import { ALL_ADAPTERS, removeCodexRules } from "./mcp-configs.js";
+import { detectPackageManager, globalUninstallCommand } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "../launcher.js";
 
@@ -22,9 +16,7 @@ export async function uninstall(args: string[]): Promise<void> {
   p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
   if (!nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const proceed = await p.confirm({
       message: "Remove argent configuration from this workspace?",
@@ -45,18 +37,13 @@ export async function uninstall(args: string[]): Promise<void> {
   p.log.step(pc.bold("Removing MCP server entries..."));
 
   for (const adapter of ALL_ADAPTERS) {
-    for (const pathFn of [
-      () => adapter.projectPath(projectRoot),
-      () => adapter.globalPath(),
-    ]) {
+    for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
       const configPath = pathFn();
       if (!configPath) continue;
       try {
         const removed = adapter.remove(configPath);
         if (removed) {
-          results.push(
-            `${pc.green("+")} Removed from ${adapter.name} ${pc.dim(configPath)}`,
-          );
+          results.push(`${pc.green("+")} Removed from ${adapter.name} ${pc.dim(configPath)}`);
         }
       } catch {
         // non-fatal
@@ -71,9 +58,7 @@ export async function uninstall(args: string[]): Promise<void> {
     for (const s of ["local", "global"] as const) {
       try {
         adapter.removeAllowlist(projectRoot, s);
-        results.push(
-          `${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`,
-        );
+        results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
       } catch {
         // non-fatal
       }
@@ -91,9 +76,7 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldPrune = pruneFlag;
 
   if (!shouldPrune && !nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const pruneChoice = await p.confirm({
       message: "Also remove skills, rules, and agents directories?",
@@ -111,9 +94,7 @@ export async function uninstall(args: string[]): Promise<void> {
     // Skills: offer to run npx skills remove --all
     let skillsRemoved = false;
     if (!nonInteractive) {
-      p.log.message(
-        pc.dim("  Press y for yes, n for no, enter to confirm."),
-      );
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const removeSkills = await p.confirm({
         message: "Run `npx skills remove --all` to clean up skills?",
@@ -127,7 +108,7 @@ export async function uninstall(args: string[]): Promise<void> {
           pruneResults.push(`${pc.green("+")} Skills removed via npx skills`);
         } catch {
           pruneResults.push(
-            `${pc.yellow("-")} npx skills remove failed — removing directories manually`,
+            `${pc.yellow("-")} npx skills remove failed — removing directories manually`
           );
         }
       }
@@ -176,11 +157,7 @@ export async function uninstall(args: string[]): Promise<void> {
       p.note(pruneResults.join("\n"), "Pruned Directories");
     }
   } else {
-    p.log.info(
-      pc.dim(
-        "Kept skills, rules, and agents directories. Pass --prune to remove them.",
-      ),
-    );
+    p.log.info(pc.dim("Kept skills, rules, and agents directories. Pass --prune to remove them."));
   }
 
   // ── Uninstall the global package ────────────────────────────────────────────
@@ -188,9 +165,7 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldUninstallPackage = nonInteractive;
 
   if (!nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const uninstallPkg = await p.confirm({
       message: `Uninstall the global ${PACKAGE_NAME} package?`,

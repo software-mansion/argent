@@ -1,11 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { execSync } from "node:child_process";
-import {
-  detectAdapters,
-  getMcpEntry,
-  copyRulesAndAgents,
-} from "./mcp-configs.js";
+import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
   getInstalledVersion,
   getLatestVersion,
@@ -52,9 +48,7 @@ export async function update(args: string[]): Promise<void> {
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
 
     if (!nonInteractive) {
-      p.log.message(
-        pc.dim("  Press y for yes, n for no, enter to confirm."),
-      );
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const proceed = await p.confirm({
         message: `Update to v${latest}?`,
@@ -94,10 +88,7 @@ export async function update(args: string[]): Promise<void> {
 
   for (const adapter of detected) {
     // Refresh both local and global configs where they exist
-    for (const pathFn of [
-      () => adapter.projectPath(projectRoot),
-      () => adapter.globalPath(),
-    ]) {
+    for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
       const configPath = pathFn();
       if (!configPath) continue;
       try {
@@ -139,9 +130,7 @@ export async function update(args: string[]): Promise<void> {
 
   // Skills check prompt
   if (!nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const checkSkills = await p.confirm({
       message: "Check if skills have updates? (runs npx skills check)",

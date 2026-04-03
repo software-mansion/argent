@@ -15,12 +15,10 @@ export interface CorrelationResult {
 
 export function correlateHangsWithCpu(
   hangs: RawHang[],
-  cpuSamples: CpuSample[],
+  cpuSamples: CpuSample[]
 ): CorrelationResult {
   // Sort samples by timestamp for efficient windowing
-  const sortedSamples = [...cpuSamples].sort(
-    (a, b) => a.timestampNs - b.timestampNs,
-  );
+  const sortedSamples = [...cpuSamples].sort((a, b) => a.timestampNs - b.timestampNs);
 
   const hangSampleTimestamps = new Set<number>();
 
@@ -30,7 +28,7 @@ export function correlateHangsWithCpu(
 
     // Find CPU samples within the hang window
     const windowSamples = sortedSamples.filter(
-      (s) => s.timestampNs >= windowStart && s.timestampNs <= windowEnd,
+      (s) => s.timestampNs >= windowStart && s.timestampNs <= windowEnd
     );
 
     // Track all sample timestamps that fell in hang windows
@@ -41,10 +39,7 @@ export function correlateHangsWithCpu(
     // Count function frequency across all threads in the window
     const funcCounts = new Map<string, number>();
     // Count call chain frequency
-    const chainCounts = new Map<
-      string,
-      { chain: string[]; count: number }
-    >();
+    const chainCounts = new Map<string, { chain: string[]; count: number }>();
 
     for (const sample of windowSamples) {
       const dominant = findDominantFunction(sample.stack);

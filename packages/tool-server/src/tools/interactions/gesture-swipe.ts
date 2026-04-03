@@ -7,12 +7,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  fromX: z.number().describe(
-    "Start x: normalized 0.0–1.0 (not pixels; same as tap)",
-  ),
-  fromY: z.number().describe(
-    "Start y: normalized 0.0–1.0 (not pixels; same as tap)",
-  ),
+  fromX: z.number().describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
+  fromY: z.number().describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
   toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
   toY: z.number().describe("End y: normalized 0.0–1.0 (not pixels; same as tap)"),
   durationMs: z

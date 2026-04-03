@@ -8,33 +8,31 @@ const zodSchema = z.object({
   centerX: z
     .number()
     .describe(
-      "Center of pinch, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)",
+      "Center of pinch, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)"
     ),
   centerY: z
     .number()
     .describe(
-      "Center of pinch, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)",
+      "Center of pinch, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)"
     ),
   startDistance: z
     .number()
     .describe(
       "Initial distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
         "E.g. 0.2 = fingers 20% of screen apart. " +
-        "Use a larger startDistance than endDistance to pinch in (zoom out).",
+        "Use a larger startDistance than endDistance to pinch in (zoom out)."
     ),
   endDistance: z
     .number()
     .describe(
       "Final distance between the two fingers: normalized 0.0–1.0 (fraction of screen, not pixels). " +
         "E.g. 0.6 = fingers 60% of screen apart. " +
-        "Use a larger endDistance than startDistance to pinch out (zoom in).",
+        "Use a larger endDistance than startDistance to pinch out (zoom in)."
     ),
   angle: z
     .number()
     .optional()
-    .describe(
-      "Axis angle in degrees along which the fingers are placed (default 0 = horizontal).",
-    ),
+    .describe("Axis angle in degrees along which the fingers are placed (default 0 = horizontal)."),
   durationMs: z
     .number()
     .optional()

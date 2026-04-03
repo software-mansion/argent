@@ -21,10 +21,10 @@ import { PACKAGE_NAME } from "./constants.js";
 
 function isGloballyInstalled(): boolean {
   try {
-    const raw = execSync(
-      `npm list -g ${PACKAGE_NAME} --depth=0 --json`,
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    );
+    const raw = execSync(`npm list -g ${PACKAGE_NAME} --depth=0 --json`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
     const data = JSON.parse(raw) as {
       dependencies?: Record<string, unknown>;
     };
@@ -181,9 +181,7 @@ export async function init(args: string[]): Promise<void> {
       hint: detectedNames.includes(a.name) ? "detected" : undefined,
     }));
 
-    p.log.message(
-      pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
 
     const selected = await p.multiselect({
       message: "Which editors should argent be configured for?",
@@ -200,9 +198,7 @@ export async function init(args: string[]): Promise<void> {
     selectedAdapters = selected as McpConfigAdapter[];
   }
 
-  p.log.info(
-    `Editors: ${selectedAdapters.map((a) => pc.cyan(a.name)).join(", ")}`,
-  );
+  p.log.info(`Editors: ${selectedAdapters.map((a) => pc.cyan(a.name)).join(", ")}`);
 
   // Ask scope: global or local
   let scope: "local" | "global";
@@ -210,9 +206,7 @@ export async function init(args: string[]): Promise<void> {
   if (nonInteractive) {
     scope = "global";
   } else {
-    p.log.message(
-      pc.dim("  Use arrow keys to move, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
 
     const scopeChoice = await p.select({
       message: "Install MCP server globally or locally?",
@@ -243,10 +237,7 @@ export async function init(args: string[]): Promise<void> {
   const mcpResults: string[] = [];
 
   for (const adapter of selectedAdapters) {
-    const configPath =
-      scope === "global"
-        ? adapter.globalPath()
-        : adapter.projectPath(projectRoot);
+    const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(projectRoot);
 
     if (!configPath) {
       if (scope === "global" && adapter.projectPath(projectRoot)) {
@@ -254,16 +245,14 @@ export async function init(args: string[]): Promise<void> {
         try {
           adapter.write(fallback, mcpEntry);
           mcpResults.push(
-            `${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`,
+            `${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`
           );
         } catch (err) {
-          mcpResults.push(
-            `${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`,
-          );
+          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
         }
       } else {
         mcpResults.push(
-          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config path for this scope)")}`,
+          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config path for this scope)")}`
         );
       }
       continue;
@@ -282,25 +271,21 @@ export async function init(args: string[]): Promise<void> {
   // ── Tool Auto-Approval ────────────────────────────────────────────────────
 
   const adaptersWithAllowlist = selectedAdapters.filter((a) => a.addAllowlist);
-  const adaptersWithoutAllowlist = selectedAdapters.filter(
-    (a) => !a.addAllowlist,
-  );
+  const adaptersWithoutAllowlist = selectedAdapters.filter((a) => !a.addAllowlist);
 
   let allowlistEnabled = false;
 
   if (adaptersWithAllowlist.length > 0) {
     p.log.info(
       `By default, editors ask for confirmation before running each MCP tool.\n` +
-      `  Adding argent to the auto-approve allowlist lets tools run without\n` +
-      `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`,
+        `  Adding argent to the auto-approve allowlist lets tools run without\n` +
+        `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`
     );
 
     if (nonInteractive) {
       allowlistEnabled = true;
     } else {
-      p.log.message(
-        pc.dim("  Press y for yes, n for no, enter to confirm."),
-      );
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const allowlistChoice = await p.confirm({
         message: "Add argent tools to editor auto-approve lists? (recommended)",
@@ -324,15 +309,13 @@ export async function init(args: string[]): Promise<void> {
         adapter.addAllowlist!(projectRoot, scope);
         allowlistResults.push(`${pc.green("+")} ${adapter.name}`);
       } catch (err) {
-        allowlistResults.push(
-          `${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`,
-        );
+        allowlistResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
       }
     }
 
     for (const adapter of adaptersWithoutAllowlist) {
       allowlistResults.push(
-        `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no auto-approve API — configure manually)")}`,
+        `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no auto-approve API — configure manually)")}`
       );
     }
 
@@ -342,11 +325,7 @@ export async function init(args: string[]): Promise<void> {
   // ── Step 2: Skills Installation ─────────────────────────────────────────────
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
-  p.log.warn(
-    pc.yellow(
-      "Skills installation is required for argent to function properly.",
-    ),
-  );
+  p.log.warn(pc.yellow("Skills installation is required for argent to function properly."));
 
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
@@ -354,9 +333,7 @@ export async function init(args: string[]): Promise<void> {
   if (nonInteractive) {
     skillsMethod = "default";
   } else {
-    p.log.message(
-      pc.dim("  Use arrow keys to move, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
 
     const choice = await p.select({
       message: "How would you like to install skills?",
@@ -404,7 +381,7 @@ export async function init(args: string[]): Promise<void> {
         `  ${pc.dim("# Or use npx skills directly:")}`,
         `  npx skills add ${SKILLS_DIR}`,
       ].join("\n"),
-      "Manual Skills Installation",
+      "Manual Skills Installation"
     );
   } else {
     const skillsArgs = ["skills", "add", SKILLS_DIR];
@@ -417,9 +394,7 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    p.log.info(
-      `Running: ${pc.dim("npx")} ${pc.cyan(skillsArgs.join(" "))}`,
-    );
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(skillsArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -436,9 +411,7 @@ export async function init(args: string[]): Promise<void> {
         spinner.stop(pc.red("Skills installation failed."));
       }
       p.log.error(`Failed to run npx skills: ${err}`);
-      p.log.info(
-        `You can install skills manually:\n  npx ${skillsArgs.join(" ")}`,
-      );
+      p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
     }
   }
 
@@ -451,7 +424,7 @@ export async function init(args: string[]): Promise<void> {
     projectRoot,
     scope,
     RULES_DIR,
-    AGENTS_DIR,
+    AGENTS_DIR
   );
 
   if (copyResults.length > 0) {
@@ -495,10 +468,7 @@ export function printBanner(): void {
   console.log();
 }
 
-function runNpxSkills(
-  args: string[],
-  interactive: boolean,
-): Promise<void> {
+function runNpxSkills(args: string[], interactive: boolean): Promise<void> {
   return new Promise((resolve, reject) => {
     const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
     const child = spawn(npxCmd, args, {
@@ -523,11 +493,7 @@ function runNpxSkills(
         resolve();
       } else {
         const output = [stderr, stdout].filter(Boolean).join("\n").trim();
-        reject(
-          new Error(
-            output || `npx skills exited with code ${code}`,
-          ),
-        );
+        reject(new Error(output || `npx skills exited with code ${code}`));
       }
     });
 

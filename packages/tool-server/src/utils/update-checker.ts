@@ -77,9 +77,7 @@ async function check(): Promise<void> {
   };
 
   if (state.updateAvailable) {
-    process.stderr.write(
-      `[argent] Update available: ${currentVersion} -> ${latest}\n`,
-    );
+    process.stderr.write(`[argent] Update available: ${currentVersion} -> ${latest}\n`);
   }
 }
 

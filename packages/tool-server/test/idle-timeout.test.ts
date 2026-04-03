@@ -55,10 +55,7 @@ describe("idle timeout", () => {
     // Simulate activity every 3 minutes (well within the 5-min timeout)
     for (let i = 0; i < 4; i++) {
       vi.advanceTimersByTime(3 * 60_000);
-      await request(handle.app)
-        .post("/tools/test-tool")
-        .send({})
-        .expect(200);
+      await request(handle.app).post("/tools/test-tool").send({}).expect(200);
     }
 
     expect(onIdle).not.toHaveBeenCalled();

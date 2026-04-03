@@ -7,12 +7,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  x: z.number().describe(
-    "Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels",
-  ),
-  y: z.number().describe(
-    "Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels",
-  ),
+  x: z.number().describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
+  y: z.number().describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
 });
 
 export const gestureTapTool: ToolDefinition<

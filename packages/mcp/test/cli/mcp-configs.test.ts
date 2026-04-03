@@ -65,7 +65,15 @@ describe("getMcpEntry", () => {
 describe("ALL_ADAPTERS", () => {
   it("contains all seven adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
-    expect(names).toEqual(["Cursor", "Claude Code", "VS Code", "Windsurf", "Zed", "Gemini", "Codex"]);
+    expect(names).toEqual([
+      "Cursor",
+      "Claude Code",
+      "VS Code",
+      "Windsurf",
+      "Zed",
+      "Gemini",
+      "Codex",
+    ]);
   });
 });
 
@@ -115,10 +123,7 @@ describe("Cursor adapter", () => {
   it("preserves other servers when writing", () => {
     const configPath = path.join(tmpDir, ".cursor", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ mcpServers: { other: { command: "other" } } }),
-    );
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
 
     adapter.write(configPath, getMcpEntry());
 
@@ -129,15 +134,11 @@ describe("Cursor adapter", () => {
   });
 
   it("projectPath returns correct path", () => {
-    expect(adapter.projectPath("/foo")).toBe(
-      path.join("/foo", ".cursor", "mcp.json"),
-    );
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".cursor", "mcp.json"));
   });
 
   it("globalPath returns path in homedir", () => {
-    expect(adapter.globalPath()).toBe(
-      path.join(os.homedir(), ".cursor", "mcp.json"),
-    );
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".cursor", "mcp.json"));
   });
 });
 
@@ -163,9 +164,7 @@ describe("Claude Code adapter", () => {
 
     expect(adapter.remove(configPath)).toBe(true);
     const config = readJsonFile(configPath);
-    expect(
-      (config.mcpServers as Record<string, unknown>),
-    ).not.toHaveProperty("argent");
+    expect(config.mcpServers as Record<string, unknown>).not.toHaveProperty("argent");
   });
 
   it("projectPath returns .mcp.json", () => {
@@ -173,9 +172,7 @@ describe("Claude Code adapter", () => {
   });
 
   it("globalPath returns ~/.claude.json", () => {
-    expect(adapter.globalPath()).toBe(
-      path.join(os.homedir(), ".claude.json"),
-    );
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".claude.json"));
   });
 });
 
@@ -202,9 +199,7 @@ describe("VS Code adapter", () => {
 
     expect(adapter.remove(configPath)).toBe(true);
     const config = readJsonFile(configPath);
-    expect(
-      (config.servers as Record<string, unknown>),
-    ).not.toHaveProperty("argent");
+    expect(config.servers as Record<string, unknown>).not.toHaveProperty("argent");
   });
 
   it("globalPath returns null (project-only)", () => {
@@ -222,8 +217,7 @@ describe("Windsurf adapter", () => {
     adapter.write(configPath, getMcpEntry());
 
     const config = readJsonFile(configPath);
-    const argent = (config.mcpServers as Record<string, unknown>)
-      .argent as Record<string, unknown>;
+    const argent = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
     expect(argent.command).toBe("argent");
     expect(argent).not.toHaveProperty("type");
   });
@@ -234,7 +228,7 @@ describe("Windsurf adapter", () => {
 
   it("globalPath returns ~/.codeium/windsurf/mcp_config.json", () => {
     expect(adapter.globalPath()).toBe(
-      path.join(os.homedir(), ".codeium", "windsurf", "mcp_config.json"),
+      path.join(os.homedir(), ".codeium", "windsurf", "mcp_config.json")
     );
   });
 });
@@ -259,18 +253,13 @@ describe("Zed adapter", () => {
   it("merges into existing settings.json", () => {
     const configPath = path.join(tmpDir, ".zed", "settings.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ theme: "dark", context_servers: {} }),
-    );
+    fs.writeFileSync(configPath, JSON.stringify({ theme: "dark", context_servers: {} }));
 
     adapter.write(configPath, getMcpEntry());
 
     const config = readJsonFile(configPath);
     expect(config.theme).toBe("dark");
-    expect(
-      (config.context_servers as Record<string, unknown>),
-    ).toHaveProperty("argent");
+    expect(config.context_servers as Record<string, unknown>).toHaveProperty("argent");
   });
 
   it("removes from context_servers", () => {
@@ -279,15 +268,11 @@ describe("Zed adapter", () => {
 
     expect(adapter.remove(configPath)).toBe(true);
     const config = readJsonFile(configPath);
-    expect(
-      (config.context_servers as Record<string, unknown>),
-    ).not.toHaveProperty("argent");
+    expect(config.context_servers as Record<string, unknown>).not.toHaveProperty("argent");
   });
 
   it("globalPath returns ~/.config/zed/settings.json", () => {
-    expect(adapter.globalPath()).toBe(
-      path.join(os.homedir(), ".config", "zed", "settings.json"),
-    );
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".config", "zed", "settings.json"));
   });
 });
 
@@ -331,9 +316,7 @@ describe("Gemini adapter", () => {
   });
 
   it("projectPath returns .gemini/settings.json under project root", () => {
-    expect(adapter.projectPath("/foo")).toBe(
-      path.join("/foo", ".gemini", "settings.json"),
-    );
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".gemini", "settings.json"));
   });
 
   it("detect() returns true when local .gemini dir exists", () => {
@@ -348,16 +331,17 @@ describe("Gemini adapter", () => {
   });
 
   it("globalPath returns ~/.gemini/settings.json", () => {
-    expect(adapter.globalPath()).toBe(
-      path.join(os.homedir(), ".gemini", "settings.json"),
-    );
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".gemini", "settings.json"));
   });
 
   it("preserves existing settings when writing", () => {
     const configPath = path.join(tmpDir, "settings.json");
     fs.writeFileSync(
       configPath,
-      JSON.stringify({ mcpServers: { "other-tool": { command: "npx" } }, security: { auth: "oauth" } }),
+      JSON.stringify({
+        mcpServers: { "other-tool": { command: "npx" } },
+        security: { auth: "oauth" },
+      })
     );
 
     adapter.write(configPath, getMcpEntry());
@@ -376,8 +360,7 @@ describe("Gemini adapter", () => {
     adapter.addAllowlist!(tmpDir, "local");
 
     const config = readJsonFile(configPath);
-    const entry = (config.mcpServers as Record<string, unknown>)
-      .argent as Record<string, unknown>;
+    const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
     expect(entry.trust).toBe(true);
   });
 
@@ -389,8 +372,7 @@ describe("Gemini adapter", () => {
     adapter.addAllowlist!(tmpDir, "global");
 
     const config = readJsonFile(configPath);
-    const entry = (config.mcpServers as Record<string, unknown>)
-      .argent as Record<string, unknown>;
+    const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
     expect(entry.trust).toBe(true);
   });
 
@@ -402,8 +384,7 @@ describe("Gemini adapter", () => {
     adapter.removeAllowlist!(tmpDir, "local");
 
     const config = readJsonFile(configPath);
-    const entry = (config.mcpServers as Record<string, unknown>)
-      .argent as Record<string, unknown>;
+    const entry = (config.mcpServers as Record<string, unknown>).argent as Record<string, unknown>;
     expect(entry).not.toHaveProperty("trust");
   });
 
@@ -448,9 +429,7 @@ describe("Codex adapter", () => {
   });
 
   it("projectPath returns .codex/config.toml under project root", () => {
-    expect(adapter.projectPath("/foo")).toBe(
-      path.join("/foo", ".codex", "config.toml"),
-    );
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".codex", "config.toml"));
   });
 
   it("detect() returns true when local .codex dir exists", () => {
@@ -465,17 +444,12 @@ describe("Codex adapter", () => {
   });
 
   it("globalPath returns ~/.codex/config.toml", () => {
-    expect(adapter.globalPath()).toBe(
-      path.join(os.homedir(), ".codex", "config.toml"),
-    );
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".codex", "config.toml"));
   });
 
   it("preserves existing settings when writing", () => {
     const configPath = path.join(tmpDir, "config.toml");
-    fs.writeFileSync(
-      configPath,
-      'model = "o3"\n\n[mcp_servers.other]\ncommand = "npx"\n',
-    );
+    fs.writeFileSync(configPath, 'model = "o3"\n\n[mcp_servers.other]\ncommand = "npx"\n');
 
     adapter.write(configPath, getMcpEntry());
 
@@ -494,8 +468,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
     const config = readJsonFile(settingsPath);
-    const allow = (config.permissions as Record<string, unknown>)
-      .allow as string[];
+    const allow = (config.permissions as Record<string, unknown>).allow as string[];
     expect(allow).toContain("mcp__argent");
   });
 
@@ -505,8 +478,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
     const config = readJsonFile(settingsPath);
-    const allow = (config.permissions as Record<string, unknown>)
-      .allow as string[];
+    const allow = (config.permissions as Record<string, unknown>).allow as string[];
     expect(allow.filter((r) => r === "mcp__argent")).toHaveLength(1);
   });
 
@@ -516,8 +488,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
 
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
     const config = readJsonFile(settingsPath);
-    const allow = (config.permissions as Record<string, unknown>)
-      .allow as string[];
+    const allow = (config.permissions as Record<string, unknown>).allow as string[];
     expect(allow).not.toContain("mcp__argent");
   });
 
@@ -542,107 +513,59 @@ describe("copyRulesAndAgents", () => {
     fs.mkdirSync(rulesDir, { recursive: true });
     fs.mkdirSync(agentsDir, { recursive: true });
     fs.writeFileSync(path.join(rulesDir, "argent.md"), "# Rule");
-    fs.writeFileSync(
-      path.join(agentsDir, "environment-inspector.md"),
-      "# Agent",
-    );
+    fs.writeFileSync(path.join(agentsDir, "environment-inspector.md"), "# Agent");
   });
 
   it("copies rules to .claude/rules for Claude Code adapter (local)", () => {
     const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
-    const results = copyRulesAndAgents(
-      [claudeAdapter],
-      tmpDir,
-      "local",
-      rulesDir,
-      agentsDir,
-    );
+    const results = copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
 
     expect(results.some((r) => r.includes("rules"))).toBe(true);
-    expect(
-      fs.existsSync(path.join(tmpDir, ".claude", "rules", "argent.md")),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".claude", "rules", "argent.md"))).toBe(true);
   });
 
   it("copies agents to .claude/agents for Claude Code adapter", () => {
     const claudeAdapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
     copyRulesAndAgents([claudeAdapter], tmpDir, "local", rulesDir, agentsDir);
 
-    expect(
-      fs.existsSync(
-        path.join(tmpDir, ".claude", "agents", "environment-inspector.md"),
-      ),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".claude", "agents", "environment-inspector.md"))).toBe(
+      true
+    );
   });
 
   it("copies rules to .cursor/rules for Cursor adapter (local)", () => {
     const cursorAdapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
     copyRulesAndAgents([cursorAdapter], tmpDir, "local", rulesDir, agentsDir);
 
-    expect(
-      fs.existsSync(path.join(tmpDir, ".cursor", "rules", "argent.md")),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".cursor", "rules", "argent.md"))).toBe(true);
   });
 
   it("returns empty array for adapters without rules/agents targets", () => {
     const windsurfAdapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
-    const results = copyRulesAndAgents(
-      [windsurfAdapter],
-      tmpDir,
-      "local",
-      rulesDir,
-      agentsDir,
-    );
+    const results = copyRulesAndAgents([windsurfAdapter], tmpDir, "local", rulesDir, agentsDir);
     expect(results).toHaveLength(0);
   });
 
   it("copies rules and agents to .gemini/ for Gemini adapter (local)", () => {
     const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
-    const results = copyRulesAndAgents(
-      [geminiAdapter],
-      tmpDir,
-      "local",
-      rulesDir,
-      agentsDir,
-    );
+    const results = copyRulesAndAgents([geminiAdapter], tmpDir, "local", rulesDir, agentsDir);
     expect(results.some((r) => r.includes("rules"))).toBe(true);
     expect(results.some((r) => r.includes("agents"))).toBe(true);
-    expect(
-      fs.existsSync(path.join(tmpDir, ".gemini", "rules", "argent.md")),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(tmpDir, ".gemini", "agents", "environment-inspector.md"),
-      ),
-    ).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".gemini", "rules", "argent.md"))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, ".gemini", "agents", "environment-inspector.md"))).toBe(
+      true
+    );
   });
 
   it("copies rules and agents to ~/.gemini/ for Gemini adapter (global)", () => {
     const geminiAdapter = ALL_ADAPTERS.find((a) => a.name === "Gemini")!;
     homedirOverride = path.join(tmpDir, "home");
-    const results = copyRulesAndAgents(
-      [geminiAdapter],
-      tmpDir,
-      "global",
-      rulesDir,
-      agentsDir,
-    );
+    const results = copyRulesAndAgents([geminiAdapter], tmpDir, "global", rulesDir, agentsDir);
     expect(results.some((r) => r.includes("rules"))).toBe(true);
     expect(results.some((r) => r.includes("agents"))).toBe(true);
+    expect(fs.existsSync(path.join(homedirOverride, ".gemini", "rules", "argent.md"))).toBe(true);
     expect(
-      fs.existsSync(
-        path.join(homedirOverride, ".gemini", "rules", "argent.md"),
-      ),
-    ).toBe(true);
-    expect(
-      fs.existsSync(
-        path.join(
-          homedirOverride,
-          ".gemini",
-          "agents",
-          "environment-inspector.md",
-        ),
-      ),
+      fs.existsSync(path.join(homedirOverride, ".gemini", "agents", "environment-inspector.md"))
     ).toBe(true);
   });
 
@@ -653,13 +576,7 @@ describe("copyRulesAndAgents", () => {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, "");
 
-    const results = copyRulesAndAgents(
-      [codexAdapter],
-      tmpDir,
-      "local",
-      rulesDir,
-      agentsDir,
-    );
+    const results = copyRulesAndAgents([codexAdapter], tmpDir, "local", rulesDir, agentsDir);
     expect(results.some((r) => r.includes("developer_instructions"))).toBe(true);
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain("argent rules");
@@ -677,7 +594,7 @@ describe("injectCodexRules / removeCodexRules", () => {
     fs.mkdirSync(rulesDir, { recursive: true });
     fs.writeFileSync(
       path.join(rulesDir, "argent.md"),
-      "---\ndescription: Test rule\nalwaysApply: true\n---\n\nUse argent tools for simulator control.",
+      "---\ndescription: Test rule\nalwaysApply: true\n---\n\nUse argent tools for simulator control."
     );
   });
 

@@ -11,11 +11,7 @@ const zodSchema = z.object({
     .optional()
     .default(50)
     .describe("Maximum number of events to return (most recent first)"),
-  clear: z
-    .boolean()
-    .optional()
-    .default(false)
-    .describe("Clear the log after reading"),
+  clear: z.boolean().optional().default(false).describe("Clear the log after reading"),
 });
 
 type Params = z.infer<typeof zodSchema>;

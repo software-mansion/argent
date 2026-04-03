@@ -19,7 +19,6 @@ Use `list-simulators` to find available simulators. **Pick the first result** if
 4. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
 
-
 ## 3. Opening Apps
 
 **Never navigate to an app by tapping home-screen icons.** Use `launch-app` or `open-url` — they are instant and reliable.
@@ -42,23 +41,23 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action           | Tool              | Notes                                                     |
-| ---------------- | ----------------- | --------------------------------------------------------- |
-| Multiple actions | `run-sequence`    | Batch steps in one call (no intermediate screenshots)     |
-| Open an app      | `launch-app`      | **Always — never tap home-screen icons**                  |
-| Restart an app   | `restart-app`     | Reinstall or reconnect to Metro                           |
-| Open URL/scheme  | `open-url`        | Web pages, deep links, URL schemes                        |
-| Single tap       | `gesture-tap`     | Buttons, links, checkboxes                                |
-| Scroll/swipe     | `gesture-swipe`   | Straight-line scroll or swipe                             |
-| Long press       | `gesture-custom`  | Context menus, drag start                                 |
-| Drag & drop      | `gesture-custom`  | Complex drag interactions                                 |
-| Pinch/zoom       | `gesture-pinch`   | Two-finger pinch with auto-interpolation                  |
-| Rotation         | `gesture-rotate`  | Two-finger rotation with auto-interpolation               |
-| Custom gesture   | `gesture-custom`  | Arbitrary touch sequences, optional interpolation         |
-| Hardware key     | `button`          | Home, back, power, volume                                 |
-| Type text (fast) | `paste`           | Form fields — uses clipboard                              |
-| Type text        | `keyboard`        | Fallback when paste fails; supports Enter, Escape, arrows |
-| Rotate device    | `rotate`          | Orientation changes                                       |
+| Action           | Tool             | Notes                                                     |
+| ---------------- | ---------------- | --------------------------------------------------------- |
+| Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)     |
+| Open an app      | `launch-app`     | **Always — never tap home-screen icons**                  |
+| Restart an app   | `restart-app`    | Reinstall or reconnect to Metro                           |
+| Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                        |
+| Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                |
+| Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                             |
+| Long press       | `gesture-custom` | Context menus, drag start                                 |
+| Drag & drop      | `gesture-custom` | Complex drag interactions                                 |
+| Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                  |
+| Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation               |
+| Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation         |
+| Hardware key     | `button`         | Home, back, power, volume                                 |
+| Type text (fast) | `paste`          | Form fields — uses clipboard                              |
+| Type text        | `keyboard`       | Fallback when paste fails; supports Enter, Escape, arrows |
+| Rotate device    | `rotate`         | Orientation changes                                       |
 
 ## 5. Finding Tap Targets
 
@@ -101,7 +100,14 @@ All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same a
 ### gesture-rotate — Two-finger rotation
 
 ```json
-{ "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "radius": 0.15, "startAngle": 0, "endAngle": 90 }
+{
+  "udid": "<UDID>",
+  "centerX": 0.5,
+  "centerY": 0.5,
+  "radius": 0.15,
+  "startAngle": 0,
+  "endAngle": 90
+}
 ```
 
 All positions and radius are normalized 0.0–1.0 (fractions of screen, not pixels). `radius: 0.15` means each finger is 15% of the screen away from center. `endAngle > startAngle` = clockwise. Optional: `"durationMs": 500` for slower rotation.
@@ -178,6 +184,7 @@ Do **not** use `run-sequence` when any step depends on observing the result of a
 ### Use cases
 
 Use the sequencing when:
+
 - Knowing that some action needs multiple steps without necessarily immediate insight of screenshot
 - "scroll to bottom", "scroll to top", "scroll to do X" -> sequence scroll 3-5 times
 - form interactions, "clear and retype field" -> you may use triple-tap to select all, type new value
@@ -193,28 +200,44 @@ The `udid` is shared — do **not** include it in each step's `args`. Optional `
 ### Examples
 
 Scroll down three times:
+
 ```json
-{ "udid": "<UDID>", "steps": [
-  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
-]}
+{
+  "udid": "<UDID>",
+  "steps": [
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
+    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
+  ]
+}
 ```
 
 Type into a focused field and submit:
+
 ```json
-{ "udid": "<UDID>", "steps": [
-  { "tool": "keyboard", "args": { "text": "hello world" } },
-  { "tool": "keyboard", "args": { "key": "enter" } }
-]}
+{
+  "udid": "<UDID>",
+  "steps": [
+    { "tool": "keyboard", "args": { "text": "hello world" } },
+    { "tool": "keyboard", "args": { "key": "enter" } }
+  ]
+}
 ```
 
 Tap a known button, then scroll down:
+
 ```json
-{ "udid": "<UDID>", "steps": [
-  { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.15 } },
-  { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }, "delayMs": 300 }
-]}
+{
+  "udid": "<UDID>",
+  "steps": [
+    { "tool": "gesture-tap", "args": { "x": 0.5, "y": 0.15 } },
+    {
+      "tool": "gesture-swipe",
+      "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 },
+      "delayMs": 300
+    }
+  ]
+}
 ```
 
 Stops on the first error and returns partial results.

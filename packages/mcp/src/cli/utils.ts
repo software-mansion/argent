@@ -44,10 +44,7 @@ export function writeToml(filePath: string, data: Record<string, unknown>): void
 export function readJson(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
   try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<
-      string,
-      unknown
-    >;
+    return JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
   } catch {
     return {};
   }
@@ -90,10 +87,9 @@ export function getInstalledVersion(): string | null {
 }
 
 export function getLatestVersion(): string {
-  const result = execSync(
-    `npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`,
-    { encoding: "utf8" },
-  );
+  const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
+    encoding: "utf8",
+  });
   return result.trim();
 }
 
@@ -122,10 +118,7 @@ export function globalInstallCommand(pm: PackageManager, pkg: string): string {
   }
 }
 
-export function globalUninstallCommand(
-  pm: PackageManager,
-  pkg: string,
-): string {
+export function globalUninstallCommand(pm: PackageManager, pkg: string): string {
   switch (pm) {
     case "yarn":
       return `yarn global remove ${pkg}`;

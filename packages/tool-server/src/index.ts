@@ -10,7 +10,7 @@ import { startUpdateChecker } from "./utils/update-checker";
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const idleMinutes = parseInt(
   process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? String(DEFAULT_IDLE_TIMEOUT_MINUTES),
-  10,
+  10
 );
 const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
 

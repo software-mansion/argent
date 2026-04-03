@@ -69,9 +69,7 @@ describe("update-checker", () => {
     const mockGet = vi.mocked(https.get);
     mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
       const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
-      callback(
-        createMockResponse(200, JSON.stringify({ version: currentVersion })),
-      );
+      callback(createMockResponse(200, JSON.stringify({ version: currentVersion })));
       return new EventEmitter() as ReturnType<typeof https.get>;
     });
 

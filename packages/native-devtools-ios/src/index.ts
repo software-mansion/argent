@@ -4,9 +4,7 @@ import * as fs from "node:fs";
 // When bundled by esbuild, __dirname points into dist/.
 // ARGENT_NATIVE_DEVTOOLS_DIR lets the launcher override the dylib directory,
 // matching the same pattern used by ARGENT_SIMULATOR_SERVER_DIR.
-const DYLIB_DIR =
-  process.env.ARGENT_NATIVE_DEVTOOLS_DIR ??
-  path.join(__dirname, "..", "dylibs");
+const DYLIB_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_DIR ?? path.join(__dirname, "..", "dylibs");
 
 function requireDylib(name: string): string {
   const p = path.join(DYLIB_DIR, name);
@@ -16,9 +14,6 @@ function requireDylib(name: string): string {
   return p;
 }
 
-export const bootstrapDylibPath = () =>
-  requireDylib("libInjectionBootstrap.dylib");
-export const nativeDevtoolsDylibPath = () =>
-  requireDylib("libNativeDevtoolsIos.dylib");
-export const keyboardPatchDylibPath = () =>
-  requireDylib("libKeyboardPatch.dylib");
+export const bootstrapDylibPath = () => requireDylib("libInjectionBootstrap.dylib");
+export const nativeDevtoolsDylibPath = () => requireDylib("libNativeDevtoolsIos.dylib");
+export const keyboardPatchDylibPath = () => requireDylib("libKeyboardPatch.dylib");

@@ -58,8 +58,7 @@ export function parseCpuXml(xml: string): CpuSample[] {
   const samples: CpuSample[] = [];
 
   // Pre-register all binaries (they can appear before frames that reference them)
-  const binaryRe =
-    /<binary\s+id="(\d+)"\s+[^>]*?name="([^"]*)"[^>]*?path="([^"]*)"[^>]*?\/?>/g;
+  const binaryRe = /<binary\s+id="(\d+)"\s+[^>]*?name="([^"]*)"[^>]*?path="([^"]*)"[^>]*?\/?>/g;
   let bm;
   while ((bm = binaryRe.exec(xml)) !== null) {
     binaryRegistry.set(bm[1], { name: bm[2], path: bm[3] });
@@ -103,12 +102,7 @@ export function parseCpuXml(xml: string): CpuSample[] {
     }
 
     // Extract backtrace
-    const stack = resolveBacktrace(
-      row,
-      frameRegistry,
-      backtraceRegistry,
-      binaryRegistry,
-    );
+    const stack = resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
 
     samples.push({ timestampNs, threadFmt, weightNs, stack });
   }
@@ -162,7 +156,7 @@ function resolveBacktrace(
   rowXml: string,
   frameRegistry: Map<string, StackFrame>,
   backtraceRegistry: Map<string, StackFrame[]>,
-  binaryRegistry: Map<string, { name: string; path: string }>,
+  binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
   // Check for backtrace ref first
   const btRefMatch = rowXml.match(/<backtrace\s+ref="(\d+)"\s*\/>/);
@@ -188,7 +182,7 @@ function resolveBacktrace(
 function resolveFrames(
   backtraceContent: string,
   frameRegistry: Map<string, StackFrame>,
-  binaryRegistry: Map<string, { name: string; path: string }>,
+  binaryRegistry: Map<string, { name: string; path: string }>
 ): StackFrame[] {
   const frames: StackFrame[] = [];
   // Match both <frame id="N" name="..." .../> and <frame ref="N"/>
@@ -210,13 +204,8 @@ function resolveFrames(
     let isSystem = false;
     // Look for <binary> child element after this frame's opening tag.
     // Simulator paths can exceed 300 chars, so use a generous window.
-    const frameFullMatch = backtraceContent.substring(
-      fm.index!,
-      fm.index! + fm[0].length + 2000,
-    );
-    const binaryIdMatch = frameFullMatch.match(
-      /<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/,
-    );
+    const frameFullMatch = backtraceContent.substring(fm.index!, fm.index! + fm[0].length + 2000);
+    const binaryIdMatch = frameFullMatch.match(/<binary\s+id="(\d+)"[^>]*path="([^"]*)"[^>]*\/?>/);
     const binaryRefMatch = frameFullMatch.match(/<binary\s+ref="(\d+)"\s*\/>/);
 
     if (binaryIdMatch) {
@@ -256,8 +245,7 @@ export function parseHangsXml(xml: string): RawHang[] {
 
   const valueRegistry = new Map<string, string>();
   // Capture elements with id that have inner text (for start-time, duration, hang-type values)
-  const valRe =
-    /<(start-time|duration|hang-type)\s+id="(\d+)"[^>]*>([^<]+)<\//g;
+  const valRe = /<(start-time|duration|hang-type)\s+id="(\d+)"[^>]*>([^<]+)<\//g;
   let vm;
   while ((vm = valRe.exec(xml)) !== null) {
     valueRegistry.set(vm[2], vm[3]);
@@ -347,9 +335,7 @@ export function parseLeaksXml(xml: string): RawLeak[] {
 // File-level entry points
 // ---------------------------------------------------------------------------
 
-export async function parseCpuFile(
-  filePath: string | null,
-): Promise<CpuSample[]> {
+export async function parseCpuFile(filePath: string | null): Promise<CpuSample[]> {
   if (!filePath) return [];
   try {
     const xml = await fs.readFile(filePath, "utf8");
@@ -359,9 +345,7 @@ export async function parseCpuFile(
   }
 }
 
-export async function parseHangsFile(
-  filePath: string | null,
-): Promise<RawHang[]> {
+export async function parseHangsFile(filePath: string | null): Promise<RawHang[]> {
   if (!filePath) return [];
   try {
     const xml = await fs.readFile(filePath, "utf8");
@@ -371,9 +355,7 @@ export async function parseHangsFile(
   }
 }
 
-export async function parseLeaksFile(
-  filePath: string | null,
-): Promise<RawLeak[]> {
+export async function parseLeaksFile(filePath: string | null): Promise<RawLeak[]> {
   if (!filePath) return [];
   try {
     const xml = await fs.readFile(filePath, "utf8");

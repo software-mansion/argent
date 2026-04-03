@@ -7,10 +7,7 @@ const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
 });
 
-export const describeTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  unknown
-> = {
+export const describeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
   id: "describe",
   description: `Get the iOS accessibility element tree for the simulator screen.
 Returns a JSON tree of UI elements with roles, labels, identifiers, values, and

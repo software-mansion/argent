@@ -121,9 +121,7 @@ function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> 
 
     child.on("exit", (code) => {
       rl.close();
-      settle(() =>
-        reject(new Error(`tool-server exited with code ${code} before becoming ready`))
-      );
+      settle(() => reject(new Error(`tool-server exited with code ${code} before becoming ready`)));
     });
 
     const timer = setTimeout(() => {

@@ -24,10 +24,7 @@ function lerp(a: number, b: number, t: number): number {
  * pair of events. Down/Up types are preserved; interpolated frames are Move.
  * Delay is distributed evenly across the interpolated segment.
  */
-export function interpolateEvents(
-  events: TouchEvent[],
-  steps: number
-): TouchEvent[] {
+export function interpolateEvents(events: TouchEvent[], steps: number): TouchEvent[] {
   if (events.length < 2 || steps < 1) return events;
 
   const result: TouchEvent[] = [];

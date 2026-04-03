@@ -7,7 +7,7 @@ import {
 function item(
   name: string,
   source: InspectItem["source"] = null,
-  code: string | null = null,
+  code: string | null = null
 ): InspectItem {
   return { name, source, code };
 }
@@ -16,30 +16,21 @@ const src = (file: string, line: number) => ({ file, line, column: 0 });
 
 describe("filterInspectItems — AnimatedComponent dedup", () => {
   it("removes AnimatedComponent(X) following X", () => {
-    const items = [
-      item("View", src("a.tsx", 1)),
-      item("AnimatedComponent(View)"),
-    ];
+    const items = [item("View", src("a.tsx", 1)), item("AnimatedComponent(View)")];
     const result = filterInspectItems(items);
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("View");
   });
 
   it("removes Animated(X) following X", () => {
-    const items = [
-      item("ScrollView", src("a.tsx", 1)),
-      item("Animated(ScrollView)"),
-    ];
+    const items = [item("ScrollView", src("a.tsx", 1)), item("Animated(ScrollView)")];
     const result = filterInspectItems(items);
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("ScrollView");
   });
 
   it("removes AnimatedComponent(X) via skip filter even when not preceded by X", () => {
-    const items = [
-      item("Text", src("a.tsx", 1)),
-      item("AnimatedComponent(View)"),
-    ];
+    const items = [item("Text", src("a.tsx", 1)), item("AnimatedComponent(View)")];
     const result = filterInspectItems(items);
     // AnimatedComponent(View) is sourceless + isHardSkip → removed by skip filter
     expect(result).toHaveLength(1);
@@ -59,10 +50,7 @@ describe("filterInspectItems — source-aware skip filter (Pass 1)", () => {
   });
 
   it("keeps View at index 0 (leaf — always preserved)", () => {
-    const items = [
-      item("View"),
-      item("Button", src("btn.tsx", 10)),
-    ];
+    const items = [item("View"), item("Button", src("btn.tsx", 10))];
     const result = filterInspectItems(items);
     expect(result[0].name).toBe("View");
     expect(result).toHaveLength(2);
@@ -99,10 +87,7 @@ describe("filterInspectItems — source-aware skip filter (Pass 1)", () => {
   });
 
   it("removes sourceless With*(X) HOC wrappers", () => {
-    const items = [
-      item("Button", src("btn.tsx", 10)),
-      item("WithNavigationFallback(Button)"),
-    ];
+    const items = [item("Button", src("btn.tsx", 10)), item("WithNavigationFallback(Button)")];
     const result = filterInspectItems(items);
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe("Button");
@@ -165,11 +150,7 @@ describe("filterInspectItems — anonymous View pruning (Pass 3)", () => {
   });
 
   it("keeps View at index 0 (leaf element)", () => {
-    const items = [
-      item("View"),
-      item("Button", src("btn.tsx", 10)),
-      item("View"),
-    ];
+    const items = [item("View"), item("Button", src("btn.tsx", 10)), item("View")];
     const result = filterInspectItems(items);
     expect(result[0].name).toBe("View");
     expect(result).toHaveLength(2);
@@ -189,21 +170,21 @@ describe("filterInspectItems — anonymous View pruning (Pass 3)", () => {
 describe("filterInspectItems — combined scenario (Expensify-like)", () => {
   it("produces expected output for realistic hierarchy", () => {
     const items: InspectItem[] = [
-      item("View"),                                                           // [0] leaf — keep
-      item("Pressable", src("BaseGenericPressable.tsx", 177)),                // keep (has src)
-      item("GenericPressable", src("index.native.tsx", 7)),                   // keep
-      item("NativeGenericPressable", src("PressableWithFeedback.tsx", 74)),   // keep
-      item("View"),                                                           // sourceless View — remove
-      item("View", src("OpacityView.tsx", 59)),                              // keep (has src)
-      item("OpacityView", src("PressableWithFeedback.tsx", 66)),             // keep
-      item("PressableWithFeedback", src("index.tsx", 475)),                  // keep
-      item("Button"),                                                         // no-src, not in skip — keep at leaf? No, not leaf. "Button" is not in skip set? Wait...
+      item("View"), // [0] leaf — keep
+      item("Pressable", src("BaseGenericPressable.tsx", 177)), // keep (has src)
+      item("GenericPressable", src("index.native.tsx", 7)), // keep
+      item("NativeGenericPressable", src("PressableWithFeedback.tsx", 74)), // keep
+      item("View"), // sourceless View — remove
+      item("View", src("OpacityView.tsx", 59)), // keep (has src)
+      item("OpacityView", src("PressableWithFeedback.tsx", 66)), // keep
+      item("PressableWithFeedback", src("index.tsx", 475)), // keep
+      item("Button"), // no-src, not in skip — keep at leaf? No, not leaf. "Button" is not in skip set? Wait...
       // Actually "Button" is NOT in SKIP, so it passes through. But it has no source.
       // The skip filter only removes shouldSkip names. "Button" is not shouldSkip.
-      item("ScrollViewContext"),                                              // sourceless + in SKIP — remove
-      item("ScrollView"),                                                     // sourceless + in SKIP... wait, ScrollView is NOT in SKIP set
-      item("ScrollView", src("ScrollView.tsx", 35)),                         // keep
-      item("SignInPage", src("SignInPage.tsx", 358)),                         // keep
+      item("ScrollViewContext"), // sourceless + in SKIP — remove
+      item("ScrollView"), // sourceless + in SKIP... wait, ScrollView is NOT in SKIP set
+      item("ScrollView", src("ScrollView.tsx", 35)), // keep
+      item("SignInPage", src("SignInPage.tsx", 358)), // keep
     ];
     const result = filterInspectItems(items);
     const names = result.map((i) => i.name);
@@ -217,10 +198,7 @@ describe("filterInspectItems — combined scenario (Expensify-like)", () => {
 
 describe("filterInspectItems — includeSkipped=true", () => {
   it("annotates animated-dedup items instead of removing them", () => {
-    const items = [
-      item("View", src("a.tsx", 1)),
-      item("AnimatedComponent(View)"),
-    ];
+    const items = [item("View", src("a.tsx", 1)), item("AnimatedComponent(View)")];
     const result = filterInspectItems(items, true);
     expect(result).toHaveLength(2);
     expect(result[1].skipped).toBe(true);
@@ -266,10 +244,7 @@ describe("filterInspectItems — includeSkipped=true", () => {
   });
 
   it("preserves leaf View at index 0 without annotation", () => {
-    const items = [
-      item("View"),
-      item("Button", src("btn.tsx", 10)),
-    ];
+    const items = [item("View"), item("Button", src("btn.tsx", 10))];
     const result = filterInspectItems(items, true);
     expect(result[0].skipped).toBeUndefined();
     expect(result[0].name).toBe("View");

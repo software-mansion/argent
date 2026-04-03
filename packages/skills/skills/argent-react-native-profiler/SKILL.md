@@ -9,24 +9,24 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 ### React Profiler (Hermes / React commits)
 
-| Tool                              | Purpose                                                                                  |
-| --------------------------------- | ---------------------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro.           |
-| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                               |
+| Tool                              | Purpose                                                                                                                                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro.                                                             |
+| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                 |
 | `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits and findings sorted by `totalRenderMs` DESC. Saves raw data to disk for later reload. |
-| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.          |
-| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required). |
-| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                       |
+| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                            |
+| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                                                  |
+| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                                                         |
 
 ### Drill-Down Query Tools (call after analyze)
 
-| Tool                       | Purpose                                                                                           |
-| -------------------------- | ------------------------------------------------------------------------------------------------- |
-| `profiler-cpu-query`       | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU.      |
-| `profiler-commit-query`    | Targeted commit investigation: by component, time range, commit index, or cascade tree.           |
-| `profiler-stack-query`     | iOS Instruments drill-down: hang stacks, function callers, thread breakdown, leak details.         |
-| `profiler-combined-report` | Cross-correlated report when both React Profiler and iOS Instruments ran in parallel.              |
-| `profiler-load`            | List and reload previous profiling sessions from disk for re-investigation with query tools.       |
+| Tool                       | Purpose                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `profiler-cpu-query`       | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU. |
+| `profiler-commit-query`    | Targeted commit investigation: by component, time range, commit index, or cascade tree.      |
+| `profiler-stack-query`     | iOS Instruments drill-down: hang stacks, function callers, thread breakdown, leak details.   |
+| `profiler-combined-report` | Cross-correlated report when both React Profiler and iOS Instruments ran in parallel.        |
+| `profiler-load`            | List and reload previous profiling sessions from disk for re-investigation with query tools. |
 
 For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-ios-profiler` skill.
 
@@ -59,11 +59,12 @@ When drilling down, chain query tool calls based on what you find:
 
 ### After fixes: always re-profile
 
-When you apply a fix, always re-profile the same scenario afterward. Compare before/after metrics (commit durations, CPU time, render counts) and report honestly: did the target metric improve, stay flat, or regress? Did any *other* metric get worse? If you need to reference the original data, use `profiler-load` to reload the pre-fix session. If the fix showed no improvement or introduced a regression, say so explicitly and reconsider the approach.
+When you apply a fix, always re-profile the same scenario afterward. Compare before/after metrics (commit durations, CPU time, render counts) and report honestly: did the target metric improve, stay flat, or regress? Did any _other_ metric get worse? If you need to reference the original data, use `profiler-load` to reload the pre-fix session. If the fix showed no improvement or introduced a regression, say so explicitly and reconsider the approach.
 
 ### Use flows for reproducible profiling
 
 When profiling requires a specific interaction sequence (scroll a list, navigate screens, trigger an animation), **record the interaction as a flow** using the `argent-create-flow` skill before the first profiling run. Then replay the same flow for every subsequent run. This eliminates interaction variance as a confounder and makes before/after comparisons meaningful. Especially important when:
+
 - You are about to re-profile after applying a fix (Step 8).
 - The user asks you to compare multiple profiling sessions.
 - The interaction path is more than 2-3 steps long.
@@ -77,12 +78,13 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 ### Step 1: Start profiling
 
 Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
 
 #### Annotate every interaction
 
-After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for *every* interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 4.
+After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 4.
 
 ### Step 2: Stop and collect
 
@@ -105,7 +107,7 @@ Analyze whether the results give you a proper image of what is wrong with the ap
 
 ### Step 5: Present findings and ask about next steps
 
-Present a concise summary of the key findings - present whether possibilities for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop. 
+Present a concise summary of the key findings - present whether possibilities for improvement exist and how performing further actions could affect performance. Then follow the "After analysis" guideline — ask whether to investigate further, implement fixes (if available), or stop.
 
 ### Step 6: Drill-down investigation (iterative)
 

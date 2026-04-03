@@ -14,8 +14,7 @@ export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 // When bundled by esbuild, __dirname is dist/ — use ARGENT_SIMULATOR_SERVER_DIR env var instead.
 const getPaths = () => {
   const BINARY_DIR =
-    process.env.ARGENT_SIMULATOR_SERVER_DIR ??
-    path.join(__dirname, "..", "..", "..", "..");
+    process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "..", "..", "..");
   const BINARY_PATH = path.join(BINARY_DIR, "simulator-server");
   return { BINARY_PATH, BINARY_DIR };
 };
@@ -29,9 +28,7 @@ export interface SimulatorServerApi {
   pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
-function spawnSimulatorServerProcess(
-  udid: string
-): Promise<{
+function spawnSimulatorServerProcess(udid: string): Promise<{
   proc: ChildProcess;
   apiUrl: string;
   streamUrl: string;
@@ -77,9 +74,7 @@ function spawnSimulatorServerProcess(
     });
 
     proc.on("exit", () => {
-      settle(() =>
-        reject(new Error(`simulator-server exited with code before becoming ready`))
-      );
+      settle(() => reject(new Error(`simulator-server exited with code before becoming ready`)));
     });
 
     proc.on("error", (err) => {
@@ -88,18 +83,14 @@ function spawnSimulatorServerProcess(
 
     const timer = setTimeout(() => {
       settle(
-        () =>
-          reject(new Error("Timed out waiting for simulator-server to become ready")),
+        () => reject(new Error("Timed out waiting for simulator-server to become ready")),
         () => proc.kill()
       );
     }, READY_TIMEOUT_MS);
   });
 }
 
-export const simulatorServerBlueprint: ServiceBlueprint<
-  SimulatorServerApi,
-  string
-> = {
+export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, string> = {
   namespace: SIMULATOR_SERVER_NAMESPACE,
   getURN(udid: string) {
     return `${SIMULATOR_SERVER_NAMESPACE}:${udid}`;

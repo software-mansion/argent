@@ -15,8 +15,7 @@ export function findDominantFunction(stack: StackFrame[]): string | null {
   for (const frame of stack) {
     if (frame.isSystemLibrary) continue;
     if (isHexAddress(frame.name)) continue;
-    if (RN_FRAMEWORK_SIGNATURES.some((sig) => frame.name.includes(sig)))
-      continue;
+    if (RN_FRAMEWORK_SIGNATURES.some((sig) => frame.name.includes(sig))) continue;
     return frame.name;
   }
 
@@ -43,9 +42,7 @@ function isHexAddress(name: string): boolean {
  * Extract all app-level frame names from a stack (like Instruments' "Hide System Libraries").
  */
 export function extractAppCallChain(stack: StackFrame[]): string[] {
-  return stack
-    .filter((f) => !f.isSystemLibrary && !isHexAddress(f.name))
-    .map((f) => f.name);
+  return stack.filter((f) => !f.isSystemLibrary && !isHexAddress(f.name)).map((f) => f.name);
 }
 
 // ---------------------------------------------------------------------------
@@ -63,7 +60,7 @@ interface HotspotAccumulator {
 
 export function aggregateCpuHotspots(
   samples: CpuSample[],
-  hangSampleTimestamps: Set<number> = new Set(),
+  hangSampleTimestamps: Set<number> = new Set()
 ): CpuHotspot[] {
   if (samples.length === 0) return [];
 
@@ -124,9 +121,7 @@ export function aggregateCpuHotspots(
     const topCallChains = sortedChains.map(({ chain, count }) => ({ chain, count }));
 
     // Check if any sample in this group occurred during a hang
-    const duringHang = acc.timestamps.some((ts) =>
-      hangSampleTimestamps.has(ts),
-    );
+    const duringHang = acc.timestamps.some((ts) => hangSampleTimestamps.has(ts));
 
     // Compute time range and burst windows from timestamps
     const sortedTs = [...acc.timestamps].sort((a, b) => a - b);
@@ -184,8 +179,7 @@ export function aggregateCpuHotspots(
 
 function normalizeThread(threadFmt: string): string {
   if (/main\s*thread/i.test(threadFmt)) return "Main Thread";
-  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt))
-    return "JS/Hermes";
+  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt)) return "JS/Hermes";
   // Strip hex thread id and pid info: "AppName 0x1e4715 (AppName, pid: 55746)" -> "AppName"
   const shortMatch = threadFmt.match(/^(.+?)\s+0x/);
   if (shortMatch) return shortMatch[1];

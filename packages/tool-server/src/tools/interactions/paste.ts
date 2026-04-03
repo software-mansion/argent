@@ -8,10 +8,7 @@ const zodSchema = z.object({
   text: z.string().describe("Text to paste into the focused field"),
 });
 
-export const pasteTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  { pasted: boolean }
-> = {
+export const pasteTool: ToolDefinition<z.infer<typeof zodSchema>, { pasted: boolean }> = {
   id: "paste",
   description: `Paste text into the focused field on the simulator (fastest text entry).
 Tap the text field first to focus it, then call paste.

@@ -48,9 +48,7 @@ function formatEntry(entry) {
     } else {
       let resultStr = "";
       if (entry.result !== undefined) {
-        const raw = typeof entry.result === "string"
-          ? entry.result
-          : JSON.stringify(entry.result);
+        const raw = typeof entry.result === "string" ? entry.result : JSON.stringify(entry.result);
         resultStr = "  " + DIM + (raw.length > 120 ? raw.slice(0, 117) + "…" : raw) + RESET;
       }
       status = `${GREEN}✓${RESET}${resultStr}`;

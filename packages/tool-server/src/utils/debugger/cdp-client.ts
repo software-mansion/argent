@@ -69,7 +69,8 @@ export class CDPClient {
       // exact match against its serverBaseUrl (127.0.0.1), so we normalize
       // localhost → 127.0.0.1 in the Origin to satisfy both servers.
       const { protocol, host } = new URL(this.wsUrl);
-      const origin = (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
+      const origin =
+        (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
       const ws = new WebSocket(this.wsUrl, { headers: { Origin: origin } });
       this.ws = ws;
 
@@ -151,20 +152,14 @@ export class CDPClient {
     });
   }
 
-  async evaluate(
-    expression: string,
-    options?: { timeout?: number }
-  ): Promise<unknown> {
-    const result = (await this.send(
-      "Runtime.evaluate",
-      { expression },
-      options?.timeout
-    )) as { result?: { type?: string; value?: unknown; description?: string }; exceptionDetails?: unknown };
+  async evaluate(expression: string, options?: { timeout?: number }): Promise<unknown> {
+    const result = (await this.send("Runtime.evaluate", { expression }, options?.timeout)) as {
+      result?: { type?: string; value?: unknown; description?: string };
+      exceptionDetails?: unknown;
+    };
 
     if (result.exceptionDetails) {
-      throw new Error(
-        `Evaluation error: ${JSON.stringify(result.exceptionDetails)}`
-      );
+      throw new Error(`Evaluation error: ${JSON.stringify(result.exceptionDetails)}`);
     }
 
     return result.result?.value;
@@ -225,8 +220,7 @@ export class CDPClient {
       if (msg.error) {
         req.reject(
           new Error(
-            (msg.error as Record<string, unknown>).message as string ??
-              JSON.stringify(msg.error)
+            ((msg.error as Record<string, unknown>).message as string) ?? JSON.stringify(msg.error)
           )
         );
       } else {

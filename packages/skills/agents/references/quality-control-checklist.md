@@ -16,6 +16,7 @@ The `quality_control` field in the output JSON must follow this structure:
 Look for these beyond the obvious lint/test configs, regardless of project type:
 
 **Immediate feedback tools (agent can trigger during a task):**
+
 - `tsc --noEmit` — instant type error feedback after edits (TypeScript projects)
 - `eslint --fix` / `swiftlint` / `ktlint` — auto-fixable lint errors
 - `jest --testPathPattern <file>` — single test file (JS/TS projects)
@@ -26,11 +27,13 @@ Look for these beyond the obvious lint/test configs, regardless of project type:
 - Flutter hot reload / hot restart
 
 **Slower validation tools (agent runs at end of a task):**
+
 - Full test suite run (`jest`, `flutter test`, `xcodebuild test`, `gradle test`)
 - E2E: Detox, Maestro, XCUITest, Espresso, Flutter integration tests
 - `eas build --local` / `flutter build` / `xcodebuild` for native validation
 
 **Indicators to check (all project types):**
+
 - `scripts/` directory at project root — often contains custom validation scripts
 - `Makefile` / `Fastfile` targets — look for `lint`, `test`, `typecheck`, `check`, `validate`
 - `package.json` scripts named `check`, `verify`, `ci`, `precommit`, `prepush`

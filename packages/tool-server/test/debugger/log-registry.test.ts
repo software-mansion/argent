@@ -9,10 +9,7 @@ import { LogFileWriter } from "../../src/utils/debugger/log-file-writer";
 
 let writer: LogFileWriter;
 
-function writeLog(
-  id: number,
-  opts: { level?: string; message?: string; stackTrace?: any } = {},
-) {
+function writeLog(id: number, opts: { level?: string; message?: string; stackTrace?: any } = {}) {
   return writer.write({
     id,
     timestamp: new Date(1710000000000 + id * 1000).toISOString(),

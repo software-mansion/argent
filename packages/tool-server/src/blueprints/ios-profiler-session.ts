@@ -1,14 +1,5 @@
-import {
-  TypedEventEmitter,
-  type ServiceBlueprint,
-  type ServiceEvents,
-} from "@argent/registry";
-import type {
-  CpuSample,
-  UiHang,
-  MemoryLeak,
-  CpuHotspot,
-} from "../utils/ios-profiler/types";
+import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 
 export const IOS_PROFILER_SESSION_NAMESPACE = "IosProfilerSession";
 
@@ -31,10 +22,7 @@ export interface IosProfilerSessionApi {
   recordingTimeout: NodeJS.Timeout | null;
 }
 
-export const iosInstrumentsSessionBlueprint: ServiceBlueprint<
-  IosProfilerSessionApi,
-  string
-> = {
+export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSessionApi, string> = {
   namespace: IOS_PROFILER_SESSION_NAMESPACE,
 
   getURN(deviceId: string) {

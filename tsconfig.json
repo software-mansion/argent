@@ -1,7 +1,4 @@
 {
   "files": [],
-  "references": [
-    { "path": "packages/tool-server" },
-    { "path": "packages/mcp" }
-  ]
+  "references": [{ "path": "packages/tool-server" }, { "path": "packages/mcp" }]
 }

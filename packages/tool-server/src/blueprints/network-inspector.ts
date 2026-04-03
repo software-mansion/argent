@@ -1,8 +1,4 @@
-import {
-  TypedEventEmitter,
-  type ServiceBlueprint,
-  type ServiceEvents,
-} from "@argent/registry";
+import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import { NETWORK_INTERCEPTOR_SCRIPT } from "../utils/debugger/scripts/network-interceptor";
@@ -14,10 +10,7 @@ export interface NetworkInspectorApi {
   cdp: CDPClient;
 }
 
-export const networkInspectorBlueprint: ServiceBlueprint<
-  NetworkInspectorApi,
-  string
-> = {
+export const networkInspectorBlueprint: ServiceBlueprint<NetworkInspectorApi, string> = {
   namespace: NETWORK_INSPECTOR_NAMESPACE,
 
   getURN(port: string) {

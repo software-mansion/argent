@@ -8,13 +8,11 @@ import type { Registry } from "../../../registry/src/index";
 let tmpDir: string;
 
 vi.mock("../../src/tools/flows/flow-utils", async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import("../../src/tools/flows/flow-utils")>();
+  const original = await importOriginal<typeof import("../../src/tools/flows/flow-utils")>();
   return {
     ...original,
     getFlowsDir: async () => path.join(tmpDir, ".argent"),
-    getFlowPath: async (name: string) =>
-      path.join(tmpDir, ".argent", `${name}.yaml`),
+    getFlowPath: async (name: string) => path.join(tmpDir, ".argent", `${name}.yaml`),
   };
 });
 
@@ -25,19 +23,12 @@ import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recor
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
-import {
-  clearActiveFlow,
-  parseFlow,
-  serializeFlow,
-} from "../../src/tools/flows/flow-utils";
+import { clearActiveFlow, parseFlow, serializeFlow } from "../../src/tools/flows/flow-utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function createMockRegistry(
-  tools: Record<
-    string,
-    { result: unknown; outputHint?: string; throws?: boolean }
-  > = {},
+  tools: Record<string, { result: unknown; outputHint?: string; throws?: boolean }> = {}
 ) {
   return {
     invokeTool: vi.fn(async (id: string) => {
@@ -78,7 +69,7 @@ describe("flow-start-recording", () => {
   it("creates the .argent dir and a .yaml file with header", async () => {
     const result = await flowStartRecordingTool.execute(
       {},
-      { name: "test-flow", executionPrerequisite: PREREQ },
+      { name: "test-flow", executionPrerequisite: PREREQ }
     );
     expect(result.message).toContain("test-flow");
 
@@ -89,25 +80,19 @@ describe("flow-start-recording", () => {
   });
 
   it("sets the active flow", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "my-flow", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "my-flow", executionPrerequisite: PREREQ });
     const result = await flowInsertEchoTool.execute({}, { message: "test" });
     expect(result.message).toContain("my-flow");
   });
 
   it("overwrites an existing flow file", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "overwrite", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "overwrite", executionPrerequisite: PREREQ });
     await flowInsertEchoTool.execute({}, { message: "line1" });
 
     // Start again with same name — should reset
     await flowStartRecordingTool.execute(
       {},
-      { name: "overwrite", executionPrerequisite: "Different prereq" },
+      { name: "overwrite", executionPrerequisite: "Different prereq" }
     );
     const content = await readFlowFile("overwrite");
     const flow = parseFlow(content);
@@ -120,13 +105,10 @@ describe("flow-start-recording", () => {
 
 describe("flow-start-recording edge cases", () => {
   it("starting a new flow while another is recording notifies about the switch", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "first-flow", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "first-flow", executionPrerequisite: PREREQ });
     const result = await flowStartRecordingTool.execute(
       {},
-      { name: "second-flow", executionPrerequisite: "Different" },
+      { name: "second-flow", executionPrerequisite: "Different" }
     );
 
     // Should mention both the old and new flow
@@ -135,10 +117,7 @@ describe("flow-start-recording edge cases", () => {
     expect(result.previousFlow).toBe("first-flow");
 
     // Adding a step should target second-flow, not first-flow
-    const echoResult = await flowInsertEchoTool.execute(
-      {},
-      { message: "goes to second" },
-    );
+    const echoResult = await flowInsertEchoTool.execute({}, { message: "goes to second" });
     expect(echoResult.message).toContain("second-flow");
 
     // first-flow should still exist on disk but be empty
@@ -149,21 +128,16 @@ describe("flow-start-recording edge cases", () => {
     // second-flow should have the echo
     const secondContent = await readFlowFile("second-flow");
     const secondFlow = parseFlow(secondContent);
-    expect(secondFlow.steps).toEqual([
-      { kind: "echo", message: "goes to second" },
-    ]);
+    expect(secondFlow.steps).toEqual([{ kind: "echo", message: "goes to second" }]);
   });
 
   it("restarting the same flow does not report a switch", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "same-flow", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "same-flow", executionPrerequisite: PREREQ });
     await flowInsertEchoTool.execute({}, { message: "will be reset" });
 
     const result = await flowStartRecordingTool.execute(
       {},
-      { name: "same-flow", executionPrerequisite: "Updated prereq" },
+      { name: "same-flow", executionPrerequisite: "Updated prereq" }
     );
 
     // Should NOT mention a switch — it's the same flow being restarted
@@ -175,7 +149,7 @@ describe("flow-start-recording edge cases", () => {
   it("does not report a switch when no flow was previously active", async () => {
     const result = await flowStartRecordingTool.execute(
       {},
-      { name: "fresh-start", executionPrerequisite: PREREQ },
+      { name: "fresh-start", executionPrerequisite: PREREQ }
     );
 
     expect(result.message).not.toContain("Switched");
@@ -187,14 +161,8 @@ describe("flow-start-recording edge cases", () => {
 
 describe("flow-add-echo", () => {
   it("appends an echo entry to the flow file", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "echo-test", executionPrerequisite: PREREQ },
-    );
-    const result = await flowInsertEchoTool.execute(
-      {},
-      { message: "Hello world" },
-    );
+    await flowStartRecordingTool.execute({}, { name: "echo-test", executionPrerequisite: PREREQ });
+    const result = await flowInsertEchoTool.execute({}, { message: "Hello world" });
 
     expect(result.message).toContain("echo-test");
     const flow = parseFlow(result.flowFile);
@@ -202,10 +170,7 @@ describe("flow-add-echo", () => {
   });
 
   it("appends multiple echo entries", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "multi-echo", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "multi-echo", executionPrerequisite: PREREQ });
     await flowInsertEchoTool.execute({}, { message: "First" });
     const result = await flowInsertEchoTool.execute({}, { message: "Second" });
 
@@ -217,9 +182,9 @@ describe("flow-add-echo", () => {
   });
 
   it("throws when no active flow", async () => {
-    await expect(
-      flowInsertEchoTool.execute({}, { message: "oops" }),
-    ).rejects.toThrow("No active flow");
+    await expect(flowInsertEchoTool.execute({}, { message: "oops" })).rejects.toThrow(
+      "No active flow"
+    );
   });
 });
 
@@ -232,20 +197,12 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "step-test", executionPrerequisite: PREREQ },
-    );
-    const result = await tool.execute(
-      {},
-      { command: "tap", args: '{"x":0.5,"y":0.3}' },
-    );
+    await flowStartRecordingTool.execute({}, { name: "step-test", executionPrerequisite: PREREQ });
+    const result = await tool.execute({}, { command: "tap", args: '{"x":0.5,"y":0.3}' });
 
     expect(result.toolResult).toEqual({ tapped: true });
     const flow = parseFlow(result.flowFile);
-    expect(flow.steps).toEqual([
-      { kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } },
-    ]);
+    expect(flow.steps).toEqual([{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } }]);
     expect(registry.invokeTool).toHaveBeenCalledWith("tap", {
       x: 0.5,
       y: 0.3,
@@ -258,13 +215,10 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "fail-test", executionPrerequisite: PREREQ },
+    await flowStartRecordingTool.execute({}, { name: "fail-test", executionPrerequisite: PREREQ });
+    await expect(tool.execute({}, { command: "tap", args: '{"x":0.5}' })).rejects.toThrow(
+      'Tool "tap" failed'
     );
-    await expect(
-      tool.execute({}, { command: "tap", args: '{"x":0.5}' }),
-    ).rejects.toThrow('Tool "tap" failed');
 
     const content = await readFlowFile("fail-test");
     const flow = parseFlow(content);
@@ -277,17 +231,12 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "no-args", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "no-args", executionPrerequisite: PREREQ });
     await tool.execute({}, { command: "screenshot" });
 
     const content = await readFlowFile("no-args");
     const flow = parseFlow(content);
-    expect(flow.steps).toEqual([
-      { kind: "tool", name: "screenshot", args: {} },
-    ]);
+    expect(flow.steps).toEqual([{ kind: "tool", name: "screenshot", args: {} }]);
     expect(registry.invokeTool).toHaveBeenCalledWith("screenshot", {});
   });
 
@@ -297,9 +246,9 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await expect(
-      tool.execute({}, { command: "tap", args: '{"x":0.5}' }),
-    ).rejects.toThrow("No active flow");
+    await expect(tool.execute({}, { command: "tap", args: '{"x":0.5}' })).rejects.toThrow(
+      "No active flow"
+    );
   });
 
   it("throws on invalid JSON in args", async () => {
@@ -308,12 +257,9 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "bad-json", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "bad-json", executionPrerequisite: PREREQ });
     await expect(
-      tool.execute({}, { command: "tap", args: "not valid json {{{" }),
+      tool.execute({}, { command: "tap", args: "not valid json {{{" })
     ).rejects.toThrow();
 
     // Flow file should remain unchanged (no step recorded)
@@ -328,11 +274,11 @@ describe("flow-add-step", () => {
 
     await flowStartRecordingTool.execute(
       {},
-      { name: "missing-tool", executionPrerequisite: PREREQ },
+      { name: "missing-tool", executionPrerequisite: PREREQ }
     );
-    await expect(
-      tool.execute({}, { command: "nonexistent-tool", args: "{}" }),
-    ).rejects.toThrow('Tool "nonexistent-tool" not found');
+    await expect(tool.execute({}, { command: "nonexistent-tool", args: "{}" })).rejects.toThrow(
+      'Tool "nonexistent-tool" not found'
+    );
 
     // Flow file should remain unchanged
     const content = await readFlowFile("missing-tool");
@@ -347,7 +293,7 @@ describe("flow-finish-recording", () => {
   it("returns summary with prerequisite and clears active flow", async () => {
     await flowStartRecordingTool.execute(
       {},
-      { name: "finish-test", executionPrerequisite: PREREQ },
+      { name: "finish-test", executionPrerequisite: PREREQ }
     );
     await flowInsertEchoTool.execute({}, { message: "Step 1" });
 
@@ -359,22 +305,17 @@ describe("flow-finish-recording", () => {
     expect(result.summary).toEqual(["1. echo: Step 1"]);
 
     // Active flow should be cleared
-    await expect(
-      flowInsertEchoTool.execute({}, { message: "after finish" }),
-    ).rejects.toThrow("No active flow");
+    await expect(flowInsertEchoTool.execute({}, { message: "after finish" })).rejects.toThrow(
+      "No active flow"
+    );
   });
 
   it("throws when no active flow", async () => {
-    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow(
-      "No active flow",
-    );
+    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow("No active flow");
   });
 
   it("handles empty flow", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "empty", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "empty", executionPrerequisite: PREREQ });
     const result = await flowFinishRecordingTool.execute({}, {});
 
     expect(result.steps).toBe(0);
@@ -384,21 +325,16 @@ describe("flow-finish-recording", () => {
   it("calling finish twice throws on the second call", async () => {
     await flowStartRecordingTool.execute(
       {},
-      { name: "double-finish", executionPrerequisite: PREREQ },
+      { name: "double-finish", executionPrerequisite: PREREQ }
     );
     await flowFinishRecordingTool.execute({}, {});
 
     // Second call should fail — active flow was cleared
-    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow(
-      "No active flow",
-    );
+    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow("No active flow");
   });
 
   it("returns the file path so the agent knows where it was written", async () => {
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "path-check", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "path-check", executionPrerequisite: PREREQ });
     const result = await flowFinishRecordingTool.execute({}, {});
 
     expect(result.path).toContain(".argent");
@@ -413,16 +349,13 @@ describe("flow-finish-recording", () => {
 
     await flowStartRecordingTool.execute(
       {},
-      { name: "summary-test", executionPrerequisite: PREREQ },
+      { name: "summary-test", executionPrerequisite: PREREQ }
     );
     await flowInsertEchoTool.execute({}, { message: "Before tap" });
     await addStep.execute({}, { command: "tap", args: '{"x":0.5}' });
 
     const result = await flowFinishRecordingTool.execute({}, {});
-    expect(result.summary).toEqual([
-      "1. echo: Before tap",
-      '2. tool: tap {"x":0.5}',
-    ]);
+    expect(result.summary).toEqual(["1. echo: Before tap", '2. tool: tap {"x":0.5}']);
   });
 });
 
@@ -441,10 +374,7 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
 
     // Build a flow
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "run-test", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "run-test", executionPrerequisite: PREREQ });
     await flowInsertEchoTool.execute({}, { message: "Tap button" });
     await addStep.execute({}, { command: "tap", args: '{"x":0.5}' });
     await flowInsertEchoTool.execute({}, { message: "Take screenshot" });
@@ -455,10 +385,7 @@ describe("flow-execute", () => {
     vi.mocked(registry.invokeTool).mockClear();
 
     // Run the flow
-    const result = await runFlow.execute(
-      {},
-      { name: "run-test", prerequisiteAcknowledged: true },
-    );
+    const result = await runFlow.execute({}, { name: "run-test", prerequisiteAcknowledged: true });
 
     expect(result.flow).toBe("run-test");
     expect(result.executionPrerequisite).toBe(PREREQ);
@@ -520,9 +447,7 @@ describe("flow-execute", () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);
 
-    await expect(
-      runFlow.execute({}, { name: "nonexistent" }),
-    ).rejects.toThrow();
+    await expect(runFlow.execute({}, { name: "nonexistent" })).rejects.toThrow();
   });
 
   it("carries outputHint from tool definition", async () => {
@@ -542,10 +467,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "hint-test.yaml"), content);
 
-    const result = await runFlow.execute(
-      {},
-      { name: "hint-test", prerequisiteAcknowledged: true },
-    );
+    const result = await runFlow.execute({}, { name: "hint-test", prerequisiteAcknowledged: true });
 
     expect(result.steps[0]).toMatchObject({
       kind: "tool",
@@ -567,7 +489,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "prereq-test", prerequisiteAcknowledged: true },
+      { name: "prereq-test", prerequisiteAcknowledged: true }
     );
 
     expect(result.executionPrerequisite).toBe("App freshly reloaded");
@@ -610,10 +532,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "ack-test.yaml"), content);
 
-    const result = await runFlow.execute(
-      {},
-      { name: "ack-test", prerequisiteAcknowledged: true },
-    );
+    const result = await runFlow.execute({}, { name: "ack-test", prerequisiteAcknowledged: true });
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toHaveLength(1);
@@ -655,7 +574,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "explicit-false", prerequisiteAcknowledged: false },
+      { name: "explicit-false", prerequisiteAcknowledged: false }
     );
 
     expect(result).toMatchObject({
@@ -769,19 +688,13 @@ describe("flow-execute", () => {
     await fs.writeFile(path.join(dir, "side-effect.yaml"), content);
 
     // Start recording a different flow
-    await flowStartRecordingTool.execute(
-      {},
-      { name: "recording", executionPrerequisite: PREREQ },
-    );
+    await flowStartRecordingTool.execute({}, { name: "recording", executionPrerequisite: PREREQ });
 
     // Execute a saved flow — this should NOT affect the active recording
     await runFlow.execute({}, { name: "side-effect" });
 
     // We should still be able to add steps to the recording
-    const result = await flowInsertEchoTool.execute(
-      {},
-      { message: "still recording" },
-    );
+    const result = await flowInsertEchoTool.execute({}, { message: "still recording" });
     expect(result.message).toContain("recording");
   });
 });
@@ -798,10 +711,7 @@ describe("flow-read-prerequisite", () => {
     });
     await fs.writeFile(path.join(dir, "read-test.yaml"), content);
 
-    const result = await flowReadPrerequisiteTool.execute(
-      {},
-      { name: "read-test" },
-    );
+    const result = await flowReadPrerequisiteTool.execute({}, { name: "read-test" });
 
     expect(result.flow).toBe("read-test");
     expect(result.executionPrerequisite).toBe("App on home screen");
@@ -816,18 +726,13 @@ describe("flow-read-prerequisite", () => {
     });
     await fs.writeFile(path.join(dir, "empty-prereq.yaml"), content);
 
-    const result = await flowReadPrerequisiteTool.execute(
-      {},
-      { name: "empty-prereq" },
-    );
+    const result = await flowReadPrerequisiteTool.execute({}, { name: "empty-prereq" });
 
     expect(result.flow).toBe("empty-prereq");
     expect(result.executionPrerequisite).toBe("");
   });
 
   it("throws when the flow file does not exist", async () => {
-    await expect(
-      flowReadPrerequisiteTool.execute({}, { name: "nonexistent" }),
-    ).rejects.toThrow();
+    await expect(flowReadPrerequisiteTool.execute({}, { name: "nonexistent" })).rejects.toThrow();
   });
 });

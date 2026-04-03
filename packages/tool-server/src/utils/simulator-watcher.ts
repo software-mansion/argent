@@ -8,12 +8,7 @@ const execFileAsync = promisify(execFile);
 const POLL_INTERVAL_MS = 10_000;
 
 async function getBootedUdids(): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", [
-    "simctl",
-    "list",
-    "devices",
-    "--json",
-  ]);
+  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
   const data = JSON.parse(stdout) as {
     devices: Record<string, Array<{ udid: string; state: string }>>;
   };
@@ -40,9 +35,10 @@ async function initSimulator(
   }
 }
 
-export function startSimulatorWatcher(
-  registry: Registry
-): { stop: () => void; ready: Promise<void> } {
+export function startSimulatorWatcher(registry: Registry): {
+  stop: () => void;
+  ready: Promise<void>;
+} {
   const watchedUdids = new Set<string>();
 
   async function poll(awaitInit: boolean): Promise<void> {
@@ -59,9 +55,7 @@ export function startSimulatorWatcher(
     if (awaitInit) {
       // First poll: await all ensureEnv completions so the server is only marked
       // ready after injection is guaranteed for all currently-booted simulators.
-      await Promise.all(
-        newUdids.map((udid) => initSimulator(registry, watchedUdids, udid))
-      );
+      await Promise.all(newUdids.map((udid) => initSimulator(registry, watchedUdids, udid)));
     } else {
       // Subsequent polls: fire-and-forget to avoid blocking the interval tick.
       newUdids.forEach((udid) => initSimulator(registry, watchedUdids, udid));
@@ -71,9 +65,7 @@ export function startSimulatorWatcher(
     for (const udid of watchedUdids) {
       if (!booted.has(udid)) {
         watchedUdids.delete(udid);
-        registry
-          .disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`)
-          .catch(() => {});
+        registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
       }
     }
   }

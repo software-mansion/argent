@@ -1,7 +1,9 @@
 {
   "name": "argent-workspace",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc --build",
     "start": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",

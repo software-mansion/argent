@@ -33,10 +33,7 @@ console.log("Building and packing argent...");
 execSync("npm run pack:mcp", { cwd: root, stdio: "inherit" });
 
 const mcpPkg = JSON.parse(
-  fs.readFileSync(
-    path.join(root, "packages", "mcp", "package.json"),
-    "utf8"
-  )
+  fs.readFileSync(path.join(root, "packages", "mcp", "package.json"), "utf8")
 );
 const tarball = path.join(root, `software-mansion-argent-${mcpPkg.version}.tgz`);
 

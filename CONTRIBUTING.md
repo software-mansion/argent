@@ -62,12 +62,12 @@ That's it — no separate install steps per package are needed.
 
 This is an npm workspaces monorepo. All packages live under `packages/`:
 
-| Package | Path | Purpose |
-|---|---|---|
-| `@argent/registry` | `packages/registry` | Core library: dependency-aware service lifecycle, blueprints, tools, URNs |
-| `@argent/tool-server` | `packages/tool-server` | HTTP API over the registry (port 3001). Registers all blueprints and tools |
-| `@software-mansion/argent` | `packages/mcp` | MCP bridge — exposes tools to AI assistants via Model Context Protocol |
-| `@argent/skills` | `packages/skills` | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools |
+| Package                       | Path                           | Purpose                                                                                                                                                 |
+| ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@argent/registry`            | `packages/registry`            | Core library: dependency-aware service lifecycle, blueprints, tools, URNs                                                                               |
+| `@argent/tool-server`         | `packages/tool-server`         | HTTP API over the registry (port 3001). Registers all blueprints and tools                                                                              |
+| `@software-mansion/argent`    | `packages/mcp`                 | MCP bridge — exposes tools to AI assistants via Model Context Protocol                                                                                  |
+| `@argent/skills`              | `packages/skills`              | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools                                                              |
 | `@argent/native-devtools-ios` | `packages/native-devtools-ios` | Pre-built dylibs for iOS simulator injection (view hierarchy, network inspection). ObjC source lives in `packages/argent-private` _(private submodule)_ |
 
 The `tsconfig.json` at the root uses TypeScript project references; `tsconfig.base.json` holds shared compiler options (`strict`, `ES2022`, etc.).

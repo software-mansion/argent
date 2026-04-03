@@ -66,9 +66,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
       break;
 
     case "Debugger.enable":
-      ws.send(
-        JSON.stringify({ id, result: { debuggerId: "mock-debugger" } })
-      );
+      ws.send(JSON.stringify({ id, result: { debuggerId: "mock-debugger" } }));
       ws.send(
         JSON.stringify({
           method: "Debugger.scriptParsed",
@@ -111,10 +109,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
             },
           })
         );
-      } else if (
-        expr.includes("__argent_network_log") ||
-        expr.includes("__argent_network_by_id")
-      ) {
+      } else if (expr.includes("__argent_network_log") || expr.includes("__argent_network_by_id")) {
         handleLogReadScript(ws, id, expr);
       } else {
         // Generic evaluate
@@ -259,7 +254,7 @@ beforeAll(async () => {
         statusText: "OK",
         headers: {
           "content-type": "application/json",
-          authorization: "Bearer secret-token",
+          "authorization": "Bearer secret-token",
         },
         mimeType: "application/json",
       },
@@ -357,12 +352,8 @@ describe("NetworkInspector integration (mock server)", () => {
     expect(wsConnectionCount).toBe(1);
 
     // Verify both services are running
-    expect(
-      registry.getServiceState(`JsRuntimeDebugger:${mockPort}`)
-    ).toBe("RUNNING");
-    expect(
-      registry.getServiceState(`NetworkInspector:${mockPort}`)
-    ).toBe("RUNNING");
+    expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}`)).toBe("RUNNING");
+    expect(registry.getServiceState(`NetworkInspector:${mockPort}`)).toBe("RUNNING");
   });
 
   it("view-network-logs returns paginated network entries", async () => {
@@ -394,13 +385,10 @@ describe("NetworkInspector integration (mock server)", () => {
   });
 
   it("view-network-request-details returns full details for a known requestId", async () => {
-    const result = (await registry.invokeTool(
-      "view-network-request-details",
-      {
-        port: mockPort,
-        requestId: "rn-net-1",
-      }
-    )) as Record<string, unknown>;
+    const result = (await registry.invokeTool("view-network-request-details", {
+      port: mockPort,
+      requestId: "rn-net-1",
+    })) as Record<string, unknown>;
 
     expect(result.requestId).toBe("rn-net-1");
     expect(result.state).toBe("finished");
@@ -420,14 +408,11 @@ describe("NetworkInspector integration (mock server)", () => {
   });
 
   it("view-network-request-details returns response body when includeBody is true", async () => {
-    const result = (await registry.invokeTool(
-      "view-network-request-details",
-      {
-        port: mockPort,
-        requestId: "rn-net-1",
-        includeBody: true,
-      }
-    )) as Record<string, unknown>;
+    const result = (await registry.invokeTool("view-network-request-details", {
+      port: mockPort,
+      requestId: "rn-net-1",
+      includeBody: true,
+    })) as Record<string, unknown>;
 
     const resp = result.response as Record<string, unknown>;
     expect(resp.body).toBeDefined();
@@ -436,13 +421,10 @@ describe("NetworkInspector integration (mock server)", () => {
   });
 
   it("view-network-request-details returns error for unknown requestId", async () => {
-    const result = (await registry.invokeTool(
-      "view-network-request-details",
-      {
-        port: mockPort,
-        requestId: "rn-net-999",
-      }
-    )) as string;
+    const result = (await registry.invokeTool("view-network-request-details", {
+      port: mockPort,
+      requestId: "rn-net-999",
+    })) as string;
 
     expect(result).toContain("Request not found");
   });
@@ -513,14 +495,11 @@ describe("NetworkInspector integration (mock server)", () => {
   });
 
   it("view-network-request-details omits body when includeBody is false", async () => {
-    const result = (await registry.invokeTool(
-      "view-network-request-details",
-      {
-        port: mockPort,
-        requestId: "rn-net-1",
-        includeBody: false,
-      }
-    )) as Record<string, unknown>;
+    const result = (await registry.invokeTool("view-network-request-details", {
+      port: mockPort,
+      requestId: "rn-net-1",
+      includeBody: false,
+    })) as Record<string, unknown>;
 
     const resp = result.response as Record<string, unknown>;
     expect(resp).toBeDefined();
@@ -557,14 +536,11 @@ describe("NetworkInspector integration (mock server)", () => {
     networkLog.push(largeEntry);
 
     try {
-      const result = (await registry.invokeTool(
-        "view-network-request-details",
-        {
-          port: mockPort,
-          requestId: "rn-net-large",
-          includeBody: true,
-        }
-      )) as Record<string, unknown>;
+      const result = (await registry.invokeTool("view-network-request-details", {
+        port: mockPort,
+        requestId: "rn-net-large",
+        includeBody: true,
+      })) as Record<string, unknown>;
 
       const resp = result.response as Record<string, unknown>;
       expect(resp.body).toBeDefined();
@@ -583,11 +559,7 @@ describe("NetworkInspector integration (mock server)", () => {
     // Dispose JsRuntimeDebugger — NetworkInspector should also be torn down
     await registry.disposeService(`JsRuntimeDebugger:${mockPort}`);
 
-    expect(
-      registry.getServiceState(`JsRuntimeDebugger:${mockPort}`)
-    ).toBe("IDLE");
-    expect(
-      registry.getServiceState(`NetworkInspector:${mockPort}`)
-    ).toBe("IDLE");
+    expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}`)).toBe("IDLE");
+    expect(registry.getServiceState(`NetworkInspector:${mockPort}`)).toBe("IDLE");
   });
 });

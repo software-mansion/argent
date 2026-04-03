@@ -72,10 +72,10 @@ Steps:
 
 ## Related Skills
 
-| Skill                  | When to use                                      |
-| ---------------------- | ------------------------------------------------ |
-| `argent-simulator-interact`   | Detailed tool usage for tapping, swiping, typing |
-| `argent-simulator-setup`      | Booting and connecting a simulator               |
-| `argent-react-native-app-workflow` | Starting the app, Metro, build issues       |
-| `argent-metro-debugger`       | Breakpoints, console logs, JS evaluation         |
-| `argent-create-flow`          | Record a test sequence as a replayable flow      |
+| Skill                              | When to use                                      |
+| ---------------------------------- | ------------------------------------------------ |
+| `argent-simulator-interact`        | Detailed tool usage for tapping, swiping, typing |
+| `argent-simulator-setup`           | Booting and connecting a simulator               |
+| `argent-react-native-app-workflow` | Starting the app, Metro, build issues            |
+| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation         |
+| `argent-create-flow`               | Record a test sequence as a replayable flow      |

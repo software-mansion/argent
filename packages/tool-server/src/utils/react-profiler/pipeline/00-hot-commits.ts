@@ -7,11 +7,7 @@
  * groups same-named components (e.g. list items) for compact display.
  */
 import type { DevToolsFiberCommit } from "../types/input";
-import type {
-  HotCommitSummary,
-  HotCommitComponentEntry,
-  ReRenderReason,
-} from "../types/output";
+import type { HotCommitSummary, HotCommitComponentEntry, ReRenderReason } from "../types/output";
 import { deriveReason } from "./utils";
 
 const ABSOLUTE_HOT_MS = 50;
@@ -20,7 +16,7 @@ const MAX_COMPONENT_ENTRIES = 15; // cap cascade display; store total count sepa
 
 export function buildHotCommitSummaries(
   commits: DevToolsFiberCommit[],
-  hotCommitIndices: number[],
+  hotCommitIndices: number[]
 ): HotCommitSummary[] {
   if (commits.length === 0) return [];
 
@@ -94,26 +90,16 @@ export function buildHotCommitSummaries(
     const totalComponentCount = componentMap.size;
 
     // Build component entries sorted by total self-duration DESC, cap at MAX_COMPONENT_ENTRIES
-    const componentEntries: HotCommitComponentEntry[] = Array.from(
-      componentMap.entries(),
-    )
+    const componentEntries: HotCommitComponentEntry[] = Array.from(componentMap.entries())
       .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
       .slice(0, MAX_COMPONENT_ENTRIES)
       .map(([name, { totalSelf, count, firstEntry, isFirstMount }]) => {
         const cd = firstEntry.changeDescription;
-        const reason =
-          !isFirstMount && cd
-            ? deriveReason(cd, firstEntry.hookTypes)
-            : undefined;
+        const reason = !isFirstMount && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
 
         // Build changed hook names for re-render entries only
         let topChangedHookNames: string[] | undefined;
-        if (
-          !isFirstMount &&
-          cd?.hooks &&
-          cd.hooks.length > 0 &&
-          firstEntry.hookTypes
-        ) {
+        if (!isFirstMount && cd?.hooks && cd.hooks.length > 0 && firstEntry.hookTypes) {
           const seen = new Set<string>();
           topChangedHookNames = [];
           for (const idx of cd.hooks.slice(0, 3)) {
@@ -155,7 +141,7 @@ export function buildHotCommitSummaries(
 
     if (!isInitialRender) {
       const rootCauseEntry = componentEntries.find(
-        (e) => !e.isFirstMount && e.reason && e.reason !== "parent",
+        (e) => !e.isFirstMount && e.reason && e.reason !== "parent"
       );
       if (rootCauseEntry) {
         rootCauseComponent = rootCauseEntry.name;
@@ -164,39 +150,27 @@ export function buildHotCommitSummaries(
         rootCauseChangedHookNames = rootCauseEntry.topChangedHookNames;
       } else {
         // All parent cascades — check rootCauseParent annotation from preprocess
-        const withRootCause = rerenderEntries.find(
-          (e) => e.rootCauseParent && e.rootCauseReason,
-        );
+        const withRootCause = rerenderEntries.find((e) => e.rootCauseParent && e.rootCauseReason);
         if (withRootCause) {
           rootCauseComponent = withRootCause.rootCauseParent;
           rootCauseReason = withRootCause.rootCauseReason;
-          if (
-            withRootCause.rootCauseProps &&
-            withRootCause.rootCauseProps.length > 0
-          ) {
+          if (withRootCause.rootCauseProps && withRootCause.rootCauseProps.length > 0) {
             rootCauseChangedProps = withRootCause.rootCauseProps.slice(0, 3);
           }
           // rootCauseHookTypes are the full hookTypes of the root cause component;
           // rootCauseHooks are the changed indices — map them
-          if (
-            withRootCause.rootCauseHooks &&
-            withRootCause.rootCauseHookTypes
-          ) {
+          if (withRootCause.rootCauseHooks && withRootCause.rootCauseHookTypes) {
             const hookNames: string[] = [];
             const seen = new Set<string>();
             for (const idx of withRootCause.rootCauseHooks.slice(0, 3)) {
-              const typeName =
-                withRootCause.rootCauseHookTypes[idx] ?? `hook[${idx}]`;
+              const typeName = withRootCause.rootCauseHookTypes[idx] ?? `hook[${idx}]`;
               if (!seen.has(typeName)) {
                 seen.add(typeName);
                 hookNames.push(typeName);
               }
             }
             if (hookNames.length > 0) rootCauseChangedHookNames = hookNames;
-          } else if (
-            withRootCause.rootCauseHooks &&
-            withRootCause.rootCauseHooks.length > 0
-          ) {
+          } else if (withRootCause.rootCauseHooks && withRootCause.rootCauseHooks.length > 0) {
             rootCauseChangedHookNames = withRootCause.rootCauseHooks
               .slice(0, 3)
               .map((idx) => `hook[${idx}]`);
@@ -214,8 +188,7 @@ export function buildHotCommitSummaries(
       ...(isInitialRender && { isInitialRender: true }),
       ...(rootCauseComponent && { rootCauseComponent }),
       ...(rootCauseReason && { rootCauseReason }),
-      ...(rootCauseChangedProps &&
-        rootCauseChangedProps.length > 0 && { rootCauseChangedProps }),
+      ...(rootCauseChangedProps && rootCauseChangedProps.length > 0 && { rootCauseChangedProps }),
       ...(rootCauseChangedHookNames &&
         rootCauseChangedHookNames.length > 0 && { rootCauseChangedHookNames }),
       components: componentEntries,

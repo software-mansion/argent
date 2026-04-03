@@ -51,8 +51,7 @@ const cursorAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".cursor")) ||
-      dirExists(path.join(process.cwd(), ".cursor"))
+      dirExists(path.join(homedir(), ".cursor")) || dirExists(path.join(process.cwd(), ".cursor"))
     );
   },
 
@@ -177,8 +176,7 @@ const vscodeAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(process.cwd(), ".vscode")) ||
-      dirExists(path.join(homedir(), ".vscode"))
+      dirExists(path.join(process.cwd(), ".vscode")) || dirExists(path.join(homedir(), ".vscode"))
     );
   },
 
@@ -312,9 +310,7 @@ const zedAdapter: McpConfigAdapter = {
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
     const config = readJson(configPath);
-    const servers = config.context_servers as
-      | Record<string, unknown>
-      | undefined;
+    const servers = config.context_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
     writeJson(configPath, config);
@@ -346,8 +342,9 @@ const zedAdapter: McpConfigAdapter = {
         : path.join(process.cwd(), ".zed", "settings.json");
     if (!fs.existsSync(settingsPath)) return;
     const config = readJson(settingsPath);
-    const perms = (config.agent as Record<string, unknown>)
-      ?.tool_permissions as Record<string, unknown> | undefined;
+    const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
+      | Record<string, unknown>
+      | undefined;
     if (!perms || perms.default !== "allow") return;
     perms.default = "confirm";
     writeJson(settingsPath, config);
@@ -363,8 +360,7 @@ const geminiAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".gemini")) ||
-      dirExists(path.join(process.cwd(), ".gemini"))
+      dirExists(path.join(homedir(), ".gemini")) || dirExists(path.join(process.cwd(), ".gemini"))
     );
   },
 
@@ -435,8 +431,7 @@ const codexAdapter: McpConfigAdapter = {
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".codex")) ||
-      dirExists(path.join(process.cwd(), ".codex"))
+      dirExists(path.join(homedir(), ".codex")) || dirExists(path.join(process.cwd(), ".codex"))
     );
   },
 
@@ -493,10 +488,7 @@ export function getAdapterByName(name: string): McpConfigAdapter | undefined {
 
 // ── Claude permissions helpers ────────────────────────────────────────────────
 
-export function addClaudePermission(
-  root: string,
-  scope: "local" | "global",
-): void {
+export function addClaudePermission(root: string, scope: "local" | "global"): void {
   const settingsPath =
     scope === "global"
       ? path.join(homedir(), ".claude", "settings.json")
@@ -513,10 +505,7 @@ export function addClaudePermission(
   }
 }
 
-export function removeClaudePermission(
-  root: string,
-  scope: "local" | "global",
-): void {
+export function removeClaudePermission(root: string, scope: "local" | "global"): void {
   const settingsPath =
     scope === "global"
       ? path.join(homedir(), ".claude", "settings.json")
@@ -524,8 +513,7 @@ export function removeClaudePermission(
 
   if (!fs.existsSync(settingsPath)) return;
   const config = readJson(settingsPath);
-  const allow = (config?.permissions as Record<string, unknown>)
-    ?.allow as string[];
+  const allow = (config?.permissions as Record<string, unknown>)?.allow as string[];
   if (!Array.isArray(allow)) return;
   const idx = allow.indexOf(PERMISSION_RULE);
   if (idx === -1) return;
@@ -544,7 +532,7 @@ interface CopyTarget {
 function getCopyTargets(
   adapters: McpConfigAdapter[],
   root: string,
-  scope: "local" | "global",
+  scope: "local" | "global"
 ): CopyTarget[] {
   const targets: CopyTarget[] = [];
 
@@ -569,9 +557,7 @@ function getCopyTargets(
         break;
       case "Claude Code": {
         const claudeBase =
-          scope === "global"
-            ? path.join(homedir(), ".claude")
-            : path.join(root, ".claude");
+          scope === "global" ? path.join(homedir(), ".claude") : path.join(root, ".claude");
         targets.push({
           editorName: adapter.name,
           rulesDir: path.join(claudeBase, "rules"),
@@ -581,9 +567,7 @@ function getCopyTargets(
       }
       case "Gemini": {
         const geminiBase =
-          scope === "global"
-            ? path.join(homedir(), ".gemini")
-            : path.join(root, ".gemini");
+          scope === "global" ? path.join(homedir(), ".gemini") : path.join(root, ".gemini");
         targets.push({
           editorName: adapter.name,
           rulesDir: path.join(geminiBase, "rules"),
@@ -612,7 +596,10 @@ function stripFrontmatter(content: string): string {
 
 function readAndConcatRules(rulesDir: string): string | null {
   if (!fs.existsSync(rulesDir)) return null;
-  const files = fs.readdirSync(rulesDir).filter((f) => f.endsWith(".md")).sort();
+  const files = fs
+    .readdirSync(rulesDir)
+    .filter((f) => f.endsWith(".md"))
+    .sort();
   if (files.length === 0) return null;
   const parts: string[] = [];
   for (const file of files) {
@@ -628,7 +615,7 @@ function injectArgentSection(existing: string | undefined, rules: string): strin
   if (!existing) return section;
   // Replace existing argent section if present
   const re = new RegExp(
-    `${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}`,
+    `${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}`
   );
   if (re.test(existing)) return existing.replace(re, section);
   // Append after user content
@@ -637,7 +624,7 @@ function injectArgentSection(existing: string | undefined, rules: string): strin
 
 function removeArgentSection(existing: string): string {
   const re = new RegExp(
-    `\\n*${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}\\n*`,
+    `\\n*${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}\\n*`
   );
   return existing.replace(re, "").trim();
 }
@@ -678,7 +665,7 @@ export function copyRulesAndAgents(
   root: string,
   scope: "local" | "global",
   rulesDir: string,
-  agentsDir: string,
+  agentsDir: string
 ): string[] {
   const results: string[] = [];
   const targets = getCopyTargets(adapters, root, scope);
@@ -710,8 +697,7 @@ export function copyRulesAndAgents(
   // Codex: inject rules into developer_instructions in config.toml
   for (const adapter of adapters) {
     if (adapter.name !== "Codex") continue;
-    const configPath =
-      scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
+    const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
     if (!configPath) continue;
     try {
       const injected = injectCodexRules(configPath, rulesDir);

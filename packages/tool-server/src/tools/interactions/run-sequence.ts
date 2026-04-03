@@ -22,28 +22,22 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate",
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
           ),
         args: z
           .record(z.unknown())
-          .describe(
-            "Tool arguments (excluding udid, which is injected automatically)",
-          ),
+          .describe("Tool arguments (excluding udid, which is injected automatically)"),
         delayMs: z
           .number()
           .optional()
-          .describe(
-            "Wait time in ms after this step before the next (default 100)",
-          ),
-      }),
+          .describe("Wait time in ms after this step before the next (default 100)"),
+      })
     )
     .min(1)
     .describe("Ordered list of interaction steps to execute sequentially"),
 });
 
-type StepResult =
-  | { tool: string; result: unknown }
-  | { tool: string; error: string };
+type StepResult = { tool: string; result: unknown } | { tool: string; error: string };
 
 type RunSequenceResult = {
   completed: number;
@@ -52,7 +46,7 @@ type RunSequenceResult = {
 };
 
 export function createRunSequenceTool(
-  registry: Registry,
+  registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, RunSequenceResult> {
   return {
     id: "run-sequence",

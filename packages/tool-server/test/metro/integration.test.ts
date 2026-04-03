@@ -75,9 +75,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
           id,
           result: {
             breakpointId: `bp:${params.lineNumber}:${params.urlRegex}`,
-            locations: [
-              { scriptId: "1", lineNumber: params.lineNumber, columnNumber: 0 },
-            ],
+            locations: [{ scriptId: "1", lineNumber: params.lineNumber, columnNumber: 0 }],
           },
         })
       );
@@ -201,5 +199,4 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
 
     expect(result.result).toBe("eval-result-42");
   });
-
 });

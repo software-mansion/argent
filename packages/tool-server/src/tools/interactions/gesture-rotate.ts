@@ -8,25 +8,21 @@ const zodSchema = z.object({
   centerX: z
     .number()
     .describe(
-      "Center of rotation, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)",
+      "Center of rotation, horizontal: normalized 0.0–1.0 (fraction of screen width, not pixels)"
     ),
   centerY: z
     .number()
     .describe(
-      "Center of rotation, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)",
+      "Center of rotation, vertical: normalized 0.0–1.0 (fraction of screen height, not pixels)"
     ),
   radius: z
     .number()
     .describe(
       "Distance from center to each finger: normalized 0.0–1.0 (fraction of screen, not pixels). " +
-        "E.g. 0.15 = fingers placed 15% of screen away from center.",
+        "E.g. 0.15 = fingers placed 15% of screen away from center."
     ),
-  startAngle: z
-    .number()
-    .describe("Starting angle in degrees (0 = right, 90 = down)"),
-  endAngle: z
-    .number()
-    .describe("Ending angle in degrees. endAngle > startAngle = clockwise."),
+  startAngle: z.number().describe("Starting angle in degrees (0 = right, 90 = down)"),
+  endAngle: z.number().describe("Ending angle in degrees. endAngle > startAngle = clockwise."),
   durationMs: z
     .number()
     .optional()
@@ -57,8 +53,7 @@ Auto-generates interpolated frames at ~60fps for a natural feel.`,
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
-      const angleDeg =
-        params.startAngle + (params.endAngle - params.startAngle) * t;
+      const angleDeg = params.startAngle + (params.endAngle - params.startAngle) * t;
       const angleRad = (angleDeg * Math.PI) / 180;
 
       const x1 = params.centerX + params.radius * Math.cos(angleRad);

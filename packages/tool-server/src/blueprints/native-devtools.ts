@@ -3,11 +3,7 @@ import * as fs from "node:fs";
 import * as readline from "node:readline";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import {
-  TypedEventEmitter,
-  type ServiceBlueprint,
-  type ServiceEvents,
-} from "@argent/registry";
+import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import { bootstrapDylibPath } from "@argent/native-devtools-ios";
 
 const execFileAsync = promisify(execFile);
@@ -70,11 +66,9 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   const bootstrapPath = bootstrapDylibPath();
 
   // xcrun simctl getenv exits non-zero when the var is unset — suppress rejection
-  const result = await execFileAsync(
-    "xcrun",
-    ["simctl", "getenv", udid, "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8" }
-  ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
+  const result = await execFileAsync("xcrun", ["simctl", "getenv", udid, "DYLD_INSERT_LIBRARIES"], {
+    encoding: "utf8",
+  }).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
   const entries = existing ? existing.split(":") : [];
@@ -105,10 +99,7 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   ]);
 }
 
-export const nativeDevtoolsBlueprint: ServiceBlueprint<
-  NativeDevtoolsApi,
-  string
-> = {
+export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string> = {
   namespace: NATIVE_DEVTOOLS_NAMESPACE,
 
   getURN(udid: string) {
@@ -252,9 +243,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<
         }
       },
 
-      getNetworkLog: (bundleId) => [
-        ...(connections.get(bundleId)?.networkLog ?? []),
-      ],
+      getNetworkLog: (bundleId) => [...(connections.get(bundleId)?.networkLog ?? [])],
 
       clearNetworkLog: (bundleId) => {
         const conn = connections.get(bundleId);
@@ -265,9 +254,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<
         const conn = connections.get(bundleId);
         if (!conn) {
           return Promise.reject(
-            new Error(
-              "Native devtools not connected for bundleId: " + bundleId
-            )
+            new Error("Native devtools not connected for bundleId: " + bundleId)
           );
         }
         const id = nextRpcId++;

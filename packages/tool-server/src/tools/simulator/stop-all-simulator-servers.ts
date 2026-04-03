@@ -3,13 +3,10 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 
-const PREFIXES = [
-  `${SIMULATOR_SERVER_NAMESPACE}:`,
-  `${NATIVE_DEVTOOLS_NAMESPACE}:`,
-];
+const PREFIXES = [`${SIMULATOR_SERVER_NAMESPACE}:`, `${NATIVE_DEVTOOLS_NAMESPACE}:`];
 
 export function createStopAllSimulatorServersTool(
-  registry: Registry,
+  registry: Registry
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
@@ -21,10 +18,7 @@ export function createStopAllSimulatorServersTool(
       const snapshot = registry.getSnapshot();
       const stopped: string[] = [];
       for (const [urn, entry] of snapshot.services) {
-        if (
-          PREFIXES.some((p) => urn.startsWith(p)) &&
-          entry.state !== ServiceState.IDLE
-        ) {
+        if (PREFIXES.some((p) => urn.startsWith(p)) && entry.state !== ServiceState.IDLE) {
           await registry.disposeService(urn);
           stopped.push(urn);
         }

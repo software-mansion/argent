@@ -83,15 +83,7 @@ function loadTreeSitter(): {
 
 // ---------------------------------------------------------------------------
 
-const EXCLUDE_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "android",
-  "ios",
-  "dist",
-  "build",
-  ".expo",
-]);
+const EXCLUDE_DIRS = new Set(["node_modules", ".git", "android", "ios", "dist", "build", ".expo"]);
 
 async function findSourceFiles(dir: string): Promise<string[]> {
   const result: string[] = [];
@@ -130,11 +122,7 @@ async function findSourceFiles(dir: string): Promise<string[]> {
 function isCapitalized(name: string): boolean {
   if (name.length === 0) return false;
   const first = name[0];
-  return (
-    first !== undefined &&
-    first === first.toUpperCase() &&
-    first !== first.toLowerCase()
-  );
+  return first !== undefined && first === first.toUpperCase() && first !== first.toLowerCase();
 }
 
 function nodeContainsCall(node: TreeSitterNode, callName: string): boolean {
@@ -142,10 +130,7 @@ function nodeContainsCall(node: TreeSitterNode, callName: string): boolean {
     const funcChild = node.children[0];
     if (funcChild) {
       if (funcChild.text === callName) return true;
-      if (
-        funcChild.type === "member_expression" &&
-        funcChild.children[2]?.text === callName
-      ) {
+      if (funcChild.type === "member_expression" && funcChild.children[2]?.text === callName) {
         return true;
       }
     }
@@ -170,9 +155,7 @@ function isWrappedInMemo(source: string, componentName: string): boolean {
  * Returns the index plus diagnostics (treeSitterAvailable, indexedFiles).
  * Returns empty index with treeSitterAvailable=false if tree-sitter is not available.
  */
-export async function buildAstIndexWithDiagnostics(
-  projectRoot: string,
-): Promise<AstIndexResult> {
+export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise<AstIndexResult> {
   const index: ComponentIndex = new Map();
 
   const ts = loadTreeSitter();
@@ -226,8 +209,7 @@ export async function buildAstIndexWithDiagnostics(
           nameNode.type === "identifier" &&
           isCapitalized(nameNode.text) &&
           valueNode &&
-          (valueNode.type === "arrow_function" ||
-            valueNode.type === "function_expression")
+          (valueNode.type === "arrow_function" || valueNode.type === "function_expression")
         ) {
           const componentName = nameNode.text;
           if (!index.has(componentName)) {

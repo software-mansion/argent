@@ -59,8 +59,7 @@ describe("selectTarget", () => {
 
   it("normalizes WebSocket URL to localhost with correct port", () => {
     const target = makeTarget({
-      webSocketDebuggerUrl:
-        "ws://10.0.2.2:9999/inspector/debug?device=0&page=1",
+      webSocketDebuggerUrl: "ws://10.0.2.2:9999/inspector/debug?device=0&page=1",
     });
 
     const result = selectTarget([target], 8081);

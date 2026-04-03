@@ -7,9 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  bundleId: z
-    .string()
-    .describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
+  bundleId: z.string().describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
 });
 
 export const restartAppTool: ToolDefinition<

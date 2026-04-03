@@ -74,11 +74,7 @@ describe("extractEnvKeys", () => {
     const content = `API_URL=https://example.com
 SECRET_KEY=abc123
 DATABASE_URL=postgres://...`;
-    expect(extractEnvKeys(content)).toEqual([
-      "API_URL",
-      "SECRET_KEY",
-      "DATABASE_URL",
-    ]);
+    expect(extractEnvKeys(content)).toEqual(["API_URL", "SECRET_KEY", "DATABASE_URL"]);
   });
 
   it("skips comments and empty lines", () => {
@@ -117,11 +113,7 @@ lint:
 
 test:
 \t@yarn test`;
-    expect(extractMakefileTargets(content)).toEqual([
-      "setup",
-      "lint",
-      "test",
-    ]);
+    expect(extractMakefileTargets(content)).toEqual(["setup", "lint", "test"]);
   });
 
   it("handles targets with hyphens and dots", () => {
@@ -130,10 +122,7 @@ test:
 
 deploy.staging:
 \t@echo deploying`;
-    expect(extractMakefileTargets(content)).toEqual([
-      "build-ios",
-      "deploy.staging",
-    ]);
+    expect(extractMakefileTargets(content)).toEqual(["build-ios", "deploy.staging"]);
   });
 
   it("returns empty array for empty content", () => {
@@ -156,14 +145,14 @@ describe("readWorkspaceSnapshot", () => {
     await writeJson(tempDir, "package.json", {
       name: "TestApp",
       version: "1.0.0",
-      dependencies: { "react-native": "0.74.0", react: "18.2.0" },
+      dependencies: { "react-native": "0.74.0", "react": "18.2.0" },
       scripts: { start: "react-native start", ios: "react-native run-ios" },
     });
     await writeText(
       tempDir,
       "metro.config.js",
       `const {getDefaultConfig} = require('@react-native/metro-config');
-module.exports = getDefaultConfig(__dirname);`,
+module.exports = getDefaultConfig(__dirname);`
     );
     await mkdirIn(tempDir, "ios");
     await writeFile(join(tempDir, "ios", "Podfile"), "platform :ios, '13.4'");
@@ -226,11 +215,7 @@ module.exports = getDefaultConfig(__dirname);`,
   });
 
   it("extracts metro port from config", async () => {
-    await writeText(
-      tempDir,
-      "metro.config.js",
-      `module.exports = { server: { port: 9090 } };`,
-    );
+    await writeText(tempDir, "metro.config.js", `module.exports = { server: { port: 9090 } };`);
 
     const snap = await readWorkspaceSnapshot(tempDir);
     expect(snap.metro_port).toBe(9090);
@@ -303,11 +288,7 @@ module.exports = getDefaultConfig(__dirname);`,
   });
 
   it("detects Makefile targets", async () => {
-    await writeText(
-      tempDir,
-      "Makefile",
-      `setup:\n\t@echo setup\nlint:\n\t@yarn lint\n`,
-    );
+    await writeText(tempDir, "Makefile", `setup:\n\t@echo setup\nlint:\n\t@yarn lint\n`);
 
     const snap = await readWorkspaceSnapshot(tempDir);
     expect(snap.makefile_targets).toEqual(["setup", "lint"]);
@@ -316,7 +297,7 @@ module.exports = getDefaultConfig(__dirname);`,
 
   it("detects lint-staged config from package.json", async () => {
     await writeJson(tempDir, "package.json", {
-      name: "test",
+      "name": "test",
       "lint-staged": { "*.ts": ["eslint --fix", "prettier --write"] },
     });
 
@@ -336,11 +317,7 @@ module.exports = getDefaultConfig(__dirname);`,
   });
 
   it("detects all lockfile types", async () => {
-    for (const lockName of [
-      "yarn.lock",
-      "package-lock.json",
-      "pnpm-lock.yaml",
-    ] as const) {
+    for (const lockName of ["yarn.lock", "package-lock.json", "pnpm-lock.yaml"] as const) {
       const dir = await createTempDir();
       await writeText(dir, lockName, "");
       const snap = await readWorkspaceSnapshot(dir);
@@ -369,11 +346,7 @@ module.exports = getDefaultConfig(__dirname);`,
   });
 
   it("falls back to metro.config.ts if .js not found", async () => {
-    await writeText(
-      tempDir,
-      "metro.config.ts",
-      `export default { server: { port: 7777 } };`,
-    );
+    await writeText(tempDir, "metro.config.ts", `export default { server: { port: 7777 } };`);
 
     const snap = await readWorkspaceSnapshot(tempDir);
     expect(snap.metro_config_raw).toContain("port: 7777");

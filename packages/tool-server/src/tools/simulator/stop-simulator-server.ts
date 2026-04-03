@@ -8,7 +8,7 @@ const zodSchema = z.object({
 });
 
 export function createStopSimulatorServerTool(
-  registry: Registry,
+  registry: Registry
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",

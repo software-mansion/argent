@@ -25,12 +25,7 @@ export const listSimulatorsTool: ToolDefinition = {
   zodSchema,
   services: () => ({}),
   async execute(_services, _params, _options) {
-    const { stdout } = await execFileAsync("xcrun", [
-      "simctl",
-      "list",
-      "devices",
-      "--json",
-    ]);
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
     const data: SimctlOutput = JSON.parse(stdout);
     const simulators: {
       udid: string;

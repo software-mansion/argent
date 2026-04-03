@@ -5,9 +5,7 @@ import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  bundleId: z
-    .string()
-    .describe("Bundle ID of the app to check (e.g. com.example.MyApp)"),
+  bundleId: z.string().describe("Bundle ID of the app to check (e.g. com.example.MyApp)"),
 });
 
 type Params = z.infer<typeof zodSchema>;

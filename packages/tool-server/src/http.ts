@@ -20,17 +20,11 @@ export interface HttpAppHandle {
   getLastActivityAt: () => number;
 }
 
-export function createHttpApp(
-  registry: Registry,
-  options?: HttpAppOptions,
-): HttpAppHandle {
+export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   app.use(express.json());
 
-  const idleTimer = createIdleTimer(
-    options?.idleTimeoutMs ?? 0,
-    options?.onIdle,
-  );
+  const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -45,8 +39,7 @@ export function createHttpApp(
 
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();
-    const services: Record<string, { state: string; dependents: string[] }> =
-      {};
+    const services: Record<string, { state: string; dependents: string[] }> = {};
     for (const [urn, data] of snapshot.services) {
       services[urn] = { state: data.state, dependents: [...data.dependents] };
     }
@@ -119,7 +112,7 @@ export function createHttpApp(
         }
         res.status(500).json({ error: formatErrorForAgent(err) });
       }
-    },
+    }
   );
 
   if (options?.onShutdown) {

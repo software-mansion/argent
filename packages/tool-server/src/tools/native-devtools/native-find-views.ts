@@ -6,23 +6,11 @@ import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
   bundleId: z.string().describe("Bundle ID of the app"),
-  className: z
-    .string()
-    .optional()
-    .describe("UIView class name to match (exact, e.g. UIButton)"),
-  identifier: z
-    .string()
-    .optional()
-    .describe("Accessibility identifier to match (exact)"),
-  label: z
-    .string()
-    .optional()
-    .describe("Accessibility label to match (exact)"),
+  className: z.string().optional().describe("UIView class name to match (exact, e.g. UIButton)"),
+  identifier: z.string().optional().describe("Accessibility identifier to match (exact)"),
+  label: z.string().optional().describe("Accessibility label to match (exact)"),
   tag: z.number().int().optional().describe("UIView tag integer to match"),
-  nativeID: z
-    .string()
-    .optional()
-    .describe("React Native nativeID prop to match (exact)"),
+  nativeID: z.string().optional().describe("React Native nativeID prop to match (exact)"),
   includeAncestors: z
     .boolean()
     .optional()
@@ -74,15 +62,12 @@ If status is restart_required: call restart-app then retry.`,
 
     const rpcParams: Record<string, unknown> = {};
     if (params.className !== undefined) rpcParams.className = params.className;
-    if (params.identifier !== undefined)
-      rpcParams.identifier = params.identifier;
+    if (params.identifier !== undefined) rpcParams.identifier = params.identifier;
     if (params.label !== undefined) rpcParams.label = params.label;
     if (params.tag !== undefined) rpcParams.tag = params.tag;
     if (params.nativeID !== undefined) rpcParams.nativeID = params.nativeID;
-    if (params.includeAncestors !== undefined)
-      rpcParams.includeAncestors = params.includeAncestors;
-    if (params.includeChildren !== undefined)
-      rpcParams.includeChildren = params.includeChildren;
+    if (params.includeAncestors !== undefined) rpcParams.includeAncestors = params.includeAncestors;
+    if (params.includeChildren !== undefined) rpcParams.includeChildren = params.includeChildren;
     if (params.fields !== undefined) rpcParams.fields = params.fields;
 
     const result = (await api.queryViewHierarchy(

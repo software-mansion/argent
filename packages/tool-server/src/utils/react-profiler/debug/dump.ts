@@ -26,7 +26,7 @@ const jsonReplacer = (_key: string, value: unknown): unknown => {
 export async function writeDump(
   dir: string,
   filename: string,
-  data: unknown,
+  data: unknown
 ): Promise<string | null> {
   try {
     const path = join(dir, filename);
@@ -46,7 +46,7 @@ export async function writeDump(
 export async function writeDumpCompact(
   dir: string,
   filename: string,
-  data: unknown,
+  data: unknown
 ): Promise<string | null> {
   try {
     const path = join(dir, filename);

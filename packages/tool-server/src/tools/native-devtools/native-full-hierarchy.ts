@@ -22,16 +22,16 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Exact UIView class names whose entire subtree should be pruned " +
-        "(e.g. [\"UIImageView\"] to drop image leaf nodes)"
+        '(e.g. ["UIImageView"] to drop image leaf nodes)'
     ),
   skipClassPrefixes: z
     .array(z.string())
     .optional()
     .describe(
       "Class name prefixes to prune entire subtrees. " +
-        "For SwiftUI apps use [\"_TtGC7SwiftUI\"] to drop mangled SwiftUI " +
+        'For SwiftUI apps use ["_TtGC7SwiftUI"] to drop mangled SwiftUI ' +
         "generic type subtrees while keeping _UIHostingView and UIKit bridges. " +
-        "Avoid broad prefixes like \"_UI\" — they prune useful system views."
+        'Avoid broad prefixes like "_UI" — they prune useful system views.'
     ),
   maxDepth: z
     .number()
@@ -81,8 +81,7 @@ If status is restart_required: call restart-app then retry.`,
 
     const rpcParams: Record<string, unknown> = {};
     if (params.fields !== undefined) rpcParams.fields = params.fields;
-    if (params.skipClasses !== undefined)
-      rpcParams.skipClasses = params.skipClasses;
+    if (params.skipClasses !== undefined) rpcParams.skipClasses = params.skipClasses;
     if (params.skipClassPrefixes !== undefined)
       rpcParams.skipClassPrefixes = params.skipClassPrefixes;
     if (params.maxDepth !== undefined) rpcParams.maxDepth = params.maxDepth;

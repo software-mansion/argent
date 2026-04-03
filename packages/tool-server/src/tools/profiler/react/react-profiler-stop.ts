@@ -11,17 +11,14 @@ import type {
   HermesCpuProfile,
   DevToolsFiberCommit,
 } from "../../../utils/react-profiler/types/input";
-import {
-  getDebugDir,
-  writeDumpCompact,
-} from "../../../utils/react-profiler/debug/dump";
+import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
 });
 
 export function createReactProfilerStopTool(
-  registry: Registry,
+  registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-stop",
@@ -38,7 +35,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
       if (!entry || entry.state !== ServiceState.RUNNING) {
         throw new Error(
           "No active profiling session. The session may have been lost due to a Metro reload. " +
-            "Call react-profiler-start to begin a new session.",
+            "Call react-profiler-start to begin a new session."
         );
       }
 
@@ -49,7 +46,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         api.profilingActive = false;
         throw new Error(
           "CDP connection lost — profiling data could not be collected. " +
-            "Call react-profiler-start to begin a new session.",
+            "Call react-profiler-start to begin a new session."
         );
       }
 
@@ -73,7 +70,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
       // Step 1: Check hook status (small CDP call, non-fatal if hook absent)
       try {
         const hookStatus = (await cdp.evaluate(
-          `JSON.stringify({ installed: typeof globalThis.__ARGENT_DEVTOOLS_COMMITS__ !== 'undefined', count: globalThis.__ARGENT_DEVTOOLS_COMMITS__?.length ?? 0 })`,
+          `JSON.stringify({ installed: typeof globalThis.__ARGENT_DEVTOOLS_COMMITS__ !== 'undefined', count: globalThis.__ARGENT_DEVTOOLS_COMMITS__?.length ?? 0 })`
         )) as string | undefined;
 
         if (hookStatus) {
@@ -121,14 +118,10 @@ Call react-profiler-start first, then exercise the app, then call this.`,
 
         const heatStr = heatResult?.result?.value;
         if (!heatStr) {
-          throw new Error(
-            "Failed to compute heat map on device: no value returned",
-          );
+          throw new Error("Failed to compute heat map on device: no value returned");
         }
 
-        const { heat, anyCompilerOptimized: compilerFromHeat } = JSON.parse(
-          heatStr,
-        ) as {
+        const { heat, anyCompilerOptimized: compilerFromHeat } = JSON.parse(heatStr) as {
           heat: Record<string, number>;
           anyCompilerOptimized: boolean;
         };
@@ -171,8 +164,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
               returnByValue: true,
               timeout: 10000,
             })) as { result?: { value?: string } };
-            if (fallbackResult?.result?.value === "true")
-              anyCompilerOptimized = true;
+            if (fallbackResult?.result?.value === "true") anyCompilerOptimized = true;
           } catch {
             // non-fatal
           }
@@ -189,7 +181,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         // Absolute floor — only commits >= 16ms are "interesting"
         const ABSOLUTE_FLOOR_MS = 16;
         const interestingKeys = allKeys.filter(
-          (k) => (commitHeat.get(k) ?? 0) >= ABSOLUTE_FLOOR_MS,
+          (k) => (commitHeat.get(k) ?? 0) >= ABSOLUTE_FLOOR_MS
         );
 
         api.anyCompilerOptimized = anyCompilerOptimized;
@@ -204,10 +196,8 @@ Call react-profiler-start first, then exercise the app, then call this.`,
           const hotSet = new Set(interestingKeys);
           const marginSet = new Set<number>();
           for (const ci of interestingKeys) {
-            if (commitHeat.has(ci - 1) && !hotSet.has(ci - 1))
-              marginSet.add(ci - 1);
-            if (commitHeat.has(ci + 1) && !hotSet.has(ci + 1))
-              marginSet.add(ci + 1);
+            if (commitHeat.has(ci - 1) && !hotSet.has(ci - 1)) marginSet.add(ci - 1);
+            if (commitHeat.has(ci + 1) && !hotSet.has(ci + 1)) marginSet.add(ci + 1);
           }
           const keepSet = new Set([...hotSet, ...marginSet]);
 
@@ -225,9 +215,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
 
             const chunkStr = chunkResult?.result?.value;
             if (!chunkStr) {
-              throw new Error(
-                `Failed to fetch commit chunk [${start}, ${end}): no value returned`,
-              );
+              throw new Error(`Failed to fetch commit chunk [${start}, ${end}): no value returned`);
             }
             for (const entry of JSON.parse(chunkStr) as DevToolsFiberCommit[]) {
               if (keepSet.has(entry.commitIndex)) {
@@ -252,7 +240,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
       const cpuProfilePath = await writeDumpCompact(
         debugDir,
         `react-profiler-${sessionTs}_cpu.json`,
-        profile,
+        profile
       );
       const commitsPath = await writeDumpCompact(
         debugDir,
@@ -266,7 +254,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
             totalReactCommits: api.totalReactCommits,
             profileStartWallMs: api.profileStartWallMs,
           },
-        },
+        }
       );
 
       const sessionPaths: ProfilerSessionPaths = {
@@ -300,8 +288,7 @@ Call react-profiler-start first, then exercise the app, then call this.`,
         response["fiber_renders_analyzed"] = allCommits.length;
         const hotCount = api.hotCommitIndices?.length ?? 0;
         if (hotCount === 0) {
-          response["selection_note"] =
-            "All commits below 16ms — app appears smooth (all-clear)";
+          response["selection_note"] = "All commits below 16ms — app appears smooth (all-clear)";
         } else if (hotCount < totalReactCommits) {
           response["selection_note"] =
             `${hotCount} of ${totalReactCommits} commits at ≥16ms absolute floor`;

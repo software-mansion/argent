@@ -16,14 +16,12 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running).",
+      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running)."
     ),
   template_path: z
     .string()
     .optional()
-    .describe(
-      "Path to an Instruments .tracetemplate file (defaults to bundled Argent template)",
-    ),
+    .describe("Path to an Instruments .tracetemplate file (defaults to bundled Argent template)"),
 });
 
 interface AppInfo {
@@ -35,10 +33,9 @@ interface AppInfo {
 
 function detectRunningApp(udid: string): string {
   // 1. Get running UIKitApplication processes
-  const launchctlOutput = execSync(
-    `xcrun simctl spawn ${udid} launchctl list`,
-    { encoding: "utf-8" },
-  );
+  const launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+    encoding: "utf-8",
+  });
 
   const runningBundleIds = new Set<string>();
   for (const line of launchctlOutput.split("\n")) {
@@ -50,32 +47,28 @@ function detectRunningApp(udid: string): string {
 
   if (runningBundleIds.size === 0) {
     throw new Error(
-      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry.",
+      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
     );
   }
 
   // 2. Get installed app metadata
-  const listAppsOutput = execSync(
-    `xcrun simctl listapps ${udid} | plutil -convert json -o - -`,
-    { encoding: "utf-8" },
-  );
+  const listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+    encoding: "utf-8",
+  });
 
   const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
 
   // 3. Cross-reference: running user apps
   const runningUserApps: AppInfo[] = [];
   for (const [, appInfo] of Object.entries(installedApps)) {
-    if (
-      appInfo.ApplicationType === "User" &&
-      runningBundleIds.has(appInfo.CFBundleIdentifier)
-    ) {
+    if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
       runningUserApps.push(appInfo);
     }
   }
 
   if (runningUserApps.length === 0) {
     throw new Error(
-      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry.",
+      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry."
     );
   }
 
@@ -83,11 +76,11 @@ function detectRunningApp(udid: string): string {
     const appList = runningUserApps
       .map(
         (a) =>
-          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`,
+          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`
       )
       .join("\n");
     throw new Error(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`,
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`
     );
   }
 
@@ -110,9 +103,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
     const api = services.session as IosProfilerSessionApi;
 
     if (api.profilingActive) {
-      throw new Error(
-        `An iOS profiling session is already running (PID: ${api.xctracePid}).`,
-      );
+      throw new Error(`An iOS profiling session is already running (PID: ${api.xctracePid}).`);
     }
 
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
@@ -146,10 +137,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
       xctraceProcess.stdout.on("data", (data: Buffer) => {
         const output = data.toString();
 
-        if (
-          output.includes("Ctrl-C to stop") ||
-          output.includes("Starting recording")
-        ) {
+        if (output.includes("Ctrl-C to stop") || output.includes("Starting recording")) {
           api.profilingActive = true;
           api.wallClockStartMs = Date.now();
           if (api.xctracePid) {
@@ -160,7 +148,7 @@ After starting, let the user interact with the app, then call ios-profiler-stop.
                 api.xctracePid = null;
                 api.recordingTimeout = null;
               },
-              10 * 60 * 1000,
+              10 * 60 * 1000
             );
             resolve({
               status: "recording",

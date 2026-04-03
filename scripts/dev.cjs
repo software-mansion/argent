@@ -46,7 +46,12 @@ function writeJson(filePath, data) {
 }
 
 function isProcessAlive(pid) {
-  try { process.kill(pid, 0); return true; } catch { return false; }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForHttp(url, timeoutMs = 20_000) {
@@ -82,7 +87,9 @@ try {
   } else {
     console.error("✗ argent-private submodule unavailable and no pre-built dylibs found.");
     console.error("  Grant SSH access to github.com/software-mansion-labs/argent-private");
-    console.error("  or obtain pre-built dylibs and place them in packages/native-devtools-ios/dylibs/");
+    console.error(
+      "  or obtain pre-built dylibs and place them in packages/native-devtools-ios/dylibs/"
+    );
     process.exit(1);
   }
 }
@@ -175,7 +182,9 @@ function cleanup() {
   if (toolServerPid && isProcessAlive(toolServerPid)) {
     process.kill(toolServerPid, "SIGTERM");
   }
-  try { fs.unlinkSync(STATE_FILE); } catch {}
+  try {
+    fs.unlinkSync(STATE_FILE);
+  } catch {}
 
   // Restore ~/.claude.json
   const config = readJson(CLAUDE_JSON);
@@ -191,8 +200,14 @@ function cleanup() {
   console.log("Done.");
 }
 
-process.on("SIGINT", () => { cleanup(); process.exit(0); });
-process.on("SIGTERM", () => { cleanup(); process.exit(0); });
+process.on("SIGINT", () => {
+  cleanup();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  cleanup();
+  process.exit(0);
+});
 process.on("exit", cleanup);
 
 async function main() {
@@ -205,28 +220,23 @@ async function main() {
     process.kill(existingState.pid, "SIGTERM");
     await new Promise((r) => setTimeout(r, 600));
   }
-  try { fs.unlinkSync(STATE_FILE); } catch {}
+  try {
+    fs.unlinkSync(STATE_FILE);
+  } catch {}
 
   // ── Step 6: Start tool-server from source ──────────────────────────────────
 
   console.log(`Starting dev tool-server on port ${PORT}...`);
 
-  const toolServer = spawn(
-    "npx",
-    ["ts-node", "src/index.ts"],
-    {
-      cwd: TOOL_SERVER_PKG,
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PORT: String(PORT) },
-    }
-  );
+  const toolServer = spawn("npx", ["ts-node", "src/index.ts"], {
+    cwd: TOOL_SERVER_PKG,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PORT: String(PORT) },
+  });
 
   toolServerPid = toolServer.pid;
 
-  const logStream = fs.createWriteStream(
-    path.join(STATE_DIR, "tool-server.log"),
-    { flags: "a" }
-  );
+  const logStream = fs.createWriteStream(path.join(STATE_DIR, "tool-server.log"), { flags: "a" });
   toolServer.stdout.pipe(logStream);
   toolServer.stderr.pipe(logStream);
 

@@ -74,8 +74,7 @@ const CRITERIA = [
   {
     id: "use_when_trigger",
     label: '"Use when" trigger',
-    check: ({ description }) =>
-      Boolean(description && /use when/i.test(description)),
+    check: ({ description }) => Boolean(description && /use when/i.test(description)),
   },
   {
     id: "capital_verb",
@@ -97,8 +96,7 @@ const CRITERIA = [
   {
     id: "has_steps_or_bullets",
     label: "Has numbered steps or bullets",
-    check: ({ body }) =>
-      /^\s*\d+\.\s+/m.test(body) || /^\s*[-*]\s+/m.test(body),
+    check: ({ body }) => /^\s*\d+\.\s+/m.test(body) || /^\s*[-*]\s+/m.test(body),
   },
   {
     id: "body_length",
@@ -145,17 +143,11 @@ function renderTable(rows, columns) {
   const bot = "└" + widths.map((w) => "─".repeat(w + 2)).join("┴") + "┘";
 
   const header =
-    "│" +
-    columns.map((c) => " " + pad(c.label, c.width, c.align) + " ").join("│") +
-    "│";
+    "│" + columns.map((c) => " " + pad(c.label, c.width, c.align) + " ").join("│") + "│";
 
   const body = rows.map((row) => {
     return (
-      "│" +
-      columns
-        .map((c) => " " + pad(row[c.key] ?? "", c.width, c.align) + " ")
-        .join("│") +
-      "│"
+      "│" + columns.map((c) => " " + pad(row[c.key] ?? "", c.width, c.align) + " ").join("│") + "│"
     );
   });
 
@@ -207,9 +199,7 @@ console.log(renderTable(tableRows, criteriaColumns));
 
 // ─── Average ──────────────────────────────────────────────────────────────────
 
-const avg =
-  allResults.reduce((sum, r) => sum + parseFloat(r.score), 0) /
-  allResults.length;
+const avg = allResults.reduce((sum, r) => sum + parseFloat(r.score), 0) / allResults.length;
 
 console.log(`\n Average score: ${avg.toFixed(1)} / 10  (${allResults.length} skills)\n`);
 

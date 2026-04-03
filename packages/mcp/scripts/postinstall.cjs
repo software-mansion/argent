@@ -14,7 +14,9 @@ const stateFile = path.join(os.homedir(), ".argent", "tool-server.json");
 try {
   const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
   if (state && state.pid) {
-    try { process.kill(state.pid, "SIGTERM"); } catch {}
+    try {
+      process.kill(state.pid, "SIGTERM");
+    } catch {}
   }
   fs.unlinkSync(stateFile);
 } catch {}
@@ -30,4 +32,3 @@ To set up your workspace (MCP server, skills, rules), run:
 
   argent init
 `);
-

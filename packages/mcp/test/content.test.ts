@@ -1,18 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  toMcpContent,
-  flowRunToMcpContent,
-  type FlowExecuteResult,
-} from "../src/content.js";
+import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "../src/content.js";
 
 // ── toMcpContent ─────────────────────────────────────────────────────
 
 describe("toMcpContent", () => {
   it("returns JSON text block for plain results", async () => {
     const result = await toMcpContent({ foo: "bar" });
-    expect(result).toEqual([
-      { type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) },
-    ]);
+    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: "bar" }, null, 2) }]);
   });
 
   it("returns JSON text block when outputHint is not image", async () => {
@@ -34,7 +28,7 @@ describe("toMcpContent", () => {
 
     const result = await toMcpContent(
       { url: "http://localhost/img.png", path: "/tmp/img.png" },
-      "image",
+      "image"
     );
 
     expect(mockFetch).toHaveBeenCalledWith("http://localhost/img.png");
@@ -55,7 +49,7 @@ describe("toMcpContent", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         arrayBuffer: async () => pngBytes.buffer,
-      }),
+      })
     );
 
     const result = await toMcpContent({ url: "http://x" }, "image");
@@ -66,9 +60,7 @@ describe("toMcpContent", () => {
 
   it("falls back to text when outputHint is image but no url", async () => {
     const result = await toMcpContent({ foo: 1 }, "image");
-    expect(result).toEqual([
-      { type: "text", text: JSON.stringify({ foo: 1 }, null, 2) },
-    ]);
+    expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }, null, 2) }]);
   });
 });
 
@@ -125,9 +117,7 @@ describe("flowRunToMcpContent", () => {
   it("renders tool success as JSON text", async () => {
     const input: FlowExecuteResult = {
       flow: "f",
-      steps: [
-        { kind: "tool", tool: "gesture-tap", result: { ok: true } },
-      ],
+      steps: [{ kind: "tool", tool: "gesture-tap", result: { ok: true } }],
     };
     const blocks = await flowRunToMcpContent(input);
 
@@ -145,7 +135,7 @@ describe("flowRunToMcpContent", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         arrayBuffer: async () => pngBytes.buffer,
-      }),
+      })
     );
 
     const input: FlowExecuteResult = {

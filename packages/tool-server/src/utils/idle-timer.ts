@@ -10,10 +10,7 @@ export interface IdleTimer {
   getLastActivityAt(): number;
 }
 
-export function createIdleTimer(
-  timeoutMs: number,
-  onIdle?: () => void,
-): IdleTimer {
+export function createIdleTimer(timeoutMs: number, onIdle?: () => void): IdleTimer {
   let lastActivityAt = Date.now();
   let interval: ReturnType<typeof setInterval> | null = null;
 
@@ -22,7 +19,7 @@ export function createIdleTimer(
     interval = setInterval(() => {
       if (Date.now() - lastActivityAt >= timeoutMs) {
         process.stderr.write(
-          `[argent] No activity for ${Math.round(timeoutMs / 60_000)}min — shutting down\n`,
+          `[argent] No activity for ${Math.round(timeoutMs / 60_000)}min — shutting down\n`
         );
         cb();
       }

@@ -4,9 +4,7 @@ import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simul
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../src/tools/simulator/stop-metro";
 
-function createMockRegistry(
-  services: Map<string, { state: ServiceState; dependents: string[] }>,
-) {
+function createMockRegistry(services: Map<string, { state: ServiceState; dependents: string[] }>) {
   return {
     getSnapshot: vi.fn(() => ({
       services,
@@ -20,10 +18,7 @@ function createMockRegistry(
 describe("stop-simulator-server", () => {
   it("disposes the correct URN for a running simulator", async () => {
     const services = new Map([
-      [
-        "SimulatorServer:AAAA-BBBB",
-        { state: ServiceState.RUNNING, dependents: [] },
-      ],
+      ["SimulatorServer:AAAA-BBBB", { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopSimulatorServerTool(registry);
@@ -31,16 +26,11 @@ describe("stop-simulator-server", () => {
     const result = await tool.execute!({}, { udid: "AAAA-BBBB" });
 
     expect(result).toEqual({ stopped: true, udid: "AAAA-BBBB" });
-    expect(registry.disposeService).toHaveBeenCalledWith(
-      "SimulatorServer:AAAA-BBBB",
-    );
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:AAAA-BBBB");
   });
 
   it("returns stopped: false for a UDID with no running server", async () => {
-    const services = new Map<
-      string,
-      { state: ServiceState; dependents: string[] }
-    >();
+    const services = new Map<string, { state: ServiceState; dependents: string[] }>();
     const registry = createMockRegistry(services);
     const tool = createStopSimulatorServerTool(registry);
 
@@ -52,10 +42,7 @@ describe("stop-simulator-server", () => {
 
   it("returns stopped: false for an IDLE simulator", async () => {
     const services = new Map([
-      [
-        "SimulatorServer:EEEE-FFFF",
-        { state: ServiceState.IDLE, dependents: [] },
-      ],
+      ["SimulatorServer:EEEE-FFFF", { state: ServiceState.IDLE, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopSimulatorServerTool(registry);
@@ -70,18 +57,9 @@ describe("stop-simulator-server", () => {
 describe("stop-all-simulator-servers", () => {
   it("disposes all running SimulatorServer URNs", async () => {
     const services = new Map([
-      [
-        "SimulatorServer:AAA",
-        { state: ServiceState.RUNNING, dependents: [] },
-      ],
-      [
-        "SimulatorServer:BBB",
-        { state: ServiceState.RUNNING, dependents: [] },
-      ],
-      [
-        "JsRuntimeDebugger:CCC",
-        { state: ServiceState.RUNNING, dependents: [] },
-      ],
+      ["SimulatorServer:AAA", { state: ServiceState.RUNNING, dependents: [] }],
+      ["SimulatorServer:BBB", { state: ServiceState.RUNNING, dependents: [] }],
+      ["JsRuntimeDebugger:CCC", { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);
@@ -92,19 +70,12 @@ describe("stop-all-simulator-servers", () => {
       stopped: ["SimulatorServer:AAA", "SimulatorServer:BBB"],
     });
     expect(registry.disposeService).toHaveBeenCalledTimes(2);
-    expect(registry.disposeService).toHaveBeenCalledWith(
-      "SimulatorServer:AAA",
-    );
-    expect(registry.disposeService).toHaveBeenCalledWith(
-      "SimulatorServer:BBB",
-    );
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:AAA");
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:BBB");
   });
 
   it("returns empty list when no simulators are running", async () => {
-    const services = new Map<
-      string,
-      { state: ServiceState; dependents: string[] }
-    >();
+    const services = new Map<string, { state: ServiceState; dependents: string[] }>();
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);
 
@@ -116,14 +87,8 @@ describe("stop-all-simulator-servers", () => {
 
   it("skips IDLE simulators", async () => {
     const services = new Map([
-      [
-        "SimulatorServer:AAA",
-        { state: ServiceState.IDLE, dependents: [] },
-      ],
-      [
-        "SimulatorServer:BBB",
-        { state: ServiceState.RUNNING, dependents: [] },
-      ],
+      ["SimulatorServer:AAA", { state: ServiceState.IDLE, dependents: [] }],
+      ["SimulatorServer:BBB", { state: ServiceState.RUNNING, dependents: [] }],
     ]);
     const registry = createMockRegistry(services);
     const tool = createStopAllSimulatorServersTool(registry);

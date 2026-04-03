@@ -5,12 +5,12 @@ on:
     branches:
       - main
     paths:
-      - 'packages/skills/skills/**/SKILL.md'
-      - 'scripts/grade-skills.mjs'
+      - "packages/skills/skills/**/SKILL.md"
+      - "scripts/grade-skills.mjs"
   pull_request:
     paths:
-      - 'packages/skills/skills/**/SKILL.md'
-      - 'scripts/grade-skills.mjs'
+      - "packages/skills/skills/**/SKILL.md"
+      - "scripts/grade-skills.mjs"
 
 jobs:
   skill-descriptions:
@@ -24,7 +24,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
 
       - name: Grade skill descriptions
         run: node scripts/grade-skills.mjs

@@ -1,4 +1,4 @@
-import { TypedEventEmitter } from './event-emitter';
+import { TypedEventEmitter } from "./event-emitter";
 import {
   ServiceState,
   ServiceNode,
@@ -10,15 +10,15 @@ import {
   URN,
   ServiceRef,
   InvokeToolOptions,
-} from './types';
+} from "./types";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
   ToolNotFoundError,
   ToolExecutionError,
-} from './errors';
-import { parseURN } from './urn';
-import { zodObjectToJsonSchema } from './zod-to-json-schema';
+} from "./errors";
+import { parseURN } from "./urn";
+import { zodObjectToJsonSchema } from "./zod-to-json-schema";
 
 export class Registry {
   /** Single map: URN -> ServiceNode (all instances). */
@@ -47,10 +47,7 @@ export class Registry {
    * Resolve a service by URN. JIT-instantiates from blueprint if not yet created.
    * Optional options are passed to the blueprint's factory (e.g. token for SimulatorServer).
    */
-  resolveService<T = unknown>(
-    urn: URN,
-    options?: Record<string, unknown>
-  ): Promise<T> {
+  resolveService<T = unknown>(urn: URN, options?: Record<string, unknown>): Promise<T> {
     return this._resolve<T>(urn, [], options);
   }
 
@@ -65,7 +62,7 @@ export class Registry {
       definition.inputSchema = zodObjectToJsonSchema(definition.zodSchema);
     }
     this.tools.set(definition.id, { definition });
-    this.events.emit('toolRegistered', definition.id);
+    this.events.emit("toolRegistered", definition.id);
   }
 
   async invokeTool<TResult = unknown>(
@@ -78,44 +75,35 @@ export class Registry {
 
     const { definition } = record;
     const startTime = performance.now();
-    this.events.emit('toolInvoked', id);
+    this.events.emit("toolInvoked", id);
 
     try {
       const aliasToRef = definition.services(params);
       const resolvedServices: Record<string, unknown> = {};
       for (const [alias, ref] of Object.entries(aliasToRef)) {
-        const urn = typeof ref === 'string' ? ref : ref.urn;
-        const resolveOptions =
-          typeof ref === 'string' ? undefined : ref.options;
+        const urn = typeof ref === "string" ? ref : ref.urn;
+        const resolveOptions = typeof ref === "string" ? undefined : ref.options;
         resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
       }
 
-      const result = await definition.execute(
-        resolvedServices,
-        params,
-        options
-      );
+      const result = await definition.execute(resolvedServices, params, options);
 
       const duration = performance.now() - startTime;
-      this.events.emit('toolCompleted', id, duration);
+      this.events.emit("toolCompleted", id, duration);
       return result as TResult;
     } catch (error) {
       const originalMsg = error instanceof Error ? error.message : String(error);
 
       const wrappedError =
-        error instanceof ServiceInitializationError ||
-        error instanceof ServiceNotFoundError
-          ? new ToolExecutionError(
-              id,
-              `Service dependency failed: ${originalMsg}`,
-              { cause: error }
-            )
+        error instanceof ServiceInitializationError || error instanceof ServiceNotFoundError
+          ? new ToolExecutionError(id, `Service dependency failed: ${originalMsg}`, {
+              cause: error,
+            })
           : new ToolExecutionError(id, originalMsg, {
-              cause:
-                error instanceof Error ? error : new Error(String(error)),
+              cause: error instanceof Error ? error : new Error(String(error)),
             });
 
-      this.events.emit('toolFailed', id, wrappedError);
+      this.events.emit("toolFailed", id, wrappedError);
       throw wrappedError;
     }
   }
@@ -131,10 +119,7 @@ export class Registry {
     namespaces: string[];
     tools: string[];
   } {
-    const services = new Map<
-      string,
-      { state: ServiceState; dependents: string[] }
-    >();
+    const services = new Map<string, { state: ServiceState; dependents: string[] }>();
     for (const [urn, node] of this.services) {
       services.set(urn, {
         state: node.state,
@@ -160,10 +145,7 @@ export class Registry {
 
   async dispose(): Promise<void> {
     for (const [urn, node] of this.services) {
-      if (
-        node.state === ServiceState.RUNNING ||
-        node.state === ServiceState.STARTING
-      ) {
+      if (node.state === ServiceState.RUNNING || node.state === ServiceState.STARTING) {
         await this._teardown(urn);
       }
     }
@@ -203,17 +185,14 @@ export class Registry {
       return Promise.reject(
         new ServiceInitializationError(
           urn,
-          `Circular dependency: ${[...resolutionPath, urn].join(' -> ')}`
+          `Circular dependency: ${[...resolutionPath, urn].join(" -> ")}`
         )
       );
     }
 
     if (node.state === ServiceState.TERMINATING) {
       return Promise.reject(
-        new ServiceInitializationError(
-          urn,
-          'Service is currently terminating'
-        )
+        new ServiceInitializationError(urn, "Service is currently terminating")
       );
     }
 
@@ -226,11 +205,7 @@ export class Registry {
     }
 
     this._transition(node, ServiceState.STARTING);
-    const initPromise = this._initialize<T>(
-      node,
-      [...resolutionPath, urn],
-      options
-    );
+    const initPromise = this._initialize<T>(node, [...resolutionPath, urn], options);
     node.initPromise = initPromise;
     return initPromise;
   }
@@ -244,32 +219,30 @@ export class Registry {
     const { payload } = parseURN(urn);
     try {
       const resolvedDeps: Record<string, unknown> = {};
-      const depRecord = blueprint.getDependencies
-        ? blueprint.getDependencies(payload)
-        : {};
+      const depRecord = blueprint.getDependencies ? blueprint.getDependencies(payload) : {};
       for (const [alias, depUrn] of Object.entries(depRecord)) {
         resolvedDeps[alias] = await this._resolve(depUrn, resolutionPath);
         const depNode = this.services.get(depUrn)!;
         depNode.dependents.add(urn);
       }
 
-      const instance = await blueprint.factory(
-        resolvedDeps,
-        payload,
-        options
-      );
+      const instance = await blueprint.factory(resolvedDeps, payload, options);
 
       // Guard: if the node was terminated while factory was running, discard the new instance
       if (node.state !== ServiceState.STARTING) {
-        try { await instance.dispose(); } catch { /* ignore */ }
+        try {
+          await instance.dispose();
+        } catch {
+          /* ignore */
+        }
         node.initPromise = null;
-        throw new ServiceInitializationError(urn, 'Service was terminated during initialization');
+        throw new ServiceInitializationError(urn, "Service was terminated during initialization");
       }
 
       this._transition(node, ServiceState.RUNNING);
       node.instance = instance as ServiceInstance;
 
-      instance.events.on('terminated', (error?: Error) => {
+      instance.events.on("terminated", (error?: Error) => {
         this._handleTermination(urn, error);
       });
 
@@ -294,26 +267,19 @@ export class Registry {
   private _transition(node: ServiceNode, to: ServiceState): void {
     const from = node.state;
     node.state = to;
-    this.events.emit('serviceStateChange', node.urn, from, to);
+    this.events.emit("serviceStateChange", node.urn, from, to);
     if (to === ServiceState.ERROR) {
       this.events.emit(
-        'serviceError',
+        "serviceError",
         node.urn,
         new Error(`Service "${node.urn}" entered ERROR state`)
       );
     }
   }
 
-  private async _handleTermination(
-    urn: string,
-    error?: Error
-  ): Promise<void> {
+  private async _handleTermination(urn: string, error?: Error): Promise<void> {
     const node = this.services.get(urn);
-    if (
-      !node ||
-      node.state === ServiceState.TERMINATING ||
-      node.state === ServiceState.IDLE
-    )
+    if (!node || node.state === ServiceState.TERMINATING || node.state === ServiceState.IDLE)
       return;
 
     this._transition(node, ServiceState.TERMINATING);
@@ -347,11 +313,7 @@ export class Registry {
 
   private async _teardown(urn: string, cause?: Error): Promise<void> {
     const node = this.services.get(urn);
-    if (
-      !node ||
-      node.state === ServiceState.IDLE ||
-      node.state === ServiceState.TERMINATING
-    )
+    if (!node || node.state === ServiceState.IDLE || node.state === ServiceState.TERMINATING)
       return;
 
     this._transition(node, ServiceState.TERMINATING);

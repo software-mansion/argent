@@ -71,7 +71,12 @@ describe("writeDump", () => {
 
   it("serialises Map values as plain objects", async () => {
     const dir = await getDebugDir();
-    const data = { m: new Map([["a", 1], ["b", 2]]) };
+    const data = {
+      m: new Map([
+        ["a", 1],
+        ["b", 2],
+      ]),
+    };
     const filePath = await writeDump(dir, "test-map.json", data);
 
     const raw = await fs.readFile(filePath!, "utf8");
@@ -172,9 +177,7 @@ describe("readCpuProfile", () => {
   });
 
   it("throws when the file does not exist", async () => {
-    await expect(
-      readCpuProfile("/nonexistent/cpu.json"),
-    ).rejects.toThrow();
+    await expect(readCpuProfile("/nonexistent/cpu.json")).rejects.toThrow();
   });
 });
 
@@ -228,8 +231,6 @@ describe("readCommitTree", () => {
   });
 
   it("throws when the file does not exist", async () => {
-    await expect(
-      readCommitTree("/nonexistent/commits.json"),
-    ).rejects.toThrow();
+    await expect(readCommitTree("/nonexistent/commits.json")).rejects.toThrow();
   });
 });
