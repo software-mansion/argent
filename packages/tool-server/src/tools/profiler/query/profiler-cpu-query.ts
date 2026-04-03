@@ -24,37 +24,46 @@ const timeWindowSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  mode: z.enum(["top_functions", "time_window", "call_tree", "component_cpu"]).describe(
-    "Query mode: top_functions (global hotspots), time_window (CPU in a time range), " +
-    "call_tree (callers/callees of a function), component_cpu (CPU during a component's commits)",
-  ),
-  time_window_ms: timeWindowSchema.optional().describe(
-    "Time window filter for time_window mode (ms, performance.now clock)",
-  ),
-  component_name: z.string().optional().describe(
-    "Component name for component_cpu mode",
-  ),
-  function_name: z.string().optional().describe(
-    "Function name for call_tree mode",
-  ),
-  top_n: z.coerce.number().int().positive().default(15).describe(
-    "Number of results to return (default 15)",
-  ),
-  include_callers: z.boolean().default(false).describe(
-    "For call_tree mode: also show callers of the function",
-  ),
+  mode: z
+    .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
+    .describe(
+      "Query mode: top_functions (global hotspots), time_window (CPU in a time range), " +
+        "call_tree (callers/callees of a function), component_cpu (CPU during a component's commits)"
+    ),
+  time_window_ms: timeWindowSchema
+    .optional()
+    .describe("Time window filter for time_window mode (ms, performance.now clock)"),
+  component_name: z.string().optional().describe("Component name for component_cpu mode"),
+  function_name: z.string().optional().describe("Function name for call_tree mode"),
+  top_n: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15)
+    .describe("Number of results to return (default 15)"),
+  include_callers: z
+    .boolean()
+    .default(false)
+    .describe("For call_tree mode: also show callers of the function"),
 });
 
 async function getIndex(api: ReactProfilerSessionApi): Promise<{
   index: CpuSampleIndex;
-  commitTree: { commits: { commitIndex: number; timestamp: number; commitDuration: number; componentName: string }[] } | null;
+  commitTree: {
+    commits: {
+      commitIndex: number;
+      timestamp: number;
+      commitDuration: number;
+      componentName: string;
+    }[];
+  } | null;
 }> {
   const sessionPaths: ProfilerSessionPaths | undefined =
     api.sessionPaths ?? getCachedProfilerPaths(api.port) ?? undefined;
 
   if (!sessionPaths?.cpuProfilePath) {
     throw new Error(
-      "No CPU profile stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first.",
+      "No CPU profile stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first."
     );
   }
 
@@ -91,7 +100,7 @@ function renderTopFunctions(
   index: CpuSampleIndex,
   topN: number,
   startMs?: number,
-  endMs?: number,
+  endMs?: number
 ): string {
   const windowStart = startMs ?? index.timestampsMs[0]!;
   const windowEnd = endMs ?? index.timestampsMs[index.timestampsMs.length - 1]!;
@@ -108,9 +117,8 @@ function renderTopFunctions(
     return `| \`${hs.name}\` | ${hs.selfMs} | ${hs.totalMs} | ${loc} |`;
   });
 
-  const rangeNote = startMs != null
-    ? `**Window:** ${startMs.toFixed(1)}ms → ${endMs!.toFixed(1)}ms\n\n`
-    : "";
+  const rangeNote =
+    startMs != null ? `**Window:** ${startMs.toFixed(1)}ms → ${endMs!.toFixed(1)}ms\n\n` : "";
 
   return `## CPU Hotspots\n\n${rangeNote}${header}\n${sep}\n${rows.join("\n")}`;
 }
@@ -119,7 +127,7 @@ function renderCallTree(
   index: CpuSampleIndex,
   functionName: string,
   topN: number,
-  includeCallers: boolean,
+  includeCallers: boolean
 ): string {
   const { nodeMap, sampleNodeIds, timestampsMs } = index;
 
@@ -144,7 +152,7 @@ function renderCallTree(
   }
 
   const totalSamples = sampleNodeIds.length;
-  const durationMs = (timestampsMs[timestampsMs.length - 1]! - timestampsMs[0]!) || 1;
+  const durationMs = timestampsMs[timestampsMs.length - 1]! - timestampsMs[0]! || 1;
   const avgIntervalMs = durationMs / totalSamples;
   const selfMs = Math.round(selfHits * avgIntervalMs * 100) / 100;
 
@@ -237,18 +245,23 @@ function renderCallTree(
 
 function renderComponentCpu(
   index: CpuSampleIndex,
-  commitTree: { commits: { commitIndex: number; timestamp: number; commitDuration: number; componentName: string }[] } | null,
+  commitTree: {
+    commits: {
+      commitIndex: number;
+      timestamp: number;
+      commitDuration: number;
+      componentName: string;
+    }[];
+  } | null,
   componentName: string,
-  topN: number,
+  topN: number
 ): string {
   if (!commitTree || commitTree.commits.length === 0) {
     return "_No commit data available. Run react-profiler-analyze first._";
   }
 
   // Find all commits where this component rendered
-  const componentCommits = commitTree.commits.filter(
-    (c) => c.componentName === componentName,
-  );
+  const componentCommits = commitTree.commits.filter((c) => c.componentName === componentName);
 
   if (componentCommits.length === 0) {
     return `_Component \`${componentName}\` not found in commit data._`;
@@ -267,7 +280,10 @@ function renderComponentCpu(
   }
 
   // Aggregate CPU across all commit windows
-  const aggregated = new Map<string, { selfMs: number; totalMs: number; url?: string; lineNumber?: number }>();
+  const aggregated = new Map<
+    string,
+    { selfMs: number; totalMs: number; url?: string; lineNumber?: number }
+  >();
 
   for (const window of commitWindows.values()) {
     const hotspots = queryCpuWindow(index, window.start, window.end, 50);
@@ -277,14 +293,17 @@ function renderComponentCpu(
         existing.selfMs += hs.selfMs;
         existing.totalMs += hs.totalMs;
       } else {
-        aggregated.set(hs.name, { selfMs: hs.selfMs, totalMs: hs.totalMs, url: hs.url, lineNumber: hs.lineNumber });
+        aggregated.set(hs.name, {
+          selfMs: hs.selfMs,
+          totalMs: hs.totalMs,
+          url: hs.url,
+          lineNumber: hs.lineNumber,
+        });
       }
     }
   }
 
-  const sorted = [...aggregated.entries()]
-    .sort((a, b) => b[1].selfMs - a[1].selfMs)
-    .slice(0, topN);
+  const sorted = [...aggregated.entries()].sort((a, b) => b[1].selfMs - a[1].selfMs).slice(0, topN);
 
   if (sorted.length === 0) {
     return `_No CPU samples found during \`${componentName}\` commits._`;
@@ -302,10 +321,10 @@ function renderComponentCpu(
   ];
 
   for (const [name, { selfMs, totalMs, url, lineNumber }] of sorted) {
-    const loc = url
-      ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}`
-      : "—";
-    lines.push(`| \`${name}\` | ${Math.round(selfMs * 100) / 100} | ${Math.round(totalMs * 100) / 100} | ${loc} |`);
+    const loc = url ? `${shortenUrl(url)}${lineNumber != null ? `:${lineNumber}` : ""}` : "—";
+    lines.push(
+      `| \`${name}\` | ${Math.round(selfMs * 100) / 100} | ${Math.round(totalMs * 100) / 100} | ${loc} |`
+    );
   }
 
   return lines.join("\n");
@@ -316,10 +335,7 @@ function shortenUrl(url: string): string {
   return parts.slice(-2).join("/");
 }
 
-export const profilerCpuQueryTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-cpu-query",
   description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
 Requires react-profiler-stop (and ideally react-profiler-analyze) to have been called first.
@@ -327,7 +343,10 @@ Modes:
 - top_functions: Global CPU hotspots ranked by self-time. Optional time_window_ms to filter.
 - time_window: CPU breakdown for a specific time range (e.g. during a slow commit or hang).
 - call_tree: For a given function_name, show its callees and optionally callers.
-- component_cpu: For a given component_name, aggregate CPU activity across all its commits.`,
+- component_cpu: For a given component_name, aggregate CPU activity across all its commits.
+Use when investigating JS CPU hotspots or correlating CPU cost with specific components.
+Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
+Fails if no CPU profile is stored — run react-profiler-stop first.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
@@ -342,7 +361,7 @@ Modes:
           index,
           params.top_n,
           params.time_window_ms?.start,
-          params.time_window_ms?.end,
+          params.time_window_ms?.end
         );
 
       case "time_window": {
@@ -353,7 +372,7 @@ Modes:
           index,
           params.top_n,
           params.time_window_ms.start,
-          params.time_window_ms.end,
+          params.time_window_ms.end
         );
       }
 

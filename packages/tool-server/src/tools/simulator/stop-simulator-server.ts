@@ -8,13 +8,11 @@ const zodSchema = z.object({
 });
 
 export function createStopSimulatorServerTool(
-  registry: Registry,
+  registry: Registry
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
-    description:
-      "Stop the simulator-server process for a specific simulator UDID. " +
-      "Use this to free resources when you are done interacting with a simulator.",
+    description: `Stop the simulator-server process for a specific simulator UDID and free its resources. Use when you are done interacting with one simulator but want to keep others running. Returns { stopped, udid }. Fails silently if no server is running for the given UDID.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

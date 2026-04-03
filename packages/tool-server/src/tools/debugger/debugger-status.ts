@@ -21,8 +21,7 @@ export const debuggerStatusTool: ToolDefinition<
 > = {
   id: "debugger-status",
   description: `Get JS runtime debugger connection status and diagnostic info.
-Connects to the debugger if not already connected (idempotent with debugger-connect).
-Includes source map readiness status for breakpoint resolution.`,
+Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot, deviceName, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning). Fails if Metro is unreachable.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

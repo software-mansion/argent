@@ -15,14 +15,18 @@ import type {
 import { runPipeline } from "../../../utils/react-profiler/pipeline/index";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { renderProfilingReport } from "../../../utils/react-profiler/pipeline/05-render";
-import { readCpuProfile, readCommitTree, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
+import {
+  readCpuProfile,
+  readCommitTree,
+  writeDumpCompact,
+} from "../../../utils/react-profiler/debug/dump";
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
     .number()
     .describe(
-      "Milliseconds since profiling started. Compute as: tapTimestampMs - startedAtEpochMs, using the timestampMs returned by tap/swipe and the startedAtEpochMs returned by react-profiler-start.",
+      "Milliseconds since profiling started. Compute as: tapTimestampMs - startedAtEpochMs, using the timestampMs returned by tap/swipe and the startedAtEpochMs returned by react-profiler-start."
     ),
   label: z.string().describe("Description of the action performed"),
 });
@@ -31,23 +35,15 @@ const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   project_root: z
     .string()
-    .describe(
-      "Absolute path to the RN project root for session context detection",
-    ),
-  platform: z
-    .enum(["ios", "android"])
-    .default("ios")
-    .describe("Target platform"),
-  rn_version: z.coerce
-    .string()
-    .default("unknown")
-    .describe('React Native version (e.g. "0.73.4")'),
+    .describe("Absolute path to the RN project root for session context detection"),
+  platform: z.enum(["ios", "android"]).default("ios").describe("Target platform"),
+  rn_version: z.coerce.string().default("unknown").describe('React Native version (e.g. "0.73.4")'),
   annotations: z
     .array(annotationSchema)
     .optional()
     .describe(
       "Optional list of user actions with their time offset from profiling start. " +
-        "Compute offsetMs = tapTimestampMs - startedAtEpochMs, where tapTimestampMs comes from the tap/swipe tool return value and startedAtEpochMs comes from react-profiler-start return value.",
+        "Compute offsetMs = tapTimestampMs - startedAtEpochMs, where tapTimestampMs comes from the tap/swipe tool return value and startedAtEpochMs comes from react-profiler-start return value."
     ),
 });
 
@@ -67,7 +63,9 @@ Requires react-profiler-stop to have been called first.
 Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
 the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
 where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
-is returned by react-profiler-start.`,
+is returned by react-profiler-start.
+Use when the profiling session is complete and you need to interpret the collected data.
+Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
@@ -81,7 +79,7 @@ is returned by react-profiler-start.`,
 
     if (!sessionPaths) {
       throw new Error(
-        "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first.",
+        "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first."
       );
     }
 
@@ -99,16 +97,10 @@ is returned by react-profiler-start.`,
       commitTree = { commits: [], hookNames: new Map() };
     }
 
-    const {
-      detectedArchitecture,
-      anyCompilerOptimized,
-      hotCommitIndices,
-      totalReactCommits,
-    } = sessionPaths;
+    const { detectedArchitecture, anyCompilerOptimized, hotCommitIndices, totalReactCommits } =
+      sessionPaths;
 
-    const recordingDurationMs = cpuProfile
-      ? (cpuProfile.endTime - cpuProfile.startTime) / 1000
-      : 0;
+    const recordingDurationMs = cpuProfile ? (cpuProfile.endTime - cpuProfile.startTime) / 1000 : 0;
 
     const input: RawProfilingInput = {
       ...(cpuProfile !== null && { flamegraph: cpuProfile }),
@@ -141,7 +133,7 @@ is returned by react-profiler-start.`,
       const indexPath = await writeDumpCompact(
         sessionPaths.debugDir,
         `react-profiler-${sessionPaths.sessionId}_cpu-index.json`,
-        serializeCpuSampleIndex(pipelineOutput.cpuSampleIndex),
+        serializeCpuSampleIndex(pipelineOutput.cpuSampleIndex)
       );
       sessionPaths.cpuSampleIndexPath = indexPath;
     }
@@ -183,24 +175,23 @@ is returned by react-profiler-start.`,
         } catch {
           // non-fatal — file may not be readable
         }
-      }),
+      })
     );
 
     const debugDir = sessionPaths.debugDir;
 
-    const { report, reportFile, hotCommitsTotal, hotCommitsShown } =
-      await renderProfilingReport({
-        hotCommitSummaries: pipelineOutput.hotCommitSummaries,
-        componentFindings: pipelineOutput.componentFindings,
-        sessionContext: pipelineOutput.sessionContext,
-        recordingMs: pipelineOutput.recordingMs,
-        anyRuntimeCompilerDetected: pipelineOutput.anyRuntimeCompilerDetected,
-        reactCommits: pipelineOutput.reactCommits,
-        annotations: params.annotations,
-        debugDir,
-        allClear: pipelineOutput.allClear,
-        maxCommitMs: pipelineOutput.maxCommitMs,
-      });
+    const { report, reportFile, hotCommitsTotal, hotCommitsShown } = await renderProfilingReport({
+      hotCommitSummaries: pipelineOutput.hotCommitSummaries,
+      componentFindings: pipelineOutput.componentFindings,
+      sessionContext: pipelineOutput.sessionContext,
+      recordingMs: pipelineOutput.recordingMs,
+      anyRuntimeCompilerDetected: pipelineOutput.anyRuntimeCompilerDetected,
+      reactCommits: pipelineOutput.reactCommits,
+      annotations: params.annotations,
+      debugDir,
+      allClear: pipelineOutput.allClear,
+      maxCommitMs: pipelineOutput.maxCommitMs,
+    });
 
     const result: Record<string, unknown> = {
       report,

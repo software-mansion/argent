@@ -1,12 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { execSync } from "node:child_process";
-import {
-  detectAdapters,
-  getMcpEntry,
-  addClaudePermission,
-  copyRulesAndAgents,
-} from "./mcp-configs.js";
+import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
   getInstalledVersion,
   getLatestVersion,
@@ -16,6 +11,7 @@ import {
   AGENTS_DIR,
 } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { killToolServer } from "../launcher.js";
 
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -52,9 +48,7 @@ export async function update(args: string[]): Promise<void> {
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
 
     if (!nonInteractive) {
-      p.log.message(
-        pc.dim("  Press y for yes, n for no, enter to confirm."),
-      );
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const proceed = await p.confirm({
         message: `Update to v${latest}?`,
@@ -68,6 +62,8 @@ export async function update(args: string[]): Promise<void> {
     }
 
     p.log.info(`Running: ${pc.dim(cmd)}`);
+
+    await killToolServer();
 
     try {
       execSync(cmd, {
@@ -92,10 +88,7 @@ export async function update(args: string[]): Promise<void> {
 
   for (const adapter of detected) {
     // Refresh both local and global configs where they exist
-    for (const pathFn of [
-      () => adapter.projectPath(projectRoot),
-      () => adapter.globalPath(),
-    ]) {
+    for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
       const configPath = pathFn();
       if (!configPath) continue;
       try {
@@ -107,18 +100,15 @@ export async function update(args: string[]): Promise<void> {
     }
   }
 
-  // Refresh Claude permissions
-  const hasClaude = detected.some((a) => a.name === "Claude Code");
-  if (hasClaude) {
-    try {
-      addClaudePermission(projectRoot, "global");
-    } catch {
-      // non-fatal
-    }
-    try {
-      addClaudePermission(projectRoot, "local");
-    } catch {
-      // non-fatal
+  // Refresh allowlists
+  for (const adapter of detected) {
+    if (!adapter.addAllowlist) continue;
+    for (const s of ["global", "local"] as const) {
+      try {
+        adapter.addAllowlist(projectRoot, s);
+      } catch {
+        // non-fatal
+      }
     }
   }
 
@@ -140,9 +130,7 @@ export async function update(args: string[]): Promise<void> {
 
   // Skills check prompt
   if (!nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const checkSkills = await p.confirm({
       message: "Check if skills have updates? (runs npx skills check)",

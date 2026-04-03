@@ -74,9 +74,7 @@ describe("writeJson", () => {
 
 describe("copyDir", () => {
   it("returns false when source does not exist", () => {
-    expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBe(
-      false,
-    );
+    expect(copyDir(path.join(tmpDir, "nope"), path.join(tmpDir, "dest"))).toBe(false);
   });
 
   it("copies directory recursively", () => {
@@ -88,9 +86,7 @@ describe("copyDir", () => {
 
     expect(copyDir(src, dest)).toBe(true);
     expect(fs.readFileSync(path.join(dest, "a.txt"), "utf8")).toBe("hello");
-    expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe(
-      "world",
-    );
+    expect(fs.readFileSync(path.join(dest, "sub", "b.txt"), "utf8")).toBe("world");
   });
 });
 
@@ -147,7 +143,7 @@ describe("detectPackageManager", () => {
 
 describe("globalInstallCommand", () => {
   it("npm", () => {
-    expect(globalInstallCommand("npm", "pkg")).toBe("npm install -g --force pkg");
+    expect(globalInstallCommand("npm", "pkg")).toBe("npm install -g pkg");
   });
   it("yarn", () => {
     expect(globalInstallCommand("yarn", "pkg")).toBe("yarn global add pkg");
@@ -165,9 +161,7 @@ describe("globalUninstallCommand", () => {
     expect(globalUninstallCommand("npm", "pkg")).toBe("npm uninstall -g pkg");
   });
   it("yarn", () => {
-    expect(globalUninstallCommand("yarn", "pkg")).toBe(
-      "yarn global remove pkg",
-    );
+    expect(globalUninstallCommand("yarn", "pkg")).toBe("yarn global remove pkg");
   });
   it("pnpm", () => {
     expect(globalUninstallCommand("pnpm", "pkg")).toBe("pnpm remove -g pkg");

@@ -17,10 +17,7 @@ export interface TimeAnchor {
 /**
  * Convert a React profiler timestamp (performance.now ms) to wall clock ms.
  */
-export function reactTimeToWallClock(
-  reactMs: number,
-  reactAnchor: TimeAnchor,
-): number {
+export function reactTimeToWallClock(reactMs: number, reactAnchor: TimeAnchor): number {
   const elapsed = reactMs - reactAnchor.monotonicStartMs;
   return reactAnchor.wallClockMs + elapsed;
 }
@@ -28,10 +25,7 @@ export function reactTimeToWallClock(
 /**
  * Convert a wall clock ms to iOS Instruments trace-relative nanoseconds.
  */
-export function wallClockToInstrumentsNs(
-  wallMs: number,
-  iosAnchor: TimeAnchor,
-): number {
+export function wallClockToInstrumentsNs(wallMs: number, iosAnchor: TimeAnchor): number {
   const elapsed = wallMs - iosAnchor.wallClockMs;
   return (iosAnchor.monotonicStartMs + elapsed) * 1_000_000;
 }
@@ -42,7 +36,7 @@ export function wallClockToInstrumentsNs(
 export function reactTimeToInstrumentsNs(
   reactMs: number,
   reactAnchor: TimeAnchor,
-  iosAnchor: TimeAnchor,
+  iosAnchor: TimeAnchor
 ): number {
   const wallMs = reactTimeToWallClock(reactMs, reactAnchor);
   return wallClockToInstrumentsNs(wallMs, iosAnchor);
@@ -51,10 +45,7 @@ export function reactTimeToInstrumentsNs(
 /**
  * Convert iOS Instruments nanoseconds to wall clock ms.
  */
-export function instrumentsNsToWallClock(
-  instrumentsNs: number,
-  iosAnchor: TimeAnchor,
-): number {
+export function instrumentsNsToWallClock(instrumentsNs: number, iosAnchor: TimeAnchor): number {
   const elapsedMs = instrumentsNs / 1_000_000 - iosAnchor.monotonicStartMs;
   return iosAnchor.wallClockMs + elapsedMs;
 }
@@ -67,7 +58,7 @@ export function windowsOverlap(
   aEndMs: number,
   bStartMs: number,
   bEndMs: number,
-  toleranceMs: number = 0,
+  toleranceMs: number = 0
 ): boolean {
   return aStartMs - toleranceMs <= bEndMs && aEndMs + toleranceMs >= bStartMs;
 }
@@ -78,7 +69,7 @@ export function windowsOverlap(
  */
 export function buildReactAnchor(
   wallClockStartMs: number,
-  cpuProfileStartTimeUs: number,
+  cpuProfileStartTimeUs: number
 ): TimeAnchor {
   return {
     wallClockMs: wallClockStartMs,

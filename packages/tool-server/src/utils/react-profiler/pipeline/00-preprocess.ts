@@ -12,9 +12,7 @@
 import type { DevToolsFiberCommit } from "../types/input";
 import { deriveReason } from "./utils";
 
-export function preprocess(
-  commits: DevToolsFiberCommit[],
-): DevToolsFiberCommit[] {
+export function preprocess(commits: DevToolsFiberCommit[]): DevToolsFiberCommit[] {
   // Group by commitIndex → Map<componentName, DevToolsFiberCommit>
   // Last-write wins for duplicate component names in the same commit (edge case).
   const commitMap = new Map<number, Map<string, DevToolsFiberCommit>>();

@@ -126,9 +126,7 @@ describe("CDPClient", () => {
       );
     });
 
-    await expect(client.send("Nonexistent.method")).rejects.toThrow(
-      "Method not found"
-    );
+    await expect(client.send("Nonexistent.method")).rejects.toThrow("Method not found");
     await client.disconnect();
   });
 
@@ -174,11 +172,7 @@ describe("CDPClient", () => {
       }
     });
 
-    const result = await client.evaluateWithBinding(
-      "someScript()",
-      "req-123",
-      { timeout: 5000 }
-    );
+    const result = await client.evaluateWithBinding("someScript()", "req-123", { timeout: 5000 });
 
     expect(result.requestId).toBe("req-123");
     expect(result.type).toBe("inspect_result");

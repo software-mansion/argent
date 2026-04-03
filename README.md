@@ -50,14 +50,12 @@ curl -X POST http://localhost:3001/tools/list-simulators \
 
 ## Installing in a project
 
-The `argent` package is distributed via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) under the `@software-mansion` scope. Because the source repository is private, you must authenticate before installing.
-
-See **[INSTALL.md](./INSTALL.md)** for the full step-by-step guide (token setup, `.npmrc` configuration, and the install command).
+The `argent` package is distributed via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) under the `@swmansion` scope. Because the source repository is private, you must authenticate before installing.
 
 **Quick start** (after completing auth setup):
 
 ```bash
-npx @software-mansion/argent install
+npx @swmansion/argent install
 ```
 
 This installs the package from GitHub Packages and configures MCP servers in `.claude/mcp.json`, `.cursor/mcp.json`, and copies skills, agents, and rules into your workspace.
@@ -84,7 +82,7 @@ npm test -w @argent/tool-server        # tool-server tests (vitest)
 ### MCP package
 
 ```bash
-npm run build -w @software-mansion/argent   # compile + bundle into single CJS file
+npm run build -w @swmansion/argent   # compile + bundle into single CJS file
 npm run pack:mcp                                  # build and create argent-<version>.tgz
 ```
 
@@ -102,18 +100,6 @@ The simulator-server binary is normally spawned by the tools server. To run it s
 | `--port N`                             | `PORT`         | `3000`  | Listen port           |
 | `--replay` / `--no-replay`             | `REPLAY`       | `true`  | Rolling replay buffer |
 | `--show-touches` / `--no-show-touches` | `SHOW_TOUCHES` | `true`  | Touch pointer overlay |
-
-### License (Pro features)
-
-Screenshot, recording, and replay require a Pro/Team/Enterprise JWT. Free-tier endpoints (touch, keys, buttons, rotate, paste, scroll, MJPEG stream) work without one.
-
-```bash
-curl http://localhost:3000/fingerprint                    # 1. get machine fingerprint
-curl -X POST http://localhost:3000/token/activate \
-  -H "Content-Type: application/json" \
-  -d '{"licenseKey": "<your-key>"}'                       # 2. activate license
-# 3. pass returned token when creating a session, or PUT /sessions/:id/token
-```
 
 ### Quick reference (curl)
 
@@ -134,3 +120,25 @@ curl -X POST http://localhost:3000/sessions/<id>/input/touch \
 ## Further reading
 
 See [`docs/reference.md`](docs/reference.md) for a detailed breakdown of the registry, blueprints, services, tools, and how they all connect.
+
+## License
+
+The "Argent" project utilizes a mixed licensing model to provide open-source accessibility while protecting specific proprietary binary components.
+
+### Source Code
+
+The vast majority of the source code (business logic, scripts, interfaces, etc.) is released under the **Apache License 2.0**. You can find the full text of the license in the <LICENSE.TXT> file. You are free to use, modify, and distribute this portion of the project in accordance with the terms of the Apache 2.0 license.
+
+### Proprietary Binary Components
+
+Certain elements of the project are provided exclusively as compiled binary files (typically located in the `/bin` or `/libs` directories).
+
+- **Files:**
+  - `packages/mcp/bin/simulator-server`
+  - `packages/native-devtools-ios/dylibs/libInjectionBootstrap.dylib`
+  - `packages/native-devtools-ios/dylibs/libKeyboardPatch.dylib`
+  - `packages/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib`
+- **Status:** These files are **NOT** Open Source software.
+- **Terms:** They are the intellectual property of Software Mansion S.A. and are licensed solely for use in conjunction with this project. Decompiling, reverse engineering, disassembling, or redistributing these binary files outside the scope of this project without explicit written permission is strictly prohibited.
+
+By using or contributing to this project, you acknowledge and agree to this mixed licensing structure.

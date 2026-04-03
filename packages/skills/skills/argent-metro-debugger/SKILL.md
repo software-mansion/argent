@@ -25,14 +25,6 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 | `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.     |
 | `restart-app`           | Terminate and relaunch the app by UDID and bundleId. Use when app lost Metro connection. |
 
-### Breakpoints & execution control
-
-| Tool                                                   | Purpose                                                                               |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| `debugger-set-breakpoint`                              | Set breakpoint by source file and line (optional condition).                          |
-| `debugger-remove-breakpoint`                           | Remove breakpoint by breakpointId.                                                    |
-| `debugger-pause` / `debugger-resume` / `debugger-step` | Pause JS execution; resume after pause or breakpoint; step over/into/out when paused. |
-
 ### Inspection & console
 
 | Tool                       | Purpose                                                                                                          |
@@ -40,7 +32,6 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 | `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
 | `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
 | `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
-| `debugger-console-listen`  | Stream console messages in real-time via WebSocket.                                                              |
 | `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
 
 ---
@@ -80,7 +71,6 @@ Logs are written to a flat log file on disk. Use the **log-registry → grep** p
 
 1. **Call `debugger-log-registry`** — returns: `file` (log path), `totalEntries`, `byLevel`, `clusters` (top message groups with counts and source file info)
 2. **Search the file** using `Grep` or `Read` with patterns from the response.
-3. **For real-time streaming** (UI clients), use `debugger-console-listen` — returns a WebSocket URL.
 
 > **Large log files:** If `totalEntries` exceeds 10 000, delegate the grep exploration to an `Explore` subagent — pass it the file path, the entry format, and the patterns you need.
 
@@ -119,11 +109,7 @@ When reading from the log file:
 | Connect to Metro CDP          | `debugger-connect`                                                  |
 | Reload JS (already connected) | `debugger-reload-metro`                                             |
 | Relaunch app on simulator     | `restart-app`                                                       |
-| Set breakpoint by file:line   | `debugger-set-breakpoint`                                           |
-| Remove breakpoint             | `debugger-remove-breakpoint`                                        |
-| Pause / resume / step         | `debugger-pause`, `debugger-resume`, `debugger-step`                |
 | Inspect component at point    | `debugger-inspect-element`                                          |
 | Full component tree           | `debugger-component-tree`                                           |
 | Console log overview          | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
-| Real-time console stream      | `debugger-console-listen`                                           |
 | Evaluate JS                   | `debugger-evaluate`                                                 |

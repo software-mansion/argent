@@ -1,5 +1,3 @@
-// DEAD FOR NOW PASTE DOES NOT WORK (FILIP)
-
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { SimulatorServerApi } from "../../blueprints/simulator-server";
@@ -10,12 +8,11 @@ const zodSchema = z.object({
   text: z.string().describe("Text to paste into the focused field"),
 });
 
-export const pasteTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  { pasted: boolean }
-> = {
+export const pasteTool: ToolDefinition<z.infer<typeof zodSchema>, { pasted: boolean }> = {
   id: "paste",
-  description: `Paste text into the focused field on the simulator (fastest text entry).
+  description: `Fill the focused field on the simulator by pasting text (fastest text entry).
+Use when you need to fill a text input with a long string faster than character-by-character typing.
+Returns { pasted: true }. Fails if no field is focused or the simulator server is not running.
 Tap the text field first to focus it, then call paste.
 If paste doesn't work for a particular field, use the keyboard tool instead.`,
   zodSchema,

@@ -22,7 +22,9 @@ Parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
 Returns a structured markdown report with severity indicators, tables, and actionable suggestions.
 After presenting the report, ask the user whether to investigate further (drill-down with
 profiler-stack-query for hang stacks, CPU context, leak details) or implement fixes and re-profile.
-Call ios-profiler-stop first to export the trace data.`,
+Call ios-profiler-stop first to export the trace data.
+Use when you need to interpret a completed iOS Instruments recording.
+Fails if ios-profiler-stop has not been called first to export trace data.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
@@ -31,9 +33,7 @@ Call ios-profiler-stop first to export the trace data.`,
     const api = services.session as IosProfilerSessionApi;
 
     if (!api.exportedFiles) {
-      throw new Error(
-        "No exported trace data found. Call ios-profiler-stop first.",
-      );
+      throw new Error("No exported trace data found. Call ios-profiler-stop first.");
     }
 
     const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
@@ -50,8 +50,7 @@ Call ios-profiler-stop first to export the trace data.`,
         "Check ios-profiler-stop output for exportDiagnostics.";
     }
     if (!api.exportedFiles.hangs) {
-      exportErrors.hangs =
-        "Hangs export failed — no potential-hangs table found in trace.";
+      exportErrors.hangs = "Hangs export failed — no potential-hangs table found in trace.";
     }
 
     const payload = {

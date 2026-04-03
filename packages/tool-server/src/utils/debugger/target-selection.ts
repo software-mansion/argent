@@ -24,15 +24,11 @@ export function selectTarget(
   let candidates = targets;
 
   if (options?.deviceId) {
-    const filtered = candidates.filter(
-      (t) => t.reactNative?.logicalDeviceId === options.deviceId
-    );
+    const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === options.deviceId);
     if (filtered.length) candidates = filtered;
   }
   if (options?.deviceName) {
-    const filtered = candidates.filter(
-      (t) => t.deviceName === options.deviceName
-    );
+    const filtered = candidates.filter((t) => t.deviceName === options.deviceName);
     if (filtered.length) candidates = filtered;
   }
 
@@ -41,24 +37,16 @@ export function selectTarget(
   );
   if (fusebox) return makeResult(fusebox, port, true);
 
-  const cppConn = candidates.find((t) =>
-    t.description?.endsWith("[C++ connection]")
-  );
+  const cppConn = candidates.find((t) => t.description?.endsWith("[C++ connection]"));
   if (cppConn) return makeResult(cppConn, port, true);
 
-  const bridge = candidates.find((t) =>
-    t.title?.startsWith("React Native Bridge")
-  );
+  const bridge = candidates.find((t) => t.title?.startsWith("React Native Bridge"));
   if (bridge) return makeResult(bridge, port, false);
 
   return makeResult(candidates[0]!, port, false);
 }
 
-function makeResult(
-  target: CDPTarget,
-  port: number,
-  isNewDebugger: boolean
-): SelectedTarget {
+function makeResult(target: CDPTarget, port: number, isNewDebugger: boolean): SelectedTarget {
   return {
     target,
     webSocketUrl: normalizeWsUrl(target.webSocketDebuggerUrl, port),

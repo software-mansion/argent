@@ -24,8 +24,8 @@ export const reinstallAppTool: ToolDefinition<
   { reinstalled: boolean; bundleId: string }
 > = {
   id: "reinstall-app",
-  description: `Uninstall an app from the simulator by bundle ID, then install it from a .app path.
-Use this for a full reinstall (e.g. after rebuilding the app, or to clear app data and container).`,
+  description: `Register and install an app on the simulator by first uninstalling then installing from a .app bundle path.
+Use for a full reinstall after rebuilding or to clear app data. Returns { reinstalled, bundleId }. Fails if the .app path does not exist or the bundle ID does not match.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

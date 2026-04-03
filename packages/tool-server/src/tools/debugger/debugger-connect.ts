@@ -18,8 +18,8 @@ export const debuggerConnectTool: ToolDefinition<
 > = {
   id: "debugger-connect",
   description: `Connect to a running Metro dev server's CDP debugger endpoint.
-Returns connection info. If already connected, returns the existing connection.
-This must be called before using other debugger-* tools (or they auto-connect).`,
+Returns connection info including port, projectRoot, deviceName, and isNewDebugger. If already connected, returns the existing connection.
+Use when starting a debug session or before calling other debugger-* tools. Fails if Metro is not running on the specified port.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,

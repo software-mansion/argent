@@ -21,16 +21,11 @@ const zodSchema = z.object({});
 
 export const listSimulatorsTool: ToolDefinition = {
   id: "list-simulators",
-  description: "List all available iOS simulators with their current state",
+  description: "List all available iOS simulators with their current state. Use when you need a UDID or want to see which simulators are Booted vs Shutdown. Returns an array of simulators with udid, name, state, runtime, and isAvailable. Fails if Xcode command-line tools are not installed.",
   zodSchema,
   services: () => ({}),
   async execute(_services, _params, _options) {
-    const { stdout } = await execFileAsync("xcrun", [
-      "simctl",
-      "list",
-      "devices",
-      "--json",
-    ]);
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
     const data: SimctlOutput = JSON.parse(stdout);
     const simulators: {
       udid: string;

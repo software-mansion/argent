@@ -1,14 +1,14 @@
-import type { ReRenderReason, HotCommitSummary, ComponentFinding } from './output.js';
+import type { ReRenderReason, HotCommitSummary, ComponentFinding } from "./output.js";
 
 export type { ReRenderReason };
 
 export interface SessionContext {
   reactCompilerEnabled: boolean;
   strictModeEnabled: boolean;
-  buildMode: 'dev' | 'prod';
-  rnArchitecture: 'bridge' | 'bridgeless';
+  buildMode: "dev" | "prod";
+  rnArchitecture: "bridge" | "bridgeless";
   projectRoot: string;
-  platform: 'ios' | 'android';
+  platform: "ios" | "android";
 }
 
 /** Accumulated root cause data for a single parent candidate */
@@ -18,33 +18,33 @@ export interface RootCauseVote {
   changedProps: string[];
   changedHooks: number[];
   hookTypes: string[] | null;
-  chain: string[];  // full chain: [immediateParent, ..., rootCauseParent]
+  chain: string[]; // full chain: [immediateParent, ..., rootCauseParent]
 }
 
 // Welford accumulator for one component (first mounts excluded)
 export interface ComponentAccumulator {
   name: string;
-  n: number;       // re-render count (first mounts stripped)
-  sum: number;     // sum of actualDuration
-  sumSq: number;   // sum of actualDuration^2
+  n: number; // re-render count (first mounts stripped)
+  sum: number; // sum of actualDuration
+  sumSq: number; // sum of actualDuration^2
   min: number;
   max: number;
   reasonHistogram: Record<ReRenderReason, number>;
   propFreq: Map<string, number>;
   hookFreq: Map<number, number>;
-  hookTypeNames?: string[];   // fiber._debugHookTypes — first non-null wins
-  parentFreq: Map<string, number>;  // parent component name → frequency
-  compilerOptimizedCount: number;   // renders where isCompilerOptimized=true
+  hookTypeNames?: string[]; // fiber._debugHookTypes — first non-null wins
+  parentFreq: Map<string, number>; // parent component name → frequency
+  compilerOptimizedCount: number; // renders where isCompilerOptimized=true
   rootCauseVotes: Map<string, RootCauseVote>; // parent name → root cause vote data
-  firstCommitTs: number;  // ms (performance.now reference)
+  firstCommitTs: number; // ms (performance.now reference)
   lastCommitTs: number;
 }
 
 // Stage 1: Reduce
 export interface ReduceOutput {
   components: Map<string, ComponentAccumulator>;
-  reactCommits: number;       // unique React commit batch count (by commitIndex)
-  fiberRenders: number;       // total fiber render entries processed
+  reactCommits: number; // unique React commit batch count (by commitIndex)
+  fiberRenders: number; // total fiber render entries processed
   anyRuntimeCompilerDetected: boolean;
   totalFirstMounts: number;
   firstMountOnlyComponents: string[];
@@ -56,7 +56,7 @@ export interface ReduceOutput {
 export interface EnrichedComponent {
   name: string;
   n: number;
-  normalizedRenderCount: number;  // n/2 if strictMode, else n
+  normalizedRenderCount: number; // n/2 if strictMode, else n
   mean: number;
   min: number;
   max: number;
@@ -66,14 +66,14 @@ export interface EnrichedComponent {
   topChangedProps: string[];
   topChangedHooks: number[];
   hookTypeNames?: string[];
-  isCompilerOptimized: boolean;   // >50% of renders showed useMemoCache
+  isCompilerOptimized: boolean; // >50% of renders showed useMemoCache
   parentTrigger?: {
     component: string;
     reason: ReRenderReason;
     changedProps: string[];
     changedHooks: number[];
     changedHookNames: string[];
-    parentChain?: string[];  // [immediateParent, ..., rootCause]; only when chain has >1 hop
+    parentChain?: string[]; // [immediateParent, ..., rootCause]; only when chain has >1 hop
   };
   firstCommitTs: number;
   lastCommitTs: number;
@@ -119,5 +119,5 @@ export interface PipelineOutput {
   reactCommits: number;
   fiberRenders: number;
   totalFirstMounts: number;
-  cpuSampleIndex?: import('../pipeline/00-cpu-correlate.js').CpuSampleIndex | null;
+  cpuSampleIndex?: import("../pipeline/00-cpu-correlate.js").CpuSampleIndex | null;
 }

@@ -121,9 +121,7 @@ function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> 
 
     child.on("exit", (code) => {
       rl.close();
-      settle(() =>
-        reject(new Error(`tool-server exited with code ${code} before becoming ready`))
-      );
+      settle(() => reject(new Error(`tool-server exited with code ${code} before becoming ready`)));
     });
 
     const timer = setTimeout(() => {
@@ -155,6 +153,17 @@ async function clearState(): Promise<void> {
   } catch {
     // already gone
   }
+}
+
+export async function killToolServer(): Promise<void> {
+  const state = await readState();
+  if (!state) return;
+  try {
+    process.kill(state.pid, "SIGTERM");
+  } catch {
+    // already gone
+  }
+  await clearState();
 }
 
 export async function ensureToolsServer(): Promise<string> {

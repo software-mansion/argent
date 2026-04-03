@@ -57,8 +57,7 @@ describe("serializeFlow", () => {
 
 describe("parseFlow", () => {
   it("parses a flow with executionPrerequisite and echo steps", () => {
-    const content =
-      "executionPrerequisite: App on home screen\nsteps:\n  - echo: Hello\n";
+    const content = "executionPrerequisite: App on home screen\nsteps:\n  - echo: Hello\n";
     const flow = parseFlow(content);
     expect(flow.executionPrerequisite).toBe("App on home screen");
     expect(flow.steps).toEqual([{ kind: "echo", message: "Hello" }]);
@@ -68,17 +67,13 @@ describe("parseFlow", () => {
     const content =
       'executionPrerequisite: ""\nsteps:\n  - tool: tap\n    args:\n      x: 0.5\n      y: 0.3\n';
     const flow = parseFlow(content);
-    expect(flow.steps).toEqual([
-      { kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } },
-    ]);
+    expect(flow.steps).toEqual([{ kind: "tool", name: "tap", args: { x: 0.5, y: 0.3 } }]);
   });
 
   it("parses tool entries with no args", () => {
     const content = 'executionPrerequisite: ""\nsteps:\n  - tool: screenshot\n';
     const flow = parseFlow(content);
-    expect(flow.steps).toEqual([
-      { kind: "tool", name: "screenshot", args: {} },
-    ]);
+    expect(flow.steps).toEqual([{ kind: "tool", name: "screenshot", args: {} }]);
   });
 
   it("parses a multi-step flow", () => {
@@ -124,9 +119,7 @@ describe("parseFlow", () => {
   });
 
   it("throws when content is not an object with steps", () => {
-    expect(() => parseFlow("- echo: Hello\n")).toThrow(
-      "expected an object with a steps array",
-    );
+    expect(() => parseFlow("- echo: Hello\n")).toThrow("expected an object with a steps array");
   });
 
   it("roundtrips: serialize then parse", () => {

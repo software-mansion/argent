@@ -18,11 +18,7 @@
  * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
  * with `original: true` since they already contain the real source path.
  */
-export function makeInspectScript(
-  x: number,
-  y: number,
-  requestId: string
-): string {
+export function makeInspectScript(x: number, y: number, requestId: string): string {
   return `(function() {
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   var renderer = Array.from(hook.renderers.values())[0];

@@ -47,10 +47,10 @@ function getXctraceVersion(): number {
  */
 function discoverTraceSchemas(traceFile: string): string[] {
   try {
-    const toc = execSync(
-      `xctrace export --input "${traceFile}" --toc`,
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
+    const toc = execSync(`xctrace export --input "${traceFile}" --toc`, {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     const schemas: string[] = [];
     const schemaRe = /schema="([^"]+)"/g;
     let m;
@@ -67,10 +67,7 @@ function discoverTraceSchemas(traceFile: string): string[] {
  * Find the correct CPU schema xpath by checking the trace TOC.
  * Falls back to trying known schema candidates if TOC parsing fails.
  */
-function resolveCpuXpath(
-  traceFile: string,
-  diagnostics: ExportDiagnostics,
-): string | null {
+function resolveCpuXpath(traceFile: string, diagnostics: ExportDiagnostics): string | null {
   const tocSchemas = discoverTraceSchemas(traceFile);
   diagnostics.tocSchemas = tocSchemas;
 
@@ -97,16 +94,15 @@ function resolveCpuXpath(
 function tryCpuExportFallback(
   traceFile: string,
   outPath: string,
-  diagnostics: ExportDiagnostics,
+  diagnostics: ExportDiagnostics
 ): boolean {
   const triedSchemas: string[] = [];
   for (const candidate of CPU_SCHEMA_CANDIDATES) {
     const xpath = `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
     try {
-      execSync(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`,
-        { stdio: "pipe" },
-      );
+      execSync(`xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`, {
+        stdio: "pipe",
+      });
       diagnostics.cpuSchemaUsed = candidate;
       return true;
     } catch {
@@ -119,9 +115,10 @@ function tryCpuExportFallback(
   return false;
 }
 
-export function exportIosTraceData(
-  traceFile: string,
-): { files: Record<string, string | null>; diagnostics: ExportDiagnostics } {
+export function exportIosTraceData(traceFile: string): {
+  files: Record<string, string | null>;
+  diagnostics: ExportDiagnostics;
+} {
   const exportedFiles: Record<string, string | null> = {};
   const diagnostics: ExportDiagnostics = {
     tocSchemas: [],
@@ -142,14 +139,13 @@ export function exportIosTraceData(
         try {
           execSync(
             `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`,
-            { stdio: "pipe" },
+            { stdio: "pipe" }
           );
           exportedFiles[key] = outPath;
           continue;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          diagnostics.errors.cpu =
-            `TOC-resolved xpath failed (schema="${diagnostics.cpuSchemaUsed}"): ${msg}`;
+          diagnostics.errors.cpu = `TOC-resolved xpath failed (schema="${diagnostics.cpuSchemaUsed}"): ${msg}`;
           diagnostics.cpuSchemaUsed = null;
         }
       }
@@ -169,7 +165,7 @@ export function exportIosTraceData(
       try {
         execSync(
           `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'${halFlag}`,
-          { stdio: "pipe" },
+          { stdio: "pipe" }
         );
         exportedFiles[key] = outPath;
       } catch {
@@ -177,7 +173,7 @@ export function exportIosTraceData(
           try {
             execSync(
               `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
-              { stdio: "pipe" },
+              { stdio: "pipe" }
             );
             exportedFiles[key] = outPath;
           } catch (err) {
@@ -196,7 +192,7 @@ export function exportIosTraceData(
     try {
       execSync(
         `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
-        { stdio: "pipe" },
+        { stdio: "pipe" }
       );
       exportedFiles[key] = outPath;
     } catch (err) {

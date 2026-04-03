@@ -5,7 +5,10 @@ import {
   type ReactProfilerSessionApi,
   getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
-import type { HermesProfileNode, HermesCpuProfile } from "../../../utils/react-profiler/types/input";
+import type {
+  HermesProfileNode,
+  HermesCpuProfile,
+} from "../../../utils/react-profiler/types/input";
 import { readCpuProfile } from "../../../utils/react-profiler/debug/dump";
 import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 
@@ -20,9 +23,7 @@ const zodSchema = z.object({
   react_only: z
     .boolean()
     .default(false)
-    .describe(
-      "If true, only show React component functions (PascalCase names)",
-    ),
+    .describe("If true, only show React component functions (PascalCase names)"),
 });
 
 interface HotspotEntry {
@@ -42,7 +43,7 @@ function buildHotspots(
   samples: number[],
   timeDeltas: number[],
   topN: number,
-  reactOnly: boolean,
+  reactOnly: boolean
 ): HotspotEntry[] {
   const nodeMap = new Map<number, HermesProfileNode>();
   for (const node of nodes) {
@@ -91,15 +92,10 @@ function buildHotspots(
 
     entries.push({
       function: name,
-      url: node.callFrame.url
-        ? `${node.callFrame.url}:${node.callFrame.lineNumber}`
-        : "",
+      url: node.callFrame.url ? `${node.callFrame.url}:${node.callFrame.lineNumber}` : "",
       self_ms: Math.round(selfUs / 10) / 100,
       total_ms: Math.round(totalUs / 10) / 100,
-      self_pct:
-        totalSelfMs > 0
-          ? `${((selfUs / 1000 / totalSelfMs) * 100).toFixed(1)}%`
-          : "0.0%",
+      self_pct: totalSelfMs > 0 ? `${((selfUs / 1000 / totalSelfMs) * 100).toFixed(1)}%` : "0.0%",
     });
   }
 
@@ -112,23 +108,20 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
   const header = "| Function | Location | Self (ms) | Total (ms) | Self % |";
   const sep = "|---|---|---|---|---|";
   const rows = entries.map(
-    (e) =>
-      `| \`${e.function}\` | ${e.url || "—"} | ${e.self_ms} | ${e.total_ms} | ${e.self_pct} |`,
+    (e) => `| \`${e.function}\` | ${e.url || "—"} | ${e.self_ms} | ${e.total_ms} | ${e.self_pct} |`
   );
   return [header, sep, ...rows].join("\n");
 }
 
-export const reactProfilerCpuSummaryTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "react-profiler-cpu-summary",
   description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
 FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.
 Use react-profiler-analyze instead; it covers all React rendering performance analysis.
-Only call react-profiler-cpu-summary when you specifically need to investigate JS CPU hotspots
-that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
-Call react-profiler-stop first. Reads directly from the stored cpuProfile.`,
+Use when you specifically need to investigate JS CPU hotspots that are NOT tied to React rendering (e.g. regex slowness, cryptography, heavy computations).
+Call react-profiler-stop first. Reads directly from the stored cpuProfile.
+Returns a markdown table of the top hotspot functions with self-time, total-time, and location.
+Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
@@ -139,7 +132,7 @@ Call react-profiler-stop first. Reads directly from the stored cpuProfile.`,
     const sessionPaths = api.sessionPaths ?? getCachedProfilerPaths(api.port);
     if (!sessionPaths?.cpuProfilePath) {
       throw new Error(
-        "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",
+        "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop."
       );
     }
 
@@ -147,13 +140,7 @@ Call react-profiler-stop first. Reads directly from the stored cpuProfile.`,
 
     const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
     const duration_ms = Math.round((endTime - startTime) / 1000);
-    const entries = buildHotspots(
-      nodes,
-      samples,
-      timeDeltas,
-      params.top_n,
-      params.react_only,
-    );
+    const entries = buildHotspots(nodes, samples, timeDeltas, params.top_n, params.react_only);
     const table = renderMarkdownTable(entries);
 
     return (

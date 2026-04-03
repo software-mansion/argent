@@ -4,16 +4,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { homedir } from "node:os";
-import {
-  detectAdapters,
-  ALL_ADAPTERS,
-  removeClaudePermission,
-} from "./mcp-configs.js";
-import {
-  detectPackageManager,
-  globalUninstallCommand,
-} from "./utils.js";
+import { ALL_ADAPTERS, removeCodexRules } from "./mcp-configs.js";
+import { detectPackageManager, globalUninstallCommand } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { killToolServer } from "../launcher.js";
 
 export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
@@ -22,9 +16,7 @@ export async function uninstall(args: string[]): Promise<void> {
   p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
   if (!nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const proceed = await p.confirm({
       message: "Remove argent configuration from this workspace?",
@@ -45,18 +37,13 @@ export async function uninstall(args: string[]): Promise<void> {
   p.log.step(pc.bold("Removing MCP server entries..."));
 
   for (const adapter of ALL_ADAPTERS) {
-    for (const pathFn of [
-      () => adapter.projectPath(projectRoot),
-      () => adapter.globalPath(),
-    ]) {
+    for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
       const configPath = pathFn();
       if (!configPath) continue;
       try {
         const removed = adapter.remove(configPath);
         if (removed) {
-          results.push(
-            `${pc.green("+")} Removed from ${adapter.name} ${pc.dim(configPath)}`,
-          );
+          results.push(`${pc.green("+")} Removed from ${adapter.name} ${pc.dim(configPath)}`);
         }
       } catch {
         // non-fatal
@@ -64,24 +51,18 @@ export async function uninstall(args: string[]): Promise<void> {
     }
   }
 
-  // ── Remove Claude permissions ───────────────────────────────────────────────
+  // ── Remove allowlists ──────────────────────────────────────────────────────
 
-  try {
-    removeClaudePermission(projectRoot, "local");
-    results.push(
-      `${pc.green("+")} Removed Claude Code permissions ${pc.dim("(local)")}`,
-    );
-  } catch {
-    // non-fatal
-  }
-
-  try {
-    removeClaudePermission(projectRoot, "global");
-    results.push(
-      `${pc.green("+")} Removed Claude Code permissions ${pc.dim("(global)")}`,
-    );
-  } catch {
-    // non-fatal
+  for (const adapter of ALL_ADAPTERS) {
+    if (!adapter.removeAllowlist) continue;
+    for (const s of ["local", "global"] as const) {
+      try {
+        adapter.removeAllowlist(projectRoot, s);
+        results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
+      } catch {
+        // non-fatal
+      }
+    }
   }
 
   if (results.length > 0) {
@@ -95,9 +76,7 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldPrune = pruneFlag;
 
   if (!shouldPrune && !nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const pruneChoice = await p.confirm({
       message: "Also remove skills, rules, and agents directories?",
@@ -115,9 +94,7 @@ export async function uninstall(args: string[]): Promise<void> {
     // Skills: offer to run npx skills remove --all
     let skillsRemoved = false;
     if (!nonInteractive) {
-      p.log.message(
-        pc.dim("  Press y for yes, n for no, enter to confirm."),
-      );
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const removeSkills = await p.confirm({
         message: "Run `npx skills remove --all` to clean up skills?",
@@ -131,7 +108,7 @@ export async function uninstall(args: string[]): Promise<void> {
           pruneResults.push(`${pc.green("+")} Skills removed via npx skills`);
         } catch {
           pruneResults.push(
-            `${pc.yellow("-")} npx skills remove failed — removing directories manually`,
+            `${pc.yellow("-")} npx skills remove failed — removing directories manually`
           );
         }
       }
@@ -162,15 +139,25 @@ export async function uninstall(args: string[]): Promise<void> {
       }
     }
 
+    // Codex: remove argent rules from developer_instructions in config.toml
+    for (const configPath of [
+      path.join(projectRoot, ".codex", "config.toml"),
+      path.join(homedir(), ".codex", "config.toml"),
+    ]) {
+      try {
+        if (removeCodexRules(configPath)) {
+          pruneResults.push(`${pc.green("+")} Removed argent rules from ${configPath}`);
+        }
+      } catch (err) {
+        pruneResults.push(`${pc.red("x")} Could not clean ${configPath}: ${err}`);
+      }
+    }
+
     if (pruneResults.length > 0) {
       p.note(pruneResults.join("\n"), "Pruned Directories");
     }
   } else {
-    p.log.info(
-      pc.dim(
-        "Kept skills, rules, and agents directories. Pass --prune to remove them.",
-      ),
-    );
+    p.log.info(pc.dim("Kept skills, rules, and agents directories. Pass --prune to remove them."));
   }
 
   // ── Uninstall the global package ────────────────────────────────────────────
@@ -178,9 +165,7 @@ export async function uninstall(args: string[]): Promise<void> {
   let shouldUninstallPackage = nonInteractive;
 
   if (!nonInteractive) {
-    p.log.message(
-      pc.dim("  Press y for yes, n for no, enter to confirm."),
-    );
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const uninstallPkg = await p.confirm({
       message: `Uninstall the global ${PACKAGE_NAME} package?`,
@@ -196,6 +181,8 @@ export async function uninstall(args: string[]): Promise<void> {
     const pm = detectPackageManager();
     const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
     p.log.info(`Running: ${pc.dim(cmd)}`);
+
+    await killToolServer();
 
     try {
       execSync(cmd, { stdio: "inherit" });

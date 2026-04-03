@@ -115,9 +115,7 @@ export class LogFileWriter {
     const sourceLine = entry.stackTrace?.callFrames?.[0]?.lineNumber;
     const sourceFile = sourceUrl ? (cleanSourceUrl(sourceUrl) ?? undefined) : undefined;
     const source =
-      sourceFile !== undefined && sourceLine !== undefined
-        ? `${sourceFile}:${sourceLine}`
-        : "-";
+      sourceFile !== undefined && sourceLine !== undefined ? `${sourceFile}:${sourceLine}` : "-";
 
     // Collapse newlines in message for flat format
     const flatMessage = entry.message.replace(/\n/g, " ");
@@ -173,9 +171,7 @@ export class LogFileWriter {
   }
 
   getClusters(limit = 20): MessageCluster[] {
-    const sorted = [...this.clusters.values()].sort(
-      (a, b) => b.count - a.count,
-    );
+    const sorted = [...this.clusters.values()].sort((a, b) => b.count - a.count);
     return sorted.slice(0, limit).map((c) => ({
       message: c.message,
       count: c.count,
@@ -202,14 +198,12 @@ export class LogFileWriter {
     }
   }
 
-  readFiltered(opts: {
-    level?: string;
-    limit?: number;
-  }): { entries: RichLogEntry[]; total: number } {
+  readFiltered(opts: { level?: string; limit?: number }): {
+    entries: RichLogEntry[];
+    total: number;
+  } {
     const all = this.readAll();
-    let filtered = opts.level
-      ? all.filter((e) => e.level === opts.level)
-      : all;
+    let filtered = opts.level ? all.filter((e) => e.level === opts.level) : all;
     const total = filtered.length;
     if (opts.limit) {
       filtered = filtered.slice(-opts.limit);

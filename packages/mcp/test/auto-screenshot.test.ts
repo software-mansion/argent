@@ -164,13 +164,13 @@ describe("getAutoScreenshotDelayMs", () => {
 
   it("uses env override as a floor", () => {
     process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "2000";
-    expect(getAutoScreenshotDelayMs("describe")).toBe(2000); // 1000 < 2000 → 2000
-    expect(getAutoScreenshotDelayMs("launch-app")).toBe(2000); // 1700 < 2000 → 2000
+    expect(getAutoScreenshotDelayMs("describe")).toBe(2000); // 100 < 2000 → 2000
+    expect(getAutoScreenshotDelayMs("keyboard")).toBe(2000); // 300 < 2000 → 2000
   });
 
   it("does not lower delay below the per-tool value", () => {
     process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "500";
-    expect(getAutoScreenshotDelayMs("launch-app")).toBe(1700); // 1700 > 500 → 1700
+    expect(getAutoScreenshotDelayMs("launch-app")).toBe(3000); // 3000 > 500 → 3000
   });
 
   it("ignores non-numeric env override", () => {

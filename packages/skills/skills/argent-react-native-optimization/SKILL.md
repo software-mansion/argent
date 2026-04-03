@@ -6,12 +6,14 @@ description: Optimize a React Native app for performance using argent profiler a
 ## 1. Tools
 
 This skill orchestrates tools from two measurement skills. Load them for full tool reference:
+
 - **`argent-react-native-profiler`** — React/Hermes profiling (renders, commits, CPU).
 - **`argent-ios-profiler`** — Native iOS profiling (CPU hotspots, UI hangs, memory leaks).
 
 On react-native apps, use both of the available tool workflows for best coverage.
 
 Quick-access tools (no profiling session required):
+
 - `react-profiler-renders` — live render count table, instant spot-check
 - `debugger-evaluate` — run JS in app runtime to test a fix live
 - `react-profiler-component-source` — AST lookup for file, line, memoization status
@@ -35,16 +37,16 @@ Quick-access tools (no profiling session required):
 
 Match `react-profiler-analyze` / `react-profiler-renders` findings to fixes:
 
-| Finding | Fix | Detail |
-| ------- | --- | ------ |
-| Re-renders with same props | `React.memo(Comp)` | **Skip if React Compiler active** — `react-profiler-analyze` reports compiler status per component |
-| Expensive recomputation / unstable callbacks | `useMemo(fn, [deps])` / `useCallback(fn, [deps])` | `useCallback` must pair with `React.memo` on child |
-| Inline objects/arrays in JSX | `StyleSheet.create()` / module const | New ref every render breaks shallow equality |
-| List jank | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout` | Or `@shopify/flash-list` with `estimatedItemSize` |
-| JS-thread animation jank | `useNativeDriver: true` or `react-native-reanimated` | `useNativeDriver` only for `transform`/`opacity` |
-| Heavy work during transitions | `InteractionManager.runAfterInteractions()` | Defer until animation completes |
-| Slow startup | Hermes + inline requires in `metro.config.js` | Lazy `require()` for heavy modules |
-| Redundant, heavy, unoptimized or n+1 network calls | `view-network-logs` → `view-network-request-details` | Batch, debounce, or cache at data layer |
+| Finding                                            | Fix                                                                           | Detail                                                                                             |
+| -------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Re-renders with same props                         | `React.memo(Comp)`                                                            | **Skip if React Compiler active** — `react-profiler-analyze` reports compiler status per component |
+| Expensive recomputation / unstable callbacks       | `useMemo(fn, [deps])` / `useCallback(fn, [deps])`                             | `useCallback` must pair with `React.memo` on child                                                 |
+| Inline objects/arrays in JSX                       | `StyleSheet.create()` / module const                                          | New ref every render breaks shallow equality                                                       |
+| List jank                                          | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout` | Or `@shopify/flash-list` with `estimatedItemSize`                                                  |
+| JS-thread animation jank                           | `useNativeDriver: true` or `react-native-reanimated`                          | `useNativeDriver` only for `transform`/`opacity`                                                   |
+| Heavy work during transitions                      | `InteractionManager.runAfterInteractions()`                                   | Defer until animation completes                                                                    |
+| Slow startup                                       | Hermes + inline requires in `metro.config.js`                                 | Lazy `require()` for heavy modules                                                                 |
+| Redundant, heavy, unoptimized or n+1 network calls | `view-network-logs` → `view-network-request-details`                          | Batch, debounce, or cache at data layer                                                            |
 
 ---
 

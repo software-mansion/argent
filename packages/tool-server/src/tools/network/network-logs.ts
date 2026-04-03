@@ -49,8 +49,7 @@ function formatEntry(entry: LogEntry): string {
   }
 
   const type = entry.resourceType ?? "";
-  const size =
-    entry.encodedDataLength != null ? formatBytes(entry.encodedDataLength) : "";
+  const size = entry.encodedDataLength != null ? formatBytes(entry.encodedDataLength) : "";
   const duration = entry.durationMs != null ? `${entry.durationMs} ms` : "";
 
   return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
@@ -66,15 +65,14 @@ const zodSchema = z.object({
     ),
 });
 
-export const networkLogsTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  string
-> = {
+export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
-  description: `View captured network (HTTP) requests from the running React Native app.
+  description: `Retrieve captured network (HTTP) requests from the running React Native app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-Network interception is injected into the JS runtime — it captures fetch() calls.`,
+Network interception is injected into the JS runtime — it captures fetch() calls.
+Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
+Fails if the app is not connected or no network interceptor could be injected.`,
   zodSchema,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}`,
@@ -87,9 +85,7 @@ Network interception is injected into the JS runtime — it captures fetch() cal
 
     // First get the total count for pagination by running the read script with a
     // zero-length slice — same filtering logic, no duplication.
-    const countRaw = await api.cdp.evaluate(
-      makeNetworkLogReadScript(0, 0, api.port),
-    );
+    const countRaw = await api.cdp.evaluate(makeNetworkLogReadScript(0, 0, api.port));
     const { total } = JSON.parse(countRaw as string) as { total: number };
 
     if (total === 0) {
@@ -97,10 +93,7 @@ Network interception is injected into the JS runtime — it captures fetch() cal
     }
 
     const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
-    const pageIndex =
-      params.pageIndex === "latest"
-        ? pageCount - 1
-        : (params.pageIndex as number);
+    const pageIndex = params.pageIndex === "latest" ? pageCount - 1 : (params.pageIndex as number);
 
     if (pageIndex < 0 || pageIndex >= pageCount) {
       return `Page index out of range. Valid range: 0-${pageCount - 1} (${pageCount} pages, ${total} total requests).`;

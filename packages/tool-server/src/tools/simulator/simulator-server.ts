@@ -4,26 +4,19 @@ import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 
 const zodSchema = z.object({
   udid: z.string().describe("The UDID of the simulator to connect to"),
-  token: z
-    .string()
-    .optional()
-    .describe("JWT license token for Pro features (screenshot, recording)"),
 });
 
 export const simulatorServerTool: ToolDefinition<
-  { udid: string; token?: string },
-  { udid: string; apiUrl: string; streamUrl: string }
+  { udid: string },
+  { udid: string; apiUrl: string }
 > = {
   id: "simulator-server",
-  description: `SETUP ONLY — Get (or start) the simulator-server for a UDID.
-Do not call this during interaction tasks; tap, swipe, paste, screenshot, and all other tools start the server automatically.
-Use this only to explicitly pass a JWT token for Pro features (screenshot, recording) before running those tools.
-Returns { apiUrl, streamUrl }.`,
+  description: `Start (or get) the simulator-server process for a UDID and return its API URL.
+Use when you need the server URL before interaction tools auto-start it. Returns { udid, apiUrl }. Fails if the simulator is not booted or the UDID is invalid.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: {
       urn: `SimulatorServer:${params.udid}`,
-      options: { token: params.token },
     },
   }),
   async execute(services, params) {
@@ -31,7 +24,6 @@ Returns { apiUrl, streamUrl }.`,
     return {
       udid: params.udid,
       apiUrl: api.apiUrl,
-      streamUrl: api.streamUrl,
     };
   },
 };

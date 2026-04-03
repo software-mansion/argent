@@ -8,7 +8,7 @@ import type { ReRenderReason } from "../types/output";
  */
 export function deriveReason(
   cd: DevToolsChangeDescription | null,
-  hookTypes?: string[] | null,
+  hookTypes?: string[] | null
 ): ReRenderReason {
   if (cd === null) return "unknown";
   if (cd.props !== null && cd.props.length > 0) return "props";
@@ -17,12 +17,7 @@ export function deriveReason(
     if (hookTypes && cd.hooks) {
       const isState = cd.hooks.some((idx) => {
         const ht = hookTypes[idx];
-        return (
-          ht === "State" ||
-          ht === "Reducer" ||
-          ht === "useState" ||
-          ht === "useReducer"
-        );
+        return ht === "State" || ht === "Reducer" || ht === "useState" || ht === "useReducer";
       });
       if (isState) return "state";
     }

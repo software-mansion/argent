@@ -35,7 +35,7 @@ export function reduce(
   commitTree: DevToolsCommitTree,
   sessionContext: SessionContext,
   recordingMs: number,
-  sessionAnyCompilerOptimized?: boolean,
+  sessionAnyCompilerOptimized?: boolean
 ): ReduceOutput {
   // -------------------------------------------------------------------------
   // React: group commits by component, accumulate Welford stats
@@ -118,19 +118,12 @@ export function reduce(
     }
 
     // hookTypeNames: first non-null value wins
-    if (
-      !acc.hookTypeNames &&
-      commit.hookTypes != null &&
-      commit.hookTypes.length > 0
-    ) {
+    if (!acc.hookTypeNames && commit.hookTypes != null && commit.hookTypes.length > 0) {
       acc.hookTypeNames = commit.hookTypes;
     }
 
     if (commit.parentName) {
-      acc.parentFreq.set(
-        commit.parentName,
-        (acc.parentFreq.get(commit.parentName) ?? 0) + 1,
-      );
+      acc.parentFreq.set(commit.parentName, (acc.parentFreq.get(commit.parentName) ?? 0) + 1);
     }
 
     // Root cause votes (annotated by Stage 0 preprocess)

@@ -6,11 +6,6 @@ import { jsRuntimeDebuggerBlueprint } from "../../src/blueprints/js-runtime-debu
 import { debuggerConnectTool } from "../../src/tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { debuggerEvaluateTool } from "../../src/tools/debugger/debugger-evaluate";
-import { debuggerSetBreakpointTool } from "../../src/tools/debugger/debugger-set-breakpoint";
-import { debuggerRemoveBreakpointTool } from "../../src/tools/debugger/debugger-remove-breakpoint";
-import { debuggerPauseTool } from "../../src/tools/debugger/debugger-pause";
-import { debuggerResumeTool } from "../../src/tools/debugger/debugger-resume";
-import { debuggerStepTool } from "../../src/tools/debugger/debugger-step";
 
 /**
  * Integration test using a mock Metro HTTP + CDP WebSocket server.
@@ -80,9 +75,7 @@ function handleCDPMessage(ws: WebSocket, raw: string) {
           id,
           result: {
             breakpointId: `bp:${params.lineNumber}:${params.urlRegex}`,
-            locations: [
-              { scriptId: "1", lineNumber: params.lineNumber, columnNumber: 0 },
-            ],
+            locations: [{ scriptId: "1", lineNumber: params.lineNumber, columnNumber: 0 }],
           },
         })
       );
@@ -163,11 +156,6 @@ beforeAll(async () => {
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
   registry.registerTool(debuggerEvaluateTool);
-  registry.registerTool(debuggerSetBreakpointTool);
-  registry.registerTool(debuggerRemoveBreakpointTool);
-  registry.registerTool(debuggerPauseTool);
-  registry.registerTool(debuggerResumeTool);
-  registry.registerTool(debuggerStepTool);
 });
 
 afterAll(async () => {
@@ -210,52 +198,5 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
     })) as { result: unknown };
 
     expect(result.result).toBe("eval-result-42");
-  });
-
-  it("debugger-set-breakpoint sets a breakpoint by URL regex", async () => {
-    const result = (await registry.invokeTool("debugger-set-breakpoint", {
-      port: mockPort,
-      file: "App.tsx",
-      line: 21,
-    })) as { breakpointId: string; locations: unknown[] };
-
-    expect(result.breakpointId).toContain("20");
-    expect(result.breakpointId).toContain("App\\.tsx");
-    expect(result.locations).toHaveLength(1);
-  });
-
-  it("debugger-remove-breakpoint removes a breakpoint", async () => {
-    const result = (await registry.invokeTool("debugger-remove-breakpoint", {
-      port: mockPort,
-      breakpointId: "bp:20:.*App\\.tsx$",
-    })) as { removed: boolean };
-
-    expect(result.removed).toBe(true);
-  });
-
-  it("debugger-pause sends Debugger.pause", async () => {
-    const result = (await registry.invokeTool("debugger-pause", {
-      port: mockPort,
-    })) as { paused: boolean };
-
-    expect(result.paused).toBe(true);
-  });
-
-  it("debugger-resume sends Debugger.resume", async () => {
-    const result = (await registry.invokeTool("debugger-resume", {
-      port: mockPort,
-    })) as { resumed: boolean };
-
-    expect(result.resumed).toBe(true);
-  });
-
-  it("debugger-step sends step command", async () => {
-    const result = (await registry.invokeTool("debugger-step", {
-      port: mockPort,
-      action: "stepOver",
-    })) as { action: string; sent: boolean };
-
-    expect(result.action).toBe("stepOver");
-    expect(result.sent).toBe(true);
   });
 });

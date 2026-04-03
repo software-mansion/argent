@@ -20,27 +20,25 @@ export interface InspectItem {
  * When includeSkipped is true, filtered items are kept in the result
  * with `skipped: true` and a `skipReason` string instead of being removed.
  */
-export function filterInspectItems(
-  items: InspectItem[],
-  includeSkipped = false,
-): InspectItem[] {
+export function filterInspectItems(items: InspectItem[], includeSkipped = false): InspectItem[] {
   function skip(item: InspectItem, reason: string): InspectItem {
-    return includeSkipped
-      ? { ...item, skipped: true, skipReason: reason }
-      : item;
+    return includeSkipped ? { ...item, skipped: true, skipReason: reason } : item;
   }
 
   // Deduplicate consecutive AnimatedComponent(X) / Animated(X) that wrap the
   // immediately preceding host component.
   const animDeduped: InspectItem[] = [];
   for (const item of items) {
-    const inner =
-      item.name.startsWith("AnimatedComponent(")
-        ? item.name.slice("AnimatedComponent(".length, -1)
-        : item.name.startsWith("Animated(")
-          ? item.name.slice("Animated(".length, -1)
-          : null;
-    if (inner !== null && animDeduped.length > 0 && animDeduped[animDeduped.length - 1].name === inner) {
+    const inner = item.name.startsWith("AnimatedComponent(")
+      ? item.name.slice("AnimatedComponent(".length, -1)
+      : item.name.startsWith("Animated(")
+        ? item.name.slice("Animated(".length, -1)
+        : null;
+    if (
+      inner !== null &&
+      animDeduped.length > 0 &&
+      animDeduped[animDeduped.length - 1].name === inner
+    ) {
       if (includeSkipped) {
         animDeduped.push(skip(item, "animated-dedup"));
       }
@@ -99,11 +97,7 @@ export function filterInspectItems(
       result.push(item);
       continue;
     }
-    if (
-      keptCount > 0 &&
-      item.name === "View" &&
-      item.source === null
-    ) {
+    if (keptCount > 0 && item.name === "View" && item.source === null) {
       if (includeSkipped) {
         result.push(skip(item, "anonymous-view"));
       }
@@ -120,8 +114,8 @@ const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   x: z.coerce.number().describe("Logical X coordinate on device screen"),
   y: z.coerce.number().describe("Logical Y coordinate on device screen"),
-  contextLines: z
-    .coerce.number()
+  contextLines: z.coerce
+    .number()
     .default(3)
     .describe("Lines of source context to include around the component definition"),
   resolveSourceMaps: z
@@ -130,8 +124,8 @@ const zodSchema = z.object({
     .describe(
       "When true, resolves bundled frame locations to original source files via Metro symbolication and includes a code fragment. When false, returns the raw bundled frame info (file, line, column) without symbolication or source reading."
     ),
-  maxItems: z
-    .coerce.number()
+  maxItems: z.coerce
+    .number()
     .default(35)
     .describe(
       "Maximum number of hierarchy items to return, counted from the bottom (most specific component first). The hierarchy walks from the tapped element up to the root — the first items are the most relevant for editing. Increase to 70+ if you need to understand the broader navigation/screen structure."
@@ -141,13 +135,20 @@ const zodSchema = z.object({
     .default(false)
     .describe(
       "When true, items that would normally be filtered are kept in the response " +
-      "with skipped=true and a skipReason. Useful for understanding what was pruned."
+        "with skipped=true and a skipReason. Useful for understanding what was pruned."
     ),
 });
 
 export const debuggerInspectElementTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  | { x: number; y: number; items: InspectItem[]; truncated?: boolean; hiddenCount?: number; hint?: string }
+  | {
+      x: number;
+      y: number;
+      items: InspectItem[];
+      truncated?: boolean;
+      hiddenCount?: number;
+      hint?: string;
+    }
   | { error: string }
 > = {
   id: "debugger-inspect-element",
@@ -162,7 +163,8 @@ see the navigation/screen structure.
 
 Uses getInspectorDataForViewAtPoint + _debugStack + Metro /symbolicate.
 Set resolveSourceMaps to false to skip symbolication and get raw bundled locations instead.
-Set includeSkipped=true to see filtered items annotated with skip reasons.`,
+Set includeSkipped=true to see filtered items annotated with skip reasons.
+Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -203,10 +205,7 @@ Set includeSkipped=true to see filtered items annotated with skip reasons.`,
               line: item.frame.line,
               column: item.frame.col,
             };
-            code = await api.sourceResolver.readSourceFragment(
-              source,
-              params.contextLines
-            );
+            code = await api.sourceResolver.readSourceFragment(source, params.contextLines);
           } else if (params.resolveSourceMaps) {
             const resolved = await api.sourceResolver.symbolicate(
               item.frame.file,
@@ -216,10 +215,7 @@ Set includeSkipped=true to see filtered items annotated with skip reasons.`,
             );
             if (resolved) {
               source = resolved;
-              code = await api.sourceResolver.readSourceFragment(
-                resolved,
-                params.contextLines
-              );
+              code = await api.sourceResolver.readSourceFragment(resolved, params.contextLines);
             }
           } else {
             source = {

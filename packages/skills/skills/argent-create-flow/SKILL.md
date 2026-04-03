@@ -9,14 +9,14 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ## 2. Tools
 
-| Tool                     | Purpose                                              |
-| ------------------------ | ---------------------------------------------------- |
+| Tool                     | Purpose                                                                    |
+| ------------------------ | -------------------------------------------------------------------------- |
 | `flow-start-recording`   | Start recording — takes a name and executionPrerequisite, creates the file |
-| `flow-add-step`          | Execute a tool call live and record it if it succeeds |
-| `flow-add-echo`          | Add a label/comment that prints during replay        |
-| `flow-finish-recording`  | Stop recording and get a summary                     |
-| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it |
-| `flow-execute`           | Replay a saved flow by name                          |
+| `flow-add-step`          | Execute a tool call live and record it if it succeeds                      |
+| `flow-add-echo`          | Add a label/comment that prints during replay                              |
+| `flow-finish-recording`  | Stop recording and get a summary                                           |
+| `flow-read-prerequisite` | Read a flow's execution prerequisite without running it                    |
+| `flow-execute`           | Replay a saved flow by name                                                |
 
 ## 3. Workflow
 
@@ -101,6 +101,7 @@ Flow files use YAML. The top-level is an object with `executionPrerequisite` (de
 - `- tool: <name>` with optional `args:` — a tool call
 
 Example `.yaml` file:
+
 ```yaml
 executionPrerequisite: Simulator booted with app installed
 steps:
@@ -140,14 +141,14 @@ Flows break. UI layouts change, coordinates drift, screens get added or removed.
 
 After every `flow-execute`, classify the outcome before proceeding:
 
-| Outcome | Signal | Action |
-|---|---|---|
-| **Success** | All steps completed, final screenshot shows expected state | Continue with task |
-| **Hard error** | A step has `ERROR` in the result — engine stopped there | Enter §10.2 |
-| **Silent misfire** | All steps completed but final screenshot shows wrong screen | Enter §10.2 |
-| **Partial divergence** | Intermediate screenshot shows wrong state even though later steps ran | Enter §10.2 |
+| Outcome                | Signal                                                                | Action             |
+| ---------------------- | --------------------------------------------------------------------- | ------------------ |
+| **Success**            | All steps completed, final screenshot shows expected state            | Continue with task |
+| **Hard error**         | A step has `ERROR` in the result — engine stopped there               | Enter §10.2        |
+| **Silent misfire**     | All steps completed but final screenshot shows wrong screen           | Enter §10.2        |
+| **Partial divergence** | Intermediate screenshot shows wrong state even though later steps ran | Enter §10.2        |
 
-For silent misfires and partial divergence, echo annotations (§10.5) are your reference for what each screen *should* look like.
+For silent misfires and partial divergence, echo annotations (§10.5) are your reference for what each screen _should_ look like.
 
 ### 10.2 Diagnose
 
@@ -156,13 +157,13 @@ For silent misfires and partial divergence, echo annotations (§10.5) are your r
 3. Call `describe` or `debugger-component-tree` to get the current element tree.
 4. Compare current state to what the failed step expected. Classify the root cause:
 
-| Root cause | Symptoms |
-|---|---|
+| Root cause       | Symptoms                                                        |
+| ---------------- | --------------------------------------------------------------- |
 | Coordinate drift | Tap succeeded but hit wrong element; elements shifted positions |
-| Missing element | Target element not present in element tree |
-| Wrong screen | Screenshot shows entirely different page than expected |
-| Timing | Element exists in tree but tap missed; loading spinner visible |
-| State mismatch | First step fails — executionPrerequisite was not actually met |
+| Missing element  | Target element not present in element tree                      |
+| Wrong screen     | Screenshot shows entirely different page than expected          |
+| Timing           | Element exists in tree but tap missed; loading spinner visible  |
+| State mismatch   | First step fails — executionPrerequisite was not actually met   |
 
 5. State the diagnosis in one sentence before attempting any correction.
 
@@ -183,6 +184,7 @@ Navigate the app to the state just before the failure point. Call `flow-start-re
 Reset the app to prerequisite state (`restart-app` + `launch-app`). Record from scratch with the same flow name.
 
 **Decision heuristic:**
+
 - 1 step broken, parameter-only change → Strategy 1
 - 1 step broken, transient issue, not worth persisting → Strategy 2
 - 2–3 steps broken or flow structure partially changed → Strategy 3
@@ -192,6 +194,7 @@ Reset the app to prerequisite state (`restart-app` + `launch-app`). Record from 
 ### 10.4 Verify and Bound Retries
 
 After applying a correction, re-run `flow-execute` to verify.
+
 - If it succeeds → done. Report what changed (e.g. "Fixed step 4: updated tap coordinates from 0.5,0.35 to 0.5,0.42").
 - If it fails at a **different** step → return to §10.2 for a second attempt.
 - If this is already the second correction attempt → **stop**. Report the diagnosis to the user and recommend a full re-record or manual investigation.
@@ -202,7 +205,7 @@ After applying a correction, re-run `flow-execute` to verify.
 
 Apply these when recording new flows to reduce future breakage:
 
-- **Echo expected state, not just actions.** Write `"On Settings > General screen, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen *should* look like.
+- **Echo expected state, not just actions.** Write `"On Settings > General screen, about to tap About"` not `"Tap About"`. During diagnosis these tell you what the screen _should_ look like.
 - **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
 - **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
 - **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.

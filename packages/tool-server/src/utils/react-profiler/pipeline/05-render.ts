@@ -37,16 +37,19 @@ export interface RenderOutput {
   hotCommitsShown: number;
 }
 
-export async function renderProfilingReport(
-  input: RenderInput,
-): Promise<RenderOutput> {
+export async function renderProfilingReport(input: RenderInput): Promise<RenderOutput> {
   const reportFile = join(input.debugDir, REPORT_FILENAME);
 
   if (input.allClear) {
     const maxMs = input.maxCommitMs ?? 0;
     const report = renderAllClear(input, maxMs);
     const wroteFile = await writeReport(reportFile, report);
-    return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal: 0, hotCommitsShown: 0 };
+    return {
+      report,
+      reportFile: wroteFile ? reportFile : null,
+      hotCommitsTotal: 0,
+      hotCommitsShown: 0,
+    };
   }
 
   // Only non-margin commits count as "hot" for the cap and total
@@ -56,24 +59,22 @@ export async function renderProfilingReport(
   if (hotCommitsTotal === 0) {
     const report = renderAllClear(input, 0);
     const wroteFile = await writeReport(reportFile, report);
-    return { report, reportFile: wroteFile ? reportFile : null, hotCommitsTotal: 0, hotCommitsShown: 0 };
+    return {
+      report,
+      reportFile: wroteFile ? reportFile : null,
+      hotCommitsTotal: 0,
+      hotCommitsShown: 0,
+    };
   }
 
   // Compute relative timestamps: use minimum timestamp across all summaries as t=0
   const minTs = Math.min(...input.hotCommitSummaries.map((s) => s.timestampMs));
 
   // Sort annotations by offsetMs for binary search
-  const annotations = (input.annotations ?? [])
-    .slice()
-    .sort((a, b) => a.offsetMs - b.offsetMs);
+  const annotations = (input.annotations ?? []).slice().sort((a, b) => a.offsetMs - b.offsetMs);
 
   // Full report: all commits
-  const fullMarkdown = buildFullMarkdown(
-    input,
-    minTs,
-    annotations,
-    hotCommitsTotal,
-  );
+  const fullMarkdown = buildFullMarkdown(input, minTs, annotations, hotCommitsTotal);
 
   // Capped report: top MAX_INLINE_COMMITS hot commits by totalRenderMs
   const topHotByMs = hotCommits
@@ -86,10 +87,7 @@ export async function renderProfilingReport(
   const cappedSummaries = input.hotCommitSummaries.filter((s) => {
     if (!s.isMargin) return topHotIndices.has(s.commitIndex);
     // Include margin if adjacent to a shown hot commit
-    return (
-      topHotIndices.has(s.commitIndex - 1) ||
-      topHotIndices.has(s.commitIndex + 1)
-    );
+    return topHotIndices.has(s.commitIndex - 1) || topHotIndices.has(s.commitIndex + 1);
   });
 
   const hotCommitsShown = Math.min(hotCommitsTotal, MAX_INLINE_COMMITS);
@@ -97,7 +95,7 @@ export async function renderProfilingReport(
     { ...input, hotCommitSummaries: cappedSummaries },
     minTs,
     annotations,
-    hotCommitsTotal,
+    hotCommitsTotal
   );
 
   const wroteFile = await writeReport(reportFile, fullMarkdown);
@@ -117,7 +115,7 @@ function renderAllClear(input: RenderInput, maxMs: number): string {
   const durationS = (input.recordingMs / 1000).toFixed(1);
   const compilerLine = renderCompilerStatus(
     input.sessionContext.reactCompilerEnabled,
-    input.anyRuntimeCompilerDetected,
+    input.anyRuntimeCompilerDetected
   );
   const maxNote = maxMs > 0 ? ` (peak commit: ${maxMs.toFixed(1)}ms)` : "";
   const lines = [
@@ -139,15 +137,11 @@ function renderAllClear(input: RenderInput, maxMs: number): string {
   return lines.join("\n");
 }
 
-function renderCompilerStatus(
-  enabled: boolean,
-  detectedAtRuntime: boolean,
-): string {
+function renderCompilerStatus(enabled: boolean, detectedAtRuntime: boolean): string {
   if (enabled && detectedAtRuntime) return "**React Compiler:** ✓";
   if (enabled && !detectedAtRuntime)
     return "**React Compiler:** ⚠️ configured but not detected at runtime";
-  if (!enabled && detectedAtRuntime)
-    return "**React Compiler:** ✓ (detected at runtime)";
+  if (!enabled && detectedAtRuntime) return "**React Compiler:** ✓ (detected at runtime)";
   return "**React Compiler:** ✗";
 }
 
@@ -155,13 +149,13 @@ function buildFullMarkdown(
   input: RenderInput,
   minTs: number,
   annotations: Array<{ offsetMs: number; label: string }>,
-  totalHotCommits: number,
+  totalHotCommits: number
 ): string {
   const { sessionContext, recordingMs, anyRuntimeCompilerDetected } = input;
   const durationS = (recordingMs / 1000).toFixed(1);
   const compilerLine = renderCompilerStatus(
     sessionContext.reactCompilerEnabled,
-    anyRuntimeCompilerDetected,
+    anyRuntimeCompilerDetected
   );
   const hotCount = input.hotCommitSummaries.filter((s) => !s.isMargin).length;
 
@@ -190,18 +184,10 @@ function buildFullMarkdown(
       const file = f.sourceLocation
         ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
         : "—";
-      const reasonStr = formatReason(
-        f.dominantReason,
-        f.topChangedProps,
-        f.topChangedHookNames,
-      );
-      const compilerFlag = f.compilerBailoutSuspected
-        ? " ⚠️"
-        : f.isCompilerOptimized
-          ? " ✓"
-          : "";
+      const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
+      const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
       lines.push(
-        `| \`${f.component}\`${compilerFlag} | ${f.renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`,
+        `| \`${f.component}\`${compilerFlag} | ${f.renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
       );
     }
 
@@ -210,7 +196,7 @@ function buildFullMarkdown(
       lines.push("");
       lines.push(
         "> ⚠️ React Compiler configured but no compiled components found at runtime. " +
-          "Check babel plugin ordering, React version compatibility, or run `npx react-compiler-healthcheck`.",
+          "Check babel plugin ordering, React version compatibility, or run `npx react-compiler-healthcheck`."
       );
     }
   }
@@ -218,7 +204,7 @@ function buildFullMarkdown(
   // Suggested improvements
   const suggestionsSection = renderSuggestedImprovements(
     input.componentFindings,
-    sessionContext.reactCompilerEnabled,
+    sessionContext.reactCompilerEnabled
   );
   if (suggestionsSection) {
     lines.push(suggestionsSection);
@@ -228,7 +214,7 @@ function buildFullMarkdown(
   if (sessionContext.buildMode === "dev") {
     lines.push("");
     lines.push(
-      "> 📝 Dev mode renders are ~3× slower than production. Divide ms values by ~3 for a rough production estimate.",
+      "> 📝 Dev mode renders are ~3× slower than production. Divide ms values by ~3 for a rough production estimate."
     );
   }
 
@@ -239,21 +225,31 @@ function buildFullMarkdown(
   lines.push("");
   lines.push("Ask the user which path to take:");
   lines.push("");
-  lines.push("1. **Investigate further** — use query tools to drill into specific findings before making changes:");
+  lines.push(
+    "1. **Investigate further** — use query tools to drill into specific findings before making changes:"
+  );
   if (input.hotCommitSummaries.length > 0) {
     const worstCommit = input.hotCommitSummaries
       .filter((s) => !s.isMargin)
       .sort((a, b) => b.totalRenderMs - a.totalRenderMs)[0];
     if (worstCommit) {
-      lines.push(`   - \`profiler-commit-query\` mode=\`by_index\` commit_index=${worstCommit.commitIndex} — full breakdown of the slowest commit`);
+      lines.push(
+        `   - \`profiler-commit-query\` mode=\`by_index\` commit_index=${worstCommit.commitIndex} — full breakdown of the slowest commit`
+      );
     }
   }
   if (input.componentFindings.length > 0) {
     const topComp = input.componentFindings[0]!;
-    lines.push(`   - \`profiler-cpu-query\` mode=\`component_cpu\` component_name=\`${topComp.component}\` — CPU activity during this component's renders`);
-    lines.push(`   - \`profiler-cpu-query\` mode=\`call_tree\` — trace callers/callees of hot functions`);
+    lines.push(
+      `   - \`profiler-cpu-query\` mode=\`component_cpu\` component_name=\`${topComp.component}\` — CPU activity during this component's renders`
+    );
+    lines.push(
+      `   - \`profiler-cpu-query\` mode=\`call_tree\` — trace callers/callees of hot functions`
+    );
   }
-  lines.push("2. **Implement fixes** — apply changes to the top offenders identified above, then re-profile the same scenario to measure improvement.");
+  lines.push(
+    "2. **Implement fixes** — apply changes to the top offenders identified above, then re-profile the same scenario to measure improvement."
+  );
   lines.push("3. **Done for now** — save the report for reference.");
 
   return lines.join("\n");
@@ -263,12 +259,11 @@ function renderCommit(
   summary: HotCommitSummary,
   minTs: number,
   annotations: Array<{ offsetMs: number; label: string }>,
-  sessionContext: SessionContext,
+  sessionContext: SessionContext
 ): string[] {
   const relativeMs = summary.timestampMs - minTs;
   const relativeS = (relativeMs / 1000).toFixed(1);
-  const tierEmoji =
-    summary.tier === "hot" ? "🔴" : summary.tier === "warm" ? "🟡" : "🔵";
+  const tierEmoji = summary.tier === "hot" ? "🔴" : summary.tier === "warm" ? "🟡" : "🔵";
 
   let header: string;
   if (summary.isMargin) {
@@ -296,15 +291,13 @@ function renderCommit(
   // Header line: root cause for re-renders, initial render label for mount-dominated commits
   if (!summary.isMargin) {
     if (summary.isInitialRender) {
-      const mountCount = summary.components.filter(
-        (c) => c.isFirstMount,
-      ).length;
+      const mountCount = summary.components.filter((c) => c.isFirstMount).length;
       const totalMount =
         summary.totalComponentCount > summary.components.length
           ? summary.totalComponentCount
           : mountCount;
       lines.push(
-        `**Initial render:** ${totalMount} component${totalMount !== 1 ? "s" : ""} mounted`,
+        `**Initial render:** ${totalMount} component${totalMount !== 1 ? "s" : ""} mounted`
       );
       lines.push("");
       lines.push("Mount cascade:");
@@ -327,9 +320,7 @@ function renderCommit(
     } else {
       reasonStr = "";
     }
-    lines.push(
-      `- \`${comp.name}\`${countSuffix} ${comp.selfDurationMs}ms${reasonStr}`,
-    );
+    lines.push(`- \`${comp.name}\`${countSuffix} ${comp.selfDurationMs}ms${reasonStr}`);
   }
 
   // "... and N more" if component list was capped
@@ -360,37 +351,25 @@ function formatRootCauseLine(summary: HotCommitSummary): string {
     const detail = formatReasonDetail(
       summary.rootCauseReason,
       summary.rootCauseChangedProps,
-      summary.rootCauseChangedHookNames,
+      summary.rootCauseChangedHookNames
     );
     if (detail) parts.push(`— ${detail}`);
   }
   return parts.join(" ");
 }
 
-function formatReason(
-  reason: string,
-  props?: string[],
-  hookNames?: string[],
-): string {
+function formatReason(reason: string, props?: string[], hookNames?: string[]): string {
   const detail = formatReasonDetail(reason, props, hookNames);
   return detail ? detail : reason;
 }
 
-function formatReasonDetail(
-  reason: string,
-  props?: string[],
-  hookNames?: string[],
-): string {
+function formatReasonDetail(reason: string, props?: string[], hookNames?: string[]): string {
   switch (reason) {
     case "props":
-      return props && props.length > 0
-        ? `props: ${props.join(", ")}`
-        : "props changed";
+      return props && props.length > 0 ? `props: ${props.join(", ")}` : "props changed";
     case "hooks":
     case "state":
-      return hookNames && hookNames.length > 0
-        ? `${reason}: ${hookNames.join(", ")}`
-        : reason;
+      return hookNames && hookNames.length > 0 ? `${reason}: ${hookNames.join(", ")}` : reason;
     case "context":
       return "context changed";
     case "parent":
@@ -404,7 +383,7 @@ function formatReasonDetail(
 
 function findPriorAnnotation(
   annotations: Array<{ offsetMs: number; label: string }>,
-  relativeMs: number,
+  relativeMs: number
 ): { offsetMs: number; label: string } | undefined {
   // Annotations are sorted by offsetMs. Find the last one with offsetMs <= relativeMs.
   let result: { offsetMs: number; label: string } | undefined;
@@ -420,7 +399,7 @@ function findPriorAnnotation(
 
 function renderSuggestedImprovements(
   findings: ComponentFinding[],
-  compilerEnabled: boolean,
+  compilerEnabled: boolean
 ): string {
   if (findings.length === 0) return "";
 
@@ -435,20 +414,18 @@ function renderSuggestedImprovements(
     const loc = f.sourceLocation
       ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
       : null;
-    lines.push(
-      loc ? `### \`${f.component}\` — ${loc}` : `### \`${f.component}\``,
-    );
+    lines.push(loc ? `### \`${f.component}\` — ${loc}` : `### \`${f.component}\``);
     lines.push("");
 
     if (f.isCompilerOptimized) {
       lines.push(
         `> React Compiler has already optimized this component. ` +
-          `Re-render cost may originate at the callsite — check that props passed to \`${f.component}\` are stable (no inline objects/functions).`,
+          `Re-render cost may originate at the callsite — check that props passed to \`${f.component}\` are stable (no inline objects/functions).`
       );
     } else if (f.compilerBailoutSuspected) {
       lines.push(
         `⚠️ **React Compiler should have optimized this** — check for patterns that prevent compilation ` +
-          `(conditionally called hooks, mutations of props/state). Run \`npx react-compiler-healthcheck\`.`,
+          `(conditionally called hooks, mutations of props/state). Run \`npx react-compiler-healthcheck\`.`
       );
     } else {
       switch (f.dominantReason) {
@@ -460,7 +437,7 @@ function renderSuggestedImprovements(
           lines.push(
             `**Stabilize props:** ${propList}. ` +
               `Likely inline objects/functions at the callsite — extract to constants or wrap with \`useMemo\`/\`useCallback\`` +
-              `${compilerEnabled ? " (or fix the React Compiler bailout causing this)" : ""}.`,
+              `${compilerEnabled ? " (or fix the React Compiler bailout causing this)" : ""}.`
           );
           break;
         }
@@ -472,22 +449,22 @@ function renderSuggestedImprovements(
               : "unknown hooks";
           lines.push(
             `**Unstable hook deps:** ${hookList}. ` +
-              `Check dependency arrays in \`useEffect\`/\`useMemo\` — a dependency may be recreated on every render.`,
+              `Check dependency arrays in \`useEffect\`/\`useMemo\` — a dependency may be recreated on every render.`
           );
           break;
         }
         case "context":
           if (!f.sourceLocation) {
             lines.push(
-              `**Context re-renders** — source not resolved, suggestion is pattern-based. Check the Provider component for an unmemoized value object.`,
+              `**Context re-renders** — source not resolved, suggestion is pattern-based. Check the Provider component for an unmemoized value object.`
             );
           } else if (f.sourceLocation.hasUseMemo) {
             lines.push(
-              `**Context re-renders — \`useMemo\` already present.** The context value reference is still changing. Investigate the Provider component: check whether its own dependencies are stable, or whether the Provider itself is remounting.`,
+              `**Context re-renders — \`useMemo\` already present.** The context value reference is still changing. Investigate the Provider component: check whether its own dependencies are stable, or whether the Provider itself is remounting.`
             );
           } else {
             lines.push(
-              `**Context value recreated every render.** Memoize the value object at the Provider with \`useMemo\`.`,
+              `**Context value recreated every render.** Memoize the value object at the Provider with \`useMemo\`.`
             );
           }
           break;
@@ -495,19 +472,19 @@ function renderSuggestedImprovements(
           if (f.parentTrigger) {
             lines.push(
               `**Parent trigger:** \`${f.parentTrigger.component}\` is re-rendering unnecessarily. ` +
-                `Fix the root cause in the parent first; this component will stop re-rendering as a side effect.`,
+                `Fix the root cause in the parent first; this component will stop re-rendering as a side effect.`
             );
           } else {
             lines.push(
               compilerEnabled
                 ? `**Unnecessary parent re-render** — check for a React Compiler bailout in the parent, or wrap with \`React.memo\` if the parent can't be fixed.`
-                : `**Wrap with \`React.memo\`** to prevent re-renders driven by parent state/props that don't affect this component.`,
+                : `**Wrap with \`React.memo\`** to prevent re-renders driven by parent state/props that don't affect this component.`
             );
           }
           break;
         default:
           lines.push(
-            `**Review render triggers** for \`${f.component}\` — dominant reason: \`${f.dominantReason}\`.`,
+            `**Review render triggers** for \`${f.component}\` — dominant reason: \`${f.dominantReason}\`.`
           );
       }
     }

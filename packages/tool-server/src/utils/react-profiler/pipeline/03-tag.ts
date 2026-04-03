@@ -8,11 +8,7 @@
  * These flags drive filtering in Stage 4. Components tagged here are
  * excluded from findings and recorded in IssueReport.excluded.
  */
-import type {
-  EnrichOutput,
-  TagOutput,
-  TaggedComponent,
-} from "../types/pipeline";
+import type { EnrichOutput, TagOutput, TaggedComponent } from "../types/pipeline";
 
 const ANIMATED_PATTERN = /(Animated|Animation|Transition|Motion)/i;
 const RECYCLER_CHILD_PATTERN = /(ListItem|CellItem|Cell|Row|Item)$/i;
@@ -24,9 +20,7 @@ export function tag(input: EnrichOutput): TagOutput {
   const allNames = new Set(input.components.keys());
 
   // Check if any known recycler parent is in the active component set
-  const hasRecyclerParent = Array.from(allNames).some((n) =>
-    RECYCLER_PARENT_PATTERN.test(n),
-  );
+  const hasRecyclerParent = Array.from(allNames).some((n) => RECYCLER_PARENT_PATTERN.test(n));
 
   const components = new Map<string, TaggedComponent>();
 
@@ -35,8 +29,7 @@ export function tag(input: EnrichOutput): TagOutput {
 
     // Tag as recycler child if name matches the suffix pattern AND a recycler
     // parent is present in this recording (makes the heuristic more precise).
-    const isRecyclerChild =
-      RECYCLER_CHILD_PATTERN.test(name) && hasRecyclerParent;
+    const isRecyclerChild = RECYCLER_CHILD_PATTERN.test(name) && hasRecyclerParent;
 
     components.set(name, {
       ...comp,
