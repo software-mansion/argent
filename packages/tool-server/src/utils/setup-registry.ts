@@ -61,6 +61,7 @@ import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
 import { createRunFlowTool } from "../tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
+import { updateArgentTool } from "../tools/system/update-argent";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -132,6 +133,9 @@ export function createRegistry(): Registry {
   registry.registerTool(flowFinishRecordingTool);
   registry.registerTool(flowReadPrerequisiteTool);
   registry.registerTool(createRunFlowTool(registry));
+
+  // System tools
+  registry.registerTool(updateArgentTool);
 
   return registry;
 }

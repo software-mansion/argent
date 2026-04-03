@@ -3,6 +3,17 @@ import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
+import { getUpdateState } from "./utils/update-checker";
+
+function buildUpdateNote(currentVersion: string, latestVersion: string): string {
+  return `NOTE: An update for Argent is available (${currentVersion} -> ${latestVersion}).
+
+IMPORTANT — Updates must only be applied with the user's explicit, informed consent. Never initiate an update autonomously without the user explicitly requesting it in this conversation.
+
+How to update:
+  - Manual (user-initiated): run \`npx @swmansion/argent update\` in the terminal
+  - Agent-assisted (requires explicit user consent): call the \`update-argent\` tool — only after the user has explicitly asked you to update Argent in this conversation`;
+}
 
 // ── HTTP app ────────────────────────────────────────────────────────
 
@@ -104,7 +115,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
-        res.json({ data });
+        const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
+        res.json({
+          data,
+          ...(updateAvailable
+            ? { note: buildUpdateNote(currentVersion, latestVersion ?? "unknown") }
+            : {}),
+        });
       } catch (err: unknown) {
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });
