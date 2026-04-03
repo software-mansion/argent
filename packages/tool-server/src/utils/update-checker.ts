@@ -21,10 +21,21 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
+let suppressUntil = 0;
 
 /** Returns the current update state (read-only snapshot). */
 export function getUpdateState(): Readonly<UpdateState> {
   return { ...state };
+}
+
+/** Returns true if the update notification is currently suppressed. */
+export function isUpdateNoteSuppressed(): boolean {
+  return Date.now() < suppressUntil;
+}
+
+/** Suppress update notifications for the given duration (milliseconds). */
+export function suppressUpdateNote(durationMs: number): void {
+  suppressUntil = Date.now() + durationMs;
 }
 
 /**

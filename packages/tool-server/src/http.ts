@@ -3,7 +3,13 @@ import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
-import { getUpdateState } from "./utils/update-checker";
+import {
+  getUpdateState,
+  isUpdateNoteSuppressed,
+  suppressUpdateNote,
+} from "./utils/update-checker";
+
+const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
 function buildUpdateNote(currentVersion: string, latestVersion: string): string {
   return `NOTE: An update for Argent is available (${currentVersion} -> ${latestVersion}).
@@ -12,7 +18,10 @@ IMPORTANT — Updates must only be applied with the user's explicit, informed co
 
 How to update:
   - Manual (user-initiated): run \`npx @swmansion/argent update\` in the terminal
-  - Agent-assisted (requires explicit user consent): call the \`update-argent\` tool — only after the user has explicitly asked you to update Argent in this conversation`;
+  - Agent-assisted (requires explicit user consent): call the \`update-argent\` tool — only after the user has explicitly asked you to update Argent in this conversation
+  - To postpone this reminder: call the \`dismiss-update\` tool with the number of hours to suppress it
+
+ACTION REQUIRED: Save a note (via TODO, task list, or memory) that an Argent update to v${latestVersion} is available so you can remind the user about it later. This notification will not repeat for the next 30 minutes.`;
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -116,9 +125,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           signal: controller.signal,
         });
         const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
+        const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
+        if (shouldNotify) {
+          suppressUpdateNote(AUTO_SUPPRESS_MS);
+        }
         res.json({
           data,
-          ...(updateAvailable
+          ...(shouldNotify
             ? { note: buildUpdateNote(currentVersion, latestVersion ?? "unknown") }
             : {}),
         });
