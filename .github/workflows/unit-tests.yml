@@ -27,8 +27,10 @@ jobs:
       - name: Fix rollup native bindings
         run: npm install @rollup/rollup-linux-x64-gnu --no-save
 
-      - name: Build registry
-        run: npm run build -w packages/registry
+      - name: Build workspace dependencies
+        run: |
+          npm run build -w packages/registry
+          npm run build -w packages/native-devtools-ios
 
       - name: Run tests
         run: npm test --workspaces --if-present
