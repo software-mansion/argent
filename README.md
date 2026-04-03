@@ -120,3 +120,25 @@ curl -X POST http://localhost:3000/sessions/<id>/input/touch \
 ## Further reading
 
 See [`docs/reference.md`](docs/reference.md) for a detailed breakdown of the registry, blueprints, services, tools, and how they all connect.
+
+## License
+
+The "Argent" project utilizes a mixed licensing model to provide open-source accessibility while protecting specific proprietary binary components.
+
+### Source Code
+
+The vast majority of the source code (business logic, scripts, interfaces, etc.) is released under the **Apache License 2.0**. You can find the full text of the license in the <LICENSE.TXT> file. You are free to use, modify, and distribute this portion of the project in accordance with the terms of the Apache 2.0 license.
+
+### Proprietary Binary Components
+
+Certain elements of the project are provided exclusively as compiled binary files (typically located in the `/bin` or `/libs` directories).
+
+- **Files:**
+  - `packages/mcp/bin/simulator-server`
+  - `packages/native-devtools-ios/dylibs/libInjectionBootstrap.dylib`
+  - `packages/native-devtools-ios/dylibs/libKeyboardPatch.dylib`
+  - `packages/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib`
+- **Status:** These files are **NOT** Open Source software.
+- **Terms:** They are the intellectual property of Software Mansion S.A. and are licensed solely for use in conjunction with this project. Decompiling, reverse engineering, disassembling, or redistributing these binary files outside the scope of this project without explicit written permission is strictly prohibited.
+
+By using or contributing to this project, you acknowledge and agree to this mixed licensing structure.

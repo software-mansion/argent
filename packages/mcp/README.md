@@ -1,0 +1,100 @@
+# Argent
+
+MCP server for iOS Simulator control — tap, swipe, screenshot, profile, and debug from your AI assistant.
+
+## Requirements
+
+- macOS with Xcode installed
+- Node.js 18 or later
+- An iOS Simulator (booted via Xcode or `xcrun simctl`)
+
+## Installation
+
+Argent is distributed as `@software-mansion/argent` via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry).
+
+### 1. Authenticate with GitHub Packages
+
+Add the following to your global `~/.npmrc` (create it if it does not exist), replacing `<GITHUB_PAT>` with a Personal Access Token that has the `read:packages` scope:
+
+```ini
+@software-mansion:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=<GITHUB_PAT>
+```
+
+> If your organisation enforces SSO, authorise the token for `software-mansion` after creating it.
+
+### 2. Install and initialise
+
+```bash
+npx @software-mansion/argent init
+```
+
+This installs the package globally, registers the MCP server with your editor, and copies skills, rules, and agents into your workspace.
+
+Alternatively:
+
+```bash
+npm i -g @software-mansion/argent
+argent init
+```
+
+### Installing from a tarball
+
+If you have a pre-built `.tgz` (e.g. from CI or `npm pack`), no registry auth is needed:
+
+```bash
+npx @software-mansion/argent init --from ./software-mansion-argent-<version>.tgz
+```
+
+## Supported editors
+
+`argent init` auto-detects and configures the MCP server for:
+
+- Claude Code
+- Cursor
+- VS Code
+- Windsurf
+- Zed
+- Gemini CLI
+- Codex CLI
+
+## CLI reference
+
+| Command         | Description                                                                          |
+| --------------- | ------------------------------------------------------------------------------------ |
+| `argent init`   | Install globally and configure MCP server in the current workspace                   |
+| `argent update` | Pull the latest version and refresh workspace configuration files                    |
+| `argent remove` | Unregister the MCP server and uninstall (`--prune` also removes skills/rules/agents) |
+| `argent mcp`    | Start the MCP stdio server directly (used internally by editors)                     |
+
+## Accessibility permission (`describe` tool)
+
+The `describe` tool reads the iOS Simulator's UI accessibility tree. On first use, macOS will prompt you to grant **Accessibility permission** to the `simulator-server` binary. Argent automatically opens System Settings and reveals the binary in Finder. To grant access:
+
+1. In **System Settings > Privacy & Security > Accessibility**, click **+**.
+2. Navigate to the `simulator-server` binary shown in Finder (or use **Cmd+Shift+G** to paste the path).
+3. Toggle the switch **ON** for `simulator-server`.
+
+The tool works immediately after granting permission — no restart needed.
+
+## License
+
+The "Argent" project utilizes a mixed licensing model to provide open-source accessibility while protecting specific proprietary binary components.
+
+### Source Code
+
+The vast majority of the source code (business logic, scripts, interfaces, etc.) is released under the **Apache License 2.0**. You can find the full text of the license in the <LICENSE> file. You are free to use, modify, and distribute this portion of the project in accordance with the terms of the Apache 2.0 license.
+
+### Proprietary Binary Components
+
+Certain elements of the project are provided exclusively as compiled binary files (typically located in the `/bin` or `/libs` directories).
+
+- **Files:**
+  - `bin/simulator-server`
+  - `node_modules/@argent/native-devtools-ios/dylibs/libInjectionBootstrap.dylib`
+  - `node_modules/@argent/native-devtools-ios/dylibs/libKeyboardPatch.dylib`
+  - `node_modules/@argent/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib`
+- **Status:** These files are **NOT** Open Source software.
+- **Terms:** They are the intellectual property of Software Mansion S.A. and are licensed solely for use in conjunction with this project. Decompiling, reverse engineering, disassembling, or redistributing these binary files outside the scope of this project without explicit written permission is strictly prohibited.
+
+By using or contributing to this project, you acknowledge and agree to this mixed licensing structure.
