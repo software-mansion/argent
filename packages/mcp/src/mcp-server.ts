@@ -82,7 +82,7 @@ export async function startMcpServer(): Promise<void> {
   async function callTool(
     name: string,
     args: unknown
-  ): Promise<{ result: unknown; outputHint?: string }> {
+  ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, {
@@ -94,9 +94,10 @@ export async function startMcpServer(): Promise<void> {
       data?: unknown;
       error?: string;
       message?: string;
+      note?: string;
     };
     if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
-    return { result: json.data, outputHint: meta?.outputHint };
+    return { result: json.data, outputHint: meta?.outputHint, note: json.note };
   }
 
   const server = new Server(
@@ -136,7 +137,14 @@ export async function startMcpServer(): Promise<void> {
       args: params.arguments,
     });
     try {
+<<<<<<< HEAD
       const { result, outputHint } = await callTool(params.name, params.arguments);
+=======
+      const { result, outputHint, note } = await callTool(
+        params.name,
+        params.arguments,
+      );
+>>>>>>> 322a369 (feat: add update notification and update-argent tool)
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",
@@ -180,6 +188,10 @@ export async function startMcpServer(): Promise<void> {
             },
           ];
         }
+      }
+
+      if (note) {
+        content = [{ type: "text" as const, text: note }, ...content];
       }
 
       return { content };

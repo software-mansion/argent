@@ -160,4 +160,109 @@ describe("update-checker", () => {
 
     handle.dispose();
   });
+
+  // ── Semver comparison ─────────────────────────────────────────────
+
+  it("does not flag update when running a newer local version", async () => {
+    const mockGet = vi.mocked(https.get);
+    // npm returns 0.1.0 but local is 0.3.3 — local is ahead
+    mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
+      const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
+      callback(createMockResponse(200, JSON.stringify({ version: "0.1.0" })));
+      return new EventEmitter() as ReturnType<typeof https.get>;
+    });
+
+    const handle = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const state = getUpdateState();
+    expect(state.updateAvailable).toBe(false);
+    expect(state.latestVersion).toBe("0.1.0");
+
+    handle.dispose();
+  });
+
+  it("does not flag update for pre-release version strings", async () => {
+    const mockGet = vi.mocked(https.get);
+    // npm returns a pre-release tag — non-semver, should be treated safely
+    mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
+      const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
+      callback(
+        createMockResponse(200, JSON.stringify({ version: "1.0.0-beta.1" })),
+      );
+      return new EventEmitter() as ReturnType<typeof https.get>;
+    });
+
+    const handle = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const state = getUpdateState();
+    expect(state.updateAvailable).toBe(false);
+
+    handle.dispose();
+  });
+
+  // ── Response stream error ─────────────────────────────────────────
+
+  it("handles response error event without crashing", async () => {
+    const mockGet = vi.mocked(https.get);
+    mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
+      const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
+      const res = new EventEmitter() as EventEmitter & {
+        statusCode: number;
+        setEncoding: ReturnType<typeof vi.fn>;
+        resume: ReturnType<typeof vi.fn>;
+      };
+      res.statusCode = 200;
+      res.setEncoding = vi.fn();
+      res.resume = vi.fn();
+
+      // Simulate a connection reset mid-stream
+      process.nextTick(() => {
+        res.emit("data", '{"ver');
+        res.emit("error", new Error("ECONNRESET"));
+      });
+
+      callback(res);
+      return new EventEmitter() as ReturnType<typeof https.get>;
+    });
+
+    const handle = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const state = getUpdateState();
+    expect(state.updateAvailable).toBe(false);
+    expect(state.latestVersion).toBeNull();
+
+    handle.dispose();
+  });
+
+  // ── Double start guard ────────────────────────────────────────────
+
+  it("clears previous interval when startUpdateChecker is called twice", async () => {
+    const mockGet = vi.mocked(https.get);
+    let callCount = 0;
+    mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
+      callCount++;
+      const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
+      callback(createMockResponse(200, JSON.stringify({ version: "99.0.0" })));
+      return new EventEmitter() as ReturnType<typeof https.get>;
+    });
+
+    const handle1 = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callCount).toBe(1);
+
+    // Start a second checker — should clear the first interval.
+    const handle2 = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(callCount).toBe(2);
+
+    // Advance 1 hour — should trigger exactly 1 check (from handle2), not 2.
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(callCount).toBe(3);
+
+    handle1.dispose();
+    handle2.dispose();
+  });
 });
