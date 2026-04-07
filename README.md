@@ -10,8 +10,6 @@ Argent is an **agentic toolkit** that gives your AI assistant direct access to i
 npx @swmansion/argent install
 ```
 
----
-
 ## Capabilities
 
 - **Autonomous iOS development** - Allow your agent to work with iOS apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
@@ -58,7 +56,6 @@ npm install -g @swmansion/argent
 argent init
 ```
 
----
 
 ## CLI Reference
 
@@ -68,7 +65,6 @@ argent init
 | `argent update` | Pull the latest version and refresh workspace configuration |
 | `argent remove` | Unregister the MCP server and uninstall the package         |
 
----
 
 ## Supported Editors
 
@@ -84,7 +80,6 @@ argent init
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
 
----
 
 ## License
 
@@ -96,7 +91,6 @@ Argent uses a mixed licensing model.
 
 By using argent you acknowledge and agree to this structure.
 
----
 
 ## Argent is created by Software Mansion
 

@@ -7,11 +7,9 @@
 Argent is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
-npx @swmansion/argent init
+npx @swmansion/argent install
 ```
 
-
----
 
 ## Capabilities
 
@@ -44,7 +42,7 @@ npx @swmansion/argent init
 From your project root:
 
 ```bash
-npx @swmansion/argent init
+npx @swmansion/argent install
 ```
 
 This command triggers an installation wizard which:
@@ -60,7 +58,6 @@ npm install -g @swmansion/argent
 argent init
 ```
 
----
 
 ## CLI Reference
 
@@ -70,7 +67,6 @@ argent init
 | `argent update` | Pull the latest version and refresh workspace configuration |
 | `argent remove` | Unregister the MCP server and uninstall the package         |
 
----
 
 ## Supported Editors
 
@@ -86,7 +82,6 @@ argent init
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
 
----
 
 ## License
 
@@ -98,7 +93,6 @@ Argent uses a mixed licensing model.
 
 By using argent you acknowledge and agree to this structure.
 
----
 
 ## Argent is created by Software Mansion
 
