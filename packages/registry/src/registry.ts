@@ -8,7 +8,6 @@ import {
   ToolRecord,
   RegistryEvents,
   URN,
-  ServiceRef,
   InvokeToolOptions,
 } from "./types";
 import {
