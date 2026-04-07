@@ -12,12 +12,6 @@ npx @swmansion/argent install
 
 ---
 
-<p align="center">
-  <img width="80%" src="assets/placeholder.gif" alt="argent banner" width="100%" />
-</p>
-
----
-
 ## Capabilities
 
 - **Autonomous iOS development** - Allow your agent to work with iOS apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
@@ -27,6 +21,12 @@ npx @swmansion/argent install
 - **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any iOS app - no extra setup required.
 
 > **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
+
+
+<br/>
+<p align="center">
+  <img width="80%" src="assets/placeholder.gif" alt="argent banner" width="100%" />
+</p>
 
 ---
 

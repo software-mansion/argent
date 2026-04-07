@@ -10,11 +10,6 @@ Argent is an **agentic toolkit** that gives your AI assistant direct access to i
 npx @swmansion/argent init
 ```
 
----
-
-<p align="center">
-  <img width="80%" src="../../assets/placeholder.gif" alt="argent banner" width="100%" />
-</p>
 
 ---
 
@@ -27,6 +22,13 @@ npx @swmansion/argent init
 - **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any iOS app - no extra setup required.
 
 > **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
+
+
+<br/>
+<p align="center">
+  <img width="80%" src="../../assets/placeholder.gif" alt="argent banner" width="100%" />
+</p>
+
 
 ---
 
