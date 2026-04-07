@@ -79,10 +79,17 @@ export async function startMcpServer(): Promise<void> {
     return json.tools;
   }
 
+  interface ToolAPIResponse {
+    data?: unknown;
+    error?: string;
+    message?: string;
+    note?: string;
+  }
+
   async function callTool(
     name: string,
     args: unknown
-  ): Promise<{ result: unknown; outputHint?: string }> {
+  ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, {
@@ -90,13 +97,12 @@ export async function startMcpServer(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args ?? {}),
     });
-    const json = (await res.json()) as {
-      data?: unknown;
-      error?: string;
-      message?: string;
-    };
+
+    const json = (await res.json()) as ToolAPIResponse;
+
     if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
-    return { result: json.data, outputHint: meta?.outputHint };
+
+    return { result: json.data, outputHint: meta?.outputHint, note: json.note };
   }
 
   const server = new Server(
@@ -136,7 +142,8 @@ export async function startMcpServer(): Promise<void> {
       args: params.arguments,
     });
     try {
-      const { result, outputHint } = await callTool(params.name, params.arguments);
+      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",
@@ -180,6 +187,10 @@ export async function startMcpServer(): Promise<void> {
             },
           ];
         }
+      }
+
+      if (note) {
+        content = [{ type: "text" as const, text: note }, ...content];
       }
 
       return { content };

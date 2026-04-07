@@ -9,10 +9,10 @@
  *   1. Builds native devtools dylibs (libInjectionBootstrap, libNativeDevtoolsIos, libKeyboardPatch)
  *   2. Builds MCP TypeScript (tsc only, no esbuild tool-server bundle)
  *   3. Sets up packages/mcp/bin/ and packages/mcp/dist/ for local use
- *   4. Patches ~/.claude.json to point the argent MCP at the local dist
+ *   4. Patches supported editor MCP configs to point argent at the local dist
  *   5. Starts the tool-server from source via ts-node (no build needed)
  *   6. Writes ~/.argent/tool-server.json so the local MCP picks it up
- *   7. On exit: restores ~/.claude.json and stops the tool-server
+ *   7. On exit: restores patched editor configs and stops the tool-server
  *
  * Usage:
  *   npm run dev
@@ -31,6 +31,8 @@ const NATIVE_DEVTOOLS_PKG = path.join(ROOT, "packages", "native-devtools-ios");
 const STATE_DIR = path.join(os.homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const CLAUDE_JSON = path.join(os.homedir(), ".claude.json");
+const CURSOR_DIR = path.join(os.homedir(), ".cursor");
+const CURSOR_MCP_JSON = path.join(CURSOR_DIR, "mcp.json");
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -70,16 +72,29 @@ async function waitForHttp(url, timeoutMs = 20_000) {
 
 const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
 const DYLIBS_EXIST = fs.existsSync(path.join(DYLIBS_DIR, "libNativeDevtoolsIos.dylib"));
+const PRIVATE_NATIVE_DEVTOOLS_SRC = path.join(
+  ROOT,
+  "packages",
+  "argent-private",
+  "packages",
+  "native-devtools-ios",
+  "Sources",
+  "NativeDevtoolsIos"
+);
 
 // Try to init the submodule and rebuild. Failure is non-fatal if pre-built
 // dylibs are already present — developers without argent-private access can
 // still work on Argent using the committed binaries.
 let submoduleReady = false;
 try {
-  execSync("git submodule update --init packages/argent-private", {
-    cwd: ROOT,
-    stdio: "pipe",
-  });
+  // Preserve an existing argent-private checkout so local branch switches
+  // are not reset back to the superproject's recorded gitlink on every dev run.
+  if (!fs.existsSync(PRIVATE_NATIVE_DEVTOOLS_SRC)) {
+    execSync("git submodule update --init packages/argent-private", {
+      cwd: ROOT,
+      stdio: "pipe",
+    });
+  }
   submoduleReady = true;
 } catch {
   if (DYLIBS_EXIST) {
@@ -151,13 +166,42 @@ if (!fs.existsSync(STUB)) {
   );
 }
 
-// ── Step 4: Patch ~/.claude.json to use local MCP dist ───────────────────────
+function restoreMcpEntry(configPath, originalEntry, existedBefore) {
+  const config = readJson(configPath);
+  if (!config.mcpServers) config.mcpServers = {};
+
+  if (originalEntry) {
+    config.mcpServers.argent = originalEntry;
+  } else {
+    delete config.mcpServers.argent;
+  }
+
+  if (config.mcpServers && Object.keys(config.mcpServers).length === 0) {
+    delete config.mcpServers;
+  }
+
+  if (!existedBefore && Object.keys(config).length === 0) {
+    try {
+      fs.unlinkSync(configPath);
+    } catch {}
+    return;
+  }
+
+  writeJson(configPath, config);
+}
+
+// ── Step 4: Patch editor MCP configs to use local MCP dist ───────────────────
 
 const LOCAL_MCP_ENTRY = path.join(MCP_PKG, "dist", "cli.js");
 const LOG_FILE = path.join(STATE_DIR, "mcp-calls.log");
 
+const claudeConfigExists = fs.existsSync(CLAUDE_JSON);
 const claudeConfig = readJson(CLAUDE_JSON);
 const originalArgentEntry = claudeConfig?.mcpServers?.argent ?? null;
+const shouldPatchCursor = fs.existsSync(CURSOR_DIR);
+const cursorConfigExists = fs.existsSync(CURSOR_MCP_JSON);
+const cursorConfig = shouldPatchCursor ? readJson(CURSOR_MCP_JSON) : {};
+const originalCursorArgentEntry = cursorConfig?.mcpServers?.argent ?? null;
 
 const devMcpEntry = {
   type: "stdio",
@@ -169,7 +213,20 @@ const devMcpEntry = {
 if (!claudeConfig.mcpServers) claudeConfig.mcpServers = {};
 claudeConfig.mcpServers.argent = devMcpEntry;
 writeJson(CLAUDE_JSON, claudeConfig);
-console.log(`✓ Patched ~/.claude.json → node ${LOCAL_MCP_ENTRY} mcp\n`);
+console.log(`✓ Patched ~/.claude.json → node ${LOCAL_MCP_ENTRY} mcp`);
+
+if (shouldPatchCursor) {
+  if (!cursorConfig.mcpServers) cursorConfig.mcpServers = {};
+  cursorConfig.mcpServers.argent = {
+    command: "node",
+    args: [LOCAL_MCP_ENTRY, "mcp"],
+    env: { ARGENT_MCP_LOG: LOG_FILE },
+  };
+  writeJson(CURSOR_MCP_JSON, cursorConfig);
+  console.log(`✓ Patched ~/.cursor/mcp.json → node ${LOCAL_MCP_ENTRY} mcp\n`);
+} else {
+  console.log("• Skipped Cursor patch (no ~/.cursor directory found)\n");
+}
 
 // ── Cleanup on exit ───────────────────────────────────────────────────────────
 
@@ -186,17 +243,13 @@ function cleanup() {
     fs.unlinkSync(STATE_FILE);
   } catch {}
 
-  // Restore ~/.claude.json
-  const config = readJson(CLAUDE_JSON);
-  if (config.mcpServers) {
-    if (originalArgentEntry) {
-      config.mcpServers.argent = originalArgentEntry;
-    } else {
-      delete config.mcpServers.argent;
-    }
-  }
-  writeJson(CLAUDE_JSON, config);
+  // Restore editor configs
+  restoreMcpEntry(CLAUDE_JSON, originalArgentEntry, claudeConfigExists);
   console.log("✓ Restored ~/.claude.json");
+  if (shouldPatchCursor) {
+    restoreMcpEntry(CURSOR_MCP_JSON, originalCursorArgentEntry, cursorConfigExists);
+    console.log("✓ Restored ~/.cursor/mcp.json");
+  }
   console.log("Done.");
 }
 
@@ -274,7 +327,7 @@ async function main() {
   MCP:         ${LOCAL_MCP_ENTRY}
   Logs:        ~/.argent/tool-server.log
 
-  Start a new Claude Code session to pick up the local MCP.
+  Start a new Claude Code or Cursor session to pick up the local MCP.
 
   After tool-server code changes → Ctrl+C and re-run npm run dev
   After MCP code changes         → re-run npm run dev (rebuilds MCP automatically)

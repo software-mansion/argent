@@ -11,20 +11,25 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 type Result = {
   envSetup: boolean;
+  appRunning: boolean;
   connected: boolean;
   requiresRestart: boolean;
+  nextLaunchWillBeInjected: boolean;
 };
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
-  description: `Check whether native devtools dylibs are injected into a specific running app on the simulator.
+  description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
 
 Returns:
 - envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
+- appRunning: the target bundle currently has a running UIKit process on the simulator
 - connected: the dylib is active in the current running process for this bundleId
-- requiresRestart: the app must be restarted before native devtools features are available
+- requiresRestart: the app is already running but its current process does not have native devtools injected
+- nextLaunchWillBeInjected: if you launch this bundle now, native devtools env setup is already in place
 
-Call this before using native-view-hierarchy or native-network-logs.
+Call this before using app-scoped native hierarchy tools or native-network-logs.
+If appRunning is false and nextLaunchWillBeInjected is true: use launch-app normally.
 If requiresRestart is true: call restart-app, then proceed with the native feature.`,
   zodSchema,
   services: (params) => ({
@@ -32,11 +37,16 @@ If requiresRestart is true: call restart-app, then proceed with the native featu
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
-    const requiresRestart = await api.requiresAppRestart(params.bundleId);
+    await api.ensureEnvReady();
+    const appRunning = await api.isAppRunning(params.bundleId);
+    const connected = api.isConnected(params.bundleId);
+    const envSetup = api.isEnvSetup();
     return {
-      envSetup: api.isEnvSetup(),
-      connected: api.isConnected(params.bundleId),
-      requiresRestart,
+      envSetup,
+      appRunning,
+      connected,
+      requiresRestart: appRunning && !connected,
+      nextLaunchWillBeInjected: envSetup,
     };
   },
 };

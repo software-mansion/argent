@@ -63,11 +63,36 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
-| App type     | Discovery tool            | What it returns                                                                       |
-| ------------ | ------------------------- | ------------------------------------------------------------------------------------- |
-| Any iOS app  | `describe`                | iOS accessibility element tree with normalized frame coordinates                      |
-| React Native | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                         |
-| Fallback     | `screenshot`              | when cannot determine using the above methods, use screenshot as a heuristic fallback |
+| App type              | Discovery tool            | What it returns                                                                                                                           |
+| --------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Target app discovery  | `describe`                | Accessibility element tree with normalized frame coordinates for a native-devtools-connected app; may use explicit `bundleId` when needed |
+| React Native          | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                             |
+| App-scoped native     | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                      |
+| Final visual fallback | `screenshot`              | Use only to inspect visible state when discovery tools cannot inspect the current UI. Do not derive tap coordinates from it               |
+
+Point follow-up native diagnostics after you already have a candidate point:
+
+- `native-user-interactable-view-at-point`: deepest native view that would receive touch at a known raw iOS point; requires `bundleId`
+- `native-view-at-point`: deepest visible native view at a known raw iOS point; requires `bundleId`
+
+### If `describe` Fails
+
+Read the exact error and choose the action that matches it:
+
+- Error says no native-devtools-connected apps are available:
+  launch or restart the app you want to inspect, then retry `describe`.
+- Error says `restart-app`, `restart_required`, or native devtools are not injected:
+  use `restart-app` with the same `bundleId`, then retry `describe` or `native-describe-screen`.
+- Error says to provide `bundleId`, or auto-targeting cannot identify a unique foreground app:
+  retry with explicit `bundleId` for the app you intend to inspect.
+- Error mentions `device_window_not_found`, Home screen, or system UI cannot be inspected automatically:
+  use `screenshot` to inspect the visible Home/system UI. If you actually want a connected background app instead, retry `describe` with explicit `bundleId`.
+- `describe` succeeds but is not detailed enough for a React Native app:
+  use `debugger-component-tree` next.
+- You already know the target app and want lower-level native inspection:
+  use `native-describe-screen` with `bundleId`.
+- You already have a candidate point and want to confirm what would actually receive touch:
+  use `native-user-interactable-view-at-point`. Use `native-view-at-point` when you want the visually deepest view instead of the hit-test target.
 
 ## 6. Tool Usage
 
