@@ -1,5 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { execSync, spawn } from "node:child_process";
 import {
   detectAdapters,
@@ -261,6 +263,9 @@ export async function init(args: string[]): Promise<void> {
         placeholder: process.cwd(),
         validate(value) {
           if (!value?.trim()) return "Path cannot be empty.";
+          const resolved = resolve(value.trim());
+          if (!existsSync(resolved))
+            return `Path does not exist: ${resolved}. Please verify and enter a valid path.`;
         },
       });
 
