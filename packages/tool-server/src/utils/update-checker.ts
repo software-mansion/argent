@@ -1,7 +1,7 @@
 import https from "node:https";
 import { version as currentVersion } from "../../package.json";
 
-const PACKAGE_NAME = "@software-mansion/argent";
+const PACKAGE_NAME = "@swmansion/argent";
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const REQUEST_TIMEOUT_MS = 10_000;
 
