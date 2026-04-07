@@ -126,9 +126,7 @@ describe("CDPClient", () => {
       );
     });
 
-    await expect(client.send("Nonexistent.method")).rejects.toThrow(
-      "Method not found"
-    );
+    await expect(client.send("Nonexistent.method")).rejects.toThrow("Method not found");
     await client.disconnect();
   });
 
@@ -161,7 +159,7 @@ describe("CDPClient", () => {
             JSON.stringify({
               method: "Runtime.bindingCalled",
               params: {
-                name: "__radon_lite_callback",
+                name: "__argent_callback",
                 payload: JSON.stringify({
                   requestId: "req-123",
                   type: "inspect_result",
@@ -174,11 +172,7 @@ describe("CDPClient", () => {
       }
     });
 
-    const result = await client.evaluateWithBinding(
-      "someScript()",
-      "req-123",
-      { timeout: 5000 }
-    );
+    const result = await client.evaluateWithBinding("someScript()", "req-123", { timeout: 5000 });
 
     expect(result.requestId).toBe("req-123");
     expect(result.type).toBe("inspect_result");

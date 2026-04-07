@@ -1,14 +1,14 @@
-import { TypedEventEmitter } from './event-emitter';
-import { z } from 'zod';
+import { TypedEventEmitter } from "./event-emitter";
+import { z } from "zod";
 
 // ── Service Types ──
 
 export enum ServiceState {
-  IDLE = 'IDLE',
-  STARTING = 'STARTING',
-  RUNNING = 'RUNNING',
-  TERMINATING = 'TERMINATING',
-  ERROR = 'ERROR',
+  IDLE = "IDLE",
+  STARTING = "STARTING",
+  RUNNING = "RUNNING",
+  TERMINATING = "TERMINATING",
+  ERROR = "ERROR",
 }
 
 export type ServiceEvents = {
@@ -19,13 +19,6 @@ export interface ServiceInstance<T = unknown> {
   api: T;
   dispose(): Promise<void>;
   events: TypedEventEmitter<ServiceEvents>;
-}
-
-export interface ServiceDefinition<T = unknown> {
-  id: string;
-  description?: string;
-  dependencies?: string[];
-  factory(deps: Record<string, unknown>): Promise<ServiceInstance<T>>;
 }
 
 /** URN (Uniform Resource Name) for parameterized service instances, e.g. "sim-server:device1". */
@@ -60,9 +53,7 @@ export interface ServiceNode<T = unknown> {
 }
 
 /** Per-service reference: URN string or URN + resolve options for factory. */
-export type ServiceRef =
-  | string
-  | { urn: string; options?: Record<string, unknown> };
+export type ServiceRef = string | { urn: string; options?: Record<string, unknown> };
 
 /** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
@@ -96,11 +87,7 @@ export interface ToolRecord {
 // ── Registry Events ──
 
 export type RegistryEvents = {
-  serviceStateChange: (
-    serviceId: string,
-    from: ServiceState,
-    to: ServiceState
-  ) => void;
+  serviceStateChange: (serviceId: string, from: ServiceState, to: ServiceState) => void;
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;

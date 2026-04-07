@@ -4,14 +4,12 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow, type FlowStep } from "./flow-utils";
 
 const zodSchema = z.object({
-  name: z
-    .string()
-    .describe('Name of the flow to run (e.g. "settings-explore")'),
+  name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()
     .describe(
-      "Set to true to confirm the execution prerequisite has been met. Required when the flow defines an executionPrerequisite.",
+      "Set to true to confirm the execution prerequisite has been met. Required when the flow defines an executionPrerequisite."
     ),
 });
 
@@ -33,16 +31,15 @@ export type FlowPrerequisiteNotice = {
 };
 
 export function createRunFlowTool(
-  registry: Registry,
-): ToolDefinition<
-  z.infer<typeof zodSchema>,
-  FlowRunResult | FlowPrerequisiteNotice
-> {
+  registry: Registry
+): ToolDefinition<z.infer<typeof zodSchema>, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "flow-execute",
     description: `Run a saved flow from the .argent/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
 echo steps print a message. Returns the result of every step, including images.
+Use when you want to replay a recorded flow or run a scripted sequence of simulator actions.
+Fails if the flow file does not exist or a step tool raises an error (execution stops at that step).
 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not
 set to true, the tool returns a notice with the prerequisite instead of running.

@@ -1,8 +1,4 @@
-import {
-  TypedEventEmitter,
-  type ServiceBlueprint,
-  type ServiceEvents,
-} from "@argent/registry";
+import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 
@@ -10,37 +6,18 @@ export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
 
 /**
  * Injected once on connect — tracks fiber root commits for get_react_renders
- * and get_fiber_tree. Idempotent (guard via __rn_mcp_installed__).
+ * and get_fiber_tree. Idempotent (guard via __argent_profiler_installed__).
  */
 export const FIBER_ROOT_TRACKER_SCRIPT = `
 (function() {
   var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook || hook.__rn_mcp_installed__) return;
-  hook.__rn_mcp_installed__ = true;
-  hook.__rn_mcp_roots__ = new Set();
+  if (!hook || hook.__argent_profiler_installed__) return;
+  hook.__argent_profiler_installed__ = true;
+  hook.__argent_roots__ = new Set();
 
   var orig = hook.onCommitFiberRoot;
   hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
-    hook.__rn_mcp_roots__.add(root);
-
-    try {
-      var stats = [];
-      var stack = root && root.current ? [root.current] : [];
-      while (stack.length > 0) {
-        var fiber = stack.pop();
-        if (!fiber) continue;
-        var name = (fiber.type && (fiber.type.displayName || fiber.type.name)) || null;
-        if (name && typeof fiber.actualDuration === 'number' && fiber.actualDuration > 0) {
-          stats.push({ c: name, d: Math.round(fiber.actualDuration * 100) / 100 });
-        }
-        if (fiber.sibling) stack.push(fiber.sibling);
-        if (fiber.child) stack.push(fiber.child);
-      }
-      if (stats.length > 0) {
-        console.log('[rn-mcp:render]', JSON.stringify(stats));
-      }
-    } catch(e) {}
-
+    hook.__argent_roots__.add(root);
     if (typeof orig === 'function') orig.call(this, rendererID, root, priorityLevel);
   };
 })();
@@ -79,10 +56,7 @@ export interface ReactProfilerSessionApi {
   disposeSession: () => void;
 }
 
-export const reactProfilerSessionBlueprint: ServiceBlueprint<
-  ReactProfilerSessionApi,
-  string
-> = {
+export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessionApi, string> = {
   namespace: REACT_PROFILER_SESSION_NAMESPACE,
 
   getURN(port: string) {
@@ -139,7 +113,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
           bridgeless: typeof globalThis.RN$Bridgeless !== 'undefined' ? !!globalThis.RN$Bridgeless : null,
           turboModules: typeof globalThis.__turboModuleProxy !== 'undefined',
           fabric: typeof globalThis.nativeFabricUIManager !== 'undefined'
-        })`,
+        })`
       )) as string | undefined;
 
       if (archJson) {
@@ -165,13 +139,12 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
     // Get Hermes version
     try {
       const propsJson = (await cdp.evaluate(
-        "JSON.stringify(HermesInternal.getRuntimeProperties())",
+        "JSON.stringify(HermesInternal.getRuntimeProperties())"
       )) as string | undefined;
 
       if (propsJson) {
         const props = JSON.parse(propsJson) as Record<string, unknown>;
-        state.hermesVersion =
-          (props["OSS Release Version"] as string) ?? "unknown";
+        state.hermesVersion = (props["OSS Release Version"] as string) ?? "unknown";
       }
     } catch {
       // non-fatal
@@ -194,16 +167,11 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<
 
 const profilerPathsCache = new Map<number, ProfilerSessionPaths>();
 
-export function cacheProfilerPaths(
-  port: number,
-  paths: ProfilerSessionPaths,
-): void {
+export function cacheProfilerPaths(port: number, paths: ProfilerSessionPaths): void {
   profilerPathsCache.set(port, paths);
 }
 
-export function getCachedProfilerPaths(
-  port: number,
-): ProfilerSessionPaths | undefined {
+export function getCachedProfilerPaths(port: number): ProfilerSessionPaths | undefined {
   return profilerPathsCache.get(port);
 }
 

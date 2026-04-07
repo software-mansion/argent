@@ -7,9 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  bundleId: z
-    .string()
-    .describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
+  bundleId: z.string().describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
 });
 
 export const restartAppTool: ToolDefinition<
@@ -17,8 +15,8 @@ export const restartAppTool: ToolDefinition<
   { restarted: boolean; bundleId: string }
 > = {
   id: "restart-app",
-  description: `Terminate and relaunch an app on the simulator by bundle ID.
-Use this to get a clean app state without reinstalling (e.g. after code changes that are already on disk, or to reset in-memory state).`,
+  description: `Restart an app on the simulator by terminating then relaunching it by bundle ID.
+Use when you need a clean in-memory state without a full reinstall. Returns { restarted, bundleId }. Fails if the bundle ID is not installed on the simulator.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

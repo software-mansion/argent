@@ -1,6 +1,6 @@
 /**
  * Generate a JS script that calls getInspectorDataForViewAtPoint at (x, y)
- * and pushes the result via __radon_lite_callback binding with a requestId
+ * and pushes the result via __argent_callback binding with a requestId
  * for correlation.
  *
  * Uses data.closestInstance (the fiber at the touch point) and walks UP the
@@ -18,11 +18,7 @@
  * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
  * with `original: true` since they already contain the real source path.
  */
-export function makeInspectScript(
-  x: number,
-  y: number,
-  requestId: string
-): string {
+export function makeInspectScript(x: number, y: number, requestId: string): string {
   return `(function() {
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   var renderer = Array.from(hook.renderers.values())[0];
@@ -73,7 +69,7 @@ export function makeInspectScript(
   }
 
   var hostFiber = findHostFiber(root.current.child, 0);
-  if (!hostFiber) { __radon_lite_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
+  if (!hostFiber) { __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
 
   var inspectRef = hostFiber.stateNode.canonical.publicInstance;
 
@@ -101,7 +97,7 @@ export function makeInspectScript(
         }
       }
 
-      __radon_lite_callback(JSON.stringify({ requestId:'${requestId}', type:'inspect_result', x:${Math.round(x)}, y:${Math.round(y)}, items:items }));
+      __argent_callback(JSON.stringify({ requestId:'${requestId}', type:'inspect_result', x:${Math.round(x)}, y:${Math.round(y)}, items:items }));
     }
   );
   return 'ok';

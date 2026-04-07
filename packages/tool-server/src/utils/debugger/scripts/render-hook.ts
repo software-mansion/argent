@@ -4,11 +4,19 @@
  * from re-renders, measures bounding rects, and pushes results via binding.
  */
 export const RENDER_HOOK_SCRIPT = `(function() {
-  if (globalThis.__radon_lite_render_patched) return 'already active';
-  globalThis.__radon_lite_render_patched = true;
+  if (globalThis.__argent_render_patched) return 'already active';
+  globalThis.__argent_render_patched = true;
   var UIManager;
-  for (var _i = 0; _i < 200; _i++) {
-    try { var _m = __r(_i); if (_m && _m.UIManager) { UIManager = _m.UIManager; break; } } catch(e) {}
+  if (typeof __r.getModules === 'function') {
+    var _mods = __r.getModules();
+    for (var _entry of _mods) {
+      if (!_entry[1].isInitialized) continue;
+      try { var _m = __r(_entry[0]); if (_m && _m.UIManager) { UIManager = _m.UIManager; break; } } catch(e) {}
+    }
+  } else {
+    for (var _i = 0; _i < 200; _i++) {
+      try { var _m = __r(_i); if (_m && _m.UIManager) { UIManager = _m.UIManager; break; } } catch(e) {}
+    }
   }
   var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   var SKIP = new Set(['PerformanceLoggerContext','AppContainer','RootTagContext',
@@ -50,7 +58,7 @@ export const RENDER_HOOK_SCRIPT = `(function() {
     var rerenders = results.filter(function(r){return r.isRerender;}).length;
     if(results.length > 0) {
       var payload = results.map(function(r){var c=Object.assign({},r);delete c.tag;return c;});
-      __radon_lite_callback(JSON.stringify({type:'render',commit:commitCount,count:results.length,rerenders:rerenders,renders:payload.slice(0,20)}));
+      __argent_callback(JSON.stringify({type:'render',commit:commitCount,count:results.length,rerenders:rerenders,renders:payload.slice(0,20)}));
     }
   };
   return 'render hook installed';

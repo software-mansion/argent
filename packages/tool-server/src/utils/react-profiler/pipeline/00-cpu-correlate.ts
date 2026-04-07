@@ -40,7 +40,7 @@ export interface CpuSampleIndex {
  */
 export function buildCpuSampleIndex(
   cpuProfile: HermesCpuProfile,
-  firstCommitTimestampMs: number | null,
+  firstCommitTimestampMs: number | null
 ): CpuSampleIndex {
   const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
 
@@ -90,7 +90,7 @@ export function queryCpuWindow(
   index: CpuSampleIndex,
   startMs: number,
   endMs: number,
-  topN: number = 5,
+  topN: number = 5
 ): CpuCommitHotspot[] {
   const { timestampsMs, sampleNodeIds, nodeMap } = index;
 
@@ -173,7 +173,7 @@ export function correlateCpuWithCommits<
 >(
   summaries: T[],
   index: CpuSampleIndex | null,
-  topNPerCommit: number = 5,
+  topNPerCommit: number = 5
 ): (T & { cpuHotspots?: CpuCommitHotspot[] })[] {
   if (!index) return summaries;
 

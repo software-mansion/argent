@@ -24,9 +24,7 @@ describe("gather-workspace-data tool", () => {
   });
 
   it("declares no service dependencies", () => {
-    expect(
-      gatherWorkspaceDataTool.services({ workspacePath: "/tmp" }),
-    ).toEqual({});
+    expect(gatherWorkspaceDataTool.services({ workspacePath: "/tmp" })).toEqual({});
   });
 
   it("zodSchema requires workspacePath string", () => {
@@ -46,19 +44,16 @@ describe("gather-workspace-data tool", () => {
         name: "ToolTestApp",
         dependencies: { "react-native": "0.74.0" },
         scripts: { start: "react-native start" },
-      }),
+      })
     );
     await writeFile(
       join(tempDir, "metro.config.js"),
-      `module.exports = { server: { port: 8082 } };`,
+      `module.exports = { server: { port: 8082 } };`
     );
     await mkdir(join(tempDir, "ios"), { recursive: true });
     await mkdir(join(tempDir, "android"), { recursive: true });
 
-    const result = await gatherWorkspaceDataTool.execute(
-      {},
-      { workspacePath: tempDir },
-    );
+    const result = await gatherWorkspaceDataTool.execute({}, { workspacePath: tempDir });
 
     expect(result.workspace_path).toBe(tempDir);
     expect(result.package_json).toMatchObject({ name: "ToolTestApp" });
@@ -69,10 +64,7 @@ describe("gather-workspace-data tool", () => {
 
   it("handles nonexistent path gracefully for file reads", async () => {
     const fakePath = join(tempDir, "nonexistent-subdir");
-    const result = await gatherWorkspaceDataTool.execute(
-      {},
-      { workspacePath: fakePath },
-    );
+    const result = await gatherWorkspaceDataTool.execute({}, { workspacePath: fakePath });
 
     expect(result.package_json).toBeNull();
     expect(result.has_ios_dir).toBe(false);

@@ -11,9 +11,7 @@ async function readFileSafe(path: string): Promise<string | null> {
   }
 }
 
-export async function detectSessionContext(
-  input: RawProfilingInput,
-): Promise<SessionContext> {
+export async function detectSessionContext(input: RawProfilingInput): Promise<SessionContext> {
   const { projectRoot, platform } = input.sessionMeta;
 
   // reactCompilerEnabled
@@ -24,8 +22,7 @@ export async function detectSessionContext(
       const pkg = JSON.parse(packageJson) as Record<string, unknown>;
       const allDeps = {
         ...((pkg["dependencies"] as Record<string, unknown> | undefined) ?? {}),
-        ...((pkg["devDependencies"] as Record<string, unknown> | undefined) ??
-          {}),
+        ...((pkg["devDependencies"] as Record<string, unknown> | undefined) ?? {}),
       };
       if ("babel-plugin-react-compiler" in allDeps) {
         reactCompilerEnabled = true;
@@ -35,12 +32,8 @@ export async function detectSessionContext(
     }
   }
   if (!reactCompilerEnabled) {
-    const babelConfigJs = await readFileSafe(
-      join(projectRoot, "babel.config.js"),
-    );
-    const babelConfigTs = await readFileSafe(
-      join(projectRoot, "babel.config.ts"),
-    );
+    const babelConfigJs = await readFileSafe(join(projectRoot, "babel.config.js"));
+    const babelConfigTs = await readFileSafe(join(projectRoot, "babel.config.ts"));
     const babelSource = (babelConfigJs ?? "") + (babelConfigTs ?? "");
     if (babelSource.includes("react-compiler")) {
       reactCompilerEnabled = true;
@@ -52,10 +45,7 @@ export async function detectSessionContext(
   const indexJs = await readFileSafe(join(projectRoot, "index.js"));
   const indexTs = await readFileSafe(join(projectRoot, "index.ts"));
   const indexSource = (indexJs ?? "") + (indexTs ?? "");
-  if (
-    indexSource.includes("<StrictMode>") ||
-    indexSource.includes("StrictMode")
-  ) {
+  if (indexSource.includes("<StrictMode>") || indexSource.includes("StrictMode")) {
     strictModeEnabled = true;
   }
 
@@ -81,16 +71,11 @@ export async function detectSessionContext(
     rnArchitecture = newArchDefault ? "bridgeless" : "bridge";
 
     if (platform === "android") {
-      const gradleProps = await readFileSafe(
-        join(projectRoot, "android", "gradle.properties"),
-      );
+      const gradleProps = await readFileSafe(join(projectRoot, "android", "gradle.properties"));
       if (gradleProps) {
         if (newArchDefault && gradleProps.includes("newArchEnabled=false")) {
           rnArchitecture = "bridge";
-        } else if (
-          !newArchDefault &&
-          gradleProps.includes("newArchEnabled=true")
-        ) {
+        } else if (!newArchDefault && gradleProps.includes("newArchEnabled=true")) {
           rnArchitecture = "bridgeless";
         }
       }

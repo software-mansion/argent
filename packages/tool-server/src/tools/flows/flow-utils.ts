@@ -10,10 +10,7 @@ const FLOWS_DIR_NAME = ".argent";
 // ── Paths ────────────────────────────────────────────────────────────
 
 async function getGitRoot(): Promise<string> {
-  const { stdout } = await execFileAsync("git", [
-    "rev-parse",
-    "--show-toplevel",
-  ]);
+  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
   return stdout.trim();
 }
 
@@ -62,9 +59,7 @@ export type FlowFile = {
   steps: FlowStep[];
 };
 
-type YamlStep =
-  | { echo: string }
-  | { tool: string; args?: Record<string, unknown> };
+type YamlStep = { echo: string } | { tool: string; args?: Record<string, unknown> };
 
 type YamlFlowFile = {
   executionPrerequisite: string;
@@ -120,7 +115,7 @@ export function parseFlow(content: string): FlowFile {
   const steps = parsed.steps.map((raw) => {
     if ("echo" in raw) return fromYamlStep(raw);
     if ("tool" in raw) return fromYamlStep(raw);
-    throw new Error(`Unrecognised flow entry: ${JSON.stringify(raw)}`);
+    throw new Error(`Unrecognized flow entry: ${JSON.stringify(raw)}`);
   });
 
   return {
@@ -132,10 +127,7 @@ export function parseFlow(content: string): FlowFile {
 // ── File helpers ─────────────────────────────────────────────────────
 
 /** Read and parse the flow file, append a step, write it back. */
-export async function appendStep(
-  filePath: string,
-  step: FlowStep,
-): Promise<string> {
+export async function appendStep(filePath: string, step: FlowStep): Promise<string> {
   const content = await fs.readFile(filePath, "utf8");
   const flow = parseFlow(content);
   flow.steps.push(step);

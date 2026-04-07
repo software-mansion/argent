@@ -101,7 +101,7 @@ describe("LogFileWriter", () => {
             },
           ],
         },
-      }),
+      })
     );
 
     const clusters = writer.getClusters();
@@ -227,7 +227,7 @@ describe("LogFileWriter", () => {
             },
           ],
         },
-      }),
+      })
     );
 
     const clusters = writer.getClusters();
@@ -249,7 +249,7 @@ describe("LogFileWriter", () => {
             },
           ],
         },
-      }),
+      })
     );
 
     const clusters = writer.getClusters();

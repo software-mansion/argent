@@ -1,8 +1,9 @@
 {
   "files": [],
   "references": [
+    { "path": "packages/registry" },
+    { "path": "packages/native-devtools-ios" },
     { "path": "packages/tool-server" },
-    { "path": "packages/ui" },
     { "path": "packages/mcp" }
   ]
 }

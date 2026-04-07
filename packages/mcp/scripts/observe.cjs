@@ -7,7 +7,7 @@ const path = require("path");
 const os = require("os");
 const readline = require("readline");
 
-const LOG_FILE = process.env.RADON_MCP_LOG ?? path.join(os.homedir(), ".argent", "mcp-calls.log");
+const LOG_FILE = process.env.ARGENT_MCP_LOG ?? path.join(os.homedir(), ".argent", "mcp-calls.log");
 
 // Ensure log file exists
 fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
@@ -48,9 +48,7 @@ function formatEntry(entry) {
     } else {
       let resultStr = "";
       if (entry.result !== undefined) {
-        const raw = typeof entry.result === "string"
-          ? entry.result
-          : JSON.stringify(entry.result);
+        const raw = typeof entry.result === "string" ? entry.result : JSON.stringify(entry.result);
         resultStr = "  " + DIM + (raw.length > 120 ? raw.slice(0, 117) + "…" : raw) + RESET;
       }
       status = `${GREEN}✓${RESET}${resultStr}`;

@@ -8,16 +8,8 @@ export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
 
-export async function toMcpContent(
-  result: unknown,
-  outputHint?: string,
-): Promise<ContentBlock[]> {
-  if (
-    outputHint === "image" &&
-    result &&
-    typeof result === "object" &&
-    "url" in result
-  ) {
+export async function toMcpContent(result: unknown, outputHint?: string): Promise<ContentBlock[]> {
+  if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
     const imgRes = await fetch((result as { url: string }).url);
     const buf = Buffer.from(await imgRes.arrayBuffer());
     const filePath = (result as { path?: string }).path ?? "";
@@ -51,9 +43,7 @@ export type FlowExecuteResult = {
  * Unpack flow-execute's structured step results into MCP content blocks.
  * Each step carries its own outputHint so toMcpContent handles images correctly.
  */
-export async function flowRunToMcpContent(
-  result: FlowExecuteResult,
-): Promise<ContentBlock[]> {
+export async function flowRunToMcpContent(result: FlowExecuteResult): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
 
   if (result.executionPrerequisite) {

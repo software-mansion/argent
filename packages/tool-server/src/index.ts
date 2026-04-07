@@ -1,15 +1,16 @@
 import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
-import { validateStoredToken } from "./utils/license";
+import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
+import { startUpdateChecker } from "./utils/update-checker";
 
 // ── Config ──────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 const idleMinutes = parseInt(
   process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? String(DEFAULT_IDLE_TIMEOUT_MINUTES),
-  10,
+  10
 );
 const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
 
@@ -17,13 +18,20 @@ const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
 
 const registry = createRegistry();
 attachRegistryLogger(registry);
+const updateChecker = startUpdateChecker();
 
-// `shutdown` captures `httpHandle` and `server` by closure; safe because it is
-// only invoked asynchronously after both are initialised.
+const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
+
+let server: ReturnType<typeof httpHandle.app.listen> | null = null;
+
+// `shutdown` closes over `server` by reference — reads the current value when
+// called, so it works correctly whether server has started yet or not.
 const shutdown = async () => {
+  updateChecker.dispose();
+  stopWatcher();
   httpHandle.dispose();
   await registry.dispose();
-  server.close();
+  server?.close();
   process.exit(0);
 };
 
@@ -33,27 +41,20 @@ const httpHandle = createHttpApp(registry, {
   onShutdown: shutdown,
 });
 
-const server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
-  const addr = server.address();
-  const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
-  process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
-  console.log(`  GET  http://127.0.0.1:${boundPort}/tools`);
-  console.log(`  POST http://127.0.0.1:${boundPort}/tools/:name`);
-  if (idleTimeoutMs > 0) {
-    console.log(`  Idle timeout: ${idleMinutes}min`);
-  }
-});
-
-validateStoredToken().then((valid) => {
-  if (valid) {
-    console.log("  License token valid.");
-  } else {
-    console.log(
-      "  No valid license found. Tools will prompt for activation on first use."
-    );
-  }
-}).catch((err) => {
-  console.error("  License validation error:", err);
+// Block advertising readiness until the first watcher poll completes — this
+// guarantees DYLD_INSERT_LIBRARIES is set in launchd for all currently-booted
+// simulators before any agent tool call (e.g. launch-app) can arrive.
+watcherReady.then(() => {
+  server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
+    const addr = server!.address();
+    const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
+    process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
+    process.stderr.write(`  GET  http://127.0.0.1:${boundPort}/tools\n`);
+    process.stderr.write(`  POST http://127.0.0.1:${boundPort}/tools/:name\n`);
+    if (idleTimeoutMs > 0) {
+      process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
+    }
+  });
 });
 
 // ── Lifecycle ───────────────────────────────────────────────────────

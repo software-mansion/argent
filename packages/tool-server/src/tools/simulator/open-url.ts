@@ -7,11 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  url: z
-    .string()
-    .describe(
-      "URL or URL scheme to open (e.g. https://example.com or messages://)"
-    ),
+  url: z.string().describe("URL or URL scheme to open (e.g. https://example.com or messages://)"),
 });
 
 export const openUrlTool: ToolDefinition<
@@ -20,7 +16,7 @@ export const openUrlTool: ToolDefinition<
 > = {
   id: "open-url",
   description: `Open a URL or URL scheme on the simulator.
-Use this to open web pages in Safari, or launch apps via their URL schemes.
+Use when you need to navigate to a web page or deep-link into an app. Returns { opened, url }. Fails if the URL scheme is not registered on the simulator.
 
 Common URL schemes:
 - messages://              — Messages app
@@ -32,12 +28,7 @@ Common URL schemes:
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    await execFileAsync("xcrun", [
-      "simctl",
-      "openurl",
-      params.udid,
-      params.url,
-    ]);
+    await execFileAsync("xcrun", ["simctl", "openurl", params.udid, params.url]);
     return { opened: true, url: params.url };
   },
 };

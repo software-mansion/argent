@@ -33,8 +33,7 @@ export function rank(input: TagOutput): ComponentFinding[] {
   // -------------------------------------------------------------------------
   // Filter components
   // -------------------------------------------------------------------------
-  type TaggedComp =
-    typeof input.components extends Map<string, infer V> ? V : never;
+  type TaggedComp = typeof input.components extends Map<string, infer V> ? V : never;
   const candidates: Array<{ name: string; comp: TaggedComp }> = [];
 
   for (const [name, comp] of input.components) {
@@ -42,8 +41,7 @@ export function rank(input: TagOutput): ComponentFinding[] {
     if (comp.isRecyclerChild) continue;
     if (!ACTIONABLE_REASONS.has(comp.dominantReason)) continue;
 
-    const passesRenderCount =
-      comp.normalizedRenderCount >= MIN_NORMALIZED_RENDERS;
+    const passesRenderCount = comp.normalizedRenderCount >= MIN_NORMALIZED_RENDERS;
     const passesMaxDuration = comp.max >= MIN_MAX_DURATION_MS;
     if (!passesRenderCount && !passesMaxDuration) continue;
 
@@ -56,9 +54,7 @@ export function rank(input: TagOutput): ComponentFinding[] {
   candidates.sort((a, b) => b.comp.totalRenderMs - a.comp.totalRenderMs);
 
   const paretoMin = recordingMs * PARETO_THRESHOLD_PCT;
-  const ranked = candidates.filter(
-    (c, i) => c.comp.totalRenderMs >= paretoMin || i < MAX_FINDINGS,
-  );
+  const ranked = candidates.filter((c, i) => c.comp.totalRenderMs >= paretoMin || i < MAX_FINDINGS);
   const topCandidates = ranked.slice(0, MAX_FINDINGS);
 
   // -------------------------------------------------------------------------
@@ -67,9 +63,7 @@ export function rank(input: TagOutput): ComponentFinding[] {
   const findings: ComponentFinding[] = topCandidates.map(({ name, comp }) => {
     const topChangedHookNames: string[] =
       comp.hookTypeNames !== undefined
-        ? comp.topChangedHooks.map(
-            (idx) => comp.hookTypeNames![idx] ?? `hook[${idx}]`,
-          )
+        ? comp.topChangedHooks.map((idx) => comp.hookTypeNames![idx] ?? `hook[${idx}]`)
         : [];
 
     const finding: ComponentFinding = {
@@ -91,8 +85,7 @@ export function rank(input: TagOutput): ComponentFinding[] {
     ) {
       finding.compilerBailoutSuspected = true;
     }
-    if (comp.parentTrigger !== undefined)
-      finding.parentTrigger = comp.parentTrigger;
+    if (comp.parentTrigger !== undefined) finding.parentTrigger = comp.parentTrigger;
 
     return finding;
   });

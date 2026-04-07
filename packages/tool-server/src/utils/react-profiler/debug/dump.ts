@@ -1,14 +1,15 @@
 import { promises as fs } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 import type { HermesCpuProfile, DevToolsFiberCommit } from "../types/input";
 
 const DEBUG_DIR_NAME = "argent-profiler-cwd";
 
 /**
- * Returns (and creates if needed) <projectRoot>/argent-profiler-cwd/.
+ * Returns (and creates if needed) /tmp/argent-profiler-cwd/.
  */
-export async function getDebugDir(projectRoot: string): Promise<string> {
-  const dir = join(projectRoot, DEBUG_DIR_NAME);
+export async function getDebugDir(): Promise<string> {
+  const dir = join(tmpdir(), DEBUG_DIR_NAME);
   await fs.mkdir(dir, { recursive: true });
   return dir;
 }
@@ -25,7 +26,7 @@ const jsonReplacer = (_key: string, value: unknown): unknown => {
 export async function writeDump(
   dir: string,
   filename: string,
-  data: unknown,
+  data: unknown
 ): Promise<string | null> {
   try {
     const path = join(dir, filename);
@@ -45,7 +46,7 @@ export async function writeDump(
 export async function writeDumpCompact(
   dir: string,
   filename: string,
-  data: unknown,
+  data: unknown
 ): Promise<string | null> {
   try {
     const path = join(dir, filename);

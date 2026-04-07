@@ -12,7 +12,7 @@ export interface PipelineOutput {
 }
 
 export async function runIosProfilerPipeline(
-  files: Record<string, string | null>,
+  files: Record<string, string | null>
 ): Promise<PipelineOutput> {
   // Stage 0: Parse all three XMLs in parallel
   const [cpuSamples, rawHangs, rawLeaks] = await Promise.all([

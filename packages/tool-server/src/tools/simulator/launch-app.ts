@@ -7,9 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
-  bundleId: z
-    .string()
-    .describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
+  bundleId: z.string().describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
 });
 
 export const launchAppTool: ToolDefinition<
@@ -17,8 +15,8 @@ export const launchAppTool: ToolDefinition<
   { launched: boolean; bundleId: string }
 > = {
   id: "launch-app",
-  description: `Launch an app on the simulator by bundle ID.
-Prefer this over tapping home-screen icons — it is instant and reliable.
+  description: `Open an app on the simulator by bundle ID.
+Use when starting any app — prefer this over tapping home-screen icons. Returns { launched, bundleId }. Fails if the bundle ID is not installed on the simulator.
 
 Common bundle IDs:
 - Messages:  com.apple.MobileSMS
@@ -35,12 +33,7 @@ Common bundle IDs:
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    await execFileAsync("xcrun", [
-      "simctl",
-      "launch",
-      params.udid,
-      params.bundleId,
-    ]);
+    await execFileAsync("xcrun", ["simctl", "launch", params.udid, params.bundleId]);
     return { launched: true, bundleId: params.bundleId };
   },
 };

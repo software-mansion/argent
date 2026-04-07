@@ -11,11 +11,10 @@ import {
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
 // Binary lives at workspace root (four levels up from dist/blueprints at runtime).
-// When bundled by esbuild, __dirname is dist/ — use RADON_SIMULATOR_SERVER_DIR env var instead.
+// When bundled by esbuild, __dirname is dist/ — use ARGENT_SIMULATOR_SERVER_DIR env var instead.
 const getPaths = () => {
   const BINARY_DIR =
-    process.env.RADON_SIMULATOR_SERVER_DIR ??
-    path.join(__dirname, "..", "..", "..", "..");
+    process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "..", "..", "..");
   const BINARY_PATH = path.join(BINARY_DIR, "simulator-server");
   return { BINARY_PATH, BINARY_DIR };
 };
@@ -25,16 +24,11 @@ const READY_TIMEOUT_MS = 30_000;
 export interface SimulatorServerApi {
   apiUrl: string;
   streamUrl: string;
-  /** Update the JWT token in the running binary (stdin `token <jwt>` command). */
-  setToken(jwt: string): void;
   /** Send a key Down or Up event by USB HID keycode (stdin `key <direction> <keyCode>` command). */
   pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
-function spawnSimulatorServerProcess(
-  udid: string,
-  token: string | undefined
-): Promise<{
+function spawnSimulatorServerProcess(udid: string): Promise<{
   proc: ChildProcess;
   apiUrl: string;
   streamUrl: string;
@@ -42,14 +36,12 @@ function spawnSimulatorServerProcess(
   const { BINARY_PATH, BINARY_DIR } = getPaths();
   return new Promise((resolve, reject) => {
     const args = ["ios", "--id", udid];
-    if (token) args.push("-t", token);
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let streamUrl: string | null = null;
     let apiUrl: string | null = null;
     let settled = false;
 
@@ -64,33 +56,15 @@ function spawnSimulatorServerProcess(
       fn();
     };
 
-    const tryResolve = () => {
-      if (streamUrl && apiUrl) {
-        settle(() => {
-          resolve({ proc, apiUrl: apiUrl!, streamUrl: streamUrl! });
-        });
-      }
-    };
-
     rl.on("line", (rawLine: string) => {
       const line = rawLine.trim();
-      if (line.startsWith("stream_ready ")) {
-        const match = line.match(/(http:\/\/[^ ]+)/);
-        if (match) {
-          streamUrl = match[1]!;
-          if (!apiUrl) {
-            const u = new URL(streamUrl);
-            apiUrl = `${u.protocol}//${u.host}`;
-          }
-          tryResolve();
-        }
-        return;
-      }
       if (line.startsWith("api_ready ")) {
         const match = line.match(/(http:\/\/[^ ]+)/);
         if (match) {
           apiUrl = match[1]!;
-          tryResolve();
+          settle(() => {
+            resolve({ proc, apiUrl: apiUrl!, streamUrl: "" });
+          });
         }
       }
     });
@@ -100,9 +74,7 @@ function spawnSimulatorServerProcess(
     });
 
     proc.on("exit", () => {
-      settle(() =>
-        reject(new Error(`simulator-server exited with code before becoming ready`))
-      );
+      settle(() => reject(new Error(`simulator-server exited with code before becoming ready`)));
     });
 
     proc.on("error", (err) => {
@@ -111,29 +83,21 @@ function spawnSimulatorServerProcess(
 
     const timer = setTimeout(() => {
       settle(
-        () =>
-          reject(new Error("Timed out waiting for simulator-server to become ready")),
+        () => reject(new Error("Timed out waiting for simulator-server to become ready")),
         () => proc.kill()
       );
     }, READY_TIMEOUT_MS);
   });
 }
 
-export const simulatorServerBlueprint: ServiceBlueprint<
-  SimulatorServerApi,
-  string
-> = {
+export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, string> = {
   namespace: SIMULATOR_SERVER_NAMESPACE,
   getURN(udid: string) {
     return `${SIMULATOR_SERVER_NAMESPACE}:${udid}`;
   },
-  async factory(_deps, payload, options?) {
+  async factory(_deps, payload) {
     const udid = payload;
-    const token = options?.token as string | undefined;
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
-      udid,
-      token
-    );
+    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(udid);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -148,9 +112,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<
       api: {
         apiUrl,
         streamUrl,
-        setToken: (jwt: string) => {
-          proc.stdin?.write(`token ${jwt}\n`);
-        },
         pressKey: (direction: "Down" | "Up", keyCode: number) => {
           proc.stdin?.write(`key ${direction} ${keyCode}\n`);
         },

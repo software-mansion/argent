@@ -1,10 +1,10 @@
-import { TypedEventEmitter } from '../src/event-emitter';
+import { TypedEventEmitter } from "../src/event-emitter";
 import type {
   ServiceBlueprint,
   ServiceEvents,
   ServiceInstance,
   ToolDefinition,
-} from '../src/types';
+} from "../src/types";
 
 export interface StaticBlueprintResult {
   blueprint: ServiceBlueprint<{ id: string; deps?: string[] }, string>;
@@ -42,9 +42,7 @@ export function createStaticBlueprint(
     async factory(deps, _context, _opts) {
       await new Promise((r) => setTimeout(r, options?.delay ?? 10));
       const shouldFail =
-        typeof options?.failOnInit === 'function'
-          ? options.failOnInit()
-          : options?.failOnInit;
+        typeof options?.failOnInit === "function" ? options.failOnInit() : options?.failOnInit;
       if (shouldFail) {
         throw new Error(`${id} factory failure`);
       }

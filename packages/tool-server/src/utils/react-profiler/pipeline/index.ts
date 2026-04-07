@@ -12,10 +12,10 @@ import { rank } from "./04-rank";
 
 export async function runPipeline(
   input: RawProfilingInput,
-  options?: { debugDumps?: boolean },
+  options?: { debugDumps?: boolean }
 ): Promise<PipelineOutput> {
   const debugDumps = options?.debugDumps ?? false;
-  const debugDir = await getDebugDir(input.sessionMeta.projectRoot);
+  const debugDir = await getDebugDir();
 
   const sessionContext = await detectSessionContext(input);
 
@@ -25,20 +25,14 @@ export async function runPipeline(
   // Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
   // Uses hotCommitIndices from sessionMeta (pre-computed in react-profiler-stop)
   const hotCommitIndices = input.sessionMeta.hotCommitIndices ?? [];
-  const rawHotCommitSummaries = buildHotCommitSummaries(
-    preprocessed,
-    hotCommitIndices,
-  );
+  const rawHotCommitSummaries = buildHotCommitSummaries(preprocessed, hotCommitIndices);
 
   // Stage 00-cpu-correlate: Map Hermes CPU samples to hot commit time windows
   const firstCommitTs = preprocessed.length > 0 ? preprocessed[0]!.timestamp : null;
   const cpuSampleIndex = input.flamegraph
     ? buildCpuSampleIndex(input.flamegraph, firstCommitTs)
     : null;
-  const hotCommitSummaries = correlateCpuWithCommits(
-    rawHotCommitSummaries,
-    cpuSampleIndex,
-  );
+  const hotCommitSummaries = correlateCpuWithCommits(rawHotCommitSummaries, cpuSampleIndex);
 
   // Stage 1: Reduce — O(n) over React commits
   const preprocessedCommitTree = { ...input.commitTree, commits: preprocessed };
@@ -46,7 +40,7 @@ export async function runPipeline(
     preprocessedCommitTree,
     sessionContext,
     input.sessionMeta.recordingDurationMs,
-    input.sessionMeta.anyCompilerOptimized,
+    input.sessionMeta.anyCompilerOptimized
   );
 
   // Override static compiler detection with runtime evidence

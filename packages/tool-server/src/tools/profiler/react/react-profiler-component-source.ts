@@ -15,9 +15,9 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
   Record<string, unknown>
 > = {
   id: "react-profiler-component-source",
-  description: `AST lookup via tree-sitter: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
-Call per-finding after react-profiler-analyze to inspect source before proposing a fix.
-Returns found: false if the component is not in user-owned code (e.g. node_modules).`,
+  description: `Find a React component's source via tree-sitter AST lookup: returns file path, line number, memoization status (isMemoized, hasUseCallback, hasUseMemo), and 50 lines of source for a named React component.
+Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
+Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).`,
   zodSchema,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,

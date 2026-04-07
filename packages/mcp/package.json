@@ -1,22 +1,26 @@
 {
-  "name": "argent",
-  "version": "0.3.0",
+  "name": "@swmansion/argent",
+  "version": "0.3.4",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
   "bin": {
-    "argent": "dist/index.js",
+    "argent": "dist/cli.js",
     "argent-simulator-server": "bin/simulator-server"
   },
   "scripts": {
     "build": "npm run build:mcp && npm run build:tools-bundle",
     "build:mcp": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:tools-bundle": "node scripts/bundle-tools.cjs",
-    "dev": "node --loader ts-node/esm src/index.ts",
+    "dev": "node --loader ts-node/esm src/cli.ts mcp",
     "test": "vitest run",
     "test:watch": "vitest",
     "observe": "node scripts/observe.cjs",
     "benchmark": "node scripts/benchmark.cjs",
     "postinstall": "node scripts/postinstall.cjs"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "restricted"
   },
   "files": [
     "dist/",
@@ -24,11 +28,13 @@
     "skills/",
     "agents/",
     "rules/",
-    "agents/",
-    "scripts/"
+    "scripts/postinstall.cjs"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0"
+    "@clack/prompts": "^1.1.0",
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "picocolors": "^1.1.1",
+    "smol-toml": "^1.6.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

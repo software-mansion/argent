@@ -35,7 +35,7 @@ export function toSimulatorNetworkError(
   toolLabel: string,
   err: unknown,
   apiUrl: string,
-  fallbackHint?: string,
+  fallbackHint?: string
 ): Error {
   if (!(err instanceof Error)) return new Error(String(err));
 
@@ -46,29 +46,29 @@ export function toSimulatorNetworkError(
   if (err.name === "AbortError" || combined.includes("aborted")) {
     return new Error(
       `${toolLabel} timed out — simulator-server at ${apiUrl} did not respond in time. ` +
-      `The simulator may be unresponsive.${suffix}`
+        `The simulator may be unresponsive.${suffix}`
     );
   }
 
   if (combined.includes("ECONNREFUSED")) {
     return new Error(
       `${toolLabel} failed: cannot connect to simulator-server (connection refused at ${apiUrl}). ` +
-      `The server process may have crashed or was never started. ` +
-      `Call the simulator-server tool to restart it, then retry.`
+        `The server process may have crashed or was never started. ` +
+        `Call the simulator-server tool to restart it, then retry.`
     );
   }
 
   if (combined.includes("ECONNRESET") || combined.includes("socket hang up")) {
     return new Error(
       `${toolLabel} failed: connection to simulator-server was reset (${apiUrl}). ` +
-      `The server may have crashed mid-request. ` +
-      `Call the simulator-server tool to restart it, then retry.`
+        `The server may have crashed mid-request. ` +
+        `Call the simulator-server tool to restart it, then retry.`
     );
   }
 
   return new Error(
     `${toolLabel} failed: network error communicating with simulator-server at ${apiUrl}: ` +
-    `${err.message}${causeMsg ? ` (${causeMsg})` : ""}. ` +
-    `Verify the simulator is running and the server is healthy.${suffix}`
+      `${err.message}${causeMsg ? ` (${causeMsg})` : ""}. ` +
+      `Verify the simulator is running and the server is healthy.${suffix}`
   );
 }

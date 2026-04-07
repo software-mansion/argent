@@ -17,8 +17,8 @@ describe("normalizeToolName", () => {
     expect(normalizeToolName("gesture-tap")).toBe("gesture-tap");
   });
 
-  it("strips mcp__radon-lite__ prefix", () => {
-    expect(normalizeToolName("mcp__radon-lite__gesture-tap")).toBe("gesture-tap");
+  it("strips mcp__argent__ prefix", () => {
+    expect(normalizeToolName("mcp__argent__gesture-tap")).toBe("gesture-tap");
   });
 
   it("strips any prefix ending with __", () => {
@@ -26,7 +26,7 @@ describe("normalizeToolName", () => {
   });
 
   it("handles tool names with hyphens", () => {
-    expect(normalizeToolName("mcp__radon-lite__launch-app")).toBe("launch-app");
+    expect(normalizeToolName("mcp__argent__launch-app")).toBe("launch-app");
   });
 });
 
@@ -70,8 +70,8 @@ describe("shouldAutoScreenshot", () => {
   });
 
   it("returns true for prefixed tool names", () => {
-    expect(shouldAutoScreenshot("mcp__radon-lite__gesture-tap")).toBe(true);
-    expect(shouldAutoScreenshot("mcp__radon-lite__launch-app")).toBe(true);
+    expect(shouldAutoScreenshot("mcp__argent__gesture-tap")).toBe(true);
+    expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
   });
 
   it("returns false for screenshot", () => {
@@ -79,7 +79,7 @@ describe("shouldAutoScreenshot", () => {
   });
 
   it("returns false for prefixed screenshot", () => {
-    expect(shouldAutoScreenshot("mcp__radon-lite__screenshot")).toBe(false);
+    expect(shouldAutoScreenshot("mcp__argent__screenshot")).toBe(false);
   });
 
   it("returns false for excluded tools", () => {
@@ -94,40 +94,40 @@ describe("shouldAutoScreenshot", () => {
 // autoScreenshotEnabled
 // ---------------------------------------------------------------------------
 describe("autoScreenshotEnabled", () => {
-  const original = process.env.RADON_AUTO_SCREENSHOT;
+  const original = process.env.ARGENT_AUTO_SCREENSHOT;
 
   afterEach(() => {
-    if (original === undefined) delete process.env.RADON_AUTO_SCREENSHOT;
-    else process.env.RADON_AUTO_SCREENSHOT = original;
+    if (original === undefined) delete process.env.ARGENT_AUTO_SCREENSHOT;
+    else process.env.ARGENT_AUTO_SCREENSHOT = original;
   });
 
   it("returns true when env var is unset", () => {
-    delete process.env.RADON_AUTO_SCREENSHOT;
+    delete process.env.ARGENT_AUTO_SCREENSHOT;
     expect(autoScreenshotEnabled()).toBe(true);
   });
 
   it("returns true when env var is empty string", () => {
-    process.env.RADON_AUTO_SCREENSHOT = "";
+    process.env.ARGENT_AUTO_SCREENSHOT = "";
     expect(autoScreenshotEnabled()).toBe(true);
   });
 
   it('returns true when env var is "1"', () => {
-    process.env.RADON_AUTO_SCREENSHOT = "1";
+    process.env.ARGENT_AUTO_SCREENSHOT = "1";
     expect(autoScreenshotEnabled()).toBe(true);
   });
 
   it('returns true when env var is "true" (case-insensitive)', () => {
-    process.env.RADON_AUTO_SCREENSHOT = "True";
+    process.env.ARGENT_AUTO_SCREENSHOT = "True";
     expect(autoScreenshotEnabled()).toBe(true);
   });
 
   it('returns false when env var is "0"', () => {
-    process.env.RADON_AUTO_SCREENSHOT = "0";
+    process.env.ARGENT_AUTO_SCREENSHOT = "0";
     expect(autoScreenshotEnabled()).toBe(false);
   });
 
   it('returns false when env var is "false"', () => {
-    process.env.RADON_AUTO_SCREENSHOT = "false";
+    process.env.ARGENT_AUTO_SCREENSHOT = "false";
     expect(autoScreenshotEnabled()).toBe(false);
   });
 });
@@ -136,11 +136,11 @@ describe("autoScreenshotEnabled", () => {
 // getAutoScreenshotDelayMs
 // ---------------------------------------------------------------------------
 describe("getAutoScreenshotDelayMs", () => {
-  const original = process.env.RADON_AUTO_SCREENSHOT_DELAY_MS;
+  const original = process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
 
   afterEach(() => {
-    if (original === undefined) delete process.env.RADON_AUTO_SCREENSHOT_DELAY_MS;
-    else process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = original;
+    if (original === undefined) delete process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS;
+    else process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = original;
   });
 
   it("returns configured delay for each tool in the delay map", () => {
@@ -154,27 +154,27 @@ describe("getAutoScreenshotDelayMs", () => {
   });
 
   it("normalizes prefixed tool names", () => {
-    expect(getAutoScreenshotDelayMs("mcp__radon-lite__gesture-tap")).toBe(
+    expect(getAutoScreenshotDelayMs("mcp__argent__gesture-tap")).toBe(
       AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["gesture-tap"]
     );
-    expect(getAutoScreenshotDelayMs("mcp__radon-lite__launch-app")).toBe(
+    expect(getAutoScreenshotDelayMs("mcp__argent__launch-app")).toBe(
       AUTO_SCREENSHOT_DELAY_MS_BY_TOOL["launch-app"]
     );
   });
 
   it("uses env override as a floor", () => {
-    process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "2000";
-    expect(getAutoScreenshotDelayMs("describe")).toBe(2000); // 1000 < 2000 → 2000
-    expect(getAutoScreenshotDelayMs("launch-app")).toBe(2000); // 1700 < 2000 → 2000
+    process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "2000";
+    expect(getAutoScreenshotDelayMs("describe")).toBe(2000); // 100 < 2000 → 2000
+    expect(getAutoScreenshotDelayMs("keyboard")).toBe(2000); // 300 < 2000 → 2000
   });
 
   it("does not lower delay below the per-tool value", () => {
-    process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "500";
-    expect(getAutoScreenshotDelayMs("launch-app")).toBe(1700); // 1700 > 500 → 1700
+    process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "500";
+    expect(getAutoScreenshotDelayMs("launch-app")).toBe(3000); // 3000 > 500 → 3000
   });
 
   it("ignores non-numeric env override", () => {
-    process.env.RADON_AUTO_SCREENSHOT_DELAY_MS = "abc";
+    process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "abc";
     expect(getAutoScreenshotDelayMs("gesture-tap")).toBe(1500);
   });
 });

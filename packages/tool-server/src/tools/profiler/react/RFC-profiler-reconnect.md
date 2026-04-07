@@ -2,6 +2,7 @@
 
 **Branch:** `ios-instruments-profiler`
 **Files changed:**
+
 - `packages/registry/src/registry.ts`
 - `packages/tool-server/src/tools/profiler/react/react-profiler-start.ts`
 - `packages/tool-server/src/tools/profiler/react/react-profiler-stop.ts`
@@ -38,9 +39,13 @@ const instance = await blueprint.factory(resolvedDeps, payload, options);
 
 // Guard: if the node was terminated while factory was running, discard the new instance
 if (node.state !== ServiceState.STARTING) {
-  try { await instance.dispose(); } catch { /* ignore */ }
+  try {
+    await instance.dispose();
+  } catch {
+    /* ignore */
+  }
   node.initPromise = null;
-  throw new ServiceInitializationError(urn, 'Service was terminated during initialization');
+  throw new ServiceInitializationError(urn, "Service was terminated during initialization");
 }
 
 this._transition(node, ServiceState.RUNNING);
@@ -156,15 +161,15 @@ registry.registerTool(createReactProfilerStopTool(registry));
 
 ---
 
-## Expected behaviour after these changes
+## Expected behavior after these changes
 
-| Scenario | Before | After |
-|---|---|---|
-| Metro hot-reload, call `react-profiler-start` immediately | Fails with "call again to reconnect"; re-call hits stale RUNNING or TERMINATING | Auto-disposes stale services, waits for settle, re-resolves — succeeds in one call |
-| Metro fully restarted, call `react-profiler-start` | Same failure loop | Same auto-reconnect; one retry needed only if Hermes is still booting |
-| Second `react-profiler-start` after first session ends + CDP drops | "Service was terminated during initialization" | Pre-cleans ERROR services before resolving — succeeds in one call |
-| `react-profiler-stop` after Metro reload | Crashes: "no CDP targets" (tries to re-create dead session) | Clean error: "No active profiling session" with guidance to start a new one |
-| Blueprint factory interrupted mid-init by cascade | Node left in phantom RUNNING state | Factory result discarded, node correctly in ERROR, next `resolveService` starts fresh |
+| Scenario                                                           | Before                                                                          | After                                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Metro hot-reload, call `react-profiler-start` immediately          | Fails with "call again to reconnect"; re-call hits stale RUNNING or TERMINATING | Auto-disposes stale services, waits for settle, re-resolves — succeeds in one call    |
+| Metro fully restarted, call `react-profiler-start`                 | Same failure loop                                                               | Same auto-reconnect; one retry needed only if Hermes is still booting                 |
+| Second `react-profiler-start` after first session ends + CDP drops | "Service was terminated during initialization"                                  | Pre-cleans ERROR services before resolving — succeeds in one call                     |
+| `react-profiler-stop` after Metro reload                           | Crashes: "no CDP targets" (tries to re-create dead session)                     | Clean error: "No active profiling session" with guidance to start a new one           |
+| Blueprint factory interrupted mid-init by cascade                  | Node left in phantom RUNNING state                                              | Factory result discarded, node correctly in ERROR, next `resolveService` starts fresh |
 
 ### Blueprint dispose
 
@@ -178,6 +183,7 @@ Unit tests: `cd packages/registry && npx vitest run` (38/38 pass)
 Integration: `cd packages/tool-server && npx vitest run` (pre-existing 3 failures in `integration.test.ts` unrelated to this change)
 
 Manual verification steps:
+
 1. Start profiling, trigger Metro reload (`debugger-reload-metro`), immediately call `react-profiler-start` → should succeed without retries.
 2. Start profiling, fully restart Metro process, call `react-profiler-start` → should succeed (or fail with "still loading" message requiring at most one retry).
 3. Start profiling → stop → wait for CDP to drop → start again → should succeed (pre-cleanup disposes ERROR services).

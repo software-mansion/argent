@@ -14,8 +14,7 @@ function getOrCreateWs(api: SimulatorServerApi): WebSocket {
   const existing = connections.get(key);
   if (
     existing &&
-    (existing.readyState === WebSocket.OPEN ||
-      existing.readyState === WebSocket.CONNECTING)
+    (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
   ) {
     return existing;
   }
@@ -43,14 +42,13 @@ export function sendCommand(api: SimulatorServerApi, cmd: object): void {
 
 function getSimulatorServerBinaryPath(): string {
   const dir =
-    process.env.RADON_SIMULATOR_SERVER_DIR ??
-    path.join(__dirname, "..", "..", "..", "..");
+    process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "..", "..", "..");
   return path.join(dir, "simulator-server");
 }
 
 function openAccessibilitySettings(): void {
   exec(
-    'open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"',
+    'open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility"'
   );
 }
 
@@ -68,7 +66,7 @@ async function simulatorPost<T>(
   endpoint: string,
   reqBody: unknown,
   signal?: AbortSignal,
-  fallbackHint?: string,
+  fallbackHint?: string
 ): Promise<{ res: Response; body: T }> {
   let res: Response;
   try {
@@ -88,7 +86,7 @@ async function simulatorPost<T>(
   } catch {
     throw new Error(
       `${toolLabel} failed: simulator-server returned non-JSON response (HTTP ${res.status}). ` +
-        `The server may be in a bad state. Restart the simulator-server and retry.`,
+        `The server may be in a bad state. Restart the simulator-server and retry.`
     );
   }
 
@@ -104,11 +102,16 @@ const DESCRIBE_FALLBACK =
  */
 export async function httpDescribe(
   api: SimulatorServerApi,
-  signal?: AbortSignal,
+  signal?: AbortSignal
 ): Promise<unknown> {
-  const { res, body } = await simulatorPost<
-    { error?: string } & Record<string, unknown>
-  >("Describe", api, "/api/ui/describe", {}, signal, DESCRIBE_FALLBACK);
+  const { res, body } = await simulatorPost<{ error?: string } & Record<string, unknown>>(
+    "Describe",
+    api,
+    "/api/ui/describe",
+    {},
+    signal,
+    DESCRIBE_FALLBACK
+  );
 
   if (body.error === "accessibility_not_trusted") {
     const binaryPath = getSimulatorServerBinaryPath();
@@ -126,7 +129,7 @@ export async function httpDescribe(
         `or paste this path in the Go dialog (Cmd+Shift+G in Finder):\n\n` +
         `   ${binaryPath}\n\n` +
         `4. Toggle the switch ON for "simulator-server" in the Accessibility list.\n` +
-        `5. Retry the "describe" tool — it should work immediately (no restart needed).`,
+        `5. Retry the "describe" tool — it should work immediately (no restart needed).`
     );
   }
 
@@ -134,7 +137,7 @@ export async function httpDescribe(
     const serverMsg = body.error ?? `HTTP ${res.status}`;
     throw new Error(
       `Describe failed: ${serverMsg}. ` +
-        `Verify the simulator is booted and an app is running. ${DESCRIBE_FALLBACK}`,
+        `Verify the simulator is booted and an app is running. ${DESCRIBE_FALLBACK}`
     );
   }
 
@@ -142,7 +145,7 @@ export async function httpDescribe(
 }
 
 export function getScreenshotScale(): number {
-  const v = process.env.RADON_SCREENSHOT_SCALE;
+  const v = process.env.ARGENT_SCREENSHOT_SCALE;
   if (v) {
     const n = parseFloat(v);
     if (!Number.isNaN(n) && n > 0 && n <= 1) return n;
@@ -157,7 +160,7 @@ export async function httpScreenshot(
   api: SimulatorServerApi,
   rotation?: string,
   signal?: AbortSignal,
-  scale?: number,
+  scale?: number
 ): Promise<{ url: string; path: string }> {
   const resolvedScale = scale ?? getScreenshotScale();
   const body: Record<string, unknown> = {};
@@ -174,13 +177,13 @@ export async function httpScreenshot(
     const serverMsg = resBody.error ?? `HTTP ${res.status}`;
     throw new Error(
       `Screenshot failed: ${serverMsg}. ` +
-        `Ensure the simulator is booted and the simulator-server is running.`,
+        `Ensure the simulator is booted and the simulator-server is running.`
     );
   }
   if (resBody.url == null || resBody.path == null) {
     throw new Error(
       "Screenshot failed: server response missing url or path. " +
-        "The simulator-server may be misconfigured. Try restarting it.",
+        "The simulator-server may be misconfigured. Try restarting it."
     );
   }
   return { url: resBody.url, path: resBody.path };
