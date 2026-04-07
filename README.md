@@ -13,7 +13,7 @@ npx @swmansion/argent install
 ---
 
 <p align="center">
-  <img src="assets/placeholder.gif" alt="argent banner" width="100%" />
+  <img width="80%" src="assets/placeholder.gif" alt="argent banner" width="100%" />
 </p>
 
 ---
