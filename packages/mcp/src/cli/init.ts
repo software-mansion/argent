@@ -82,7 +82,7 @@ export async function init(args: string[]): Promise<void> {
   if (!globallyInstalled) {
     if (!nonInteractive) {
       const installChoice = await p.select({
-        message: "argent is not installed globally. Would you like to install it?",
+        message: "Argent is not installed globally. Would you like to install it?",
         options: [
           {
             value: "global" as const,
@@ -115,7 +115,7 @@ export async function init(args: string[]): Promise<void> {
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install argent manually with: ${pc.cyan(cmdStr)}`);
+      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
   } else if (fromTar) {
@@ -204,7 +204,7 @@ export async function init(args: string[]): Promise<void> {
     p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
 
     const selected = await p.multiselect({
-      message: "Which editors should argent be configured for?",
+      message: "Which editors should Argent be configured for?",
       options: choices,
       initialValues: detected,
       required: true,
@@ -326,7 +326,7 @@ export async function init(args: string[]): Promise<void> {
   if (adaptersWithAllowlist.length > 0) {
     p.log.info(
       `By default, editors ask for confirmation before running each MCP tool.\n` +
-        `  Adding argent to the auto-approve allowlist lets tools run without\n` +
+        `  Adding Argent to the auto-approve allowlist lets tools run without\n` +
         `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`
     );
 
@@ -336,7 +336,7 @@ export async function init(args: string[]): Promise<void> {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const allowlistChoice = await p.confirm({
-        message: "Add argent tools to editor auto-approve lists? - recommended",
+        message: "Add Argent tools to editor auto-approve lists? - recommended",
         initialValue: true,
       });
 
@@ -373,7 +373,7 @@ export async function init(args: string[]): Promise<void> {
   // ── Step 2: Skills Installation ─────────────────────────────────────────────
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
-  p.log.warn(pc.yellow("Skills installation is required for argent to function properly."));
+  p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
 
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
@@ -492,7 +492,7 @@ export async function init(args: string[]): Promise<void> {
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
-  p.outro(pc.green("argent is ready!"));
+  p.outro(pc.green("Argent is ready!"));
 }
 
 export function printBanner(): void {
