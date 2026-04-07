@@ -2,15 +2,6 @@
   <img src="../../assets/banner.png" alt="argent banner" width="100%" />
 </p>
 
-<p align="center">
-  <a href="https://github.com/software-mansion/argent/releases"><img src="https://img.shields.io/github/package-json/v/software-mansion/argent?label=version&color=6B5BFF" alt="version" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="macOS only" />
-  <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/MCP-compatible-green" alt="MCP compatible" />
-</p>
-
-
-
 # Argent
 
 Argent is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
