@@ -7,7 +7,7 @@
 Argent is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
-npx @swmansion/argent init
+npx @swmansion/argent install
 ```
 
 ---
@@ -42,7 +42,7 @@ npx @swmansion/argent init
 From your project root:
 
 ```bash
-npx @swmansion/argent init
+npx @swmansion/argent install
 ```
 
 This command triggers an installation wizard which:
