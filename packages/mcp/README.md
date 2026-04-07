@@ -1,100 +1,108 @@
+<p align="center">
+  <img src="../../assets/banner.png" alt="argent banner" width="100%" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/software-mansion/argent/releases"><img src="https://img.shields.io/github/package-json/v/software-mansion/argent?label=version&color=6B5BFF" alt="version" /></a>
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey" alt="macOS only" />
+  <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="Apache 2.0" />
+  <img src="https://img.shields.io/badge/MCP-compatible-green" alt="MCP compatible" />
+</p>
+
+
+
 # Argent
 
-MCP server for iOS Simulator control — tap, swipe, screenshot, profile, and debug from your AI assistant.
-
-## Requirements
-
-- macOS with Xcode installed
-- Node.js 18 or later
-- An iOS Simulator (booted via Xcode or `xcrun simctl`)
-
-## Installation
-
-Argent is distributed as `@swmansion/argent` via [GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry).
-
-### 1. Authenticate with GitHub Packages
-
-Add the following to your global `~/.npmrc` (create it if it does not exist), replacing `<GITHUB_PAT>` with a Personal Access Token that has the `read:packages` scope:
-
-```ini
-@swmansion:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=<GITHUB_PAT>
-```
-
-> If your organisation enforces SSO, authorise the token for `software-mansion` after creating it.
-
-### 2. Install and initialise
+Argent is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent init
 ```
 
-This installs the package globally, registers the MCP server with your editor, and copies skills, rules, and agents into your workspace.
+<p align="center">
+  <img src="../../assets/placeholder.png" alt="argent banner" width="100%" />
+</p>
 
-Alternatively:
+---
+
+## Capabilities
+
+- **Autonomous iOS development** - Allow your agent to work with iOS apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
+- **UI interaction** - Give your agent full control toolkit - tapping, swiping, pinching, typing, gestures, hardware buttons and all other gears included. Let it navigate your app exactly as a user would, without lifting a finger.
+- **Profiling with batteries included** - Argent can perform and analyze both React-Native and Xcode Instruments profiling sessions. Get comprehensive summaries and ask to optimise your app where you find fit.
+- **Debugging and diagnostics** - Let your agent inspect logs, capture crash reports, and reproduce failing states on the simulator, so you can jump straight to the fix.
+- **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any iOS app - no extra setup required.
+
+> **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
+
+---
+
+## Installation
+
+#### Prerequisites
+
+- macOS with **Xcode** installed
+- **Node.js 18** or later
+
+#### Run `init` in your project
+
+From your project root:
 
 ```bash
-npm i -g @swmansion/argent
+npx @swmansion/argent init
+```
+
+This command triggers an installation wizard which:
+
+- Installs `@swmansion/argent` globally
+- Detects your editor and registers the MCP server
+- Copies skills, rules, and agent definitions into your workspace
+
+Prefer a manual install?
+
+```bash
+npm install -g @swmansion/argent
 argent init
 ```
 
-### Installing from a tarball
+---
 
-If you have a pre-built `.tgz` (e.g. from CI or `npm pack`), no registry auth is needed:
+## CLI Reference
 
-```bash
-npx @swmansion/argent init --from ./swmansion-argent-<version>.tgz
-```
+| Command         | Description                                                 |
+| --------------- | ----------------------------------------------------------- |
+| `argent init`   | Install globally and configure MCP in the current workspace |
+| `argent update` | Pull the latest version and refresh workspace configuration |
+| `argent remove` | Unregister the MCP server and uninstall the package         |
 
-## Supported editors
+---
 
-`argent init` auto-detects and configures the MCP server for:
+## Supported Editors
 
-- Claude Code
-- Cursor
-- VS Code
-- Windsurf
-- Zed
-- Gemini CLI
-- Codex CLI
+`argent init` auto-detects and configures MCP for:
 
-## CLI reference
+| Editor      | Config location                                               |
+| ----------- | ------------------------------------------------------------- |
+| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)            |
+| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global) |
+| VS Code     | `.vscode/mcp.json`                                            |
+| Windsurf    | `.windsurf/mcp.json`                                          |
+| Zed         | `.zed/settings.json`                                          |
+| Gemini CLI  | `.gemini/settings.json`                                       |
+| Codex CLI   | `.codex/config.yaml`                                          |
 
-| Command         | Description                                                                          |
-| --------------- | ------------------------------------------------------------------------------------ |
-| `argent init`   | Install globally and configure MCP server in the current workspace                   |
-| `argent update` | Pull the latest version and refresh workspace configuration files                    |
-| `argent remove` | Unregister the MCP server and uninstall (`--prune` also removes skills/rules/agents) |
-| `argent mcp`    | Start the MCP stdio server directly (used internally by editors)                     |
-
-## Accessibility permission (`describe` tool)
-
-The `describe` tool reads the iOS Simulator's UI accessibility tree. On first use, macOS will prompt you to grant **Accessibility permission** to the `simulator-server` binary. Argent automatically opens System Settings and reveals the binary in Finder. To grant access:
-
-1. In **System Settings > Privacy & Security > Accessibility**, click **+**.
-2. Navigate to the `simulator-server` binary shown in Finder (or use **Cmd+Shift+G** to paste the path).
-3. Toggle the switch **ON** for `simulator-server`.
-
-The tool works immediately after granting permission — no restart needed.
+---
 
 ## License
 
-The "Argent" project utilizes a mixed licensing model to provide open-source accessibility while protecting specific proprietary binary components.
+Argent uses a mixed licensing model.
 
-### Source Code
+**Source code** is released under the [Apache License 2.0](LICENSE).
 
-The vast majority of the source code (business logic, scripts, interfaces, etc.) is released under the **Apache License 2.0**. You can find the full text of the license in the <LICENSE> file. You are free to use, modify, and distribute this portion of the project in accordance with the terms of the Apache 2.0 license.
+**Proprietary binaries** (`bin/simulator-server` and the `.dylib` files in `native-devtools-ios`) are the intellectual property of Software Mansion S.A. and are licensed solely for use within this project. Decompiling, reverse-engineering, or redistributing them without explicit written permission is prohibited.
 
-### Proprietary Binary Components
+By using argent you acknowledge and agree to this structure.
 
-Certain elements of the project are provided exclusively as compiled binary files (typically located in the `/bin` or `/libs` directories).
+---
 
-- **Files:**
-  - `bin/simulator-server`
-  - `node_modules/@argent/native-devtools-ios/dylibs/libInjectionBootstrap.dylib`
-  - `node_modules/@argent/native-devtools-ios/dylibs/libKeyboardPatch.dylib`
-  - `node_modules/@argent/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib`
-- **Status:** These files are **NOT** Open Source software.
-- **Terms:** They are the intellectual property of Software Mansion S.A. and are licensed solely for use in conjunction with this project. Decompiling, reverse engineering, disassembling, or redistributing these binary files outside the scope of this project without explicit written permission is strictly prohibited.
-
-By using or contributing to this project, you acknowledge and agree to this mixed licensing structure.
+Made by [Software Mansion](https://swmansion.com)
