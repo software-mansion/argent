@@ -49,8 +49,8 @@ describe("update — constants are correct", () => {
     expect(PACKAGE_NAME).toBe("@swmansion/argent");
   });
 
-  it("NPM_REGISTRY is the GitHub packages registry", () => {
-    expect(NPM_REGISTRY).toContain("npm.pkg.github.com");
+  it("NPM_REGISTRY is the npm registry", () => {
+    expect(NPM_REGISTRY).toContain("registry.npmjs.org");
   });
 });
 
