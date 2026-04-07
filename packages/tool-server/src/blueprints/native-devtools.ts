@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as readline from "node:readline";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -76,10 +77,42 @@ interface AppConnection {
   networkLog: NetworkEvent[];
 }
 
+const BOOTSTRAP_DYLIB_BASENAME = "libInjectionBootstrap.dylib";
+
 function getNativeDevtoolsSocketPath(udid: string): string {
   // Deterministic, short — well under the 104-char macOS Unix socket limit
   // /tmp/argent-nd-XXXXXXXX.sock = 28 chars
   return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
+}
+
+function splitDyldInsertLibraries(value: string): string[] {
+  return value
+    .split(":")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
+  if (entry === bootstrapPath) {
+    return false;
+  }
+
+  if (path.basename(entry) === BOOTSTRAP_DYLIB_BASENAME) {
+    return false;
+  }
+
+  if (entry.startsWith("@")) {
+    return true;
+  }
+
+  return fs.existsSync(entry);
+}
+
+export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
+  const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
+    shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
+  );
+  return [...preserved, bootstrapPath].join(":");
 }
 
 async function ensureEnv(udid: string, socketPath: string): Promise<void> {
@@ -91,10 +124,9 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   }).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
-  const entries = existing ? existing.split(":") : [];
+  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
 
-  if (!entries.includes(bootstrapPath)) {
-    const updated = [...entries, bootstrapPath].join(":");
+  if (updated !== existing) {
     await execFileAsync("xcrun", [
       "simctl",
       "spawn",

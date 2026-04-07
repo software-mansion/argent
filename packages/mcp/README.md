@@ -90,9 +90,9 @@ Certain elements of the project are provided exclusively as compiled binary file
 
 - **Files:**
   - `bin/simulator-server`
-  - `node_modules/@argent/native-devtools-ios/dylibs/libInjectionBootstrap.dylib`
-  - `node_modules/@argent/native-devtools-ios/dylibs/libKeyboardPatch.dylib`
-  - `node_modules/@argent/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib`
+  - `dylibs/libInjectionBootstrap.dylib`
+  - `dylibs/libKeyboardPatch.dylib`
+  - `dylibs/libNativeDevtoolsIos.dylib`
 - **Status:** These files are **NOT** Open Source software.
 - **Terms:** They are the intellectual property of Software Mansion S.A. and are licensed solely for use in conjunction with this project. Decompiling, reverse engineering, disassembling, or redistributing these binary files outside the scope of this project without explicit written permission is strictly prohibited.
 

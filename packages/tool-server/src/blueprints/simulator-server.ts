@@ -6,10 +6,7 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
-import {
-  simulatorServerBinaryPath,
-  simulatorServerBinaryDir,
-} from "@argent/native-devtools-ios";
+import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 

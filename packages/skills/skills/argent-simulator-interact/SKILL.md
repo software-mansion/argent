@@ -18,6 +18,7 @@ Use `list-simulators` to find available simulators. **Pick the first result** if
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
+6. **For native iOS app navigation, prefer `describe` first.** Do not navigate from screenshots on regular in-app screens unless `describe` or `native-describe-screen` failed to expose a reliable target.
 
 ## 3. Opening Apps
 
@@ -63,12 +64,13 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
-| App type              | Discovery tool            | What it returns                                                                                                                           |
-| --------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Target app discovery  | `describe`                | Accessibility element tree with normalized frame coordinates for a native-devtools-connected app; may use explicit `bundleId` when needed |
-| React Native          | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                             |
-| App-scoped native     | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                      |
-| Final visual fallback | `screenshot`              | Use only to inspect visible state when discovery tools cannot inspect the current UI. Do not derive tap coordinates from it               |
+| App type                          | Discovery tool            | What it returns                                                                                                                           |
+| --------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Target app discovery              | `describe`                | Accessibility element tree with normalized frame coordinates for a native-devtools-connected app; may use explicit `bundleId` when needed |
+| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                             |
+| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                      |
+| Permission / system modal overlay | `describe` first          | Try `describe` or `native-describe-screen` first. Fall back to `screenshot` only if the visible alert/modal is not exposed reliably       |
+| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots    |
 
 Point follow-up native diagnostics after you already have a candidate point:
 
@@ -87,6 +89,8 @@ Read the exact error and choose the action that matches it:
   retry with explicit `bundleId` for the app you intend to inspect.
 - Error mentions `device_window_not_found`, Home screen, or system UI cannot be inspected automatically:
   use `screenshot` to inspect the visible Home/system UI. If you actually want a connected background app instead, retry `describe` with explicit `bundleId`.
+- A permission prompt, native alert, or modal overlay is visible:
+  still try `describe` first. If the overlay is system-owned or `describe` / `native-describe-screen` does not expose the actionable controls reliably, use `screenshot` as a fallback. Once the modal is dismissed, switch back to `describe`, `native-describe-screen`, or `debugger-component-tree`.
 - `describe` succeeds but is not detailed enough for a React Native app:
   use `debugger-component-tree` next.
 - You already know the target app and want lower-level native inspection:
@@ -183,6 +187,14 @@ Use the explicit `screenshot` tool only when:
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
+- A permission dialog, system alert, or native modal overlay is visible and `describe` / `native-describe-screen` did not expose reliable targets.
+
+When using `screenshot` for permission or native modal navigation:
+
+- Do not switch to screenshot-driven navigation just because a modal is visible. On regular app screens and in-app modals, keep using `describe`.
+- Prefer obvious, centered alert buttons such as `Allow`, `OK`, `Don't Allow`, `Not Now`, or `Continue`.
+- Tap one control at a time and inspect the returned auto-screenshot before doing anything else.
+- After the modal is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 

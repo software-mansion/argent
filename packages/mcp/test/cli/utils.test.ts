@@ -144,13 +144,22 @@ describe("detectPackageManager", () => {
 
 describe("globalInstallCommand", () => {
   it("npm", () => {
-    expect(globalInstallCommand("npm", "pkg")).toEqual({ bin: "npm", args: ["install", "-g", "pkg"] });
+    expect(globalInstallCommand("npm", "pkg")).toEqual({
+      bin: "npm",
+      args: ["install", "-g", "pkg"],
+    });
   });
   it("yarn", () => {
-    expect(globalInstallCommand("yarn", "pkg")).toEqual({ bin: "yarn", args: ["global", "add", "pkg"] });
+    expect(globalInstallCommand("yarn", "pkg")).toEqual({
+      bin: "yarn",
+      args: ["global", "add", "pkg"],
+    });
   });
   it("pnpm", () => {
-    expect(globalInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-g", "pkg"] });
+    expect(globalInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-g", "pkg"],
+    });
   });
   it("bun", () => {
     expect(globalInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-g", "pkg"] });
@@ -163,16 +172,28 @@ describe("globalInstallCommand", () => {
 
 describe("globalUninstallCommand", () => {
   it("npm", () => {
-    expect(globalUninstallCommand("npm", "pkg")).toEqual({ bin: "npm", args: ["uninstall", "-g", "pkg"] });
+    expect(globalUninstallCommand("npm", "pkg")).toEqual({
+      bin: "npm",
+      args: ["uninstall", "-g", "pkg"],
+    });
   });
   it("yarn", () => {
-    expect(globalUninstallCommand("yarn", "pkg")).toEqual({ bin: "yarn", args: ["global", "remove", "pkg"] });
+    expect(globalUninstallCommand("yarn", "pkg")).toEqual({
+      bin: "yarn",
+      args: ["global", "remove", "pkg"],
+    });
   });
   it("pnpm", () => {
-    expect(globalUninstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["remove", "-g", "pkg"] });
+    expect(globalUninstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["remove", "-g", "pkg"],
+    });
   });
   it("bun", () => {
-    expect(globalUninstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["remove", "-g", "pkg"] });
+    expect(globalUninstallCommand("bun", "pkg")).toEqual({
+      bin: "bun",
+      args: ["remove", "-g", "pkg"],
+    });
   });
 });
 

@@ -187,9 +187,7 @@ describe("update-checker", () => {
     // npm returns a pre-release tag — non-semver, should be treated safely
     mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
       const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
-      callback(
-        createMockResponse(200, JSON.stringify({ version: "1.0.0-beta.1" })),
-      );
+      callback(createMockResponse(200, JSON.stringify({ version: "1.0.0-beta.1" })));
       return new EventEmitter() as ReturnType<typeof https.get>;
     });
 

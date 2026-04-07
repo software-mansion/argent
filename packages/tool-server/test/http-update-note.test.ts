@@ -62,10 +62,7 @@ describe("HTTP update note injection", () => {
   it("does NOT include a note when update is not available", async () => {
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body).toHaveProperty("data");
     expect(res.body).not.toHaveProperty("note");
@@ -80,10 +77,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body).toHaveProperty("data");
     expect(res.body).toHaveProperty("note");
@@ -100,10 +94,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body.note).toContain("1.0.0 -> 1.2.3");
   });
@@ -117,10 +108,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body.note).toContain("npx @swmansion/argent update");
   });
@@ -134,10 +122,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body.note).toContain("update-argent");
   });
@@ -151,10 +136,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body.note).toContain("dismiss-update");
   });
@@ -168,10 +150,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body.note).toContain("Save a note");
   });
@@ -184,9 +163,13 @@ describe("HTTP update note injection", () => {
         description: "A stub tool",
         inputSchema: {},
         services: () => ({}),
-        execute: async () => { throw new Error("tool blew up"); },
+        execute: async () => {
+          throw new Error("tool blew up");
+        },
       })),
-      invokeTool: vi.fn(async () => { throw new Error("tool blew up"); }),
+      invokeTool: vi.fn(async () => {
+        throw new Error("tool blew up");
+      }),
     } as unknown as Registry;
 
     mockGetUpdateState.mockReturnValue({
@@ -197,10 +180,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(errorRegistry);
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(500);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(500);
 
     expect(res.body).toHaveProperty("error");
     expect(res.body).not.toHaveProperty("note");
@@ -215,10 +195,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/nonexistent-tool")
-      .send({})
-      .expect(404);
+    const res = await request(handle.app).post("/tools/nonexistent-tool").send({}).expect(404);
 
     expect(res.body).toHaveProperty("error");
     expect(res.body).not.toHaveProperty("note");
@@ -233,10 +210,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body).toHaveProperty("note");
     expect(res.body.note).toContain("unknown");
@@ -254,10 +228,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(mockSuppressUpdateNote).toHaveBeenCalledOnce();
     expect(mockSuppressUpdateNote).toHaveBeenCalledWith(30 * 60 * 1000);
@@ -273,10 +244,7 @@ describe("HTTP update note injection", () => {
 
     handle = createHttpApp(stubRegistry());
 
-    const res = await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(res.body).toHaveProperty("data");
     expect(res.body).not.toHaveProperty("note");
@@ -286,10 +254,7 @@ describe("HTTP update note injection", () => {
   it("does NOT call suppressUpdateNote when no update is available", async () => {
     handle = createHttpApp(stubRegistry());
 
-    await request(handle.app)
-      .post("/tools/test-tool")
-      .send({})
-      .expect(200);
+    await request(handle.app).post("/tools/test-tool").send({}).expect(200);
 
     expect(mockSuppressUpdateNote).not.toHaveBeenCalled();
   });

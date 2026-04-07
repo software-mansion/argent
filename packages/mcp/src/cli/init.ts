@@ -285,7 +285,8 @@ export async function init(args: string[]): Promise<void> {
   const mcpResults: string[] = [];
 
   for (const adapter of selectedAdapters) {
-    const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
+    const configPath =
+      scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
 
     if (!configPath) {
       if (scope === "global" && adapter.projectPath(projectRoot)) {
@@ -354,9 +355,7 @@ export async function init(args: string[]): Promise<void> {
 
     for (const adapter of adaptersWithAllowlist) {
       const hasPath =
-        normalizedScope === "global"
-          ? adapter.globalPath()
-          : adapter.projectPath(effectiveRoot);
+        normalizedScope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
       if (!hasPath) {
         allowlistResults.push(
           `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config for this scope)")}`

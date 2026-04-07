@@ -3,10 +3,7 @@ import type { ToolDefinition } from "@argent/registry";
 import { suppressUpdateNote } from "../../utils/update-checker";
 
 const zodSchema = z.object({
-  hours: z
-    .number()
-    .min(0)
-    .describe("Number of hours to suppress the update notification"),
+  hours: z.number().min(0).describe("Number of hours to suppress the update notification"),
 });
 
 export const dismissUpdateTool: ToolDefinition<{ hours: number }> = {
