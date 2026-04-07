@@ -23,17 +23,35 @@ export type ViewInspectorMethod =
   | "ViewHierarchy.userInteractableViewAtPoint"
   | "ViewHierarchy.describeScreen";
 
+type InspectorMethod = ViewInspectorMethod | "Application.getState";
+
+export type NativeApplicationState = "active" | "inactive" | "background" | "unknown";
+
+export interface NativeAppState {
+  bundleId: string;
+  applicationState: NativeApplicationState;
+  foregroundActiveSceneCount: number;
+  foregroundInactiveSceneCount: number;
+  backgroundSceneCount: number;
+  unattachedSceneCount: number;
+  isFrontmostCandidate: boolean;
+}
+
 export interface NativeDevtoolsApi {
   // Simulator-level
   isEnvSetup(): boolean;
   readonly socketPath: string;
+  ensureEnvReady(): Promise<void>;
 
   // App-level — all keyed by bundleId
   isConnected(bundleId: string): boolean;
+  isAppRunning(bundleId: string): Promise<boolean>;
+  listConnectedBundleIds(): string[];
   /**
-   * Returns true if the app needs to be restarted before native features are available.
-   * Async because when not connected it re-verifies and re-sets the launchd env —
-   * this handles the simulator-reboot case where DYLD_INSERT_LIBRARIES was silently cleared.
+   * Conservative helper for native feature tools.
+   * Returns false only when the current running app process is already connected.
+   * When not connected it re-verifies and re-sets the launchd env, which handles
+   * the simulator-reboot case where DYLD_INSERT_LIBRARIES was silently cleared.
    */
   requiresAppRestart(bundleId: string): Promise<boolean>;
   /**
@@ -44,6 +62,8 @@ export interface NativeDevtoolsApi {
   activateNetworkInspection(bundleId: string): void;
   getNetworkLog(bundleId: string): NetworkEvent[];
   clearNetworkLog(bundleId: string): void;
+  getAppState(bundleId: string): Promise<NativeAppState>;
+  detectFrontmostBundleId(): Promise<string | null>;
   queryViewHierarchy(
     bundleId: string,
     method: ViewInspectorMethod,
@@ -99,6 +119,21 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   ]);
 }
 
+async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
+  const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
+    encoding: "utf8",
+  });
+
+  const bundleIds = new Set<string>();
+  for (const line of stdout.split("\n")) {
+    const match = line.match(/UIKitApplication:([^\[]+)/);
+    if (match) {
+      bundleIds.add(match[1].trim());
+    }
+  }
+  return bundleIds;
+}
+
 export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string> = {
   namespace: NATIVE_DEVTOOLS_NAMESPACE,
 
@@ -119,6 +154,45 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string
 
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
+
+    const ensureEnvReady = async (): Promise<void> => {
+      await ensureEnv(udid, socketPath);
+      envSetup = true;
+    };
+
+    const isAppRunning = async (bundleId: string): Promise<boolean> => {
+      const runningBundleIds = await listRunningUIKitApplicationBundleIds(udid);
+      return runningBundleIds.has(bundleId);
+    };
+
+    function sendViewInspectorRpc(
+      targetBundleId: string,
+      method: InspectorMethod,
+      params: Record<string, unknown> = {}
+    ): Promise<unknown> {
+      const conn = connections.get(targetBundleId);
+      if (!conn) {
+        return Promise.reject(
+          new Error("Native devtools not connected for bundleId: " + targetBundleId)
+        );
+      }
+      const id = nextRpcId++;
+      return new Promise((resolve, reject) => {
+        pendingRpc.set(id, { resolve, reject });
+        conn.socket.write(
+          JSON.stringify({
+            type: "ViewInspector",
+            payload: { id, method, params },
+          }) + "\n"
+        );
+        setTimeout(() => {
+          if (pendingRpc.has(id)) {
+            pendingRpc.delete(id);
+            reject(new Error(`ViewInspector RPC timed out: ${method}`));
+          }
+        }, 5000);
+      });
+    }
 
     // Remove stale socket file from a crashed previous run
     try {
@@ -212,21 +286,23 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string
     server.listen(socketPath);
 
     // ── ensureEnv — runs once at factory init ─────────────────────────────────
-    await ensureEnv(udid, socketPath);
-    envSetup = true;
+    await ensureEnvReady();
 
     // ── Public API ────────────────────────────────────────────────────────────
     const api: NativeDevtoolsApi = {
       isEnvSetup: () => envSetup,
       socketPath,
+      ensureEnvReady,
 
       isConnected: (bundleId) => connections.has(bundleId),
+      isAppRunning,
+      listConnectedBundleIds: () => [...connections.keys()],
 
       async requiresAppRestart(bundleId) {
         if (connections.has(bundleId)) return false;
         // Re-verify and re-set env — handles the case where the simulator was
         // rebooted and launchd cleared DYLD_INSERT_LIBRARIES
-        await ensureEnv(udid, socketPath);
+        await ensureEnvReady();
         return true;
       },
 
@@ -250,29 +326,60 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string
         if (conn) conn.networkLog.length = 0;
       },
 
-      queryViewHierarchy(bundleId, method, params = {}) {
-        const conn = connections.get(bundleId);
-        if (!conn) {
-          return Promise.reject(
-            new Error("Native devtools not connected for bundleId: " + bundleId)
-          );
-        }
-        const id = nextRpcId++;
-        return new Promise((resolve, reject) => {
-          pendingRpc.set(id, { resolve, reject });
-          conn.socket.write(
-            JSON.stringify({
-              type: "ViewInspector",
-              payload: { id, method, params },
-            }) + "\n"
-          );
-          setTimeout(() => {
-            if (pendingRpc.has(id)) {
-              pendingRpc.delete(id);
-              reject(new Error(`ViewInspector RPC timed out: ${method}`));
+      async getAppState(bundleId) {
+        const result = (await sendViewInspectorRpc(bundleId, "Application.getState")) as {
+          applicationState?: NativeApplicationState;
+          foregroundActiveSceneCount?: number;
+          foregroundInactiveSceneCount?: number;
+          backgroundSceneCount?: number;
+          unattachedSceneCount?: number;
+          isFrontmostCandidate?: boolean;
+        };
+        return {
+          bundleId,
+          applicationState: result.applicationState ?? "unknown",
+          foregroundActiveSceneCount: result.foregroundActiveSceneCount ?? 0,
+          foregroundInactiveSceneCount: result.foregroundInactiveSceneCount ?? 0,
+          backgroundSceneCount: result.backgroundSceneCount ?? 0,
+          unattachedSceneCount: result.unattachedSceneCount ?? 0,
+          isFrontmostCandidate: result.isFrontmostCandidate ?? false,
+        };
+      },
+
+      async detectFrontmostBundleId() {
+        const bundleIds = [...connections.keys()];
+        if (bundleIds.length === 0) return null;
+
+        const states = await Promise.all(
+          bundleIds.map(async (bundleId) => {
+            try {
+              return await api.getAppState(bundleId);
+            } catch {
+              return null;
             }
-          }, 5000);
-        });
+          })
+        );
+
+        const appStates = states.filter((state): state is NativeAppState => state !== null);
+        const strongCandidates = appStates.filter(
+          (state) => state.applicationState === "active" || state.foregroundActiveSceneCount > 0
+        );
+        if (strongCandidates.length === 1) {
+          return strongCandidates[0].bundleId;
+        }
+
+        const weakCandidates = appStates.filter(
+          (state) => state.applicationState === "inactive" || state.foregroundInactiveSceneCount > 0
+        );
+        if (strongCandidates.length === 0 && weakCandidates.length === 1) {
+          return weakCandidates[0].bundleId;
+        }
+
+        return null;
+      },
+
+      queryViewHierarchy(bundleId, method, params = {}) {
+        return sendViewInspectorRpc(bundleId, method, params);
       },
     };
 

@@ -67,15 +67,14 @@ npx @swmansion/argent init --from ./swmansion-argent-<version>.tgz
 | `argent remove` | Unregister the MCP server and uninstall (`--prune` also removes skills/rules/agents) |
 | `argent mcp`    | Start the MCP stdio server directly (used internally by editors)                     |
 
-## Accessibility permission (`describe` tool)
+## `describe` tool behavior
 
-The `describe` tool reads the iOS Simulator's UI accessibility tree. On first use, macOS will prompt you to grant **Accessibility permission** to the `simulator-server` binary. Argent automatically opens System Settings and reveals the binary in Finder. To grant access:
+The `describe` tool now inspects a native-devtools-connected app and returns a normalized accessibility tree in the same coordinate space as tap/swipe tools.
 
-1. In **System Settings > Privacy & Security > Accessibility**, click **+**.
-2. Navigate to the `simulator-server` binary shown in Finder (or use **Cmd+Shift+G** to paste the path).
-3. Toggle the switch **ON** for `simulator-server`.
-
-The tool works immediately after granting permission — no restart needed.
+- If `bundleId` is omitted, `describe` auto-targets a safely identifiable connected foreground app when possible.
+- If the app you want is backgrounded or auto-targeting is ambiguous, provide `bundleId` explicitly.
+- If native devtools are not yet injected into the target app, call `restart-app` and retry.
+- `describe` is app-scoped, not simulator-wide. For visible Home/system UI, use `screenshot` to inspect the screen state.
 
 ## License
 
