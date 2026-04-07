@@ -1,8 +1,8 @@
 import WebSocket from "ws";
 import { exec } from "node:child_process";
-import * as path from "node:path";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
+import { simulatorServerBinaryPath } from "@argent/native-devtools-ios";
 
 const DEFAULT_SCREENSHOT_SCALE = 0.3;
 
@@ -41,9 +41,7 @@ export function sendCommand(api: SimulatorServerApi, cmd: object): void {
 }
 
 function getSimulatorServerBinaryPath(): string {
-  const dir =
-    process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "..", "..", "..");
-  return path.join(dir, "simulator-server");
+  return simulatorServerBinaryPath();
 }
 
 function openAccessibilitySettings(): void {

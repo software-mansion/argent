@@ -1,5 +1,4 @@
 import { spawn, ChildProcess } from "node:child_process";
-import * as path from "node:path";
 import * as readline from "node:readline";
 import {
   TypedEventEmitter,
@@ -7,15 +6,16 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
+import {
+  simulatorServerBinaryPath,
+  simulatorServerBinaryDir,
+} from "@argent/native-devtools-ios";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
-// Binary lives at workspace root (four levels up from dist/blueprints at runtime).
-// When bundled by esbuild, __dirname is dist/ — use ARGENT_SIMULATOR_SERVER_DIR env var instead.
 const getPaths = () => {
-  const BINARY_DIR =
-    process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "..", "..", "..");
-  const BINARY_PATH = path.join(BINARY_DIR, "simulator-server");
+  const BINARY_PATH = simulatorServerBinaryPath();
+  const BINARY_DIR = simulatorServerBinaryDir();
   return { BINARY_PATH, BINARY_DIR };
 };
 

@@ -182,6 +182,7 @@ ADDITIONAL TERMS: PROPRIETARY BINARY COMPONENTS
 The following files included in this package are NOT governed by the Apache
 License, Version 2.0 above:
 
+  bin/simulator-server
   dylibs/libInjectionBootstrap.dylib
   dylibs/libKeyboardPatch.dylib
   dylibs/libNativeDevtoolsIos.dylib
