@@ -5,6 +5,9 @@ import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtoo
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
 import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
+import { nativeDescribeScreenTool } from "../tools/native-devtools/native-describe-screen";
+import { nativeViewAtPointTool } from "../tools/native-devtools/native-view-at-point";
+import { nativeUserInteractableViewAtPointTool } from "../tools/native-devtools/native-user-interactable-view-at-point";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
@@ -119,6 +122,9 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeNetworkLogsTool);
   registry.registerTool(nativeFindViewsTool);
   registry.registerTool(nativeFullHierarchyTool);
+  registry.registerTool(nativeDescribeScreenTool);
+  registry.registerTool(nativeViewAtPointTool);
+  registry.registerTool(nativeUserInteractableViewAtPointTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
