@@ -34,12 +34,10 @@ export const gestureRotateTool: ToolDefinition<
   { rotated: boolean; timestampMs: number }
 > = {
   id: "gesture-rotate",
-  description: `Execute a smooth two-finger rotation gesture. All positions and radius are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
-Two fingers are placed opposite each other at the given radius from the center,
-then rotated from startAngle to endAngle.
-endAngle > startAngle = clockwise rotation.
-Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise rotation at screen center.
-Auto-generates interpolated frames at ~60fps for a natural feel.
+  description: `Send a two-finger circular arc gesture to rotate on-screen content by a specified angle. Two fingers are placed opposite each other at a fixed radius from the center, then swept from startAngle to endAngle degrees. All positions and radius are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
+endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn.
+Auto-generates interpolated frames at ~60fps.
+Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
 Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
