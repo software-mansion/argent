@@ -2,10 +2,10 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { ALL_ADAPTERS, removeCodexRules } from "./mcp-configs.js";
-import { detectPackageManager, globalUninstallCommand } from "./utils.js";
+import { detectPackageManager, globalUninstallCommand, formatShellCommand } from "./utils.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "../launcher.js";
 
@@ -180,12 +180,12 @@ export async function uninstall(args: string[]): Promise<void> {
   if (shouldUninstallPackage) {
     const pm = detectPackageManager();
     const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
-    p.log.info(`Running: ${pc.dim(cmd)}`);
+    p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
 
     await killToolServer();
 
     try {
-      execSync(cmd, { stdio: "inherit" });
+      execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
       p.log.success("Package uninstalled.");
     } catch (err) {
       p.log.error(`Uninstall failed: ${err}`);

@@ -1,4 +1,5 @@
 node_modules/
+.yarn
 
 # Build outputs
 dist/
