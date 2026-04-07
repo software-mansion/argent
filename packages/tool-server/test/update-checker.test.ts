@@ -115,8 +115,8 @@ describe("update-checker", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(callCount).toBe(1);
 
-    // Advance 1 hour — should trigger another check.
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    // Advance 24 hours — should trigger another check.
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 * 24);
     expect(callCount).toBe(2);
 
     handle.dispose();
@@ -258,8 +258,8 @@ describe("update-checker", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(callCount).toBe(2);
 
-    // Advance 1 hour — should trigger exactly 1 check (from handle2), not 2.
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    // Advance 24 hours — should trigger exactly 1 check (from handle2), not 2.
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 * 24);
     expect(callCount).toBe(3);
 
     handle1.dispose();
