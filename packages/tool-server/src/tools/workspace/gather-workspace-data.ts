@@ -28,7 +28,8 @@ Flutter, native iOS/Android, or other), build commands, startup scripts, platfor
 support, package manager, and QA tooling. Follow up with Read/Glob/Grep for deeper
 exploration of anything the snapshot surfaces.
 Use when you need to inspect project configuration without manually reading multiple files.
-Returns partial data if workspacePath does not exist or is not readable; missing items are represented as null or empty collections.`,
+Returns partial data if workspacePath does not exist or is not readable; missing items are represented as null or empty collections.
+Fails if the workspacePath is not an absolute path or the directory cannot be accessed.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

@@ -18,14 +18,10 @@ type Result = {
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
   description: `Check whether native devtools dylibs are injected into a specific running app on the simulator.
-
-Returns:
-- envSetup: DYLD_INSERT_LIBRARIES is configured in the simulator's launchd environment
-- connected: the dylib is active in the current running process for this bundleId
-- requiresRestart: the app must be restarted before native devtools features are available
-
-Call this before using native-view-hierarchy or native-network-logs.
-If requiresRestart is true: call restart-app, then proceed with the native feature.`,
+Use when you need to verify native devtools readiness before calling native-full-hierarchy or native-network-logs.
+Returns { envSetup, connected, requiresRestart } — envSetup indicates DYLD_INSERT_LIBRARIES is configured, connected means the dylib is active in the running process, requiresRestart means the app must be restarted first.
+If requiresRestart is true: call restart-app, then proceed with the native feature.
+Fails if the simulator server is not running or the bundleId is not found.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
