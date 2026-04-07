@@ -79,6 +79,13 @@ export async function startMcpServer(): Promise<void> {
     return json.tools;
   }
 
+  interface ToolAPIResponse {
+    data?: unknown;
+    error?: string;
+    message?: string;
+    note?: string;
+  }
+
   async function callTool(
     name: string,
     args: unknown
@@ -90,13 +97,11 @@ export async function startMcpServer(): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args ?? {}),
     });
-    const json = (await res.json()) as {
-      data?: unknown;
-      error?: string;
-      message?: string;
-      note?: string;
-    };
+
+    const json = (await res.json()) as ToolAPIResponse;
+
     if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
+
     return { result: json.data, outputHint: meta?.outputHint, note: json.note };
   }
 
