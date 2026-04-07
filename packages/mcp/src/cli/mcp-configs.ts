@@ -321,11 +321,11 @@ const zedAdapter: McpConfigAdapter = {
   // would need its own entry.  Setting the global default to "allow" is the
   // documented opt-in; built-in security rules still protect against
   // destructive operations.
-  addAllowlist(_root: string, scope: "local" | "global"): void {
+  addAllowlist(root: string, scope: "local" | "global"): void {
     const settingsPath =
       scope === "global"
         ? path.join(homedir(), ".config", "zed", "settings.json")
-        : path.join(process.cwd(), ".zed", "settings.json");
+        : path.join(root, ".zed", "settings.json");
     const config = readJson(settingsPath);
     const agent = (config.agent ?? {}) as Record<string, unknown>;
     const perms = (agent.tool_permissions ?? {}) as Record<string, unknown>;
@@ -335,11 +335,11 @@ const zedAdapter: McpConfigAdapter = {
     writeJson(settingsPath, config);
   },
 
-  removeAllowlist(_root: string, scope: "local" | "global"): void {
+  removeAllowlist(root: string, scope: "local" | "global"): void {
     const settingsPath =
       scope === "global"
         ? path.join(homedir(), ".config", "zed", "settings.json")
-        : path.join(process.cwd(), ".zed", "settings.json");
+        : path.join(root, ".zed", "settings.json");
     if (!fs.existsSync(settingsPath)) return;
     const config = readJson(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as

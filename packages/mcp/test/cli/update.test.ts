@@ -3,6 +3,7 @@ import {
   getInstalledVersion,
   detectPackageManager,
   globalInstallCommand,
+  formatShellCommand,
 } from "../../src/cli/utils.js";
 import { PACKAGE_NAME, NPM_REGISTRY } from "../../src/cli/constants.js";
 
@@ -27,17 +28,19 @@ describe("update — install command generation", () => {
     delete process.env.npm_config_user_agent;
     const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
-    expect(cmd).toContain("npm install -g");
-    expect(cmd).toContain(PACKAGE_NAME);
-    expect(cmd).not.toContain("--registry");
+    const cmdStr = formatShellCommand(cmd);
+    expect(cmdStr).toContain("npm install -g");
+    expect(cmdStr).toContain(PACKAGE_NAME);
+    expect(cmdStr).not.toContain("--registry");
   });
 
   it("generates correct pnpm update command", () => {
     process.env.npm_config_user_agent = "pnpm/9.0.0";
     const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
-    expect(cmd).toContain("pnpm add -g");
-    expect(cmd).toContain(PACKAGE_NAME);
+    const cmdStr = formatShellCommand(cmd);
+    expect(cmdStr).toContain("pnpm add -g");
+    expect(cmdStr).toContain(PACKAGE_NAME);
   });
 });
 
@@ -55,7 +58,8 @@ describe("update — registry safety", () => {
   it("globalInstallCommand never includes --registry (relies on .npmrc scoped registry)", () => {
     for (const pm of ["npm", "yarn", "pnpm", "bun"] as const) {
       const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@1.0.0`);
-      expect(cmd).not.toContain("--registry");
+      const cmdStr = formatShellCommand(cmd);
+      expect(cmdStr).not.toContain("--registry");
     }
   });
 });
