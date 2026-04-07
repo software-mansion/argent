@@ -10,6 +10,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
+  formatShellCommand,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
@@ -143,31 +144,51 @@ describe("detectPackageManager", () => {
 
 describe("globalInstallCommand", () => {
   it("npm", () => {
-    expect(globalInstallCommand("npm", "pkg")).toBe("npm install -g pkg");
+    expect(globalInstallCommand("npm", "pkg")).toEqual({ bin: "npm", args: ["install", "-g", "pkg"] });
   });
   it("yarn", () => {
-    expect(globalInstallCommand("yarn", "pkg")).toBe("yarn global add pkg");
+    expect(globalInstallCommand("yarn", "pkg")).toEqual({ bin: "yarn", args: ["global", "add", "pkg"] });
   });
   it("pnpm", () => {
-    expect(globalInstallCommand("pnpm", "pkg")).toBe("pnpm add -g pkg");
+    expect(globalInstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["add", "-g", "pkg"] });
   });
   it("bun", () => {
-    expect(globalInstallCommand("bun", "pkg")).toBe("bun add -g pkg");
+    expect(globalInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-g", "pkg"] });
+  });
+  it("preserves paths with spaces", () => {
+    const cmd = globalInstallCommand("npm", "/path/with spaces/pkg.tgz");
+    expect(cmd.args[2]).toBe("/path/with spaces/pkg.tgz");
   });
 });
 
 describe("globalUninstallCommand", () => {
   it("npm", () => {
-    expect(globalUninstallCommand("npm", "pkg")).toBe("npm uninstall -g pkg");
+    expect(globalUninstallCommand("npm", "pkg")).toEqual({ bin: "npm", args: ["uninstall", "-g", "pkg"] });
   });
   it("yarn", () => {
-    expect(globalUninstallCommand("yarn", "pkg")).toBe("yarn global remove pkg");
+    expect(globalUninstallCommand("yarn", "pkg")).toEqual({ bin: "yarn", args: ["global", "remove", "pkg"] });
   });
   it("pnpm", () => {
-    expect(globalUninstallCommand("pnpm", "pkg")).toBe("pnpm remove -g pkg");
+    expect(globalUninstallCommand("pnpm", "pkg")).toEqual({ bin: "pnpm", args: ["remove", "-g", "pkg"] });
   });
   it("bun", () => {
-    expect(globalUninstallCommand("bun", "pkg")).toBe("bun remove -g pkg");
+    expect(globalUninstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["remove", "-g", "pkg"] });
+  });
+});
+
+// ── formatShellCommand ───────────────────────────────────────────────────────
+
+describe("formatShellCommand", () => {
+  it("joins bin and args", () => {
+    expect(formatShellCommand({ bin: "npm", args: ["install", "-g", "pkg"] })).toBe(
+      "npm install -g pkg"
+    );
+  });
+
+  it("quotes args that contain spaces", () => {
+    expect(
+      formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
+    ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
   });
 });
 

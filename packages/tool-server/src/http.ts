@@ -3,6 +3,10 @@ import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
+import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
+import { buildUpdateNote } from "./update-utils";
+
+const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── HTTP app ────────────────────────────────────────────────────────
 
@@ -104,7 +108,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
-        res.json({ data });
+        const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
+        const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
+        if (shouldNotify) {
+          suppressUpdateNote(AUTO_SUPPRESS_MS);
+        }
+        res.json({
+          data,
+          ...(shouldNotify
+            ? { note: buildUpdateNote(currentVersion, latestVersion ?? "unknown") }
+            : {}),
+        });
       } catch (err: unknown) {
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });

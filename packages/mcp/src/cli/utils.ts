@@ -97,6 +97,16 @@ export function getLatestVersion(): string {
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
+export interface ShellCommand {
+  bin: string;
+  args: string[];
+}
+
+export function formatShellCommand(cmd: ShellCommand): string {
+  const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
+  return parts.join(" ");
+}
+
 export function detectPackageManager(): PackageManager {
   const agent = process.env.npm_config_user_agent ?? "";
   if (agent.startsWith("yarn")) return "yarn";
@@ -105,28 +115,28 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
-export function globalInstallCommand(pm: PackageManager, pkg: string): string {
+export function globalInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
-      return `yarn global add ${pkg}`;
+      return { bin: "yarn", args: ["global", "add", pkg] };
     case "pnpm":
-      return `pnpm add -g ${pkg}`;
+      return { bin: "pnpm", args: ["add", "-g", pkg] };
     case "bun":
-      return `bun add -g ${pkg}`;
+      return { bin: "bun", args: ["add", "-g", pkg] };
     default:
-      return `npm install -g ${pkg}`;
+      return { bin: "npm", args: ["install", "-g", pkg] };
   }
 }
 
-export function globalUninstallCommand(pm: PackageManager, pkg: string): string {
+export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
-      return `yarn global remove ${pkg}`;
+      return { bin: "yarn", args: ["global", "remove", pkg] };
     case "pnpm":
-      return `pnpm remove -g ${pkg}`;
+      return { bin: "pnpm", args: ["remove", "-g", pkg] };
     case "bun":
-      return `bun remove -g ${pkg}`;
+      return { bin: "bun", args: ["remove", "-g", pkg] };
     default:
-      return `npm uninstall -g ${pkg}`;
+      return { bin: "npm", args: ["uninstall", "-g", pkg] };
   }
 }
