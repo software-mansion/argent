@@ -72,16 +72,29 @@ async function waitForHttp(url, timeoutMs = 20_000) {
 
 const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
 const DYLIBS_EXIST = fs.existsSync(path.join(DYLIBS_DIR, "libNativeDevtoolsIos.dylib"));
+const PRIVATE_NATIVE_DEVTOOLS_SRC = path.join(
+  ROOT,
+  "packages",
+  "argent-private",
+  "packages",
+  "native-devtools-ios",
+  "Sources",
+  "NativeDevtoolsIos"
+);
 
 // Try to init the submodule and rebuild. Failure is non-fatal if pre-built
 // dylibs are already present — developers without argent-private access can
 // still work on Argent using the committed binaries.
 let submoduleReady = false;
 try {
-  execSync("git submodule update --init packages/argent-private", {
-    cwd: ROOT,
-    stdio: "pipe",
-  });
+  // Preserve an existing argent-private checkout so local branch switches
+  // are not reset back to the superproject's recorded gitlink on every dev run.
+  if (!fs.existsSync(PRIVATE_NATIVE_DEVTOOLS_SRC)) {
+    execSync("git submodule update --init packages/argent-private", {
+      cwd: ROOT,
+      stdio: "pipe",
+    });
+  }
   submoduleReady = true;
 } catch {
   if (DYLIBS_EXIST) {
