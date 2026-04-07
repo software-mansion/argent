@@ -10,6 +10,8 @@ Argent is an **agentic toolkit** that gives your AI assistant direct access to i
 npx @swmansion/argent init
 ```
 
+---
+
 <p align="center">
   <img src="../../assets/placeholder.png" alt="argent banner" width="100%" />
 </p>
