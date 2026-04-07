@@ -137,14 +137,8 @@ export async function startMcpServer(): Promise<void> {
       args: params.arguments,
     });
     try {
-<<<<<<< HEAD
-      const { result, outputHint } = await callTool(params.name, params.arguments);
-=======
-      const { result, outputHint, note } = await callTool(
-        params.name,
-        params.arguments,
-      );
->>>>>>> 322a369 (feat: add update notification and update-argent tool)
+      const { result, outputHint, note } = await callTool(params.name, params.arguments);
+
       await spyLog({
         ts: new Date().toISOString(),
         event: "tool_result",
