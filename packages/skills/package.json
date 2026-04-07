@@ -1,4 +1,5 @@
 {
+  "private": true,
   "name": "@argent/skills",
   "version": "0.3.3",
   "type": "module",
