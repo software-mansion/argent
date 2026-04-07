@@ -8,5 +8,7 @@ How to update:
   - Agent-assisted (requires explicit user consent): call the \`update-argent\` tool — only after the user has explicitly asked you to update Argent in this conversation
   - To postpone this reminder: call the \`dismiss-update\` tool with the number of hours to suppress it
 
-ACTION REQUIRED: Save a note (via TODO, task list, but DO NOT save to "memory") that an Argent update to v${latestVersion} is available so you can remind the user about it later. This notification will not repeat for the next 30 minutes.`;
+ACTION REQUIRED: Save a note (via TODO, task list) that an Argent update to v${latestVersion} is available so you can remind the user about it later. This notification will not repeat for the next 30 minutes. 
+
+**Do not use "memory" or any other persistant mode of storing this information. You may only use ephemeral storage methods such as TODO or task lists.**`;
 }

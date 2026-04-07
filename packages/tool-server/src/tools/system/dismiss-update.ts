@@ -12,7 +12,7 @@ const zodSchema = z.object({
 export const dismissUpdateTool: ToolDefinition<{ hours: number }> = {
   id: "dismiss-update",
   description:
-    "Suppresses the Argent update notification for the given number of hours. Use when the user asks to postpone or silence update reminders.",
+    "Clear the Argent update notification for the given number of hours. Use when the user asks to postpone or silence update reminders. Returns { message } confirming the suppression duration. Fails if the hours value is negative or the suppression state cannot be persisted.",
   zodSchema,
   services: () => ({}),
   async execute(_services, params, _options) {

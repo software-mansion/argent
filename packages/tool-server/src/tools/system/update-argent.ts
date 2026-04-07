@@ -7,7 +7,7 @@ let updateScheduled = false;
 export const updateArgentTool: ToolDefinition<void> = {
   id: "update-argent",
   description:
-    "Applies a pending Argent update. Only call this tool when the user has explicitly consented to updating Argent in this conversation. The tool server will restart automatically after the update.",
+    "Apply a pending Argent update. Only call this tool when the user has explicitly consented to updating Argent in this conversation. Use when an update notification indicates a new version is available and the user agrees to update. Returns { message } with the update status and version info. The tool server will restart automatically after the update. Fails if no update is available or an update is already in progress.",
   services: () => ({}),
   async execute(_services, _params, _options) {
     const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
