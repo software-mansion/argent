@@ -10,6 +10,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
+  formatShellCommand,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
@@ -172,6 +173,22 @@ describe("globalUninstallCommand", () => {
   });
   it("bun", () => {
     expect(globalUninstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["remove", "-g", "pkg"] });
+  });
+});
+
+// ── formatShellCommand ───────────────────────────────────────────────────────
+
+describe("formatShellCommand", () => {
+  it("joins bin and args", () => {
+    expect(formatShellCommand({ bin: "npm", args: ["install", "-g", "pkg"] })).toBe(
+      "npm install -g pkg"
+    );
+  });
+
+  it("quotes args that contain spaces", () => {
+    expect(
+      formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
+    ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
   });
 });
 

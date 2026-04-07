@@ -103,7 +103,8 @@ export interface ShellCommand {
 }
 
 export function formatShellCommand(cmd: ShellCommand): string {
-  return [cmd.bin, ...cmd.args].join(" ");
+  const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
+  return parts.join(" ");
 }
 
 export function detectPackageManager(): PackageManager {

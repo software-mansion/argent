@@ -244,7 +244,7 @@ export async function init(args: string[]): Promise<void> {
         },
         {
           value: "custom" as const,
-          label: "Specify installation path",
+          label: "Specify installation directory",
           hint: "Specify a directory to use as the project root",
         },
       ],
@@ -274,7 +274,7 @@ export async function init(args: string[]): Promise<void> {
         process.exit(0);
       }
 
-      customRoot = customPathInput as string;
+      customRoot = resolve((customPathInput as string).trim());
     }
   }
 
@@ -353,6 +353,16 @@ export async function init(args: string[]): Promise<void> {
     const allowlistResults: string[] = [];
 
     for (const adapter of adaptersWithAllowlist) {
+      const hasPath =
+        normalizedScope === "global"
+          ? adapter.globalPath()
+          : adapter.projectPath(effectiveRoot);
+      if (!hasPath) {
+        allowlistResults.push(
+          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config for this scope)")}`
+        );
+        continue;
+      }
       try {
         adapter.addAllowlist!(effectiveRoot, normalizedScope);
         allowlistResults.push(`${pc.green("+")} ${adapter.name}`);
