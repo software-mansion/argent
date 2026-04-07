@@ -3,7 +3,7 @@
 Argent has two HTTP surfaces:
 
 - **Tools server** — Node/Express app (port 3001) that lists and invokes tools via a registry. Manages simulator lifecycle, debugger connections, and all tool logic.
-- **Simulator server** — Native arm64 macOS binary (repo root) that runs one process per simulator. Handles device I/O: touch, keys, buttons, rotation, paste, scroll, MJPEG stream, screenshots, recording.
+- **Simulator server** — Native arm64 macOS binary (`packages/native-devtools-ios/bin/`) that runs one process per simulator. Handles device I/O: touch, keys, buttons, rotation, paste, scroll, MJPEG stream, screenshots, recording.
 
 The tools server spawns simulator-server processes on demand. The UI and MCP bridge both talk to the tools server; the tools server talks to simulator-server instances.
 
@@ -20,7 +20,7 @@ The tools server spawns simulator-server processes on demand. The UI and MCP bri
 
 - macOS with Xcode installed (for `xcrun simctl`)
 - Node.js 18+
-- The `simulator-server` binary at the repo root (arm64 macOS)
+- The `simulator-server` binary in `packages/native-devtools-ios/bin/` (arm64 macOS)
 
 ## Getting started
 
@@ -91,8 +91,8 @@ npm run pack:mcp                                  # build and create argent-<ver
 The simulator-server binary is normally spawned by the tools server. To run it standalone:
 
 ```bash
-./simulator-server ios --id <UDID>                          # defaults: port 3000, replay on, touch overlay on
-./simulator-server ios --id <UDID> --port 8080 --no-replay  # custom port, replay off
+./packages/native-devtools-ios/bin/simulator-server ios --id <UDID>                          # defaults: port 3000, replay on, touch overlay on
+./packages/native-devtools-ios/bin/simulator-server ios --id <UDID> --port 8080 --no-replay  # custom port, replay off
 ```
 
 | Flag                                   | Env var        | Default | Description           |
@@ -134,7 +134,7 @@ The vast majority of the source code (business logic, scripts, interfaces, etc.)
 Certain elements of the project are provided exclusively as compiled binary files (typically located in the `/bin` or `/libs` directories).
 
 - **Files:**
-  - `packages/mcp/bin/simulator-server`
+  - `packages/native-devtools-ios/bin/simulator-server`
   - `packages/native-devtools-ios/dylibs/libInjectionBootstrap.dylib`
   - `packages/native-devtools-ios/dylibs/libKeyboardPatch.dylib`
   - `packages/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib`

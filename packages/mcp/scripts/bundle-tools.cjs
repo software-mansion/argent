@@ -9,8 +9,9 @@ const path = require("path");
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
+const NATIVE_DEVTOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/src/index.ts");
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
-const BIN_SRC = path.resolve(WORKSPACE_ROOT, "simulator-server");
+const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
@@ -37,7 +38,10 @@ esbuild.buildSync({
   target: "node22",
   format: "cjs",
   outfile: OUT_FILE,
-  alias: { "@argent/registry": REGISTRY_ENTRY },
+  alias: {
+    "@argent/registry": REGISTRY_ENTRY,
+    "@argent/native-devtools-ios": NATIVE_DEVTOOLS_ENTRY,
+  },
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);

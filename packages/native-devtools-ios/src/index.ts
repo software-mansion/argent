@@ -17,3 +17,18 @@ function requireDylib(name: string): string {
 export const bootstrapDylibPath = () => requireDylib("libInjectionBootstrap.dylib");
 export const nativeDevtoolsDylibPath = () => requireDylib("libNativeDevtoolsIos.dylib");
 export const keyboardPatchDylibPath = () => requireDylib("libKeyboardPatch.dylib");
+
+const BIN_DIR =
+  process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "bin");
+
+export function simulatorServerBinaryPath(): string {
+  const p = path.join(BIN_DIR, "simulator-server");
+  if (!fs.existsSync(p)) {
+    throw new Error(`simulator-server binary not found: ${p}`);
+  }
+  return p;
+}
+
+export function simulatorServerBinaryDir(): string {
+  return BIN_DIR;
+}

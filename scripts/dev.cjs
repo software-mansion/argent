@@ -130,7 +130,7 @@ console.log("✓ MCP TypeScript built\n");
 // ── Step 3: Set up packages/mcp/bin/ and skills/rules/agents ─────────────────
 
 const BIN_DIR = path.join(MCP_PKG, "bin");
-const BIN_SRC = path.join(ROOT, "simulator-server");
+const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", "simulator-server");
 const BIN_DEST = path.join(BIN_DIR, "simulator-server");
 fs.mkdirSync(BIN_DIR, { recursive: true });
 if (fs.existsSync(BIN_SRC)) {
