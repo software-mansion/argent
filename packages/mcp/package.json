@@ -8,8 +8,10 @@
     "argent-simulator-server": "bin/simulator-server"
   },
   "scripts": {
-    "build": "npm run build:mcp && npm run build:tools-bundle",
+    "build": "npm run build:mcp && npm run build:tools-bundle && npm run sync-readme",
     "build:mcp": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "sync-readme": "node scripts/sync-readme.cjs",
+    "prepack": "node scripts/sync-readme.cjs",
     "build:tools-bundle": "node scripts/bundle-tools.cjs",
     "dev": "node --loader ts-node/esm src/cli.ts mcp",
     "test": "vitest run",

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="argent banner" width="100%" />
+  <img src="https://raw.githubusercontent.com/software-mansion/argent/main/assets/banner.png" alt="argent banner" width="100%" />
 </p>
 
 # Argent
@@ -7,7 +7,7 @@
 Argent is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
-npx @swmansion/argent install
+npx @swmansion/argent init
 ```
 
 ## Capabilities
@@ -20,10 +20,9 @@ npx @swmansion/argent install
 
 > **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
 
-
 <br/>
 <p align="center">
-  <img width="80%" src="assets/placeholder.gif" alt="argent banner" width="100%" />
+  <img src="https://raw.githubusercontent.com/software-mansion/argent/main/assets/showcase.gif" alt="argent showcase video gif" width="100%" />
 </p>
 
 ---
@@ -40,7 +39,7 @@ npx @swmansion/argent install
 From your project root:
 
 ```bash
-npx @swmansion/argent install
+npx @swmansion/argent init
 ```
 
 This command triggers an installation wizard which:
@@ -49,22 +48,23 @@ This command triggers an installation wizard which:
 - Detects your editor and registers the MCP server
 - Copies skills, rules, and agent definitions into your workspace
 
-Prefer a manual install?
+#### Prefer a manual install?
 
 ```bash
 npm install -g @swmansion/argent
 argent init
 ```
 
-
 ## CLI Reference
 
-| Command         | Description                                                 |
-| --------------- | ----------------------------------------------------------- |
-| `argent init`   | Install globally and configure MCP in the current workspace |
-| `argent update` | Pull the latest version and refresh workspace configuration |
-| `argent remove` | Unregister the MCP server and uninstall the package         |
-
+| Command            | Description                                                 |
+| ------------------ | ----------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace |
+| `argent install`   | Alias for `init` command                                    |
+| `argent update`    | Pull the latest version and refresh workspace configuration |
+| `argent remove`    | Unregister the MCP server and uninstall the package         |
+| `argent uninstall` | Alias for `remove` command                                  |
+| `argent mcp`       | Start MCP server instance, used internally by agent         |
 
 ## Supported Editors
 
@@ -80,7 +80,6 @@ argent init
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
 
-
 ## License
 
 Argent uses a mixed licensing model.
@@ -91,9 +90,8 @@ Argent uses a mixed licensing model.
 
 By using argent you acknowledge and agree to this structure.
 
-
 ## Argent is created by Software Mansion
 
 Since 2012 [Software Mansion](https://swmansion.com) is a software agency with experience in building web and mobile apps. We are Core React Native Contributors and experts in dealing with all kinds of React Native issues. We can help you build your next dream product – [Hire us](https://swmansion.com/contact/projects?utm_source=argent&utm_medium=readme).
 
-[![swm](https://logo.swmansion.com/logo?color=white&variant=desktop&width=150&tag=argent-github 'Software Mansion')](https://swmansion.com)
+[![swm](https://logo.swmansion.com/logo?color=white&variant=desktop&width=150&tag=argent-github "Software Mansion")](https://swmansion.com)
