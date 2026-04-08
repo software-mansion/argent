@@ -87,7 +87,7 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
   }
 }
 
-async function ensureAutomationEnabled(udid: string): Promise<void> {
+export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync("xcrun", [
     "simctl", "spawn", udid,
     "defaults", "write", "com.apple.Accessibility",
