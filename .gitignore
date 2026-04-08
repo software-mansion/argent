@@ -32,6 +32,7 @@ packages/mcp/dylibs/
 packages/mcp/skills/
 packages/mcp/agents/
 packages/mcp/rules/
+packages/mcp/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/
