@@ -22,6 +22,7 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
+import { ensureAccessibilityPermission } from "./accessibility.js";
 
 function isGloballyInstalled(): boolean {
   try {
@@ -69,6 +70,9 @@ export async function init(args: string[]): Promise<void> {
   const fromTar = extractFlag(args, "--from");
 
   printBanner();
+
+  // ── Accessibility Permission Gate (macOS only) ─────────────────────────────
+  await ensureAccessibilityPermission(nonInteractive);
 
   p.intro(pc.bgCyan(pc.black(" argent init ")));
 
