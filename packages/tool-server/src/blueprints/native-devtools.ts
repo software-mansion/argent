@@ -115,6 +115,28 @@ export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: st
   return [...preserved, bootstrapPath].join(":");
 }
 
+async function ensureAccessibilityEnabled(udid: string): Promise<void> {
+  // iOS 26+ requires AccessibilityEnabled and ApplicationAccessibilityEnabled to be set
+  // in the simulator's defaults for SwiftUI to populate the accessibility tree.
+  // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
+  const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
+  await Promise.all(
+    flags.map((flag) =>
+      execFileAsync("xcrun", [
+        "simctl",
+        "spawn",
+        udid,
+        "defaults",
+        "write",
+        "com.apple.Accessibility",
+        flag,
+        "-bool",
+        "true",
+      ])
+    )
+  );
+}
+
 async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   const bootstrapPath = bootstrapDylibPath();
 
@@ -149,6 +171,9 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
     "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
     socketPath,
   ]);
+
+  // Ensure the accessibility runtime is enabled so that describeScreen works on iOS 26+.
+  await ensureAccessibilityEnabled(udid);
 }
 
 async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
