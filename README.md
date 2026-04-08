@@ -1,8 +1,11 @@
 <p align="center">
-  <img src="https://github.com/software-mansion/argent/blob/main/assets/banner.png" alt="argent banner" width="100%" />
+  <img src="assets/banner.png" alt="argent banner" width="50%" />
 </p>
 
-# Argent
+<div align="center">
+  <h1 align="center" style="display:inline-bloc;font-size:3.5rem;">Argent
+  </h1>
+</div>
 
 **Argent** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
