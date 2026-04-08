@@ -92,9 +92,19 @@ function resolveNodePath(): string {
   }
 }
 
+function pickSystemEnv(): Record<string, string> {
+  const keys = ["PATH", "HOME", "USER", "SHELL", "TMPDIR", "LANG"] as const;
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    const v = process.env[k];
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
 function buildPlist(port: number): string {
   const nodePath = resolveNodePath();
-  const env = buildToolsServerEnv(port, {});
+  const env = buildToolsServerEnv(port, pickSystemEnv());
 
   const envEntries = Object.entries(env)
     .filter(([, v]) => v !== undefined)
@@ -203,7 +213,12 @@ async function launchToolsServer(port: number): Promise<{ port: number; pid: num
 
   await waitForHealthy(port);
 
-  const pid = getDaemonPid() ?? 0;
+  const pid = getDaemonPid();
+  if (pid == null || pid <= 0) {
+    throw new Error(
+      "tool-server daemon was bootstrapped but its PID could not be determined"
+    );
+  }
 
   return { port, pid };
 }
