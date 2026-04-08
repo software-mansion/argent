@@ -11,7 +11,7 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 | Tool                              | Purpose                                                                                                                                    |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro.                                                             |
+| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro. Optional: `sample_interval_us` (default 100).               |
 | `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                 |
 | `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits and findings sorted by `totalRenderMs` DESC. Saves raw data to disk for later reload. |
 | `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                            |
