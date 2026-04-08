@@ -8,6 +8,15 @@ import pc from "picocolors";
  * Uses the CoreGraphics AXIsProcessTrusted() API via a one-liner Swift call.
  * Returns false on non-macOS platforms.
  */
+function isSwiftAvailable(): boolean {
+  try {
+    execSync("which swift", { stdio: "ignore", timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isAccessibilityEnabled(): boolean {
   if (process.platform !== "darwin") return false;
   try {
@@ -159,6 +168,18 @@ export async function ensureAccessibilityPermission(
   // Already granted — nothing to do
   if (isAccessibilityEnabled()) return;
 
+  // Check that swift is available — we need it to query the Accessibility API
+  if (!isSwiftAvailable()) {
+    console.log(
+      pc.yellow(
+        "\n  Warning: `swift` is not available on your PATH.\n" +
+          "  Argent needs Swift to check Accessibility permissions.\n" +
+          "  Install Xcode Command Line Tools: xcode-select --install\n"
+      )
+    );
+    process.exit(1);
+  }
+
   // Show the warning banner
   printBannerBlock(PERM_BANNER_LINES, pc.yellow);
 
@@ -181,7 +202,7 @@ export async function ensureAccessibilityPermission(
     process.stdout.write(pc.yellow(pc.bold(`  Opening permission prompt in ${i}...`)) + "\r");
     await sleep(1000);
   }
-  process.stdout.write(" ".repeat(60) + "\r"); // Clear countdown line
+  process.stdout.write("\x1b[2K\r"); // Clear countdown line
 
   // Trigger the native prompt
   requestAccessibilityPermission();
@@ -236,18 +257,34 @@ export async function ensureAccessibilityPermission(
 
 /**
  * Poll for permission while listening for 's' keypress to open settings.
- * Returns true if permission is granted within the timeout.
+ * Uses recursive setTimeout (not setInterval) so that synchronous execSync
+ * calls in isAccessibilityEnabled() don't stack up and block key events.
+ * Handles Ctrl+C and ensures raw mode is always restored on exit.
  */
 function pollWithKeyboardHint(timeoutSeconds: number): Promise<boolean> {
   return new Promise((resolve) => {
     let resolved = false;
+    let rawModeSet = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const cleanup = () => {
-      if (process.stdin.isTTY) {
-        process.stdin.setRawMode(false);
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (rawModeSet && process.stdin.isTTY) {
+        try {
+          process.stdin.setRawMode(false);
+        } catch {
+          // Best effort
+        }
         process.stdin.pause();
         process.stdin.removeListener("data", onData);
+        rawModeSet = false;
       }
+      process.removeListener("exit", cleanup);
+      process.removeListener("SIGINT", onSigInt);
+      process.removeListener("SIGTERM", onSigInt);
     };
 
     const done = (result: boolean) => {
@@ -257,9 +294,25 @@ function pollWithKeyboardHint(timeoutSeconds: number): Promise<boolean> {
       resolve(result);
     };
 
-    // Set up keyboard listener for 's' to open settings
+    const onSigInt = () => {
+      cleanup();
+      process.exit(1);
+    };
+
+    // Ensure raw mode is always restored, even on unexpected exit
+    process.on("exit", cleanup);
+    process.on("SIGINT", onSigInt);
+    process.on("SIGTERM", onSigInt);
+
+    // Set up keyboard listener for 's' to open settings, Ctrl+C to abort
     const onData = (data: Buffer) => {
       const key = data.toString();
+      if (key === "\x03") {
+        // Ctrl+C
+        console.log();
+        done(false);
+        return;
+      }
       if (key === "s" || key === "S") {
         openAccessibilitySettings();
         console.log(pc.dim("  Opened System Settings → Accessibility"));
@@ -267,24 +320,35 @@ function pollWithKeyboardHint(timeoutSeconds: number): Promise<boolean> {
     };
 
     if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-      process.stdin.resume();
-      process.stdin.on("data", onData);
+      try {
+        process.stdin.setRawMode(true);
+        rawModeSet = true;
+        process.stdin.resume();
+        process.stdin.on("data", onData);
+      } catch {
+        // If raw mode fails, continue without keyboard hints
+      }
     }
 
-    // Poll every 1.5 seconds
-    let elapsed = 0;
-    const interval = setInterval(() => {
+    // Poll using recursive setTimeout so each check completes before scheduling the next
+    const startTime = Date.now();
+    const pollIntervalMs = 2000;
+
+    const check = () => {
+      if (resolved) return;
       if (isAccessibilityEnabled()) {
-        clearInterval(interval);
         done(true);
         return;
       }
-      elapsed += 1.5;
+      const elapsed = (Date.now() - startTime) / 1000;
       if (elapsed >= timeoutSeconds) {
-        clearInterval(interval);
         done(false);
+        return;
       }
-    }, 1500);
+      timer = setTimeout(check, pollIntervalMs);
+    };
+
+    // Start first check after a short delay to let the system prompt appear
+    timer = setTimeout(check, pollIntervalMs);
   });
 }
