@@ -12,7 +12,7 @@ import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
-import { bootSimulatorTool } from "../tools/simulator/boot-simulator";
+import { createBootSimulatorTool } from "../tools/simulator/boot-simulator";
 import { simulatorServerTool } from "../tools/simulator/simulator-server";
 import { launchAppTool } from "../tools/simulator/launch-app";
 import { restartAppTool } from "../tools/simulator/restart-app";
@@ -78,7 +78,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(nativeDevtoolsBlueprint);
 
   registry.registerTool(listSimulatorsTool);
-  registry.registerTool(bootSimulatorTool);
+  registry.registerTool(createBootSimulatorTool(registry));
   registry.registerTool(launchAppTool);
   registry.registerTool(restartAppTool);
   registry.registerTool(reinstallAppTool);
