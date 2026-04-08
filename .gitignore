@@ -28,6 +28,7 @@ packages/*/node_modules/
 
 # MCP package generated assets (copied/bundled at build time)
 packages/mcp/bin/
+packages/mcp/dylibs/
 packages/mcp/skills/
 packages/mcp/agents/
 packages/mcp/rules/

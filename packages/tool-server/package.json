@@ -1,4 +1,5 @@
 {
+  "private": true,
   "name": "@argent/tool-server",
   "version": "0.3.3",
   "description": "Framework-agnostic tool registry for iOS simulator control",

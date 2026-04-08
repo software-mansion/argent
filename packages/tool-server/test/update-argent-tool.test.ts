@@ -67,11 +67,10 @@ describe("update-argent tool", () => {
 
     vi.advanceTimersByTime(1);
     expect(mockSpawn).toHaveBeenCalledOnce();
-    expect(mockSpawn).toHaveBeenCalledWith(
-      "argent",
-      ["update", "--yes"],
-      { detached: true, stdio: "ignore" },
-    );
+    expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes"], {
+      detached: true,
+      stdio: "ignore",
+    });
   });
 
   it("does NOT spawn before 2 seconds have elapsed", async () => {

@@ -182,10 +182,10 @@ ADDITIONAL TERMS: PROPRIETARY BINARY COMPONENTS
 The following files included in this package are NOT governed by the Apache
 License, Version 2.0 above:
 
-  node_modules/@argent/native-devtools-ios/bin/simulator-server
-  node_modules/@argent/native-devtools-ios/dylibs/libInjectionBootstrap.dylib
-  node_modules/@argent/native-devtools-ios/dylibs/libKeyboardPatch.dylib
-  node_modules/@argent/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib
+  bin/simulator-server
+  dylibs/libInjectionBootstrap.dylib
+  dylibs/libKeyboardPatch.dylib
+  dylibs/libNativeDevtoolsIos.dylib
 
 These files are the proprietary intellectual property of Software Mansion S.A.
 and are licensed solely for use in conjunction with this package.
