@@ -4,7 +4,7 @@
 
 # Argent
 
-Argent is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
+**Argent** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent init
@@ -88,7 +88,7 @@ Argent uses a mixed licensing model.
 
 **Proprietary binaries** (`bin/simulator-server` and the `.dylib` files in `native-devtools-ios`) are the intellectual property of Software Mansion S.A. and are licensed solely for use within this project. Decompiling, reverse-engineering, or redistributing them without explicit written permission is prohibited.
 
-By using argent you acknowledge and agree to this structure.
+By using Argent, you acknowledge and agree to this structure. See [LICENSE](https://raw.githubusercontent.com/software-mansion/argent/main/LICENSE.txt) for full details.
 
 ## Argent is created by Software Mansion
 
