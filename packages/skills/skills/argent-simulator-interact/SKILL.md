@@ -207,7 +207,6 @@ Screenshots are downscaled by default (30% of original resolution) to reduce con
 | Screenshot times out | Restart simulator-server via the `simulator-server` tool, then retry. |
 | No booted simulator  | Run `boot-simulator` first.                                                            |
 
-Note: Screenshots require a Pro/Team/Enterprise license. Use `activate-sso` or `activate-license-key` if prompted.
 
 ---
 
