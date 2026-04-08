@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
   TypedEventEmitter,
@@ -8,6 +9,8 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { axServiceBinaryPath } from "@argent/native-devtools-ios";
+
+const execFileAsync = promisify(execFile);
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
@@ -82,6 +85,23 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function ensureAutomationEnabled(udid: string): Promise<void> {
+  await execFileAsync("xcrun", [
+    "simctl", "spawn", udid,
+    "defaults", "write", "com.apple.Accessibility",
+    "AutomationEnabled", "-bool", "true",
+  ]);
+}
+
+async function killExistingDaemon(socketPath: string): Promise<void> {
+  try {
+    const raw = await querySocket(socketPath, "ping", 2000);
+    const parsed = JSON.parse(raw);
+    if (parsed.pid) process.kill(parsed.pid, "SIGTERM");
+  } catch {}
+  try { fs.unlinkSync(socketPath); } catch {}
 }
 
 function spawnDaemon(
@@ -172,23 +192,19 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, string> = {
 
   async factory(_deps, udid) {
     const socketPath = getSocketPath(udid);
-    let proc: ChildProcess | null = null;
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    const alive = await pingDaemon(socketPath);
-    if (!alive) {
-      try {
-        fs.unlinkSync(socketPath);
-      } catch {}
-      proc = await spawnDaemon(udid, socketPath);
+    await ensureAutomationEnabled(udid);
+    await killExistingDaemon(socketPath);
 
-      proc.on("exit", (code) => {
-        events.emit("terminated", new Error(`ax-service exited with code ${code}`));
-      });
-      proc.on("error", (err) => {
-        events.emit("terminated", err);
-      });
-    }
+    const proc = await spawnDaemon(udid, socketPath);
+
+    proc.on("exit", (code) => {
+      events.emit("terminated", new Error(`ax-service exited with code ${code}`));
+    });
+    proc.on("error", (err) => {
+      events.emit("terminated", err);
+    });
 
     async function query(command: string): Promise<unknown> {
       try {
