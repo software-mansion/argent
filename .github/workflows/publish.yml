@@ -1,9 +1,10 @@
 name: Publish to GitHub Packages
 
 on:
-  release:
-    types: [created]
   workflow_dispatch:
+  push:
+    tags:
+      - "v*"
 
 jobs:
   publish:
@@ -17,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           registry-url: "https://npm.pkg.github.com"
           scope: "@swmansion"
 
@@ -25,6 +26,12 @@ jobs:
 
       - run: npm run build -w @swmansion/argent
 
-      - run: npm publish --workspace packages/mcp
+      - run: test -x packages/mcp/bin/simulator-server
+      - run: test -f packages/mcp/dylibs/libNativeDevtoolsIos.dylib
+      - run: test -f packages/mcp/dylibs/libKeyboardPatch.dylib
+      - run: test -f packages/mcp/dylibs/libInjectionBootstrap.dylib
+      - run: npm pack --dry-run -w @swmansion/argent
+
+      - run: npm publish -w @swmansion/argent --registry https://npm.pkg.github.com
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
