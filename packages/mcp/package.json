@@ -2,6 +2,10 @@
   "name": "@swmansion/argent",
   "version": "0.3.5",
   "description": "MCP server for iOS Simulator control",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/software-mansion/argent.git"
+  },
   "type": "module",
   "bin": {
     "argent": "dist/cli.js",
