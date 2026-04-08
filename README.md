@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/software-mansion/argent/main/assets/banner.png" alt="argent banner" width="100%" />
+  <img src="https://github.com/software-mansion/argent/blob/main/assets/banner.png" alt="argent banner" width="100%" />
 </p>
 
 # Argent
@@ -22,7 +22,7 @@ npx @swmansion/argent init
 
 <br/>
 <p align="center">
-  <img src="https://raw.githubusercontent.com/software-mansion/argent/main/assets/showcase.gif" alt="argent showcase video gif" width="100%" />
+  <img src="https://github.com/software-mansion/argent/blob/main/assets/showcase.gif" alt="argent showcase video gif" width="100%" />
 </p>
 
 ---
