@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
+import { axServiceBlueprint } from "../blueprints/ax-service";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -37,7 +38,7 @@ import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-e
 import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
-import { describeTool } from "../tools/interactions/describe";
+import { createDescribeTool } from "../tools/interactions/describe";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
 import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
@@ -76,6 +77,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(iosInstrumentsSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
+  registry.registerBlueprint(axServiceBlueprint);
 
   registry.registerTool(listSimulatorsTool);
   registry.registerTool(createBootSimulatorTool(registry));
@@ -103,7 +105,7 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerLogRegistryTool);
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
-  registry.registerTool(describeTool);
+  registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
   registry.registerTool(reactProfilerAnalyzeTool);

@@ -1,166 +1,169 @@
-import { describe, expect, it } from "vitest";
-import type { NativeDevtoolsApi, NativeAppState } from "../src/blueprints/native-devtools";
-import { describeTool } from "../src/tools/interactions/describe";
+import { describe, expect, it, vi } from "vitest";
+import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
+import { createDescribeTool } from "../src/tools/interactions/describe";
 
-function makeAppState(bundleId: string, overrides: Partial<NativeAppState> = {}): NativeAppState {
+function makeAXServiceApi(response: AXDescribeResponse): AXServiceApi {
   return {
-    bundleId,
-    applicationState: "background",
-    foregroundActiveSceneCount: 0,
-    foregroundInactiveSceneCount: 0,
-    backgroundSceneCount: 1,
-    unattachedSceneCount: 0,
-    isFrontmostCandidate: false,
-    ...overrides,
+    describe: async () => response,
+    alertCheck: async () => response.alertVisible,
+    ping: async () => true,
   };
 }
 
-function makeNativeApi(options: {
-  apps?: NativeAppState[];
-  requiresRestart?: boolean;
-  nativeResult?: unknown;
-  queryError?: string;
-}): NativeDevtoolsApi {
-  const apps = options.apps ?? [];
-  const byBundleId = new Map(apps.map((app) => [app.bundleId, app]));
-
+function makeMockRegistry(options: { axService?: AXServiceApi }) {
   return {
-    isEnvSetup: () => true,
-    socketPath: "/tmp/mock.sock",
-    ensureEnvReady: async () => {},
-    isConnected: (bundleId) => byBundleId.has(bundleId),
-    isAppRunning: async (bundleId) => byBundleId.has(bundleId),
-    listConnectedBundleIds: () => [...byBundleId.keys()],
-    requiresAppRestart: async () => options.requiresRestart ?? false,
-    activateNetworkInspection: () => {},
-    getNetworkLog: () => [],
-    clearNetworkLog: () => {},
-    getAppState: async (bundleId) => {
-      const app = byBundleId.get(bundleId);
-      if (!app) throw new Error(`unknown bundleId: ${bundleId}`);
-      return app;
-    },
-    detectFrontmostBundleId: async () => null,
-    queryViewHierarchy: async () => {
-      if (options.queryError) return { error: options.queryError };
-      return (
-        options.nativeResult ?? {
-          screenFrame: { x: 0, y: 0, width: 390, height: 844 },
-          elements: [],
-        }
-      );
-    },
-  };
+    resolveService: vi.fn(async (urn: string) => {
+      if (urn.startsWith("AXService:")) {
+        if (options.axService) return options.axService;
+        throw new Error("ax-service not available");
+      }
+      throw new Error(`unknown service: ${urn}`);
+    }),
+  } as any;
 }
 
 describe("describe tool", () => {
-  it("uses the native path when bundleId is explicitly provided", async () => {
-    const result = await describeTool.execute(
-      {
-        nativeDevtools: makeNativeApi({
-          apps: [makeAppState("com.example.app")],
-          nativeResult: {
-            screenFrame: { x: 0, y: 0, width: 390, height: 844 },
-            elements: [
-              {
-                frame: { x: 16, y: 80, width: 100, height: 44 },
-                tapPoint: { x: 66, y: 102 },
-                normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
-                normalizedTapPoint: { x: 0.25, y: 0.25 },
-                traits: ["button"],
-                label: "Native button",
-              },
-            ],
-          },
-        }),
-      },
-      { udid: "SIM-1", bundleId: "com.example.app" }
-    );
+  it("returns elements from ax-service daemon", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "General",
+          frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+          traits: ["button"],
+        },
+      ],
+    });
 
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "SIM-1" });
     expect(result.role).toBe("AXGroup");
-    expect(result.children[0]?.label).toBe("Native button");
+    expect(result.children[0]?.label).toBe("General");
+    expect(result.children[0]?.role).toBe("AXButton");
   });
 
-  it("auto-targets a uniquely foreground-like connected app", async () => {
-    const result = await describeTool.execute(
-      {
-        nativeDevtools: makeNativeApi({
-          apps: [
-            makeAppState("com.example.foreground", {
-              applicationState: "active",
-              foregroundActiveSceneCount: 1,
-              backgroundSceneCount: 0,
-            }),
-          ],
-          nativeResult: {
-            screenFrame: { x: 0, y: 0, width: 390, height: 844 },
-            elements: [
-              {
-                frame: { x: 16, y: 80, width: 100, height: 44 },
-                tapPoint: { x: 66, y: 102 },
-                normalizedFrame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
-                normalizedTapPoint: { x: 0.25, y: 0.25 },
-                traits: ["button"],
-                label: "Foreground button",
-              },
-            ],
-          },
-        }),
-      },
-      { udid: "SIM-1" }
+  it("returns dialog elements when alertVisible is true", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: true,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "Allow Once",
+          frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+        {
+          label: "Don\u2019t Allow",
+          frame: { x: 0.1, y: 0.56, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+    });
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "SIM-1" });
+    expect(result.children).toHaveLength(2);
+    expect(result.children[0]?.label).toBe("Allow Once");
+    expect(result.children[0]?.role).toBe("AXButton");
+    expect(result.children[1]?.label).toBe("Don\u2019t Allow");
+  });
+
+  it("returns empty root when no elements are present", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      elements: [],
+    });
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "SIM-1" });
+    expect(result.role).toBe("AXGroup");
+    expect(result.children).toHaveLength(0);
+  });
+
+  it("ignores bundleId parameter and still uses ax-service", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "Settings item",
+          frame: { x: 0.05, y: 0.3, width: 0.9, height: 0.05 },
+          traits: ["staticText"],
+        },
+      ],
+    });
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "SIM-1", bundleId: "com.apple.Preferences" }
     );
-
-    expect(result.children[0]?.label).toBe("Foreground button");
+    expect(result.children[0]?.label).toBe("Settings item");
   });
 
-  it("requires a connected app when auto mode has no native target", async () => {
-    await expect(
-      describeTool.execute(
-        {
-          nativeDevtools: makeNativeApi({ apps: [] }),
-        },
-        { udid: "SIM-1" }
-      )
-    ).rejects.toThrow(
-      "No native-devtools-connected apps are available for auto-targeting. Launch or restart the app first, provide bundleId explicitly, or use screenshot to inspect visible Home/system UI."
+  it("throws when ax-service is unavailable", async () => {
+    const registry = makeMockRegistry({});
+    const tool = createDescribeTool(registry);
+
+    await expect(tool.execute({}, { udid: "SIM-1" })).rejects.toThrow(
+      "ax-service not available"
     );
   });
 
-  it("requires explicit bundleId when the only connected app is background-only", async () => {
-    await expect(
-      describeTool.execute(
+  it("returns multiple elements with correct roles", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
         {
-          nativeDevtools: makeNativeApi({
-            apps: [makeAppState("com.example.background-only")],
-          }),
+          label: "Search",
+          frame: { x: 0.05, y: 0.16, width: 0.9, height: 0.04 },
+          traits: ["searchField"],
+          value: "Search",
         },
-        { udid: "SIM-1" }
-      )
-    ).rejects.toThrow("Provide bundleId explicitly if you still want to target this app.");
+        {
+          label: "General",
+          frame: { x: 0.05, y: 0.34, width: 0.9, height: 0.05 },
+          traits: ["button", "staticText"],
+        },
+        {
+          label: "Accessibility",
+          frame: { x: 0.05, y: 0.4, width: 0.9, height: 0.05 },
+          traits: ["button", "staticText"],
+        },
+      ],
+    });
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "SIM-1" });
+    expect(result.children).toHaveLength(3);
+    expect(result.children[0]?.role).toBe("AXTextField");
+    expect(result.children[0]?.value).toBe("Search");
+    expect(result.children[1]?.role).toBe("AXButton");
+    expect(result.children[2]?.label).toBe("Accessibility");
   });
 
-  it("throws restart guidance when explicit bundleId requires native reinjection", async () => {
-    await expect(
-      describeTool.execute(
-        {
-          nativeDevtools: makeNativeApi({ requiresRestart: true }),
-        },
-        { udid: "SIM-1", bundleId: "com.example.app" }
-      )
-    ).rejects.toThrow("Call restart-app with the same bundleId, then retry describe.");
-  });
+  it("resolves ax-service with the correct URN", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      elements: [],
+    });
 
-  it("surfaces native query errors directly", async () => {
-    await expect(
-      describeTool.execute(
-        {
-          nativeDevtools: makeNativeApi({
-            apps: [makeAppState("com.example.app")],
-            queryError: "view hierarchy unavailable",
-          }),
-        },
-        { udid: "SIM-1", bundleId: "com.example.app" }
-      )
-    ).rejects.toThrow("view hierarchy unavailable");
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    await tool.execute({}, { udid: "ABC-12345" });
+    expect(registry.resolveService).toHaveBeenCalledWith("AXService:ABC-12345");
   });
 });

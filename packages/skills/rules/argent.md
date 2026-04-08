@@ -24,7 +24,7 @@ Argent MCP tools are the preferred form of interaction with the application.
 **HARD RULE: Never derive tap coordinates from a screenshot.**
 BEFORE EVERY TAP, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are `describe` and `debugger-component-tree`. Native discovery tools may also be used when needed: `native-describe-screen` can provide app-scoped accessibility elements and normalized coordinates, while `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point. Whenever something changed YOU MUST first call `describe`, `debugger-component-tree`, or another appropriate native discovery tool so you do not hallucinate element positions. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
-`describe` is good for native app-level components and safely targetable foreground apps.
+`describe` inspects the current simulator screen — works for any app, system dialogs, and Home screen without requiring app restart or bundleId.
 `component-tree` is good for react-native specific components
 
 If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
@@ -42,14 +42,14 @@ If `describe` fails, follow the recovery guidance in `argent-simulator-interact`
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - IMPORTANT: NEVER tap anything without knowing exact coordinates. DO NOT GUESS WHERE TO TAP. Especially when navigated to another screen after an action you MUST **always** use a discovery tool `describe` or `debugger-component-tree` to get exact coordinates. Reference:
-  - `describe` — native app accessibility tree with normalized coordinates; may require explicit `bundleId`.
+  - `describe` — accessibility element tree for the current simulator screen with normalized coordinates. Works on any screen including system dialogs — no app restart or `bundleId` required.
   - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
   For example, if you've used `describe` and it was insufficient - then try `component-tree` if in react-native app. Based on which was more successful - use the preferred option in the future.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
+- iOS system popups (permission dialogs, alerts) — `describe` detects these automatically and returns dialog buttons with tap coordinates. Use `gesture-tap` on the appropriate button (e.g., "Allow Once", "Don't Allow"). Fall back to `keyboard` `key: "enter"` only if `describe` does not expose the dialog controls.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If `describe` or another discovery tool fails, **read the exact error before reacting**. Use the recovery guidance in `argent-simulator-interact` to choose the correct next action instead of treating every failure as a generic permissions problem.
