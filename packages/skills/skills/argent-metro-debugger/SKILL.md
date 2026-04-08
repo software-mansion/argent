@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, setting breakpoints, pausing JS execution, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
+description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
 ---
 
 ## 1. Prerequisites
@@ -30,7 +30,7 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 | Tool                       | Purpose                                                                                                          |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
-| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
+| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
 | `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
 | `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
 

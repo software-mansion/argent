@@ -46,7 +46,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | ---------------- | ---------------- | --------------------------------------------------------- |
 | Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)     |
 | Open an app      | `launch-app`     | **Always — never tap home-screen icons**                  |
-| Restart an app   | `restart-app`    | Reinstall or reconnect to Metro                           |
+| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                       |
 | Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                        |
 | Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                |
 | Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                             |
@@ -204,10 +204,10 @@ Screenshots are downscaled by default (30% of original resolution) to reduce con
 
 | Problem              | Solution                                                                               |
 | -------------------- | -------------------------------------------------------------------------------------- |
-| Screenshot times out | Restart simulator-server via the `simulator-server` tool with a JWT token, then retry. |
+| Screenshot times out | Restart simulator-server via the `simulator-server` tool, then retry. |
 | No booted simulator  | Run `boot-simulator` first.                                                            |
 
-Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs to be passed once — subsequent calls reuse the running process.
+Note: Screenshots require a Pro/Team/Enterprise license. Use `activate-sso` or `activate-license-key` if prompted.
 
 ---
 
