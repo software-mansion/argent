@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "description": "MCP server for iOS Simulator control",
   "type": "module",
   "bin": {
