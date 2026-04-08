@@ -1,14 +1,17 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import { homedir } from "node:os";
-import { spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
 
 const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
+
+const LAUNCHD_LABEL = "com.argent.tool-server";
+const PLIST_DIR = path.join(homedir(), "Library", "LaunchAgents");
+const PLIST_FILE = path.join(PLIST_DIR, `${LAUNCHD_LABEL}.plist`);
 
 // __dirname in ESM (compiled from TS) will be dist/
 export const BUNDLED_RUNTIME_PATHS = {
@@ -81,69 +84,128 @@ async function isHealthy(port: number): Promise<boolean> {
   }
 }
 
-function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> {
-  return new Promise((resolve, reject) => {
-    let logFd: number;
-    try {
-      fs.mkdirSync(STATE_DIR, { recursive: true });
-      logFd = fs.openSync(LOG_FILE, "a");
-    } catch {
-      logFd = fs.openSync("/dev/null", "w");
-    }
+function resolveNodePath(): string {
+  try {
+    return execFileSync("which", ["node"], { encoding: "utf8" }).trim();
+  } catch {
+    return process.execPath;
+  }
+}
 
-    const child = spawn("node", [BUNDLE_PATH], {
-      detached: true,
-      stdio: ["ignore", "pipe", logFd],
-      env: buildToolsServerEnv(port),
+function buildPlist(port: number): string {
+  const nodePath = resolveNodePath();
+  const env = buildToolsServerEnv(port, {});
+
+  const envEntries = Object.entries(env)
+    .filter(([, v]) => v !== undefined)
+    .map(
+      ([k, v]) =>
+        `      <key>${escapeXml(k)}</key>\n      <string>${escapeXml(String(v))}</string>`
+    )
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${LAUNCHD_LABEL}</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>${escapeXml(nodePath)}</string>
+    <string>${escapeXml(BUNDLE_PATH)}</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+${envEntries}
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>${escapeXml(LOG_FILE)}</string>
+
+  <key>StandardErrorPath</key>
+  <string>${escapeXml(LOG_FILE)}</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>
+`;
+}
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function bootoutDaemon(): void {
+  const uid = process.getuid?.() ?? 501;
+  try {
+    execFileSync("launchctl", ["bootout", `gui/${uid}/${LAUNCHD_LABEL}`], {
+      stdio: "ignore",
     });
+  } catch {
+    // Service may not be loaded — that's fine.
+  }
+}
 
-    child.unref();
-
-    const pid = child.pid;
-    if (!pid) {
-      reject(new Error("Failed to get PID of spawned tools server"));
-      return;
-    }
-
-    let settled = false;
-    const settle = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      fn();
-    };
-
-    const rl = readline.createInterface({ input: child.stdout! });
-
-    rl.on("line", (line) => {
-      // Match: "Tools server listening on http://127.0.0.1:<port>"
-      const match = line.match(/Tools server listening on http:\/\/127\.0\.0\.1:(\d+)/);
-      if (match) {
-        const actualPort = parseInt(match[1]!, 10);
-        rl.close();
-        // Resume stdout so the pipe stays open and the child's console.log calls
-        // don't fail with EPIPE once the readline interface stops consuming it.
-        child.stdout?.resume();
-        settle(() => resolve({ port: actualPort, pid }));
-      }
-    });
-
-    child.on("error", (err) => {
-      rl.close();
-      settle(() => reject(err));
-    });
-
-    child.on("exit", (code) => {
-      rl.close();
-      settle(() => reject(new Error(`tool-server exited with code ${code} before becoming ready`)));
-    });
-
-    const timer = setTimeout(() => {
-      rl.close();
-      settle(() => reject(new Error("Timed out waiting for tools server to become ready")));
-    }, 15_000);
-
-    rl.on("close", () => clearTimeout(timer));
+function bootstrapDaemon(): void {
+  const uid = process.getuid?.() ?? 501;
+  execFileSync("launchctl", ["bootstrap", `gui/${uid}`, PLIST_FILE], {
+    stdio: "ignore",
   });
+}
+
+function getDaemonPid(): number | null {
+  try {
+    const output = execFileSync("launchctl", ["print", `gui/${process.getuid?.() ?? 501}/${LAUNCHD_LABEL}`], {
+      encoding: "utf8",
+    });
+    const match = output.match(/pid\s*=\s*(\d+)/);
+    return match ? parseInt(match[1]!, 10) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function waitForHealthy(port: number, timeoutMs: number = 15_000): Promise<void> {
+  const start = Date.now();
+  const interval = 200;
+
+  while (Date.now() - start < timeoutMs) {
+    if (await isHealthy(port)) return;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+
+  throw new Error("Timed out waiting for tool-server daemon to become healthy");
+}
+
+async function launchToolsServer(port: number): Promise<{ port: number; pid: number }> {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.mkdirSync(PLIST_DIR, { recursive: true });
+
+  // Remove any previously loaded instance of this daemon.
+  bootoutDaemon();
+
+  const plistContent = buildPlist(port);
+  fs.writeFileSync(PLIST_FILE, plistContent, "utf8");
+
+  bootstrapDaemon();
+
+  await waitForHealthy(port);
+
+  const pid = getDaemonPid() ?? 0;
+
+  return { port, pid };
 }
 
 async function readState(): Promise<ToolsServerState | null> {
@@ -168,14 +230,17 @@ async function clearState(): Promise<void> {
   }
 }
 
-export async function killToolServer(): Promise<void> {
-  const state = await readState();
-  if (!state) return;
+async function removePlist(): Promise<void> {
   try {
-    process.kill(state.pid, "SIGTERM");
+    await unlink(PLIST_FILE);
   } catch {
     // already gone
   }
+}
+
+export async function killToolServer(): Promise<void> {
+  bootoutDaemon();
+  await removePlist();
   await clearState();
 }
 
@@ -190,12 +255,14 @@ export async function ensureToolsServer(): Promise<string> {
         return `http://127.0.0.1:${state.port}`;
       }
     }
+    // Stale state — clean up before re-launching.
+    bootoutDaemon();
     await clearState();
   }
 
-  // Spawn a new server
+  // Launch a new daemon.
   const port = await findFreePort();
-  const { port: actualPort, pid } = await spawnToolsServer(port);
+  const { port: actualPort, pid } = await launchToolsServer(port);
 
   await writeState({
     port: actualPort,
