@@ -2,14 +2,9 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/banner_alt_dark_mode.png">
     <source media="(prefers-color-scheme: light)" srcset="assets/banner_alt_white_mode.png">
-    <img alt="banner" src="assets/banner_alt_dark_mode.png" width="50%">
+    <img alt="banner" src="assets/banner_alt_dark_mode.png" width="95%">
   </picture>
 </p>
-
-<div align="center">
-  <h1 align="center" style="display:inline-bloc;font-size:3.5rem;">Argent
-  </h1>
-</div>
 
 **Argent** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or axreproduce an issue manually - all from within your CLI, without switching context.
 
