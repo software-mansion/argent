@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "MCP server for iOS Simulator control",
   "repository": {
     "type": "git",
