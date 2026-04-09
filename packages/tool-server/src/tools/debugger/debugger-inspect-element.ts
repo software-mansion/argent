@@ -148,6 +148,9 @@ export const debuggerInspectElementTool: ToolDefinition<
       truncated?: boolean;
       hiddenCount?: number;
       hint?: string;
+      deviceName: string;
+      appName: string;
+      logicalDeviceId: string | undefined;
     }
   | { error: string }
 > = {
@@ -269,6 +272,9 @@ Use when you need the source file and line for a component at a tap coordinate. 
             hint: `${hiddenCount} more parent components hidden (framework/navigation wrappers). Pass maxItems=${Math.min(totalKept, params.maxItems + 35)} to see more.`,
           }
         : {}),
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
     };
   },
 };

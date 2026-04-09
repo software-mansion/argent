@@ -89,6 +89,8 @@ export interface JsRuntimeDebuggerApi {
   port: number;
   projectRoot: string;
   deviceName: string;
+  appName: string;
+  logicalDeviceId: string | undefined;
   isNewDebugger: boolean;
   cdp: CDPClient;
   sourceResolver: SourceResolver;
@@ -169,6 +171,8 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
       port,
       projectRoot: metro.projectRoot,
       deviceName: selected.deviceName,
+      appName: selected.target.title,
+      logicalDeviceId: selected.target.reactNative?.logicalDeviceId,
       isNewDebugger: selected.isNewDebugger,
       cdp,
       sourceResolver,

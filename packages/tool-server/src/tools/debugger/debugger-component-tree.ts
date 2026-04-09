@@ -555,10 +555,18 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
       return `Error: ${parsed.error}`;
     }
 
-    return buildTextTree(parsed, {
+    const tree = buildTextTree(parsed, {
       onScreenOnly: params.onScreenOnly,
       maxNodes: params.maxNodes,
       includeSkipped: params.includeSkipped,
     });
+
+    const deviceLine = [
+      `device: ${api.deviceName}`,
+      `app: ${api.appName}`,
+      ...(api.logicalDeviceId ? [`udid: ${api.logicalDeviceId}`] : []),
+    ].join(" | ");
+
+    return `[${deviceLine}]\n${tree}`;
   },
 };

@@ -12,13 +12,15 @@ export const debuggerConnectTool: ToolDefinition<
     port: number;
     projectRoot: string;
     deviceName: string;
+    appName: string;
+    logicalDeviceId: string | undefined;
     isNewDebugger: boolean;
     connected: boolean;
   }
 > = {
   id: "debugger-connect",
   description: `Connect to a running Metro dev server's CDP debugger endpoint.
-Returns connection info including port, projectRoot, deviceName, and isNewDebugger. If already connected, returns the existing connection.
+Returns connection info including port, projectRoot, deviceName, appName, logicalDeviceId, and isNewDebugger. If already connected, returns the existing connection.
 Use when starting a debug session or before calling other debugger-* tools. Fails if Metro is not running on the specified port.`,
   zodSchema,
   services: (params) => ({
@@ -30,6 +32,8 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
       port: api.port,
       projectRoot: api.projectRoot,
       deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
       isNewDebugger: api.isNewDebugger,
       connected: api.cdp.isConnected(),
     };
