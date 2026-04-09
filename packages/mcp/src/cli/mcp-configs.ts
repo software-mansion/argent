@@ -422,6 +422,75 @@ const geminiAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Roo Code adapter ────────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project: <root>/.roo/mcp.json
+// Global (macOS): ~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json
+
+function rooCodeGlobalDir(): string {
+  return path.join(
+    homedir(),
+    "Library",
+    "Application Support",
+    "Code",
+    "User",
+    "globalStorage",
+    "rooveterinaryinc.roo-cline",
+    "settings"
+  );
+}
+
+const rooCodeAdapter: McpConfigAdapter = {
+  name: "Roo Code",
+
+  detect(): boolean {
+    return (
+      dirExists(path.join(process.cwd(), ".roo")) ||
+      dirExists(
+        path.join(
+          homedir(),
+          "Library",
+          "Application Support",
+          "Code",
+          "User",
+          "globalStorage",
+          "rooveterinaryinc.roo-cline"
+        )
+      )
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".roo", "mcp.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(rooCodeGlobalDir(), "cline_mcp_settings.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJson(configPath, config);
+    return true;
+  },
+};
+
 // ── Codex CLI adapter ────────────────────────────────────────────────────────
 // Format (TOML): [mcp_servers.argent] command = "argent" args = ["mcp"] env = { ... }
 // Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
@@ -476,6 +545,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  rooCodeAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {

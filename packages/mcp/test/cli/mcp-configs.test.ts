@@ -63,7 +63,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -73,6 +73,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "Roo Code",
     ]);
   });
 });
@@ -457,6 +458,81 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
+// ── Roo Code adapter ────────────────────────────────────────────────────────
+
+describe("Roo Code adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Roo Code")!;
+
+  it("writes { mcpServers: { argent: ... } } without type", () => {
+    const configPath = path.join(tmpDir, ".roo", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, ".roo", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).not.toHaveProperty("argent");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".roo", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers when writing", () => {
+    const configPath = path.join(tmpDir, ".roo", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).toHaveProperty("argent");
+  });
+
+  it("projectPath returns .roo/mcp.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".roo", "mcp.json"));
+  });
+
+  it("globalPath returns VS Code globalStorage path", () => {
+    expect(adapter.globalPath()).toBe(
+      path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "Code",
+        "User",
+        "globalStorage",
+        "rooveterinaryinc.roo-cline",
+        "settings",
+        "cline_mcp_settings.json"
+      )
+    );
   });
 });
 
