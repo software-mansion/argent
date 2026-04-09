@@ -466,6 +466,61 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Trae adapter ────────────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project: <root>/.trae/mcp.json
+// Global (macOS): ~/Library/Application Support/Trae/User/mcp.json
+
+const traeAdapter: McpConfigAdapter = {
+  name: "Trae",
+
+  detect(): boolean {
+    return (
+      dirExists(path.join(process.cwd(), ".trae")) ||
+      dirExists(
+        path.join(homedir(), "Library", "Application Support", "Trae", "User")
+      )
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".trae", "mcp.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(
+      homedir(),
+      "Library",
+      "Application Support",
+      "Trae",
+      "User",
+      "mcp.json"
+    );
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJson(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -476,6 +531,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  traeAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
