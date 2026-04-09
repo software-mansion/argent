@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 // ── Package root resolution ───────────────────────────────────────────────────
 // tsc compiles src/cli/utils.ts -> dist/cli/utils.js.
@@ -37,6 +38,22 @@ export function readToml(filePath: string): Record<string, unknown> {
 export function writeToml(filePath: string, data: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, stringifyToml(data) + "\n");
+}
+
+// ── YAML helpers ────────────────────────────────────────────────────────────
+
+export function readYaml(filePath: string): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) return {};
+  try {
+    return (parseYaml(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeYaml(filePath: string, data: Record<string, unknown>): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, stringifyYaml(data));
 }
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────

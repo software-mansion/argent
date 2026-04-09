@@ -8,12 +8,13 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../../src/cli/mcp-configs.js";
-import { readToml } from "../../src/cli/utils.js";
+import { readToml, readYaml } from "../../src/cli/utils.js";
 
 let tmpDir: string;
 
 function readConfigFile(filePath: string): Record<string, unknown> {
   if (filePath.endsWith(".toml")) return readToml(filePath);
+  if (filePath.endsWith(".yml") || filePath.endsWith(".yaml")) return readYaml(filePath);
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 

@@ -7,7 +7,7 @@ import {
   PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
-import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
+import { readJson, writeJson, dirExists, readToml, writeToml, readYaml, writeYaml } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -466,6 +466,66 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Aider adapter ───────────────────────────────────────────────────────────
+// Format (YAML): servers: [{ name, command, envs }]
+// Project: <root>/.aider.mcp.yml   Global: ~/.aider.mcp.yml
+
+interface AiderServerEntry {
+  name: string;
+  command: string;
+  envs?: Record<string, string>;
+}
+
+const aiderAdapter: McpConfigAdapter = {
+  name: "Aider",
+
+  detect(): boolean {
+    return (
+      fs.existsSync(path.join(process.cwd(), ".aider.conf.yml")) ||
+      fs.existsSync(path.join(process.cwd(), ".aider.mcp.yml")) ||
+      fs.existsSync(path.join(homedir(), ".aider.conf.yml")) ||
+      fs.existsSync(path.join(homedir(), ".aider.mcp.yml"))
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".aider.mcp.yml");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".aider.mcp.yml");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readYaml(configPath);
+    const servers = (config.servers ?? []) as AiderServerEntry[];
+    // Build the command string from command + args
+    const command = [entry.command, ...entry.args].join(" ");
+    const idx = servers.findIndex((s) => s.name === MCP_SERVER_KEY);
+    const newEntry: AiderServerEntry = { name: MCP_SERVER_KEY, command, envs: entry.env };
+    if (idx >= 0) {
+      servers[idx] = newEntry;
+    } else {
+      servers.push(newEntry);
+    }
+    config.servers = servers;
+    writeYaml(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readYaml(configPath);
+    const servers = config.servers as AiderServerEntry[] | undefined;
+    if (!Array.isArray(servers)) return false;
+    const idx = servers.findIndex((s) => s.name === MCP_SERVER_KEY);
+    if (idx < 0) return false;
+    servers.splice(idx, 1);
+    config.servers = servers;
+    writeYaml(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -476,6 +536,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  aiderAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {

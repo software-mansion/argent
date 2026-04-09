@@ -63,7 +63,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -73,6 +73,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "Aider",
     ]);
   });
 });
@@ -457,6 +458,110 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
+// ── Aider adapter ───────────────────────────────────────────────────────────
+
+describe("Aider adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Aider")!;
+
+  function readYamlFile(filePath: string): Record<string, unknown> {
+    const { parse } = require("yaml") as typeof import("yaml");
+    return parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+  }
+
+  it("writes servers array in YAML format", () => {
+    const configPath = path.join(tmpDir, ".aider.mcp.yml");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    const servers = config.servers as Array<Record<string, unknown>>;
+    expect(servers).toHaveLength(1);
+    expect(servers[0].name).toBe("argent");
+    expect(servers[0].command).toBe("argent mcp");
+    expect(servers[0].envs).toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, ".aider.mcp.yml");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readYamlFile(configPath);
+    const servers = config.servers as Array<Record<string, unknown>>;
+    expect(servers.find((s) => s.name === "argent")).toBeUndefined();
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.yml"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".aider.mcp.yml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "servers: []\n");
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers when writing", () => {
+    const configPath = path.join(tmpDir, ".aider.mcp.yml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      'servers:\n  - name: other\n    command: "npx other-tool"\n'
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    const servers = config.servers as Array<Record<string, unknown>>;
+    expect(servers).toHaveLength(2);
+    expect(servers.find((s) => s.name === "other")).toBeDefined();
+    expect(servers.find((s) => s.name === "argent")).toBeDefined();
+  });
+
+  it("updates existing argent entry instead of duplicating", () => {
+    const configPath = path.join(tmpDir, ".aider.mcp.yml");
+    adapter.write(configPath, getMcpEntry());
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    const servers = config.servers as Array<Record<string, unknown>>;
+    const argentEntries = servers.filter((s) => s.name === "argent");
+    expect(argentEntries).toHaveLength(1);
+  });
+
+  it("projectPath returns .aider.mcp.yml under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".aider.mcp.yml"));
+  });
+
+  it("globalPath returns ~/.aider.mcp.yml", () => {
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".aider.mcp.yml"));
+  });
+
+  it("detect() returns true when local .aider.conf.yml exists", () => {
+    const localConf = path.join(process.cwd(), ".aider.conf.yml");
+    const existed = fs.existsSync(localConf);
+    if (!existed) fs.writeFileSync(localConf, "");
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.unlinkSync(localConf);
+    }
+  });
+
+  it("detect() returns true when local .aider.mcp.yml exists", () => {
+    const localMcp = path.join(process.cwd(), ".aider.mcp.yml");
+    const existed = fs.existsSync(localMcp);
+    if (!existed) fs.writeFileSync(localMcp, "");
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.unlinkSync(localMcp);
+    }
   });
 });
 
