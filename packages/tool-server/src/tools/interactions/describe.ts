@@ -47,7 +47,7 @@ If bundleId is omitted, describe auto-targets a safely identifiable connected fo
 If bundleId is provided, describe targets that app explicitly.
 
 This tool is app-scoped, not simulator-wide: it does not inspect Home/system UI unless you target a connected app explicitly.
-If native devtools are not injected into the target app: call restart-app, then retry.
+If native devtools are not injected into the target app (message status "restart_required"): call restart-app, then retry.
 
 Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
 

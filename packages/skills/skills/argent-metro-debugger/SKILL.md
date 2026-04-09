@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, setting breakpoints, pausing JS execution, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
+description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
 ---
 
 ## 1. Prerequisites
@@ -9,7 +9,7 @@ The debugger requires **Metro dev server running** (default `localhost:8081`) an
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-connect` to connect manually when tools fail to auto-connect.
+All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-connect` to connect manually when tools fail to auto-connect. Always make sure that you provide metro-port of correct application on right device.
 
 ### Connect & diagnostics
 
