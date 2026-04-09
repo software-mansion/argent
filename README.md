@@ -1,9 +1,9 @@
 <br/>
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner_alt_dark_mode.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/banner_alt_white_mode.png">
-    <img alt="banner" src="assets/banner_alt_dark_mode.png" width="80%">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banner_white_mode.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/banner_white_mode.png">
+    <img alt="banner" src="assets/banner_dark_mode.png" width="80%">
   </picture>
 </p>
 <br/>
