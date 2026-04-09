@@ -466,6 +466,112 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── JetBrains adapter ───────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project: .idea/mcp.json   Global: ~/Library/Application Support/JetBrains/<product>/options/mcp.json (macOS)
+//                                    ~/.config/JetBrains/<product>/options/mcp.json (Linux)
+
+/** JetBrains product directory prefixes (each has a version suffix like "2025.1"). */
+const JETBRAINS_PRODUCTS = [
+  "IntelliJIdea",
+  "WebStorm",
+  "PyCharm",
+  "PyCharmCE",
+  "GoLand",
+  "Rider",
+  "CLion",
+  "PhpStorm",
+  "RubyMine",
+  "DataGrip",
+  "RustRover",
+  "Aqua",
+  "DataSpell",
+  "Fleet",
+  "AndroidStudio",
+];
+
+/**
+ * Return the JetBrains base config directory for the current platform.
+ * macOS: ~/Library/Application Support/JetBrains
+ * Linux: ~/.config/JetBrains
+ */
+function jetbrainsBaseDir(): string {
+  if (process.platform === "darwin") {
+    return path.join(homedir(), "Library", "Application Support", "JetBrains");
+  }
+  // Linux (and fallback)
+  return path.join(homedir(), ".config", "JetBrains");
+}
+
+/**
+ * Find all existing JetBrains product config directories that contain an
+ * `options` subdirectory (the standard location for settings like mcp.json).
+ * Returns paths sorted by name (newest version last for a given product).
+ */
+function findJetbrainsConfigDirs(): string[] {
+  const base = jetbrainsBaseDir();
+  if (!dirExists(base)) return [];
+  try {
+    const entries = fs.readdirSync(base, { withFileTypes: true });
+    return entries
+      .filter(
+        (e) =>
+          e.isDirectory() &&
+          JETBRAINS_PRODUCTS.some((p) => e.name.startsWith(p))
+      )
+      .map((e) => path.join(base, e.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+const jetbrainsAdapter: McpConfigAdapter = {
+  name: "JetBrains",
+
+  detect(): boolean {
+    // Detect via global config directories or a local .idea directory
+    return (
+      findJetbrainsConfigDirs().length > 0 ||
+      dirExists(path.join(process.cwd(), ".idea"))
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".idea", "mcp.json");
+  },
+
+  globalPath(): string | null {
+    // Return the mcp.json path inside the most recent (last sorted) product dir.
+    // When no product dirs exist, return null.
+    const dirs = findJetbrainsConfigDirs();
+    if (dirs.length === 0) return null;
+    return path.join(dirs[dirs.length - 1], "options", "mcp.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJson(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -476,6 +582,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  jetbrainsAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {

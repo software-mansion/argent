@@ -63,7 +63,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -73,6 +73,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "JetBrains",
     ]);
   });
 });
@@ -457,6 +458,127 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
+// ── JetBrains adapter ────────────────────────────────────────────────────────
+
+describe("JetBrains adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "JetBrains")!;
+
+  it("writes { mcpServers: { argent: ... } } format", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    const entry = getMcpEntry();
+
+    adapter.write(configPath, entry);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).not.toHaveProperty("argent");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers when writing", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).toHaveProperty("argent");
+  });
+
+  it("projectPath returns .idea/mcp.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".idea", "mcp.json"));
+  });
+
+  it("detect() returns true when local .idea dir exists", () => {
+    const localIdea = path.join(process.cwd(), ".idea");
+    const existed = fs.existsSync(localIdea);
+    if (!existed) fs.mkdirSync(localIdea, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localIdea);
+    }
+  });
+
+  it("detect() returns true when JetBrains global config dir exists", () => {
+    homedirOverride = tmpDir;
+    const jbBase =
+      process.platform === "darwin"
+        ? path.join(tmpDir, "Library", "Application Support", "JetBrains")
+        : path.join(tmpDir, ".config", "JetBrains");
+    const productDir = path.join(jbBase, "WebStorm2025.1");
+    fs.mkdirSync(productDir, { recursive: true });
+
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      homedirOverride = undefined;
+    }
+  });
+
+  it("globalPath returns mcp.json inside the most recent product dir", () => {
+    homedirOverride = tmpDir;
+    const jbBase =
+      process.platform === "darwin"
+        ? path.join(tmpDir, "Library", "Application Support", "JetBrains")
+        : path.join(tmpDir, ".config", "JetBrains");
+
+    // Create two product dirs — globalPath should pick the last sorted one
+    fs.mkdirSync(path.join(jbBase, "WebStorm2024.3"), { recursive: true });
+    fs.mkdirSync(path.join(jbBase, "WebStorm2025.1"), { recursive: true });
+
+    try {
+      expect(adapter.globalPath()).toBe(
+        path.join(jbBase, "WebStorm2025.1", "options", "mcp.json")
+      );
+    } finally {
+      homedirOverride = undefined;
+    }
+  });
+
+  it("globalPath returns null when no JetBrains config dirs exist", () => {
+    homedirOverride = tmpDir;
+    try {
+      expect(adapter.globalPath()).toBeNull();
+    } finally {
+      homedirOverride = undefined;
+    }
+  });
+
+  afterEach(() => {
+    homedirOverride = undefined;
   });
 });
 
