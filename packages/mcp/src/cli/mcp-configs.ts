@@ -466,6 +466,61 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Continue adapter ─────────────────────────────────────────────────────────
+// Format: { mcpServers: [ { name: "argent", command, args, env } ] }
+// Global: ~/.continue/config.json   Project: .continue/config.json
+
+const continueAdapter: McpConfigAdapter = {
+  name: "Continue",
+
+  detect(): boolean {
+    return (
+      dirExists(path.join(homedir(), ".continue")) ||
+      dirExists(path.join(process.cwd(), ".continue"))
+    );
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".continue", "config.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".continue", "config.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? []) as Array<Record<string, unknown>>;
+    const idx = servers.findIndex((s) => s.name === MCP_SERVER_KEY);
+    const newEntry = {
+      name: MCP_SERVER_KEY,
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    if (idx >= 0) {
+      servers[idx] = newEntry;
+    } else {
+      servers.push(newEntry);
+    }
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Array<Record<string, unknown>> | undefined;
+    if (!Array.isArray(servers)) return false;
+    const idx = servers.findIndex((s) => s.name === MCP_SERVER_KEY);
+    if (idx < 0) return false;
+    servers.splice(idx, 1);
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -476,6 +531,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  continueAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {

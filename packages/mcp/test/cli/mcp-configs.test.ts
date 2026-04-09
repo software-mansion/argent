@@ -63,7 +63,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -73,6 +73,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "Continue",
     ]);
   });
 });
@@ -457,6 +458,101 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
+// ── Continue adapter ─────────────────────────────────────────────────────────
+
+describe("Continue adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Continue")!;
+
+  it("writes { mcpServers: [{ name: 'argent', ... }] } array format", () => {
+    const configPath = path.join(tmpDir, ".continue", "config.json");
+    const entry = getMcpEntry();
+
+    adapter.write(configPath, entry);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Array<Record<string, unknown>>;
+    expect(Array.isArray(servers)).toBe(true);
+    expect(servers).toHaveLength(1);
+    expect(servers[0].name).toBe("argent");
+    expect(servers[0].command).toBe("argent");
+    expect(servers[0]).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, ".continue", "config.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Array<Record<string, unknown>>;
+    expect(servers).toHaveLength(0);
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".continue", "config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: [] }));
+
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers when writing", () => {
+    const configPath = path.join(tmpDir, ".continue", "config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: [{ name: "other", command: "other" }] })
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Array<Record<string, unknown>>;
+    expect(servers).toHaveLength(2);
+    expect(servers.find((s) => s.name === "other")).toBeDefined();
+    expect(servers.find((s) => s.name === "argent")).toBeDefined();
+  });
+
+  it("updates existing argent entry instead of duplicating", () => {
+    const configPath = path.join(tmpDir, ".continue", "config.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Array<Record<string, unknown>>;
+    expect(servers.filter((s) => s.name === "argent")).toHaveLength(1);
+  });
+
+  it("preserves existing config keys when writing", () => {
+    const configPath = path.join(tmpDir, ".continue", "config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ models: [{ title: "GPT-4" }], mcpServers: [] })
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    expect(config.models).toBeDefined();
+    expect((config.mcpServers as unknown[]).length).toBe(1);
+  });
+
+  it("projectPath returns .continue/config.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".continue", "config.json"));
+  });
+
+  it("globalPath returns ~/.continue/config.json", () => {
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".continue", "config.json"));
   });
 });
 
