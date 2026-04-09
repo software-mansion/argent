@@ -1,6 +1,6 @@
 ---
 name: argent-simulator-interact
-description: Interact with an iOS simulator using argent MCP tools. Use for tapping UI elements, perfroming gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
+description: Interact with an iOS simulator using argent MCP tools. Use when tapping UI elements, perfroming gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
 ---
 
 ## 1. Before You Start
