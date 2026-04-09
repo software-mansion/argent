@@ -63,7 +63,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -73,6 +73,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "Cline",
     ]);
   });
 });
@@ -457,6 +458,75 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
+// ── Cline adapter ───────────────────────────────────────────────────────────
+
+describe("Cline adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Cline")!;
+
+  it("writes { mcpServers: { argent: ... } } without type", () => {
+    const configPath = path.join(tmpDir, "cline_mcp_settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, "cline_mcp_settings.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).not.toHaveProperty("argent");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, "cline_mcp_settings.json");
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("projectPath returns null (global-only)", () => {
+    expect(adapter.projectPath("/foo")).toBeNull();
+  });
+
+  it("globalPath returns cline_mcp_settings.json in VS Code globalStorage", () => {
+    const globalPath = adapter.globalPath()!;
+    expect(globalPath).toContain("saoudrizwan.claude-dev");
+    expect(globalPath).toContain(
+      path.join("settings", "cline_mcp_settings.json")
+    );
+  });
+
+  it("preserves existing servers when writing", () => {
+    const configPath = path.join(tmpDir, "cline_mcp_settings.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcpServers: { "other-tool": { command: "npx" } },
+      })
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other-tool");
+    expect(servers).toHaveProperty("argent");
   });
 });
 

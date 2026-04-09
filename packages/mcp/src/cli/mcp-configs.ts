@@ -466,6 +466,73 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Cline adapter ───────────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Global only: ~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json (macOS)
+//              ~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json (Linux)
+
+function clineGlobalDir(): string {
+  const platform = process.platform;
+  if (platform === "darwin") {
+    return path.join(
+      homedir(),
+      "Library",
+      "Application Support",
+      "Code",
+      "User",
+      "globalStorage",
+      "saoudrizwan.claude-dev"
+    );
+  }
+  // Linux (and fallback)
+  return path.join(
+    homedir(),
+    ".config",
+    "Code",
+    "User",
+    "globalStorage",
+    "saoudrizwan.claude-dev"
+  );
+}
+
+const clineAdapter: McpConfigAdapter = {
+  name: "Cline",
+
+  detect(): boolean {
+    return dirExists(clineGlobalDir());
+  },
+
+  projectPath(): string | null {
+    return null;
+  },
+
+  globalPath(): string | null {
+    return path.join(clineGlobalDir(), "settings", "cline_mcp_settings.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJson(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -476,6 +543,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  clineAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
