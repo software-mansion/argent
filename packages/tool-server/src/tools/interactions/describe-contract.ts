@@ -31,6 +31,12 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
     .passthrough()
 );
 
+export interface DescribeResult {
+  tree: DescribeNode;
+  source: "ax-service" | "native-devtools";
+  should_restart?: boolean;
+}
+
 export function parseDescribeResult(input: unknown): DescribeNode {
   return describeNodeSchema.parse(input);
 }
