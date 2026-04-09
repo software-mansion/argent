@@ -1,14 +1,14 @@
 <br/>
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/banner_white_mode.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/banner_white_mode.png">
-    <img alt="banner" src="assets/banner_dark_mode.png" width="80%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_white_mode.png">
+    <img alt="banner" src="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png" width="80%">
   </picture>
 </p>
 <br/>
 
-**Argent** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or axreproduce an issue manually - all from within your CLI, without switching context.
+**Argent** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent init
