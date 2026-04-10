@@ -4,6 +4,7 @@
 
 const esbuild = require("esbuild");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
@@ -14,6 +15,11 @@ const NATIVE_DEVTOOLS_ENTRY = path.resolve(
   "packages/native-devtools-ios/src/index.ts"
 );
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
+const TOOL_IDS_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/utils/registered-tools.ts"
+);
+const TOOL_IDS_DIST_DEST = path.resolve(__dirname, "../dist/argent-tool-names.json");
 const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
 const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
@@ -52,6 +58,33 @@ esbuild.buildSync({
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
+
+// Generate canonical tool ids from the live registry for the packaged runtime.
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-tool-ids-"));
+const tempToolIdsBundle = path.join(tempDir, "registered-tools.cjs");
+
+try {
+  esbuild.buildSync({
+    entryPoints: [TOOL_IDS_ENTRY],
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format: "cjs",
+    outfile: tempToolIdsBundle,
+    alias: {
+      "@argent/registry": REGISTRY_ENTRY,
+      "@argent/native-devtools-ios": NATIVE_DEVTOOLS_ENTRY,
+    },
+  });
+
+  const { getRegisteredToolIds } = require(tempToolIdsBundle);
+  const toolIds = [...getRegisteredToolIds()].sort();
+  fs.writeFileSync(TOOL_IDS_DIST_DEST, JSON.stringify(toolIds, null, 2) + "\n");
+
+  console.log(`✓ Generated tool id manifest → ${path.relative(process.cwd(), TOOL_IDS_DIST_DEST)}`);
+} finally {
+  fs.rmSync(tempDir, { recursive: true, force: true });
+}
 
 // Copy simulator-server binary
 if (fs.existsSync(BIN_SRC)) {

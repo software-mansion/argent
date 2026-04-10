@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -14,8 +14,8 @@ import {
   removeCodexRules,
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
-import { ARGENT_TOOL_NAMES } from "../../src/cli/argent-tool-names.js";
 import { readToml } from "../../src/cli/utils.js";
+import { getRegisteredToolIds } from "../../../tool-server/src/utils/registered-tools";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -35,6 +35,15 @@ vi.mock("node:os", async (importOriginal) => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let tmpDir: string;
+const isolatedToolNamesManifestPath = path.join(
+  os.tmpdir(),
+  `argent-tool-names-${process.pid}-mcp-configs.json`
+);
+fs.writeFileSync(
+  isolatedToolNamesManifestPath,
+  JSON.stringify([...getRegisteredToolIds()].sort(), null, 2) + "\n"
+);
+process.env.ARGENT_CODEX_TOOL_MANIFEST = isolatedToolNamesManifestPath;
 function setupTmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-test-"));
   return dir;
@@ -55,6 +64,10 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
   homedirOverride = undefined;
+});
+
+afterAll(() => {
+  fs.rmSync(isolatedToolNamesManifestPath, { force: true });
 });
 
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
@@ -517,7 +530,7 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     const argent = servers.argent as Record<string, unknown>;
     const tools = argent.tools as Record<string, unknown>;
 
-    expect(Object.keys(tools).sort()).toEqual([...ARGENT_TOOL_NAMES].sort());
+    expect(Object.keys(tools).sort()).toEqual([...getRegisteredToolIds()].sort());
     expect((tools["gesture-tap"] as Record<string, unknown>).approval_mode).toBe("approve");
     expect((tools["describe"] as Record<string, unknown>).approval_mode).toBe("approve");
   });
@@ -555,7 +568,7 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     >;
     const tools = (argent.tools ?? {}) as Record<string, unknown>;
 
-    expect(Object.keys(tools).sort()).toEqual([...ARGENT_TOOL_NAMES].sort());
+    expect(Object.keys(tools).sort()).toEqual([...getRegisteredToolIds()].sort());
     expect((tools["gesture-tap"] as Record<string, unknown>).approval_mode).toBe("approve");
   });
 

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
@@ -8,7 +9,6 @@ import {
   CODEX_APPROVAL_MODE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
-import { ARGENT_TOOL_NAMES } from "./argent-tool-names.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -591,7 +591,23 @@ export function removeCodexApprovalAllowlist(root: string, scope: "local" | "glo
 }
 
 function getArgentToolNames(): string[] {
-  return [...ARGENT_TOOL_NAMES];
+  const candidates = [
+    process.env.ARGENT_CODEX_TOOL_MANIFEST,
+    fileURLToPath(new URL("../argent-tool-names.json", import.meta.url)),
+    fileURLToPath(new URL("../../dist/argent-tool-names.json", import.meta.url)),
+    path.resolve(process.cwd(), "dist", "argent-tool-names.json"),
+    path.resolve(process.cwd(), "packages", "mcp", "dist", "argent-tool-names.json"),
+  ].filter((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
+
+  for (const manifestPath of candidates) {
+    if (!fs.existsSync(manifestPath)) continue;
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as unknown;
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed;
+    }
+  }
+
+  throw new Error("Could not load Argent tool names for Codex approvals.");
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
