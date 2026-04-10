@@ -16,6 +16,8 @@ const NATIVE_DEVTOOLS_ENTRY = path.resolve(
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
+const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
+const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
@@ -58,6 +60,15 @@ if (fs.existsSync(BIN_SRC)) {
   console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
 } else {
   console.warn(`⚠ simulator-server binary not found at ${BIN_SRC} — skipping copy`);
+}
+
+// Copy ax-service binary
+if (fs.existsSync(AX_BIN_SRC)) {
+  fs.copyFileSync(AX_BIN_SRC, AX_BIN_DEST);
+  fs.chmodSync(AX_BIN_DEST, 0o755);
+  console.log(`✓ Copied ax-service binary → ${path.relative(process.cwd(), AX_BIN_DEST)}`);
+} else {
+  console.warn(`⚠ ax-service binary not found at ${AX_BIN_SRC} — skipping copy`);
 }
 
 // Copy native devtools dylibs so the packaged tool-server can inject them at runtime.

@@ -9,11 +9,18 @@ const zodSchema = z.object({
 
 export const debuggerReloadMetroTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { reloaded: boolean; port: number; method: "cdp" | "http" }
+  {
+    reloaded: boolean;
+    port: number;
+    method: "cdp" | "http";
+    deviceName: string;
+    appName: string;
+    logicalDeviceId: string | undefined;
+  }
 > = {
   id: "debugger-reload-metro",
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
-Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method } indicating which reload path was used. Fails if Metro is not running on the given port.`,
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -29,10 +36,16 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
 
     // Primary: CDP Page.reload — works reliably with RN 0.76+ (Fusebox/Bridgeless).
     // Triggers a full JS execution context teardown and restart without touching the native shell.
+    const context = {
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
+    };
+
     try {
       await api.cdp.send("Page.reload");
       disableLogBox();
-      return { reloaded: true, port, method: "cdp" };
+      return { reloaded: true, port, method: "cdp", ...context };
     } catch {
       // Fall through to HTTP fallback
     }
@@ -48,6 +61,6 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
       );
     }
     disableLogBox();
-    return { reloaded: true, port, method: "http" };
+    return { reloaded: true, port, method: "http", ...context };
   },
 };
