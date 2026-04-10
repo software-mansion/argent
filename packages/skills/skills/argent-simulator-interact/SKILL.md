@@ -1,6 +1,6 @@
 ---
 name: argent-simulator-interact
-description: Interact with an iOS simulator using argent MCP tools. Use when tapping UI elements, perfroming gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
+description: Interact with an iOS simulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
 ---
 
 ## 1. Before You Start
@@ -67,10 +67,10 @@ IMPORTANT. When moved to a different screen after an action or do not know the c
 | App type                          | Discovery tool            | What it returns                                                                                                                                                                          |
 | --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Target app discovery              | `describe`                | Accessibility element tree for the current simulator screen with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
-| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                            |
-| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                     |
-| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls               |
-| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                   |
+| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                             |
+| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                      |
+| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. If `describe` does not expose the controls and the dialog has a single obvious default action, you may fall back to `keyboard` with `key: "enter"`; otherwise use `screenshot` only if you still cannot inspect the overlay reliably |
+| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots    |
 
 Point follow-up native diagnostics after you already have a candidate point:
 
@@ -181,14 +181,14 @@ Use the explicit `screenshot` tool only when:
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
-- A permission dialog, system alert, or native modal overlay is visible and `describe` did not expose reliable targets.
+- A permission dialog, system alert, or native modal overlay is visible, `describe` did not expose reliable targets, and `keyboard` with `key: "enter"` is not clearly safe or did not work.
 
-When using `screenshot` for permission or native modal navigation:
+When using `screenshot` for permission or native modal overlays:
 
-- Do not switch to screenshot-driven navigation just because a modal is visible. On regular app screens and in-app modals, keep using `describe`.
-- Prefer obvious, centered alert buttons such as `Allow`, `OK`, `Don't Allow`, `Not Now`, or `Continue`.
-- Tap one control at a time and inspect the returned auto-screenshot before doing anything else.
-- After the modal is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
+- Do not switch to screenshot-driven navigation just because an overlay is visible. On regular app screens and in-app modals, keep using `describe`.
+- Use the screenshot to inspect or report the current state when the overlay is not exposed reliably — do not derive tap coordinates from it.
+- If the dialog has an obvious default action and `describe` did not expose the controls, `keyboard` with `key: "enter"` may be acceptable.
+- After the overlay is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 

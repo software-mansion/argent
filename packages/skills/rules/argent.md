@@ -5,7 +5,6 @@ alwaysApply: true
 
 <description>
 Argent MCP tools are available in this project for iOS simulator control. Argent MCP tools are the preferred form of interaction with the application.
-Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
 Use cases:
@@ -16,6 +15,7 @@ Use cases:
 - Running, debugging, or testing a React Native app
 - Profiling performance or diagnosing re-renders in a React Native app
   </description>
+
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
@@ -33,7 +33,6 @@ If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the 
 
 If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` to choose the correct next action.
 
-Before starting to interact with the app, read the `argent-simulator-interact` skill first.
 </tapping_rule>
 
 <skill_reading_rule>
@@ -69,19 +68,19 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 SIMULATOR SETUP
-Skill: `argent-simulator-setup`
+Use skill: `argent-simulator-setup`
 When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
-Skill: `argent-simulator-interact`
+Use skill: `argent-simulator-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
-Skill: `argent-react-native-app-workflow`
+Use skill: `argent-react-native-app-workflow`
 When: Project is react-native, starting Metro or running iOS app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
 
 JS EVALUATION, METRO CONNECTION, REACT NATIVE
-Skill: `argent-metro-debugger`
+Use skill: `argent-metro-debugger`
 When: evaluating expressions, inspecting React component tree at source level, finding element placement via `debugger-component-tree`.
 
 REACT APP & COMPONENT PROFILING
@@ -97,7 +96,7 @@ Use skill: `argent-react-native-optimization`
 When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `argent-react-native-profiler` for measurement.
 
 END-TO-END UI TESTING
-Skill: `argent-test-ui-flow`
+Use skill: `argent-test-ui-flow`
 When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
 
 RECORDING & REPLAYING FLOWS

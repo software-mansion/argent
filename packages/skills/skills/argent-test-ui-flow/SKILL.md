@@ -11,8 +11,8 @@ All interactions go through argent MCP tools. Ensure the simulator is booted bef
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps. To use it, resolve the `argent-react-native-app-workflow` skill for setup.
    - **Standard iOS app screens and in-app modals**: use `describe` — it returns the accessibility element tree with normalized frame coordinates.
-   - **Permission prompts / system modal overlays**: still try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
-   - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
+   - **Permission prompts / system modal overlays**: still try `describe` first. If the overlay is not exposed reliably and the dialog has an obvious default action, `keyboard` with `key: "enter"` may be acceptable; otherwise use `screenshot` only to inspect/report the state instead of guessing tap coordinates.
+   - **Fallback**: use `screenshot` only to inspect the current UI state when discovery fails. Do not derive tap coordinates from it.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `paste`, etc.) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with `screenshot`.
 5. **Repeat** for each step in the flow.
@@ -60,7 +60,7 @@ Steps:
 
 - If screenshot shows loading/transition: wait 500ms, retake with `screenshot`.
 - If tap misses target: re-run discovery tool (`describe` / `debugger-component-tree`), retry once with new coordinates.
-- If a permission dialog or modal is visible: re-run `describe` first. Stay in screenshot-driven navigation only when the overlay is not exposed reliably, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
+- If a permission dialog or modal is visible: re-run `describe` first. If the overlay is not exposed reliably and the dialog has an obvious default action, `keyboard` with `key: "enter"` may be acceptable; otherwise use `screenshot` only to inspect/report state, then switch back to `describe` / `debugger-component-tree` as soon as it is dismissed.
 - If tap fails twice at same coordinates: stop, re-discover, report if element not found.
 - If a **saved flow** fails during `flow-execute` replay (as opposed to live test steps above): follow `argent-create-flow` skill §10 for structured diagnosis and correction.
 
@@ -69,8 +69,7 @@ Steps:
 - **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
-- **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
-- **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.
+- **Permission modals**: try `describe` first. If the dialog has an obvious default action and `describe` does not expose the controls, `keyboard` with `key: "enter"` may be acceptable; otherwise inspect/report with `screenshot` instead of guessing tap coordinates.
 - **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
 
 ## Related Skills
@@ -80,5 +79,5 @@ Steps:
 | `argent-simulator-interact`        | Detailed tool usage for tapping, swiping, typing |
 | `argent-simulator-setup`           | Booting and connecting a simulator               |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues            |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation         |
+| `argent-metro-debugger`            | Component inspection, console logs, JS evaluation |
 | `argent-create-flow`               | Record a test sequence as a replayable flow      |
