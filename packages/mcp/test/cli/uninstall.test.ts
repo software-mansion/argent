@@ -6,7 +6,9 @@ import {
   ALL_ADAPTERS,
   getMcpEntry,
   addClaudePermission,
+  addCodexApprovalAllowlist,
   removeClaudePermission,
+  removeCodexApprovalAllowlist,
 } from "../../src/cli/mcp-configs.js";
 import { readToml } from "../../src/cli/utils.js";
 
@@ -77,6 +79,19 @@ describe("uninstall — permissions cleanup", () => {
     fs.writeFileSync(settingsPath, JSON.stringify({}));
 
     expect(() => removeClaudePermission(tmpDir, "local")).not.toThrow();
+  });
+
+  it("removes Codex per-tool approvals when present", () => {
+    addCodexApprovalAllowlist(tmpDir, "local");
+    removeCodexApprovalAllowlist(tmpDir, "local");
+
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    const config = readToml(configPath);
+    const argent = (config.mcp_servers as Record<string, unknown>).argent as Record<
+      string,
+      unknown
+    >;
+    expect(argent.tools).toBeUndefined();
   });
 });
 

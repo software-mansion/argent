@@ -4,8 +4,10 @@ import { homedir } from "node:os";
 import {
   MCP_SERVER_KEY,
   MCP_BINARY_NAME,
-  PERMISSION_RULE,
+  CLAUDE_PERMISSION_RULE,
+  CODEX_APPROVAL_MODE,
   CURSOR_ALLOWLIST_PATTERN,
+  ARGENT_TOOL_NAMES,
 } from "./constants.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
@@ -464,6 +466,14 @@ const codexAdapter: McpConfigAdapter = {
     writeToml(configPath, config);
     return true;
   },
+
+  addAllowlist(root: string, scope: "local" | "global"): void {
+    addCodexApprovalAllowlist(root, scope);
+  },
+
+  removeAllowlist(root: string, scope: "local" | "global"): void {
+    removeCodexApprovalAllowlist(root, scope);
+  },
 };
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -497,8 +507,8 @@ export function addClaudePermission(root: string, scope: "local" | "global"): vo
   const config = readJson(settingsPath);
   const permissions = (config.permissions ?? {}) as Record<string, unknown>;
   const allow = (permissions.allow ?? []) as string[];
-  if (!allow.includes(PERMISSION_RULE)) {
-    allow.push(PERMISSION_RULE);
+  if (!allow.includes(CLAUDE_PERMISSION_RULE)) {
+    allow.push(CLAUDE_PERMISSION_RULE);
     permissions.allow = allow;
     config.permissions = permissions;
     writeJson(settingsPath, config);
@@ -515,10 +525,63 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
   const config = readJson(settingsPath);
   const allow = (config?.permissions as Record<string, unknown>)?.allow as string[];
   if (!Array.isArray(allow)) return;
-  const idx = allow.indexOf(PERMISSION_RULE);
+  const idx = allow.indexOf(CLAUDE_PERMISSION_RULE);
   if (idx === -1) return;
   allow.splice(idx, 1);
   writeJson(settingsPath, config);
+}
+
+export function addCodexApprovalAllowlist(root: string, scope: "local" | "global"): void {
+  const configPath =
+    scope === "global"
+      ? path.join(homedir(), ".codex", "config.toml")
+      : path.join(root, ".codex", "config.toml");
+
+  const config = readToml(configPath);
+  const servers = (config.mcp_servers ?? {}) as Record<string, unknown>;
+  const argentServer = (servers[MCP_SERVER_KEY] ?? {}) as Record<string, unknown>;
+  const tools = (argentServer.tools ?? {}) as Record<string, unknown>;
+
+  for (const toolName of ARGENT_TOOL_NAMES) {
+    const toolConfig = (tools[toolName] ?? {}) as Record<string, unknown>;
+    toolConfig.approval_mode = CODEX_APPROVAL_MODE;
+    tools[toolName] = toolConfig;
+  }
+
+  argentServer.tools = tools;
+  servers[MCP_SERVER_KEY] = argentServer;
+  config.mcp_servers = servers;
+  writeToml(configPath, config);
+}
+
+export function removeCodexApprovalAllowlist(root: string, scope: "local" | "global"): void {
+  const configPath =
+    scope === "global"
+      ? path.join(homedir(), ".codex", "config.toml")
+      : path.join(root, ".codex", "config.toml");
+
+  if (!fs.existsSync(configPath)) return;
+
+  const config = readToml(configPath);
+  const servers = config.mcp_servers as Record<string, unknown> | undefined;
+  const argentServer = servers?.[MCP_SERVER_KEY] as Record<string, unknown> | undefined;
+  const tools = argentServer?.tools as Record<string, unknown> | undefined;
+  if (!tools) return;
+
+  let removedAny = false;
+  for (const toolName of ARGENT_TOOL_NAMES) {
+    if (!(toolName in tools)) continue;
+    delete tools[toolName];
+    removedAny = true;
+  }
+
+  if (!removedAny) return;
+
+  if (argentServer && Object.keys(tools).length === 0) {
+    delete argentServer.tools;
+  }
+
+  writeToml(configPath, config);
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
@@ -581,13 +644,14 @@ function getCopyTargets(
   return targets;
 }
 
-// ── Codex developer_instructions helpers ─────────────────────────────────────
-// Codex has no rules/ directory for model instructions. Instead we inject
-// rule content into the `developer_instructions` field of config.toml,
-// delimited by markers so we can update/remove without touching user content.
+// ── Codex model_instructions_file helpers ────────────────────────────────────
+// Codex reads model instructions from a file referenced by config.toml.
+// We store Argent's rule content in that file, delimited by markers so we can
+// update/remove it without touching the user's other instructions.
 
 const ARGENT_RULES_START = "# --- argent rules (managed by argent init — do not edit) ---";
 const ARGENT_RULES_END = "# --- end argent rules ---";
+const CODEX_MODEL_INSTRUCTIONS_FILENAME = "model_instructions.md";
 
 function stripFrontmatter(content: string): string {
   const match = content.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
@@ -633,29 +697,107 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function defaultCodexInstructionsPath(configPath: string): string {
+  return path.join(path.dirname(configPath), CODEX_MODEL_INSTRUCTIONS_FILENAME);
+}
+
+function resolveConfiguredInstructionsPath(configPath: string, configuredPath: string): string {
+  if (path.isAbsolute(configuredPath)) return configuredPath;
+
+  const relativeToConfigDir = path.resolve(path.dirname(configPath), configuredPath);
+  if (fs.existsSync(relativeToConfigDir)) return relativeToConfigDir;
+
+  return path.resolve(process.cwd(), configuredPath);
+}
+
+function readInstructionsFile(filePath: string): string | undefined {
+  if (!fs.existsSync(filePath)) return undefined;
+  return fs.readFileSync(filePath, "utf8");
+}
+
 export function injectCodexRules(configPath: string, rulesDir: string): string | null {
   const rules = readAndConcatRules(rulesDir);
   if (!rules) return null;
+
   const config = readToml(configPath);
-  const existing = config.developer_instructions as string | undefined;
-  config.developer_instructions = injectArgentSection(existing, rules);
+  const configuredInstructionsPath =
+    typeof config.model_instructions_file === "string" ? config.model_instructions_file : undefined;
+  const instructionsPath = configuredInstructionsPath
+    ? resolveConfiguredInstructionsPath(configPath, configuredInstructionsPath)
+    : defaultCodexInstructionsPath(configPath);
+
+  if (!configuredInstructionsPath) {
+    config.model_instructions_file = instructionsPath;
+  }
+
+  const legacyDeveloperInstructions =
+    typeof config.developer_instructions === "string" ? config.developer_instructions : undefined;
+  if (legacyDeveloperInstructions?.includes(ARGENT_RULES_START)) {
+    const cleaned = removeArgentSection(legacyDeveloperInstructions);
+    if (cleaned) {
+      config.developer_instructions = cleaned;
+    } else {
+      delete config.developer_instructions;
+    }
+  }
+
+  const existingInstructions = readInstructionsFile(instructionsPath);
+  const updatedInstructions = injectArgentSection(existingInstructions, rules);
+
+  fs.mkdirSync(path.dirname(instructionsPath), { recursive: true });
+  fs.writeFileSync(instructionsPath, `${updatedInstructions}\n`);
   writeToml(configPath, config);
-  return configPath;
+  return instructionsPath;
 }
 
 export function removeCodexRules(configPath: string): boolean {
   if (!fs.existsSync(configPath)) return false;
+
   const config = readToml(configPath);
-  const existing = config.developer_instructions as string | undefined;
-  if (!existing || !existing.includes(ARGENT_RULES_START)) return false;
-  const cleaned = removeArgentSection(existing);
-  if (cleaned) {
-    config.developer_instructions = cleaned;
-  } else {
-    delete config.developer_instructions;
+  let removed = false;
+
+  const legacyDeveloperInstructions =
+    typeof config.developer_instructions === "string" ? config.developer_instructions : undefined;
+  if (legacyDeveloperInstructions?.includes(ARGENT_RULES_START)) {
+    const cleaned = removeArgentSection(legacyDeveloperInstructions);
+    if (cleaned) {
+      config.developer_instructions = cleaned;
+    } else {
+      delete config.developer_instructions;
+    }
+    removed = true;
   }
+
+  const configuredInstructionsPath =
+    typeof config.model_instructions_file === "string" ? config.model_instructions_file : undefined;
+  if (configuredInstructionsPath) {
+    const instructionsPath = resolveConfiguredInstructionsPath(
+      configPath,
+      configuredInstructionsPath
+    );
+    const existingInstructions = readInstructionsFile(instructionsPath);
+
+    if (existingInstructions?.includes(ARGENT_RULES_START)) {
+      const cleaned = removeArgentSection(existingInstructions);
+      const isDefaultPath = instructionsPath === defaultCodexInstructionsPath(configPath);
+
+      if (cleaned) {
+        fs.writeFileSync(instructionsPath, `${cleaned}\n`);
+      } else if (isDefaultPath) {
+        fs.rmSync(instructionsPath, { force: true });
+        delete config.model_instructions_file;
+      } else {
+        fs.writeFileSync(instructionsPath, "");
+      }
+
+      removed = true;
+    }
+  }
+
+  if (!removed) return false;
+
   writeToml(configPath, config);
-  return true;
+  return removed;
 }
 
 // ── Copy orchestrator ────────────────────────────────────────────────────────
@@ -694,7 +836,7 @@ export function copyRulesAndAgents(
     }
   }
 
-  // Codex: inject rules into developer_instructions in config.toml
+  // Codex: inject rules into the configured model instructions file
   for (const adapter of adapters) {
     if (adapter.name !== "Codex") continue;
     const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
@@ -702,7 +844,9 @@ export function copyRulesAndAgents(
     try {
       const injected = injectCodexRules(configPath, rulesDir);
       if (injected) {
-        results.push(`  Injected rules into ${configPath} (developer_instructions)`);
+        results.push(
+          `  Injected rules into ${injected} via model_instructions_file in ${configPath}`
+        );
       }
     } catch (err) {
       results.push(`  Could not inject rules into ${configPath}: ${err}`);

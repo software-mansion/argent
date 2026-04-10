@@ -139,7 +139,7 @@ export async function uninstall(args: string[]): Promise<void> {
       }
     }
 
-    // Codex: remove argent rules from developer_instructions in config.toml
+    // Codex: remove argent rules from the configured model instructions file
     for (const configPath of [
       path.join(projectRoot, ".codex", "config.toml"),
       path.join(homedir(), ".codex", "config.toml"),

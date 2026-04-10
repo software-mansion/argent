@@ -82,7 +82,7 @@ argent init
 | Windsurf    | `.windsurf/mcp.json`                                          |
 | Zed         | `.zed/settings.json`                                          |
 | Gemini CLI  | `.gemini/settings.json`                                       |
-| Codex CLI   | `.codex/config.yaml`                                          |
+| Codex CLI   | `.codex/config.toml`                                          |
 
 ## License
 

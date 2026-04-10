@@ -6,12 +6,16 @@ import {
   ALL_ADAPTERS,
   getMcpEntry,
   addClaudePermission,
+  addCodexApprovalAllowlist,
   removeClaudePermission,
+  removeCodexApprovalAllowlist,
   copyRulesAndAgents,
   injectCodexRules,
   removeCodexRules,
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
+import { ARGENT_TOOL_NAMES } from "../../src/cli/constants.js";
+import { readToml } from "../../src/cli/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -39,6 +43,10 @@ function setupTmpDir(): string {
 
 function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function readTomlFile(filePath: string): Record<string, unknown> {
+  return readToml(filePath);
 }
 
 beforeEach(() => {
@@ -497,6 +505,88 @@ describe("addClaudePermission / removeClaudePermission", () => {
   });
 });
 
+// ── Codex approvals ───────────────────────────────────────────────────────────
+
+describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
+  it("adds per-tool approval entries to .codex/config.toml", () => {
+    addCodexApprovalAllowlist(tmpDir, "local");
+
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    const config = readTomlFile(configPath);
+    const servers = config.mcp_servers as Record<string, unknown>;
+    const argent = servers.argent as Record<string, unknown>;
+    const tools = argent.tools as Record<string, unknown>;
+
+    expect(Object.keys(tools).sort()).toEqual([...ARGENT_TOOL_NAMES].sort());
+    expect((tools["gesture-tap"] as Record<string, unknown>).approval_mode).toBe("approve");
+    expect((tools["describe"] as Record<string, unknown>).approval_mode).toBe("approve");
+  });
+
+  it("does not clobber existing Codex MCP server settings", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      'model = "gpt-5.4"\n[mcp_servers.argent]\ncommand = "argent"\n[mcp_servers.argent.env]\nFOO = "bar"\n'
+    );
+
+    addCodexApprovalAllowlist(tmpDir, "local");
+
+    const config = readTomlFile(configPath);
+    const argent = (config.mcp_servers as Record<string, unknown>).argent as Record<
+      string,
+      unknown
+    >;
+    expect(argent.command).toBe("argent");
+    expect((argent.env as Record<string, unknown>).FOO).toBe("bar");
+    expect(argent.tools).toBeDefined();
+  });
+
+  it("removes only Argent tool approvals from .codex/config.toml", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      [
+        "[mcp_servers.argent]",
+        'command = "argent"',
+        '[mcp_servers.argent.tools."gesture-tap"]',
+        'approval_mode = "approve"',
+        '[mcp_servers.argent.tools."custom-tool"]',
+        'approval_mode = "approve"',
+      ].join("\n")
+    );
+
+    removeCodexApprovalAllowlist(tmpDir, "local");
+
+    const config = readTomlFile(configPath);
+    const argent = (config.mcp_servers as Record<string, unknown>).argent as Record<
+      string,
+      unknown
+    >;
+    const tools = argent.tools as Record<string, unknown>;
+    expect(tools["gesture-tap"]).toBeUndefined();
+    expect((tools["custom-tool"] as Record<string, unknown>).approval_mode).toBe("approve");
+  });
+
+  it("removes the tools table when only Argent approvals remain", () => {
+    addCodexApprovalAllowlist(tmpDir, "local");
+    removeCodexApprovalAllowlist(tmpDir, "local");
+
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    const config = readTomlFile(configPath);
+    const argent = (config.mcp_servers as Record<string, unknown>).argent as Record<
+      string,
+      unknown
+    >;
+    expect(argent.tools).toBeUndefined();
+  });
+
+  it("removeCodexApprovalAllowlist is a no-op when file does not exist", () => {
+    expect(() => removeCodexApprovalAllowlist(tmpDir, "local")).not.toThrow();
+  });
+});
+
 // ── copyRulesAndAgents ────────────────────────────────────────────────────────
 
 describe("copyRulesAndAgents", () => {
@@ -569,22 +659,25 @@ describe("copyRulesAndAgents", () => {
     ).toBe(true);
   });
 
-  it("injects Codex rules into developer_instructions in config.toml (local)", () => {
+  it("injects Codex rules into a model instructions file referenced by config.toml (local)", () => {
     const codexAdapter = ALL_ADAPTERS.find((a) => a.name === "Codex")!;
-    // Pre-create the config.toml so the adapter can find it
     const configPath = path.join(tmpDir, ".codex", "config.toml");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(configPath, "");
 
     const results = copyRulesAndAgents([codexAdapter], tmpDir, "local", rulesDir, agentsDir);
-    expect(results.some((r) => r.includes("developer_instructions"))).toBe(true);
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).toContain("argent rules");
-    expect(content).toContain("developer_instructions");
+    expect(results.some((r) => r.includes("model_instructions_file"))).toBe(true);
+
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain("model_instructions_file");
+
+    const instructionsPath = path.join(tmpDir, ".codex", "model_instructions.md");
+    const instructionsContent = fs.readFileSync(instructionsPath, "utf8");
+    expect(instructionsContent).toContain("argent rules");
   });
 });
 
-// ── Codex developer_instructions injection ──────────────────────────────────
+// ── Codex model_instructions_file injection ─────────────────────────────────
 
 describe("injectCodexRules / removeCodexRules", () => {
   let rulesDir: string;
@@ -602,10 +695,13 @@ describe("injectCodexRules / removeCodexRules", () => {
     const configPath = path.join(tmpDir, "config.toml");
     injectCodexRules(configPath, rulesDir);
 
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).toContain("Use argent tools for simulator control.");
-    expect(content).not.toContain("alwaysApply");
-    expect(content).toContain("argent rules");
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain("model_instructions_file");
+
+    const instructionsContent = fs.readFileSync(path.join(tmpDir, "model_instructions.md"), "utf8");
+    expect(instructionsContent).toContain("Use argent tools for simulator control.");
+    expect(instructionsContent).not.toContain("alwaysApply");
+    expect(instructionsContent).toContain("argent rules");
   });
 
   it("preserves existing developer_instructions", () => {
@@ -614,9 +710,11 @@ describe("injectCodexRules / removeCodexRules", () => {
 
     injectCodexRules(configPath, rulesDir);
 
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).toContain("Always use TypeScript.");
-    expect(content).toContain("Use argent tools for simulator control.");
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain("Always use TypeScript.");
+
+    const instructionsContent = fs.readFileSync(path.join(tmpDir, "model_instructions.md"), "utf8");
+    expect(instructionsContent).toContain("Use argent tools for simulator control.");
   });
 
   it("replaces existing argent section on re-inject", () => {
@@ -627,11 +725,51 @@ describe("injectCodexRules / removeCodexRules", () => {
     fs.writeFileSync(path.join(rulesDir, "argent.md"), "Updated rule content.");
     injectCodexRules(configPath, rulesDir);
 
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).toContain("Updated rule content.");
-    expect(content).not.toContain("Use argent tools for simulator control.");
+    const instructionsContent = fs.readFileSync(path.join(tmpDir, "model_instructions.md"), "utf8");
+    expect(instructionsContent).toContain("Updated rule content.");
+    expect(instructionsContent).not.toContain("Use argent tools for simulator control.");
     // Should only have one pair of markers
-    expect(content.split("argent rules").length - 1).toBe(2); // start + end
+    expect(instructionsContent.split("argent rules").length - 1).toBe(2); // start + end
+  });
+
+  it("reuses an existing model_instructions_file target", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    const instructionsPath = path.join(tmpDir, "custom-instructions.md");
+    fs.writeFileSync(
+      configPath,
+      `model_instructions_file = "${instructionsPath}"\ndeveloper_instructions = "Always use TypeScript."\n`
+    );
+    fs.writeFileSync(instructionsPath, "Keep existing content.");
+
+    injectCodexRules(configPath, rulesDir);
+
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain(`model_instructions_file = "${instructionsPath}"`);
+    expect(configContent).toContain("Always use TypeScript.");
+
+    const instructionsContent = fs.readFileSync(instructionsPath, "utf8");
+    expect(instructionsContent).toContain("Keep existing content.");
+    expect(instructionsContent).toContain("Use argent tools for simulator control.");
+  });
+
+  it("migrates legacy argent content out of developer_instructions", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        'developer_instructions = "Always use TypeScript.\\n\\n# --- argent rules (managed by argent init — do not edit) ---\\nLegacy argent rules.\\n# --- end argent rules ---"',
+      ].join("\n")
+    );
+
+    injectCodexRules(configPath, rulesDir);
+
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain("Always use TypeScript.");
+    expect(configContent).not.toContain("Legacy argent rules.");
+    expect(configContent).toContain("model_instructions_file");
+
+    const instructionsContent = fs.readFileSync(path.join(tmpDir, "model_instructions.md"), "utf8");
+    expect(instructionsContent).toContain("Use argent tools for simulator control.");
   });
 
   it("removeCodexRules strips argent section", () => {
@@ -642,25 +780,57 @@ describe("injectCodexRules / removeCodexRules", () => {
     const removed = removeCodexRules(configPath);
     expect(removed).toBe(true);
 
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).toContain("Always use TypeScript.");
-    expect(content).not.toContain("argent rules");
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain("Always use TypeScript.");
+    expect(configContent).not.toContain("argent rules");
+    expect(configContent).not.toContain("model_instructions_file");
+    expect(fs.existsSync(path.join(tmpDir, "model_instructions.md"))).toBe(false);
   });
 
-  it("removeCodexRules deletes field when only argent content remains", () => {
+  it("removeCodexRules deletes the default file reference when only argent content remains", () => {
     const configPath = path.join(tmpDir, "config.toml");
     injectCodexRules(configPath, rulesDir);
 
     removeCodexRules(configPath);
 
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).not.toContain("developer_instructions");
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).not.toContain("developer_instructions");
+    expect(configContent).not.toContain("model_instructions_file");
+    expect(fs.existsSync(path.join(tmpDir, "model_instructions.md"))).toBe(false);
+  });
+
+  it("removeCodexRules preserves a custom model_instructions_file target", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    const instructionsPath = path.join(tmpDir, "custom-instructions.md");
+    fs.writeFileSync(configPath, `model_instructions_file = "${instructionsPath}"\n`);
+    injectCodexRules(configPath, rulesDir);
+
+    const removed = removeCodexRules(configPath);
+    expect(removed).toBe(true);
+
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).toContain(`model_instructions_file = "${instructionsPath}"`);
+    expect(fs.readFileSync(instructionsPath, "utf8")).toBe("");
   });
 
   it("removeCodexRules returns false when no argent section exists", () => {
     const configPath = path.join(tmpDir, "config.toml");
     fs.writeFileSync(configPath, 'model = "o3"\n');
     expect(removeCodexRules(configPath)).toBe(false);
+  });
+
+  it("removeCodexRules also cleans legacy developer_instructions-only installs", () => {
+    const configPath = path.join(tmpDir, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      'developer_instructions = "# --- argent rules (managed by argent init — do not edit) ---\\nLegacy argent rules.\\n# --- end argent rules ---"\n'
+    );
+
+    const removed = removeCodexRules(configPath);
+    expect(removed).toBe(true);
+
+    const configContent = fs.readFileSync(configPath, "utf8");
+    expect(configContent).not.toContain("developer_instructions");
   });
 
   it("removeCodexRules returns false for non-existent file", () => {
