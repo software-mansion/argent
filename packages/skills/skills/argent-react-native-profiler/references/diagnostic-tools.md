@@ -21,10 +21,10 @@ Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm Rea
 ## Console logs
 
 ```json
-{ "port": 8081, "level": "error", "limit": 50 }
+{ "port": 8081 }
 ```
 
-Call `debugger-log-registry`. Filter by `level`: `"error"`, `"warn"`, `"log"`, or omit to get all.
+Call `debugger-log-registry`. Returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep`/`Read` on the log file to filter by level or search for specific messages.
 
 ---
 

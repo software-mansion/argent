@@ -15,8 +15,8 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 | Tool               | Purpose                                                            |
 | ------------------ | ------------------------------------------------------------------ |
-| `debugger-connect` | Connect to Metro CDP. Returns projectRoot, deviceName, connected.  |
-| `debugger-status`  | Like connect + loadedScripts, sourceMapReady. **Use to diagnose.** |
+| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, isNewDebugger, connected.  |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.** |
 
 ### Reload & recovery
 
@@ -30,7 +30,7 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 | Tool                       | Purpose                                                                                                          |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
-| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
+| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
 | `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
 | `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
 
@@ -49,9 +49,9 @@ Both can point to source files, but `inspect-element` is purpose-built for sourc
 
 ### `includeSkipped` guidance
 
-Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
 
-> **Warning:** Output can be very large. Always combine with `maxNodes` and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without `maxNodes` on large apps.
+> **Warning:** Output can be very large. Always combine with `maxNodes` (component-tree) or `maxItems` (inspect-element) and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without a limit on large apps.
 
 ---
 

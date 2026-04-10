@@ -11,7 +11,7 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 | Tool                              | Purpose                                                                                                                                    |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro.                                                             |
+| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro. Optional: `sample_interval_us` (default 100).               |
 | `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                 |
 | `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits and findings sorted by `totalRenderMs` DESC. Saves raw data to disk for later reload. |
 | `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                            |
@@ -84,16 +84,16 @@ Mind the react-native and ios-native profiler selection mentioned above when sta
 
 #### Annotate every interaction
 
-After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 4.
+After each `gesture-tap` or `gesture-swipe` call, record an annotation using the returned `timestampMs`. Compute `offsetMs = timestampMs - startedAtEpochMs`. Do this for _every_ interaction — including back-navigation swipes, not just the primary action. Pass all collected annotations to `react-profiler-analyze` in Step 3.
 
 ### Step 2: Stop and collect
 
-Call `react-profiler-stop` **and** `ios-profiler-stop` in parallel. Only skip `ios-profiler-stop` if you did not start it in Step 2. Note `duration_ms`, `fiber_renders_captured`, `hook_installed`.
+Call `react-profiler-stop` **and** `ios-profiler-stop` in parallel. Only skip `ios-profiler-stop` if you did not start it in Step 1. Note `duration_ms`, `fiber_renders_captured`, `hook_installed`.
 If `hook_installed: false` or `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
 
 ### Step 3: Analyze
 
-Call `react-profiler-analyze` with `project_root`, `platform`, and `rn_version`. Read `meta` first: note `reactCompilerEnabled`, `strictModeEnabled`, `buildMode`.
+Call `react-profiler-analyze` with `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
 
 If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
 
@@ -141,7 +141,7 @@ If fix is present, read the source code of the identified bottleneck using `reac
 
 If the user stated that they do not wish for changes, present the profiling report and skip the fix but suggest it to the user.
 
-**React Compiler rule:** If `meta.reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out (check `react-profiler-fiber-tree` for absent `useMemoCache` on that component).
+**React Compiler rule:** If the analyze report indicates React Compiler is enabled, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out (check `react-profiler-fiber-tree` for absent `useMemoCache` on that component).
 
 ---
 

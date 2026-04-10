@@ -46,7 +46,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | ---------------- | ---------------- | --------------------------------------------------------- |
 | Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)     |
 | Open an app      | `launch-app`     | **Always — never tap home-screen icons**                  |
-| Restart an app   | `restart-app`    | Reinstall or reconnect to Metro                           |
+| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                       |
 | Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                        |
 | Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                |
 | Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                             |
@@ -55,7 +55,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                  |
 | Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation               |
 | Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation         |
-| Hardware key     | `button`         | Home, back, power, volume                                 |
+| Hardware key     | `button`         | Home, back, power, volume, appSwitch, actionButton        |
 | Type text (fast) | `paste`          | Form fields — uses clipboard                              |
 | Type text        | `keyboard`       | Fallback when paste fails; supports Enter, Escape, arrows |
 | Rotate device    | `rotate`         | Orientation changes                                       |
@@ -110,7 +110,7 @@ Before tapping near the bottom of the screen in React Native apps, check that "O
 { "udid": "<UDID>", "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }
 ```
 
-Swipe **up** (`fromY > toY`) = scroll content **down**. Optional: `"durationMs": 500` for slower swipe.
+Swipe **up** (`fromY > toY`) = scroll content **down**. Default duration: 300ms. Optional: `"durationMs": 500` for slower swipe.
 
 ### gesture-pinch — Two-finger pinch
 
@@ -118,7 +118,7 @@ Swipe **up** (`fromY > toY`) = scroll content **down**. Optional: `"durationMs":
 { "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "startDistance": 0.2, "endDistance": 0.6 }
 ```
 
-All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same as all other gesture tools. `startDistance: 0.2` means fingers start 20% of the screen apart; `endDistance: 0.6` means they end 60% apart. `startDistance < endDistance` = pinch out (zoom in). `startDistance > endDistance` = pinch in (zoom out). Optional: `"angle": 90` for vertical axis, `"durationMs": 500` for slower pinch.
+All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same as all other gesture tools. `startDistance: 0.2` means fingers start 20% of the screen apart; `endDistance: 0.6` means they end 60% apart. `startDistance < endDistance` = pinch out (zoom in). `startDistance > endDistance` = pinch in (zoom out). Defaults: `angle: 0` (horizontal), `durationMs: 300`. Optional: `"angle": 90` for vertical axis, `"durationMs": 500` for slower pinch.
 
 ### gesture-rotate — Two-finger rotation
 
@@ -133,7 +133,7 @@ All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same a
 }
 ```
 
-All positions and radius are normalized 0.0–1.0 (fractions of screen, not pixels). `radius: 0.15` means each finger is 15% of the screen away from center. `endAngle > startAngle` = clockwise. Optional: `"durationMs": 500` for slower rotation.
+All positions and radius are normalized 0.0–1.0 (fractions of screen, not pixels). `radius: 0.15` means each finger is 15% of the screen away from center. `endAngle > startAngle` = clockwise. Default duration: 300ms. Optional: `"durationMs": 500` for slower rotation.
 
 ### gesture-custom — Custom touch sequence
 
@@ -161,7 +161,7 @@ Tap the field first, then paste. Fall back to `keyboard` if it doesn't work.
 { "udid": "<UDID>", "text": "search query", "key": "enter" }
 ```
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms).
 
 ### rotate — Change orientation
 
@@ -192,16 +192,15 @@ When using `screenshot` for permission or native modal navigation:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
-Screenshots are downscaled by default (30% of original resolution) to reduce context size. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
+Screenshots are downscaled by default (30% of original resolution) to reduce context size. `scale` accepts values from 0.01 to 1.0. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
 
 ### Troubleshooting
 
 | Problem              | Solution                                                                               |
 | -------------------- | -------------------------------------------------------------------------------------- |
-| Screenshot times out | Restart simulator-server via the `simulator-server` tool with a JWT token, then retry. |
+| Screenshot times out | Restart simulator-server via the `simulator-server` tool, then retry. |
 | No booted simulator  | Run `boot-simulator` first.                                                            |
 
-Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs to be passed once — subsequent calls reuse the running process.
 
 ---
 
