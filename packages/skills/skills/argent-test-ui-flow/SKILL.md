@@ -35,11 +35,11 @@ Steps:
 
 ```
 1. screenshot → see login screen
-2. tap { x: 0.5, y: 0.4 }  → tap email field
+2. gesture-tap { x: 0.5, y: 0.4 }  → tap email field
 3. paste { text: "user@example.com" }
-4. tap { x: 0.5, y: 0.55 } → tap password field
+4. gesture-tap { x: 0.5, y: 0.55 } → tap password field
 5. paste { text: "password123" }
-6. tap { x: 0.5, y: 0.7 }  → tap Login button
+6. gesture-tap { x: 0.5, y: 0.7 }  → tap Login button
 7. screenshot → verify home screen appeared
 ```
 
@@ -47,8 +47,8 @@ Steps:
 
 ```
 1. screenshot → see list at top
-2. swipe { fromY: 0.7, toY: 0.3 } → scroll down
-3. tap item at visible position → verify auto-screenshot
+2. gesture-swipe { fromY: 0.7, toY: 0.3 } → scroll down
+3. gesture-tap item at visible position → verify auto-screenshot
 4. screenshot → verify detail view opened
 5. button { button: "back" }
 6. screenshot → verify returned to list
