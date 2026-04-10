@@ -89,9 +89,15 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync("xcrun", [
-    "simctl", "spawn", udid,
-    "defaults", "write", "com.apple.Accessibility",
-    "AutomationEnabled", "-bool", "true",
+    "simctl",
+    "spawn",
+    udid,
+    "defaults",
+    "write",
+    "com.apple.Accessibility",
+    "AutomationEnabled",
+    "-bool",
+    "true",
   ]);
 }
 
@@ -101,13 +107,12 @@ async function killExistingDaemon(socketPath: string): Promise<void> {
     const parsed = JSON.parse(raw);
     if (parsed.pid) process.kill(parsed.pid, "SIGTERM");
   } catch {}
-  try { fs.unlinkSync(socketPath); } catch {}
+  try {
+    fs.unlinkSync(socketPath);
+  } catch {}
 }
 
-function spawnDaemon(
-  udid: string,
-  socketPath: string
-): Promise<ChildProcess> {
+function spawnDaemon(udid: string, socketPath: string): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
     let binaryPath: string;
     try {
@@ -120,16 +125,7 @@ function spawnDaemon(
     let settled = false;
     const proc = execFile(
       "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        binaryPath,
-        "--socket",
-        socketPath,
-        "--timeout",
-        "3600",
-      ],
+      ["simctl", "spawn", udid, binaryPath, "--socket", socketPath, "--timeout", "3600"],
       { encoding: "utf8" }
     ) as ChildProcess;
 
@@ -211,10 +207,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, string> = {
         const raw = await querySocket(socketPath, command);
         return JSON.parse(raw);
       } catch (err) {
-        events.emit(
-          "terminated",
-          err instanceof Error ? err : new Error(String(err))
-        );
+        events.emit("terminated", err instanceof Error ? err : new Error(String(err)));
         throw err;
       }
     }

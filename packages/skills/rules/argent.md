@@ -9,12 +9,13 @@ Running MCP server and managing the Argent toolkit utilises `argent` command - i
 To check current version of MCP server run `argent --version` command.
 
 Use cases:
+
 - User mentions iOS simulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in the simulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
 - Running, debugging, or testing a React Native app
 - Profiling performance or diagnosing re-renders in a React Native app
-</description>
+  </description>
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>

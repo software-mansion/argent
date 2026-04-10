@@ -133,16 +133,16 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 
 ### 3.5 iOS Simulator Control
 
-| Action                     | Tool / Command                                         |
-| -------------------------- | ------------------------------------------------------ |
-| List devices               | `list-simulators` tool                                 |
-| Boot a simulator           | `boot-simulator` tool (pass UDID)                      |
-| Launch an app              | `launch-app` tool (pass UDID + bundle ID)              |
-| Restart an app             | `restart-app` tool (pass UDID + bundle ID)             |
-| Open a URL / deep link     | `open-url` tool (pass UDID + URL)                      |
-| Rotate simulator           | `rotate` tool                                          |
-| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID)     |
-| Stop all simulator servers | `stop-all-simulator-servers` tool                      |
+| Action                     | Tool / Command                                     |
+| -------------------------- | -------------------------------------------------- |
+| List devices               | `list-simulators` tool                             |
+| Boot a simulator           | `boot-simulator` tool (pass UDID)                  |
+| Launch an app              | `launch-app` tool (pass UDID + bundle ID)          |
+| Restart an app             | `restart-app` tool (pass UDID + bundle ID)         |
+| Open a URL / deep link     | `open-url` tool (pass UDID + URL)                  |
+| Rotate simulator           | `rotate` tool                                      |
+| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID) |
+| Stop all simulator servers | `stop-all-simulator-servers` tool                  |
 
 For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
@@ -154,7 +154,7 @@ For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
 | Problem type                      | Tool / Where to look                                                                                                                                                                                                                                              |
 | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search.                                                                                                                   |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search.                                                                                                                                                                     |
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific logical pixel coordinates (not normalized 0-1).                                                                                                                     |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, but prefer `describe` or `debugger-component-tree` for actual navigation and target discovery. If a permission prompt or system-owned modal overlay is not exposed reliably, then fall back to `screenshot`. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                                                                                                                                              |

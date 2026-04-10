@@ -115,7 +115,7 @@ describe("describe ax-service adapter", () => {
         },
         {
           label: "Search",
-          frame: { x: 0.045, y: 0.160, width: 0.909, height: 0.038 },
+          frame: { x: 0.045, y: 0.16, width: 0.909, height: 0.038 },
           value: "Search",
         },
       ],

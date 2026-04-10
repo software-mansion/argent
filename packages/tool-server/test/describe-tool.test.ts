@@ -39,7 +39,10 @@ function makeNativeDevtoolsApi(options: {
     }),
     detectFrontmostBundleId: async () => [...connected][0] ?? null,
     queryViewHierarchy: async () =>
-      options.describeScreenResult ?? { screenFrame: { x: 0, y: 0, width: 440, height: 956 }, elements: [] },
+      options.describeScreenResult ?? {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [],
+      },
   } as NativeDevtoolsApi;
 }
 
@@ -156,10 +159,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute(
-      {},
-      { udid: "SIM-1", bundleId: "com.apple.Preferences" }
-    );
+    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.apple.Preferences" });
     expect(result.source).toBe("native-devtools");
     expect(result.tree.children[0]?.label).toBe("General");
     expect(result.tree.children[0]?.role).toBe("AXButton");
@@ -211,10 +211,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute(
-      {},
-      { udid: "SIM-1", bundleId: "com.example.app" }
-    );
+    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.example.app" });
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(result.tree.children).toHaveLength(0);
@@ -240,9 +237,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({});
     const tool = createDescribeTool(registry);
 
-    await expect(tool.execute({}, { udid: "SIM-1" })).rejects.toThrow(
-      "ax-service not available"
-    );
+    await expect(tool.execute({}, { udid: "SIM-1" })).rejects.toThrow("ax-service not available");
   });
 
   it("returns multiple elements with correct roles", async () => {
@@ -315,10 +310,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute(
-      {},
-      { udid: "SIM-1", bundleId: "com.example.app" }
-    );
+    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.example.app" });
     expect(result.source).toBe("ax-service");
     expect(result.tree.children).toHaveLength(0);
   });

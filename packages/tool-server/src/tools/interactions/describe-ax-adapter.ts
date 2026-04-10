@@ -34,9 +34,7 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
   };
 }
 
-export function adaptAXDescribeToDescribeResult(
-  response: AXDescribeResponse
-): DescribeNode {
+export function adaptAXDescribeToDescribeResult(response: AXDescribeResponse): DescribeNode {
   const children = response.elements
     .map(adaptAXElement)
     .filter((n): n is DescribeNode => n !== null);

@@ -64,13 +64,13 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
-| App type                          | Discovery tool            | What it returns                                                                                                                           |
-| --------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| App type                          | Discovery tool            | What it returns                                                                                                                                                                          |
+| --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Target app discovery              | `describe`                | Accessibility element tree for the current simulator screen with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
-| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                             |
-| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                      |
-| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls |
-| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots    |
+| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                            |
+| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                     |
+| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls               |
+| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                   |
 
 Point follow-up native diagnostics after you already have a candidate point:
 
@@ -196,11 +196,10 @@ Screenshots are downscaled by default (30% of original resolution) to reduce con
 
 ### Troubleshooting
 
-| Problem              | Solution                                                                               |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| Screenshot times out | Restart simulator-server via the `simulator-server` tool, then retry. |
-| No booted simulator  | Run `boot-simulator` first.                                                            |
-
+| Problem              | Solution                                                      |
+| -------------------- | ------------------------------------------------------------- |
+| Screenshot times out | Restart the simulator-server via `stop-simulator-server` tool |
+| No booted simulator  | Run `boot-simulator` first.                                   |
 
 ---
 

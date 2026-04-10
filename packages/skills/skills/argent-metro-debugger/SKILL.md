@@ -13,10 +13,10 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 ### Connect & diagnostics
 
-| Tool               | Purpose                                                            |
-| ------------------ | ------------------------------------------------------------------ |
-| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, isNewDebugger, connected.  |
-| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.** |
+| Tool               | Purpose                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, isNewDebugger, connected. |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**     |
 
 ### Reload & recovery
 
@@ -27,12 +27,12 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 ### Inspection & console
 
-| Tool                       | Purpose                                                                                                          |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
+| Tool                       | Purpose                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                                                                                    |
 | `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
-| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
-| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
+| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.                                                                   |
+| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                   |
 
 ---
 

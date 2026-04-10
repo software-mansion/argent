@@ -5,13 +5,13 @@ description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks v
 
 ## 1. Tool Overview
 
-| Tool                   | Purpose                                                                                      |
-| ---------------------- | -------------------------------------------------------------------------------------------- |
+| Tool                   | Purpose                                                                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `ios-profiler-start`   | Start xctrace recording on a booted simulator or device. Captures CPU, hangs, and leaks. Optional: `app_process`, `template_path`. |
-| `ios-profiler-stop`    | Stop xctrace, export trace data to XML files (timestamped, persist on disk).                 |
-| `ios-profiler-analyze` | Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, leaks). |
-| `profiler-stack-query` | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.       |
-| `profiler-load`        | List and reload previous trace sessions from disk for re-investigation.                      |
+| `ios-profiler-stop`    | Stop xctrace, export trace data to XML files (timestamped, persist on disk).                                                       |
+| `ios-profiler-analyze` | Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, leaks).                                       |
+| `profiler-stack-query` | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.                                             |
+| `profiler-load`        | List and reload previous trace sessions from disk for re-investigation.                                                            |
 
 ---
 

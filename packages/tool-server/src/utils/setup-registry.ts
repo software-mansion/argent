@@ -14,7 +14,6 @@ import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listSimulatorsTool } from "../tools/simulator/list-simulators";
 import { createBootSimulatorTool } from "../tools/simulator/boot-simulator";
-import { simulatorServerTool } from "../tools/simulator/simulator-server";
 import { launchAppTool } from "../tools/simulator/launch-app";
 import { restartAppTool } from "../tools/simulator/restart-app";
 import { reinstallAppTool } from "../tools/simulator/reinstall-app";
@@ -85,7 +84,6 @@ export function createRegistry(): Registry {
   registry.registerTool(restartAppTool);
   registry.registerTool(reinstallAppTool);
   registry.registerTool(openUrlTool);
-  registry.registerTool(simulatorServerTool);
   registry.registerTool(screenshotTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(gestureSwipeTool);
