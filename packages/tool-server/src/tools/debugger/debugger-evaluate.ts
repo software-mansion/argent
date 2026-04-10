@@ -9,11 +9,11 @@ const zodSchema = z.object({
 
 export const debuggerEvaluateTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { result: unknown }
+  { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
 > = {
   id: "debugger-evaluate",
   description: `Execute arbitrary JavaScript in the React Native app's JS runtime via CDP.
-Returns the evaluation result as a JSON-serializable value. Use when you need to read app state, call app functions, or test logic at runtime. Fails if the expression throws or the runtime is not connected.`,
+Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. Use when you need to read app state, call app functions, or test logic at runtime. Fails if the expression throws or the runtime is not connected.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -21,6 +21,11 @@ Returns the evaluation result as a JSON-serializable value. Use when you need to
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const result = await api.cdp.evaluate(params.expression);
-    return { result };
+    return {
+      result,
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
+    };
   },
 };
