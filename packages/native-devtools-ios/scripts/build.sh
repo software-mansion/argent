@@ -132,6 +132,24 @@ xcrun --sdk iphonesimulator clang \
   "${SRC_DIR}/InjectionBootstrap.c" \
   -o "${DEST_FILE_BS}"
 
+echo "Building ax-service..."
+AX_SRC_DIR="${SUBMODULE_DIR}/Sources/AXService"
+AX_DEST="${ROOT_DIR}/bin/ax-service"
+mkdir -p "$(dirname "$AX_DEST")"
+
+if [[ -n "${PREBUILT_AX_SERVICE:-}" ]]; then
+  cp "$PREBUILT_AX_SERVICE" "$AX_DEST"
+else
+  xcrun --sdk iphonesimulator clang \
+    -fobjc-arc \
+    ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+    -isysroot "${SDK_PATH}" \
+    -target arm64-apple-ios17.0-simulator \
+    -framework Foundation -framework UIKit -framework CoreGraphics \
+    -lobjc \
+    -o "${AX_DEST}" "${AX_SRC_DIR}/ax_service.m"
+fi
+
 if [[ "$MODE" == "release" ]]; then
   IDENTITY="${CODESIGN_IDENTITY:-${IDENTITY:-}}"
   if [[ -n "$IDENTITY" ]]; then

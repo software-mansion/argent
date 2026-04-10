@@ -1,10 +1,14 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { Registry, ToolDefinition } from "@argent/registry";
+import type { AXServiceApi } from "../../blueprints/ax-service";
+import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import type { DescribeNode } from "./describe-contract";
+import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import type { DescribeResult } from "./describe-contract";
+import { adaptAXDescribeToDescribeResult } from "./describe-ax-adapter";
+import { adaptNativeDescribeToDescribeResult } from "./describe-native-adapter";
 import { parseNativeDescribeScreenResult } from "../native-devtools/native-describe-contract";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
-import { adaptNativeDescribeToDescribeResult } from "./describe-native-adapter";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -12,60 +16,75 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Optional bundle ID override for native app-targeted describe. " +
-        "When omitted, describe auto-targets a safe connected app when possible."
+      "Optional app bundle ID. Used as a target hint when the AX-service returns no elements " +
+        "and the describe tool falls back to native-devtools inspection. " +
+        "If omitted, the fallback auto-detects the frontmost connected app."
     ),
 });
 
-async function nativeDescribe(api: NativeDevtoolsApi, bundleId: string): Promise<DescribeNode> {
-  if (await api.requiresAppRestart(bundleId)) {
-    throw new Error(
-      "Native devtools are not injected into the requested app. " +
-        "Call restart-app with the same bundleId, then retry describe."
-    );
-  }
+export function createDescribeTool(
+  registry: Registry
+): ToolDefinition<z.infer<typeof zodSchema>, DescribeResult> {
+  return {
+    id: "describe",
+    description: `Get the iOS accessibility element tree for the current simulator screen.
+Uses the AXRuntime accessibility service to inspect whatever is currently visible — including
+system dialogs, permission prompts, and any foreground app content.
 
-  const result = (await api.queryViewHierarchy(bundleId, "ViewHierarchy.describeScreen", {})) as {
-    error?: string;
-  };
-  if (result.error) {
-    throw new Error(result.error);
-  }
+When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
+with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
 
-  const parsed = parseNativeDescribeScreenResult(result);
-  return adaptNativeDescribeToDescribeResult(parsed);
-}
-
-export const describeTool: ToolDefinition<z.infer<typeof zodSchema>, DescribeNode> = {
-  id: "describe",
-  description: `Get the iOS accessibility element tree for a native-devtools-connected app on the simulator.
-Returns a JSON tree of UI elements with roles, labels, identifiers, values, and
-frame coordinates in normalized [0,1] space (fractions of the screen, not pixels)—the same space as tap/swipe/gesture and simulator-server touch input.
-Use when you need element coordinates before tapping or to inspect the UI hierarchy of a running app.
-
-If bundleId is omitted, describe auto-targets a safely identifiable connected foreground app.
-If bundleId is provided, describe targets that app explicitly.
-
-This tool is app-scoped, not simulator-wide: it does not inspect Home/system UI unless you target a connected app explicitly.
-If native devtools are not injected into the target app: call restart-app, then retry.
+Returns a JSON tree of UI elements with roles, labels, values, and frame coordinates in normalized
+[0,1] space (fractions of the screen, not pixels) — the same coordinate space as tap/swipe/gesture
+and simulator-server touch input.
 
 Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
 
-For React Native apps, the debugger-component-tree tool is also available and returns React component names with tap coordinates.
+For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
+use native-describe-screen with an explicit bundleId instead.
+For React Native apps, debugger-component-tree returns React component names with tap coordinates.
 Only supported on iOS simulators.`,
-  zodSchema,
-  services: (params) => ({
-    nativeDevtools: `NativeDevtools:${params.udid}`,
-  }),
-  async execute(services, params, _options) {
-    const nativeApi = services.nativeDevtools as NativeDevtoolsApi;
+    zodSchema,
+    services: () => ({}),
+    async execute(_services, params, _options) {
+      const axApi = await registry.resolveService<AXServiceApi>(
+        `${AX_SERVICE_NAMESPACE}:${params.udid}`
+      );
+      const response = await axApi.describe();
+      const tree = adaptAXDescribeToDescribeResult(response);
 
-    if (params.bundleId) {
-      const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
-      return nativeDescribe(nativeApi, target.bundleId);
-    }
+      if (tree.children.length > 0) {
+        return { tree, source: "ax-service" };
+      }
 
-    const target = await resolveNativeTargetApp(nativeApi);
-    return nativeDescribe(nativeApi, target.bundleId);
-  },
-};
+      // AX returned zero elements — attempt native-devtools fallback
+      try {
+        const nativeApi = await registry.resolveService<NativeDevtoolsApi>(
+          `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`
+        );
+
+        const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
+
+        if (await nativeApi.requiresAppRestart(target.bundleId)) {
+          return { tree, source: "ax-service", should_restart: true };
+        }
+
+        const rawResult = (await nativeApi.queryViewHierarchy(
+          target.bundleId,
+          "ViewHierarchy.describeScreen"
+        )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
+
+        if (rawResult.error) {
+          return { tree, source: "ax-service" };
+        }
+
+        const parsed = parseNativeDescribeScreenResult(rawResult);
+        const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
+        return { tree: nativeTree, source: "native-devtools" };
+      } catch {
+        // Native devtools unavailable or no connected app — return the empty AX result
+        return { tree, source: "ax-service" };
+      }
+    },
+  };
+}

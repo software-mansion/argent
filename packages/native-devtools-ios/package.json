@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
-    "build:dylibs": "bash scripts/build.sh"
+    "build:native": "bash scripts/build.sh",
+    "build:native:dev": "bash scripts/build.sh dev"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
