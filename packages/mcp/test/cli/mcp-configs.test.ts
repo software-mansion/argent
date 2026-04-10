@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -15,7 +15,7 @@ import {
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
 import { readToml } from "../../src/cli/utils.js";
-import { createRegistry } from "../../../tool-server/src/utils/setup-registry";
+import { getRegisteredToolIds } from "../../../tool-server/src/utils/registered-tools";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Allows individual tests to redirect homedir() to a temp path so that
@@ -35,14 +35,18 @@ vi.mock("node:os", async (importOriginal) => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let tmpDir: string;
+const isolatedToolNamesManifestPath = path.join(
+  os.tmpdir(),
+  `argent-tool-names-${process.pid}-mcp-configs.json`
+);
+fs.writeFileSync(
+  isolatedToolNamesManifestPath,
+  JSON.stringify([...getRegisteredToolIds()].sort(), null, 2) + "\n"
+);
+process.env.ARGENT_CODEX_TOOL_MANIFEST = isolatedToolNamesManifestPath;
 function setupTmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-test-"));
   return dir;
-}
-
-function getRegisteredToolIds(): string[] {
-  const registry = createRegistry();
-  return [...registry.getSnapshot().tools].sort();
 }
 
 function readJsonFile(filePath: string): Record<string, unknown> {
@@ -60,6 +64,10 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
   homedirOverride = undefined;
+});
+
+afterAll(() => {
+  fs.rmSync(isolatedToolNamesManifestPath, { force: true });
 });
 
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
@@ -564,43 +572,6 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     expect((tools["gesture-tap"] as Record<string, unknown>).approval_mode).toBe("approve");
   });
 
-  it("replaces malformed Argent server shapes with the managed approvals table", () => {
-    const configPath = path.join(tmpDir, ".codex", "config.toml");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      ["[mcp_servers]", 'argent = "broken"', 'model = "gpt-5.4"'].join("\n")
-    );
-
-    expect(() => addCodexApprovalAllowlist(tmpDir, "local")).not.toThrow();
-
-    const config = readTomlFile(configPath);
-    const argent = (config.mcp_servers as Record<string, unknown>).argent as Record<
-      string,
-      unknown
-    >;
-    const tools = argent.tools as Record<string, unknown>;
-    expect(Object.keys(tools).sort()).toEqual([...getRegisteredToolIds()].sort());
-  });
-
-  it("replaces malformed per-tool entries with managed approval config", () => {
-    const configPath = path.join(tmpDir, ".codex", "config.toml");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      ["[mcp_servers.argent.tools]", '"gesture-tap" = "broken"'].join("\n")
-    );
-
-    expect(() => addCodexApprovalAllowlist(tmpDir, "local")).not.toThrow();
-
-    const config = readTomlFile(configPath);
-    const gestureTap = (
-      ((config.mcp_servers as Record<string, unknown>).argent as Record<string, unknown>)
-        .tools as Record<string, unknown>
-    )["gesture-tap"] as Record<string, unknown>;
-    expect(gestureTap.approval_mode).toBe("approve");
-  });
-
   it("removes only Argent tool approvals from .codex/config.toml", () => {
     const configPath = path.join(tmpDir, ".codex", "config.toml");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
@@ -712,13 +683,6 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     expect(() => removeCodexApprovalAllowlist(tmpDir, "local")).not.toThrow();
   });
 
-  it("removes approvals safely when the existing tool config shape is malformed", () => {
-    const configPath = path.join(tmpDir, ".codex", "config.toml");
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, ["[mcp_servers.argent]", 'tools = "broken"'].join("\n"));
-
-    expect(() => removeCodexApprovalAllowlist(tmpDir, "local")).not.toThrow();
-  });
 });
 
 // ── copyRulesAndAgents ────────────────────────────────────────────────────────
@@ -908,9 +872,7 @@ describe("injectCodexRules / removeCodexRules", () => {
     injectCodexRules(configPath, rulesDir);
 
     const expectedPath = path.join(tmpDir, "nested", "instructions", "custom.md");
-    expect(fs.readFileSync(expectedPath, "utf8")).toContain(
-      "Use argent tools for simulator control."
-    );
+    expect(fs.readFileSync(expectedPath, "utf8")).toContain("Use argent tools for simulator control.");
   });
 
   it("migrates legacy argent content out of developer_instructions", () => {

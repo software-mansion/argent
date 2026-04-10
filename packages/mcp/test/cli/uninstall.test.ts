@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -11,8 +11,18 @@ import {
   removeCodexApprovalAllowlist,
 } from "../../src/cli/mcp-configs.js";
 import { readToml } from "../../src/cli/utils.js";
+import { getRegisteredToolIds } from "../../../tool-server/src/utils/registered-tools";
 
 let tmpDir: string;
+const isolatedToolNamesManifestPath = path.join(
+  os.tmpdir(),
+  `argent-tool-names-${process.pid}-uninstall.json`
+);
+fs.writeFileSync(
+  isolatedToolNamesManifestPath,
+  JSON.stringify([...getRegisteredToolIds()].sort(), null, 2) + "\n"
+);
+process.env.ARGENT_CODEX_TOOL_MANIFEST = isolatedToolNamesManifestPath;
 
 function readConfigFile(filePath: string): Record<string, unknown> {
   if (filePath.endsWith(".toml")) return readToml(filePath);
@@ -25,6 +35,10 @@ beforeEach(() => {
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  fs.rmSync(isolatedToolNamesManifestPath, { force: true });
 });
 
 // ── MCP entry removal across all adapters ─────────────────────────────────────
