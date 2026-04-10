@@ -184,7 +184,7 @@ License, Version 2.0 above:
 
   bin/simulator-server
   bin/ax-service
-  dylibs/libInjectionBootstrap.dylib
+  dylibs/libArgentInjectionBootstrap.dylib
   dylibs/libKeyboardPatch.dylib
   dylibs/libNativeDevtoolsIos.dylib
 

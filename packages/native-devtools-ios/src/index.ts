@@ -14,7 +14,7 @@ function requireDylib(name: string): string {
   return p;
 }
 
-export const bootstrapDylibPath = () => requireDylib("libInjectionBootstrap.dylib");
+export const bootstrapDylibPath = () => requireDylib("libArgentInjectionBootstrap.dylib");
 export const nativeDevtoolsDylibPath = () => requireDylib("libNativeDevtoolsIos.dylib");
 export const keyboardPatchDylibPath = () => requireDylib("libKeyboardPatch.dylib");
 

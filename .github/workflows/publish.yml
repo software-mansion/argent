@@ -30,7 +30,7 @@ jobs:
       - run: test -x packages/mcp/bin/ax-service
       - run: test -f packages/mcp/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/mcp/dylibs/libKeyboardPatch.dylib
-      - run: test -f packages/mcp/dylibs/libInjectionBootstrap.dylib
+      - run: test -f packages/mcp/dylibs/libArgentInjectionBootstrap.dylib
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent --registry https://npm.pkg.github.com

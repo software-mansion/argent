@@ -21,10 +21,10 @@ describe("buildDyldInsertLibraries", () => {
     return filePath;
   }
 
-  it("replaces stale bootstrap entries and missing paths with the current bootstrap dylib", () => {
-    const currentBootstrap = makeTempFile("libInjectionBootstrap.dylib");
+  it("replaces only stale bootstrap entries and keeps unrelated paths even if missing on disk", () => {
+    const currentBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
     const unrelated = makeTempFile("libOtherInspector.dylib");
-    const staleBootstrap = "/tmp/old/location/libInjectionBootstrap.dylib";
+    const staleBootstrap = "/tmp/old/location/libArgentInjectionBootstrap.dylib";
     const truncatedEntry = "/Users/filip/.nvm/versi";
 
     const result = buildDyldInsertLibraries(
@@ -32,11 +32,11 @@ describe("buildDyldInsertLibraries", () => {
       currentBootstrap
     );
 
-    expect(result).toBe([unrelated, currentBootstrap].join(":"));
+    expect(result).toBe([truncatedEntry, unrelated, currentBootstrap].join(":"));
   });
 
   it("preserves valid non-bootstrap loader entries while deduplicating the active bootstrap", () => {
-    const currentBootstrap = makeTempFile("libInjectionBootstrap.dylib");
+    const currentBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
     const unrelated = makeTempFile("libCustomTracing.dylib");
 
     const result = buildDyldInsertLibraries(
@@ -45,5 +45,18 @@ describe("buildDyldInsertLibraries", () => {
     );
 
     expect(result).toBe(["@loader_path/Other.dylib", unrelated, currentBootstrap].join(":"));
+  });
+
+  it("strips legacy libInjectionBootstrap.dylib paths when merging with the renamed bootstrap", () => {
+    const currentBootstrap = makeTempFile("libArgentInjectionBootstrap.dylib");
+    const legacyBootstrap = "/tmp/old/libInjectionBootstrap.dylib";
+    const thirdParty = makeTempFile("libSimCamLoader.dylib");
+
+    const result = buildDyldInsertLibraries(
+      [legacyBootstrap, thirdParty].join(":"),
+      currentBootstrap
+    );
+
+    expect(result).toBe([thirdParty, currentBootstrap].join(":"));
   });
 });

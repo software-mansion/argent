@@ -39,7 +39,7 @@ fi
 
 DEST_FILE="${DEST_DIR}/libNativeDevtoolsIos.dylib"
 DEST_FILE_KB="${DEST_DIR}/libKeyboardPatch.dylib"
-DEST_FILE_BS="${DEST_DIR}/libInjectionBootstrap.dylib"
+DEST_FILE_BS="${DEST_DIR}/libArgentInjectionBootstrap.dylib"
 
 # If pre-built dylibs are provided, copy them and exit.
 if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PATCH:-}" ]] && [[ -n "${PREBUILT_INJECTION_BOOTSTRAP:-}" ]]; then
@@ -121,7 +121,7 @@ xcrun --sdk iphonesimulator clang \
   "${SRC_DIR}/KeyboardPatch.m" \
   -o "${DEST_FILE_KB}"
 
-echo "Building libInjectionBootstrap.dylib..."
+echo "Building libArgentInjectionBootstrap.dylib..."
 xcrun --sdk iphonesimulator clang \
   -dynamiclib \
   ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \

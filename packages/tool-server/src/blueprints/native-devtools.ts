@@ -77,7 +77,11 @@ interface AppConnection {
   networkLog: NetworkEvent[];
 }
 
-const BOOTSTRAP_DYLIB_BASENAME = "libInjectionBootstrap.dylib";
+/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
+const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
+  "libArgentInjectionBootstrap.dylib",
+  "libInjectionBootstrap.dylib",
+]);
 
 function getNativeDevtoolsSocketPath(udid: string): string {
   // Deterministic, short — well under the 104-char macOS Unix socket limit
@@ -92,20 +96,20 @@ function splitDyldInsertLibraries(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
+/**
+ * Only strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name).
+ * All other entries are kept verbatim so third-party injectors (e.g. SimCam) are never dropped.
+ */
 function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
   if (entry === bootstrapPath) {
     return false;
   }
 
-  if (path.basename(entry) === BOOTSTRAP_DYLIB_BASENAME) {
+  if (ARGENT_BOOTSTRAP_DYLIB_BASENAMES.has(path.basename(entry))) {
     return false;
   }
 
-  if (entry.startsWith("@")) {
-    return true;
-  }
-
-  return fs.existsSync(entry);
+  return true;
 }
 
 export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
