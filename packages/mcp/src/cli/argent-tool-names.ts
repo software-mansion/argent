@@ -1,4 +1,4 @@
-[
+export const ARGENT_TOOL_NAMES = [
   "boot-simulator",
   "button",
   "debugger-component-tree",
@@ -58,5 +58,5 @@
   "stop-simulator-server",
   "update-argent",
   "view-network-logs",
-  "view-network-request-details"
-]
+  "view-network-request-details",
+] as const;

@@ -8,6 +8,7 @@ import {
   CODEX_APPROVAL_MODE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
+import { ARGENT_TOOL_NAMES } from "./argent-tool-names.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -590,20 +591,7 @@ export function removeCodexApprovalAllowlist(root: string, scope: "local" | "glo
 }
 
 function getArgentToolNames(): string[] {
-  const candidates = [
-    path.resolve(import.meta.dirname, "..", "generated", "argent-tool-names.json"),
-    path.resolve(import.meta.dirname, "..", "argent-tool-names.json"),
-  ];
-
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
-    const parsed = JSON.parse(fs.readFileSync(candidate, "utf8")) as unknown;
-    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
-      return parsed;
-    }
-  }
-
-  throw new Error("Could not load Argent tool names for Codex approvals.");
+  return [...ARGENT_TOOL_NAMES];
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
@@ -745,7 +733,7 @@ export function injectCodexRules(configPath: string, rulesDir: string): string |
     : defaultCodexInstructionsPath(configPath);
 
   if (!configuredInstructionsPath) {
-    config.model_instructions_file = instructionsPath;
+    config.model_instructions_file = CODEX_MODEL_INSTRUCTIONS_FILENAME;
   }
 
   const legacyDeveloperInstructions =

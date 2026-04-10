@@ -14,6 +14,7 @@ import {
   removeCodexRules,
   type McpConfigAdapter,
 } from "../../src/cli/mcp-configs.js";
+import { ARGENT_TOOL_NAMES } from "../../src/cli/argent-tool-names.js";
 import { readToml } from "../../src/cli/utils.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
@@ -34,14 +35,6 @@ vi.mock("node:os", async (importOriginal) => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let tmpDir: string;
-const generatedToolNamesPath = path.join(
-  process.cwd(),
-  "src",
-  "generated",
-  "argent-tool-names.json"
-);
-const fallbackToolNamesPath = path.join(process.cwd(), "src", "argent-tool-names.json");
-
 function setupTmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-test-"));
   return dir;
@@ -55,10 +48,6 @@ function readTomlFile(filePath: string): Record<string, unknown> {
   return readToml(filePath);
 }
 
-function readGeneratedToolNames(): string[] {
-  return JSON.parse(fs.readFileSync(generatedToolNamesPath, "utf8")) as string[];
-}
-
 beforeEach(() => {
   tmpDir = setupTmpDir();
 });
@@ -66,7 +55,6 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
   homedirOverride = undefined;
-  fs.rmSync(fallbackToolNamesPath, { force: true });
 });
 
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
@@ -529,7 +517,7 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     const argent = servers.argent as Record<string, unknown>;
     const tools = argent.tools as Record<string, unknown>;
 
-    expect(Object.keys(tools).sort()).toEqual(readGeneratedToolNames().sort());
+    expect(Object.keys(tools).sort()).toEqual([...ARGENT_TOOL_NAMES].sort());
     expect((tools["gesture-tap"] as Record<string, unknown>).approval_mode).toBe("approve");
     expect((tools["describe"] as Record<string, unknown>).approval_mode).toBe("approve");
   });
@@ -567,7 +555,7 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     >;
     const tools = (argent.tools ?? {}) as Record<string, unknown>;
 
-    expect(Object.keys(tools).sort()).toEqual(readGeneratedToolNames().sort());
+    expect(Object.keys(tools).sort()).toEqual([...ARGENT_TOOL_NAMES].sort());
     expect((tools["gesture-tap"] as Record<string, unknown>).approval_mode).toBe("approve");
   });
 
@@ -682,46 +670,6 @@ describe("addCodexApprovalAllowlist / removeCodexApprovalAllowlist", () => {
     expect(() => removeCodexApprovalAllowlist(tmpDir, "local")).not.toThrow();
   });
 
-  it("falls back to the secondary tool manifest path when the generated manifest is absent", () => {
-    const originalGeneratedManifest = fs.readFileSync(generatedToolNamesPath, "utf8");
-    const fallbackToolNames = ["gesture-tap", "describe"];
-
-    fs.rmSync(generatedToolNamesPath, { force: true });
-    fs.writeFileSync(fallbackToolNamesPath, JSON.stringify(fallbackToolNames));
-
-    try {
-      addCodexApprovalAllowlist(tmpDir, "local");
-
-      const configPath = path.join(tmpDir, ".codex", "config.toml");
-      const config = readTomlFile(configPath);
-      const argent = ((config.mcp_servers as Record<string, unknown>).argent ?? {}) as Record<
-        string,
-        unknown
-      >;
-      const tools = (argent.tools ?? {}) as Record<string, unknown>;
-
-      expect(Object.keys(tools).sort()).toEqual(fallbackToolNames.sort());
-    } finally {
-      fs.writeFileSync(generatedToolNamesPath, originalGeneratedManifest);
-      fs.rmSync(fallbackToolNamesPath, { force: true });
-    }
-  });
-
-  it("throws when no valid tool manifest is available", () => {
-    const originalGeneratedManifest = fs.readFileSync(generatedToolNamesPath, "utf8");
-
-    fs.rmSync(generatedToolNamesPath, { force: true });
-    fs.writeFileSync(fallbackToolNamesPath, JSON.stringify({ invalid: true }));
-
-    try {
-      expect(() => addCodexApprovalAllowlist(tmpDir, "local")).toThrow(
-        "Could not load Argent tool names for Codex approvals."
-      );
-    } finally {
-      fs.writeFileSync(generatedToolNamesPath, originalGeneratedManifest);
-      fs.rmSync(fallbackToolNamesPath, { force: true });
-    }
-  });
 });
 
 // ── copyRulesAndAgents ────────────────────────────────────────────────────────
@@ -806,7 +754,7 @@ describe("copyRulesAndAgents", () => {
     expect(results.some((r) => r.includes("model_instructions_file"))).toBe(true);
 
     const configContent = fs.readFileSync(configPath, "utf8");
-    expect(configContent).toContain("model_instructions_file");
+    expect(configContent).toContain('model_instructions_file = "model_instructions.md"');
 
     const instructionsPath = path.join(tmpDir, ".codex", "model_instructions.md");
     const instructionsContent = fs.readFileSync(instructionsPath, "utf8");
@@ -847,7 +795,7 @@ describe("injectCodexRules / removeCodexRules", () => {
     injectCodexRules(configPath, rulesDir);
 
     const configContent = fs.readFileSync(configPath, "utf8");
-    expect(configContent).toContain("model_instructions_file");
+    expect(configContent).toContain('model_instructions_file = "model_instructions.md"');
 
     const instructionsContent = fs.readFileSync(path.join(tmpDir, "model_instructions.md"), "utf8");
     expect(instructionsContent).toContain("Use argent tools for simulator control.");
