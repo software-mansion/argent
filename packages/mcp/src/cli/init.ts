@@ -285,8 +285,9 @@ export async function init(args: string[]): Promise<void> {
   const mcpResults: string[] = [];
 
   for (const adapter of selectedAdapters) {
-    const configPath =
-      scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
+    const localPath = adapter.projectPath(effectiveRoot);
+    const globalPath = adapter.globalPath();
+    const configPath = scope === "global" ? globalPath : localPath;
 
     if (!configPath) {
       if (scope === "global" && adapter.projectPath(projectRoot)) {
@@ -295,6 +296,15 @@ export async function init(args: string[]): Promise<void> {
           adapter.write(fallback, mcpEntry);
           mcpResults.push(
             `${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`
+          );
+        } catch (err) {
+          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
+        }
+      } else if (scope !== "global" && !localPath && globalPath) {
+        try {
+          adapter.write(globalPath, mcpEntry);
+          mcpResults.push(
+            `${pc.green("+")} ${adapter.name} ${pc.dim(`(global-only fallback: ${globalPath})`)}`
           );
         } catch (err) {
           mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);

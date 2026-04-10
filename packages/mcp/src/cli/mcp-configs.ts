@@ -7,7 +7,7 @@ import {
   PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
-import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
+import { readJson, writeJson, dirExists, readToml, writeToml, readYaml, writeYaml } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -466,6 +466,53 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Hermes adapter ──────────────────────────────────────────────────────────
+// Format (YAML): mcp_servers: { argent: { command, args, env } }
+// Global only: ~/.hermes/config.yaml
+
+const hermesAdapter: McpConfigAdapter = {
+  name: "Hermes",
+
+  detect(): boolean {
+    return dirExists(path.join(homedir(), ".hermes"));
+  },
+
+  projectPath(): string | null {
+    return null;
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".hermes", "config.yaml");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readYaml(configPath);
+    const servers = (config.mcp_servers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcp_servers = servers;
+    writeYaml(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readYaml(configPath);
+    const servers = config.mcp_servers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    if (Object.keys(servers).length === 0) {
+      delete config.mcp_servers;
+    } else {
+      config.mcp_servers = servers;
+    }
+    writeYaml(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
@@ -476,6 +523,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  hermesAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {

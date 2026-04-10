@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { parse as parseYaml } from "yaml";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
@@ -41,6 +42,10 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function readYamlFile(filePath: string): Record<string, unknown> {
+  return parseYaml(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+}
+
 beforeEach(() => {
   tmpDir = setupTmpDir();
 });
@@ -63,7 +68,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -73,6 +78,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "Hermes",
     ]);
   });
 });
@@ -457,6 +463,68 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+});
+
+// ── Hermes adapter ──────────────────────────────────────────────────────────
+
+describe("Hermes adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
+
+  it("writes YAML format with mcp_servers key", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    const servers = config.mcp_servers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent.args).toEqual(["mcp"]);
+    expect(argent.env).toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("removes argent entry and drops empty mcp_servers", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    adapter.write(configPath, getMcpEntry());
+
+    expect(adapter.remove(configPath)).toBe(true);
+    const config = readYamlFile(configPath);
+    expect(config).not.toHaveProperty("mcp_servers");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.yaml"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "mcp_servers: {}\n");
+
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other config and servers when writing", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "model: test\nmcp_servers:\n  other:\n    command: other\n");
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    expect(config.model).toBe("test");
+    const servers = config.mcp_servers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).toHaveProperty("argent");
+  });
+
+  it("projectPath returns null", () => {
+    expect(adapter.projectPath("/foo")).toBeNull();
+  });
+
+  it("globalPath returns path in homedir", () => {
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".hermes", "config.yaml"));
   });
 });
 

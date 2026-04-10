@@ -83,6 +83,7 @@ argent init
 | Zed         | `.zed/settings.json`                                          |
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
+| Hermes      | `~/.hermes/config.yaml`                                       |
 
 ## License
 

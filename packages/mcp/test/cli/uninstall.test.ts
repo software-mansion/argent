@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -8,21 +8,33 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../../src/cli/mcp-configs.js";
-import { readToml } from "../../src/cli/utils.js";
+import { readToml, readYaml } from "../../src/cli/utils.js";
 
 let tmpDir: string;
+let homedirOverride: string | undefined;
+
+vi.mock("node:os", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:os")>();
+  return {
+    ...original,
+    homedir: vi.fn(() => homedirOverride ?? original.homedir()),
+  };
+});
 
 function readConfigFile(filePath: string): Record<string, unknown> {
   if (filePath.endsWith(".toml")) return readToml(filePath);
+  if (filePath.endsWith(".yaml") || filePath.endsWith(".yml")) return readYaml(filePath);
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
+  homedirOverride = tmpDir;
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
+  homedirOverride = undefined;
 });
 
 // ── MCP entry removal across all adapters ─────────────────────────────────────
@@ -52,6 +64,24 @@ describe("uninstall — MCP entry removal", () => {
       expect(adapter.remove(path.join(tmpDir, "nonexistent.json"))).toBe(false);
     }
   });
+
+  for (const adapter of ALL_ADAPTERS) {
+    it(`removes argent from ${adapter.name} global config`, () => {
+      const configPath = adapter.globalPath();
+      if (!configPath) return;
+
+      adapter.write(configPath, getMcpEntry());
+      expect(adapter.remove(configPath)).toBe(true);
+
+      const config = readConfigFile(configPath);
+      const allValues = Object.values(config).filter(
+        (v) => typeof v === "object" && v !== null
+      ) as Record<string, unknown>[];
+      for (const section of allValues) {
+        expect(section).not.toHaveProperty("argent");
+      }
+    });
+  }
 });
 
 // ── Permissions cleanup ───────────────────────────────────────────────────────
