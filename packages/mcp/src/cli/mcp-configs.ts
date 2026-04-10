@@ -7,7 +7,6 @@ import {
   CLAUDE_PERMISSION_RULE,
   CODEX_APPROVAL_MODE,
   CURSOR_ALLOWLIST_PATTERN,
-  ARGENT_TOOL_NAMES,
 } from "./constants.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
@@ -542,7 +541,7 @@ export function addCodexApprovalAllowlist(root: string, scope: "local" | "global
   const argentServer = (servers[MCP_SERVER_KEY] ?? {}) as Record<string, unknown>;
   const tools = (argentServer.tools ?? {}) as Record<string, unknown>;
 
-  for (const toolName of ARGENT_TOOL_NAMES) {
+  for (const toolName of getArgentToolNames()) {
     const toolConfig = (tools[toolName] ?? {}) as Record<string, unknown>;
     toolConfig.approval_mode = CODEX_APPROVAL_MODE;
     tools[toolName] = toolConfig;
@@ -569,9 +568,15 @@ export function removeCodexApprovalAllowlist(root: string, scope: "local" | "glo
   if (!tools) return;
 
   let removedAny = false;
-  for (const toolName of ARGENT_TOOL_NAMES) {
-    if (!(toolName in tools)) continue;
-    delete tools[toolName];
+  for (const toolName of getArgentToolNames()) {
+    const toolConfig = tools[toolName] as Record<string, unknown> | undefined;
+    if (!toolConfig || toolConfig.approval_mode !== CODEX_APPROVAL_MODE) continue;
+    delete toolConfig.approval_mode;
+    if (Object.keys(toolConfig).length === 0) {
+      delete tools[toolName];
+    } else {
+      tools[toolName] = toolConfig;
+    }
     removedAny = true;
   }
 
@@ -582,6 +587,23 @@ export function removeCodexApprovalAllowlist(root: string, scope: "local" | "glo
   }
 
   writeToml(configPath, config);
+}
+
+function getArgentToolNames(): string[] {
+  const candidates = [
+    path.resolve(import.meta.dirname, "..", "generated", "argent-tool-names.json"),
+    path.resolve(import.meta.dirname, "..", "argent-tool-names.json"),
+  ];
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) continue;
+    const parsed = JSON.parse(fs.readFileSync(candidate, "utf8")) as unknown;
+    if (Array.isArray(parsed) && parsed.every((item) => typeof item === "string")) {
+      return parsed;
+    }
+  }
+
+  throw new Error("Could not load Argent tool names for Codex approvals.");
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
@@ -703,11 +725,7 @@ function defaultCodexInstructionsPath(configPath: string): string {
 
 function resolveConfiguredInstructionsPath(configPath: string, configuredPath: string): string {
   if (path.isAbsolute(configuredPath)) return configuredPath;
-
-  const relativeToConfigDir = path.resolve(path.dirname(configPath), configuredPath);
-  if (fs.existsSync(relativeToConfigDir)) return relativeToConfigDir;
-
-  return path.resolve(process.cwd(), configuredPath);
+  return path.resolve(path.dirname(configPath), configuredPath);
 }
 
 function readInstructionsFile(filePath: string): string | undefined {

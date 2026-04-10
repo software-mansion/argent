@@ -21,9 +21,11 @@ describe("package manifest", () => {
     const pkgPath = path.resolve(import.meta.dirname, "..", "package.json");
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as {
       files?: string[];
+      scripts?: Record<string, string>;
     };
 
     expect(pkg.files).toContain("dist/");
     expect(pkg.files).toContain("dylibs/");
+    expect(pkg.scripts?.prepack).toBe("npm run build");
   });
 });

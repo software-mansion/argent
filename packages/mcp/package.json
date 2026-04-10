@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.4.2",
+  "version": "0.5.6",
   "description": "MCP server for iOS Simulator control",
   "repository": {
     "type": "git",
@@ -15,7 +15,7 @@
     "build": "npm run build:mcp && npm run build:tools-bundle && npm run sync-readme",
     "build:mcp": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "sync-readme": "node scripts/sync-readme.cjs",
-    "prepack": "node scripts/sync-readme.cjs",
+    "prepack": "npm run build",
     "build:tools-bundle": "node scripts/bundle-tools.cjs",
     "dev": "node --loader ts-node/esm src/cli.ts mcp",
     "test": "vitest run",
