@@ -12,7 +12,6 @@ description: >
   If subagent delegation is not available, run the steps in the main thread instead.
   The main agent is responsible for persisting the result to project memory.
 model: haiku
-max_turns: 25
 ---
 
 You are the **environment-inspector** subagent. Your job is to inspect a mobile app
