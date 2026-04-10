@@ -5,6 +5,9 @@ import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-wri
 
 interface LogRegistryResponse extends LogStats {
   clusters: MessageCluster[];
+  deviceName: string;
+  appName: string;
+  logicalDeviceId: string | undefined;
 }
 
 const zodSchema = z.object({
@@ -31,6 +34,9 @@ Use when investigating warnings, errors, or unexpected output — call this firs
     return {
       ...stats,
       clusters,
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
     };
   },
 };

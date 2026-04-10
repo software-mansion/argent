@@ -27,6 +27,7 @@ jobs:
       - run: npm run build -w @swmansion/argent
 
       - run: test -x packages/mcp/bin/simulator-server
+      - run: test -x packages/mcp/bin/ax-service
       - run: test -f packages/mcp/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/mcp/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/mcp/dylibs/libInjectionBootstrap.dylib

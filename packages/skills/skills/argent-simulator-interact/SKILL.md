@@ -1,6 +1,6 @@
 ---
 name: argent-simulator-interact
-description: Interact with a running iOS simulator using argent MCP tools. Use when tapping UI elements, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, or performing any gesture on the simulator.
+description: Interact with an iOS simulator using argent MCP tools. Use when tapping UI elements, perfroming gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
 ---
 
 ## 1. Before You Start
@@ -18,7 +18,7 @@ Use `list-simulators` to find available simulators. **Pick the first result** if
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For native iOS app navigation, prefer `describe` first.** Do not navigate from screenshots on regular in-app screens unless `describe` or `native-describe-screen` failed to expose a reliable target.
+6. **For native iOS app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -66,10 +66,10 @@ IMPORTANT. When moved to a different screen after an action or do not know the c
 
 | App type                          | Discovery tool            | What it returns                                                                                                                           |
 | --------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Target app discovery              | `describe`                | Accessibility element tree with normalized frame coordinates for a native-devtools-connected app; may use explicit `bundleId` when needed |
+| Target app discovery              | `describe`                | Accessibility element tree for the current simulator screen with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
 | React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                             |
 | App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                      |
-| Permission / system modal overlay | `describe` first          | Try `describe` or `native-describe-screen` first. Fall back to `screenshot` only if the visible alert/modal is not exposed reliably       |
+| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls |
 | Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots    |
 
 Point follow-up native diagnostics after you already have a candidate point:
@@ -81,20 +81,14 @@ Point follow-up native diagnostics after you already have a candidate point:
 
 Read the exact error and choose the action that matches it:
 
-- Error says no native-devtools-connected apps are available:
-  launch or restart the app you want to inspect, then retry `describe`.
-- Error says `restart-app`, `restart_required`, or native devtools are not injected:
-  use `restart-app` with the same `bundleId`, then retry `describe` or `native-describe-screen`.
-- Error says to provide `bundleId`, or auto-targeting cannot identify a unique foreground app:
-  retry with explicit `bundleId` for the app you intend to inspect.
-- Error mentions `device_window_not_found`, Home screen, or system UI cannot be inspected automatically:
-  use `screenshot` to inspect the visible Home/system UI. If you actually want a connected background app instead, retry `describe` with explicit `bundleId`.
-- A permission prompt, native alert, or modal overlay is visible:
-  still try `describe` first. If the overlay is system-owned or `describe` / `native-describe-screen` does not expose the actionable controls reliably, use `screenshot` as a fallback. Once the modal is dismissed, switch back to `describe`, `native-describe-screen`, or `debugger-component-tree`.
+- Error mentions `ax-service` not available or daemon startup failure:
+  the ax-service daemon could not start. Check that the simulator is booted. Use `screenshot` as a temporary fallback, or use `native-describe-screen` with an explicit `bundleId` if the app has native devtools injected.
+- `describe` returns an empty element list:
+  the screen may be blank, loading, or showing content without accessibility labels. Use `screenshot` to see what is visible, then retry after the content has loaded.
 - `describe` succeeds but is not detailed enough for a React Native app:
   use `debugger-component-tree` next.
-- You already know the target app and want lower-level native inspection:
-  use `native-describe-screen` with `bundleId`.
+- You need app-scoped inspection with full UIKit properties (`accessibilityIdentifier`, `viewClassName`):
+  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection — call `restart-app` first if needed.
 - You already have a candidate point and want to confirm what would actually receive touch:
   use `native-user-interactable-view-at-point`. Use `native-view-at-point` when you want the visually deepest view instead of the hit-test target.
 
@@ -187,7 +181,7 @@ Use the explicit `screenshot` tool only when:
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
-- A permission dialog, system alert, or native modal overlay is visible and `describe` / `native-describe-screen` did not expose reliable targets.
+- A permission dialog, system alert, or native modal overlay is visible and `describe` did not expose reliable targets.
 
 When using `screenshot` for permission or native modal navigation:
 

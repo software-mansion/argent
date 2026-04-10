@@ -12,6 +12,8 @@ export const debuggerStatusTool: ToolDefinition<
     port: number;
     projectRoot: string;
     deviceName: string;
+    appName: string;
+    logicalDeviceId: string | undefined;
     isNewDebugger: boolean;
     connected: boolean;
     loadedScripts: number;
@@ -21,7 +23,7 @@ export const debuggerStatusTool: ToolDefinition<
 > = {
   id: "debugger-status",
   description: `Get JS runtime debugger connection status and diagnostic info.
-Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot, deviceName, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning). Fails if Metro is unreachable.`,
+Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot, deviceName, appName, logicalDeviceId, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning). Fails if Metro is unreachable.`,
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}`,
@@ -33,6 +35,8 @@ Use when you need to verify connectivity before using other debugger tools. Retu
       port: api.port,
       projectRoot: api.projectRoot,
       deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
       isNewDebugger: api.isNewDebugger,
       connected: api.cdp.isConnected(),
       loadedScripts: api.cdp.getLoadedScripts().size,

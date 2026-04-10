@@ -7,6 +7,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
+import { ensureAutomationEnabled } from "./ax-service";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -94,6 +95,11 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, stri
   },
   async factory(_deps, payload) {
     const udid = payload;
+    // Enable accessibility automation before any app is launched so that apps
+    // start with their AX server running. If this is called after apps are already
+    // running (e.g. a pre-booted simulator), those apps won't pick up the flag
+    // until restarted — but new launches will work correctly.
+    await ensureAutomationEnabled(udid).catch(() => {});
     const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(udid);
 
     const events = new TypedEventEmitter<ServiceEvents>();
