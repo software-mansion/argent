@@ -478,6 +478,30 @@ describe("Registry -- Blueprint", () => {
   });
 });
 
+describe("Registry -- getAllTools", () => {
+  it("returns all registered tool IDs", () => {
+    const registry = new Registry();
+    registry.registerTool(createMockToolDef("ToolA", () => ({})));
+    registry.registerTool(createMockToolDef("ToolB", () => ({})));
+    registry.registerTool(createMockToolDef("ToolC", () => ({})));
+
+    const tools = registry.getAllTools();
+    console.log("Registered tools:", tools);
+
+    expect(tools).toContain("ToolA");
+    expect(tools).toContain("ToolB");
+    expect(tools).toContain("ToolC");
+    expect(tools).toHaveLength(3);
+  });
+
+  it("returns empty array when no tools registered", () => {
+    const registry = new Registry();
+    const tools = registry.getAllTools();
+    console.log("No tools registered:", tools);
+    expect(tools).toEqual([]);
+  });
+});
+
 describe("Registry -- getTool and extensions", () => {
   it("getTool returns definition for registered tool", () => {
     const registry = new Registry();

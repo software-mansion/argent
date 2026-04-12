@@ -42,6 +42,10 @@ export class Registry {
     return this.tools.get(id)?.definition;
   }
 
+  getAllTools() {
+    return Array.from(this.tools.keys());
+  }
+
   /**
    * Resolve a service by URN. JIT-instantiates from blueprint if not yet created.
    * Optional options are passed to the blueprint's factory (e.g. token for SimulatorServer).
