@@ -371,11 +371,11 @@ const geminiAdapter: McpConfigAdapter = {
     );
   },
 
-  projectPath(root: string): string | null {
+  projectPath(root: string): string {
     return path.join(root, ".gemini", "settings.json");
   },
 
-  globalPath(): string | null {
+  globalPath(): string {
     return path.join(homedir(), ".gemini", "settings.json");
   },
 
@@ -402,10 +402,12 @@ const geminiAdapter: McpConfigAdapter = {
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
-    const configPath =
-      scope === "global"
-        ? path.join(homedir(), ".gemini", "settings.json")
-        : path.join(root, ".gemini", "settings.json");
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath) {
+      return;
+    }
+
     const config = readJson(configPath);
     const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
     const entry = servers[MCP_SERVER_KEY];
@@ -415,11 +417,12 @@ const geminiAdapter: McpConfigAdapter = {
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
-    const configPath =
-      scope === "global"
-        ? path.join(homedir(), ".gemini", "settings.json")
-        : path.join(root, ".gemini", "settings.json");
-    if (!fs.existsSync(configPath)) return;
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath || !fs.existsSync(configPath)) {
+      return;
+    }
+
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
