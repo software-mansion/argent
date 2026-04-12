@@ -10,6 +10,7 @@ import {
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+// MARK: Types
 
 export interface McpServerEntry {
   command: string;
@@ -44,6 +45,7 @@ export function getMcpEntry(): McpServerEntry {
 }
 
 // ── Cursor adapter ────────────────────────────────────────────────────────────
+// MARK: Cursor
 // Format: { mcpServers: { argent: { command, args, env } } }
 
 const cursorAdapter: McpConfigAdapter = {
@@ -111,6 +113,7 @@ const cursorAdapter: McpConfigAdapter = {
 };
 
 // ── Claude Code adapter ───────────────────────────────────────────────────────
+// MARK: Claude
 // Format: { mcpServers: { argent: { type: "stdio", command, args, env } } }
 // Project: .mcp.json   Global: ~/.claude.json
 // Also manages permissions in .claude/settings.json
@@ -168,6 +171,7 @@ const claudeAdapter: McpConfigAdapter = {
 };
 
 // ── VS Code adapter ──────────────────────────────────────────────────────────
+// MARK: VSCode
 // Format: { servers: { argent: { type: "stdio", command, args, env } } }
 // Project only: .vscode/mcp.json
 
@@ -213,6 +217,7 @@ const vscodeAdapter: McpConfigAdapter = {
 };
 
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
+// MARK: Windsurf
 // Format: { mcpServers: { argent: { command, args, env } } }
 // Global only: ~/.codeium/windsurf/mcp_config.json
 
@@ -276,6 +281,7 @@ const windsurfAdapter: McpConfigAdapter = {
 };
 
 // ── Zed adapter ──────────────────────────────────────────────────────────────
+// MARK: Zed
 // Format: merges { context_servers: { argent: { source: "custom", command, args, env } } }
 // Into existing settings.json
 
@@ -352,6 +358,7 @@ const zedAdapter: McpConfigAdapter = {
 };
 
 // ── Gemini CLI adapter ────────────────────────────────────────────────────────
+// MARK: Gemini
 // Format: { mcpServers: { argent: { command, args, env } } }
 // Project: <root>/.gemini/settings.json   Global: ~/.gemini/settings.json
 
@@ -423,6 +430,7 @@ const geminiAdapter: McpConfigAdapter = {
 };
 
 // ── Codex CLI adapter ────────────────────────────────────────────────────────
+// MARK: Codex
 // Format (TOML): [mcp_servers.argent] command = "argent" args = ["mcp"] env = { ... }
 // Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
 
@@ -467,6 +475,7 @@ const codexAdapter: McpConfigAdapter = {
 };
 
 // ── Registry ──────────────────────────────────────────────────────────────────
+// MARK: Registry
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
   cursorAdapter,
@@ -659,6 +668,7 @@ export function removeCodexRules(configPath: string): boolean {
 }
 
 // ── Copy orchestrator ────────────────────────────────────────────────────────
+// MARK: Copy orchestrator
 
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
