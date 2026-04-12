@@ -10,5 +10,6 @@
     "composite": true,
     "sourceMap": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*"],
+  "references": [{ "path": "../tool-server" }]
 }

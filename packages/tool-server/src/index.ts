@@ -5,6 +5,9 @@ import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
 
+// The CLI package requires registry to read the tool list.
+export { createRegistry };
+
 // ── Config ──────────────────────────────────────────────────────────
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
