@@ -3,7 +3,11 @@
   "name": "@argent/tool-server",
   "version": "0.4.1",
   "description": "Framework-agnostic tool registry for iOS simulator control",
+  "type": "module",
   "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc && cp src/utils/ios-profiler/Argent.tracetemplate dist/utils/ios-profiler/",
     "start": "node dist/index.js",
