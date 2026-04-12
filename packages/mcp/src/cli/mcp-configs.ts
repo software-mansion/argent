@@ -8,6 +8,9 @@ import {
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
+import { createRegistry } from "@argent/tool-server";
+
+const registry = createRegistry();
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 // MARK: Types
@@ -438,6 +441,21 @@ const geminiAdapter: McpConfigAdapter = {
 // Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
 
 const CODEX_FILENAME = ".codex";
+
+// TODO: Move elsewhere
+type CodexConfig = {
+  mcp_servers?: {
+    argent?: {
+      tools?: Record<
+        string,
+        {
+          approval_mode: string;
+        }
+      >;
+    };
+  };
+};
+
 const codexAdapter: McpConfigAdapter = {
   name: "Codex",
 
@@ -476,6 +494,54 @@ const codexAdapter: McpConfigAdapter = {
     delete servers[MCP_SERVER_KEY];
     writeToml(configPath, config);
     return true;
+  },
+
+  addAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath) {
+      return;
+    }
+
+    const tools = registry.getAllTools();
+    const config = readToml(configPath) as CodexConfig;
+
+    config.mcp_servers ??= {};
+    config.mcp_servers.argent ??= {};
+    config.mcp_servers.argent.tools ??= {};
+    const toolsConfig = config?.mcp_servers?.argent?.tools;
+
+    for (const tool of tools) {
+      toolsConfig[tool] = {
+        approval_mode: "approve",
+      };
+    }
+
+    writeToml(configPath, config);
+  },
+
+  removeAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath) {
+      return;
+    }
+
+    const tools = registry.getAllTools();
+    const config = readToml(configPath) as CodexConfig;
+    const toolsConfig = config?.mcp_servers?.argent?.tools;
+
+    if (toolsConfig === undefined) {
+      return;
+    }
+
+    for (const tool of tools) {
+      if (tool in toolsConfig) {
+        delete toolsConfig[tool];
+      }
+    }
+
+    writeToml(configPath, config);
   },
 };
 
