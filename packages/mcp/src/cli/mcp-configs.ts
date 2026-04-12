@@ -434,21 +434,23 @@ const geminiAdapter: McpConfigAdapter = {
 // Format (TOML): [mcp_servers.argent] command = "argent" args = ["mcp"] env = { ... }
 // Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
 
+const CODEX_FILENAME = ".codex";
 const codexAdapter: McpConfigAdapter = {
   name: "Codex",
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".codex")) || dirExists(path.join(process.cwd(), ".codex"))
+      dirExists(path.join(homedir(), CODEX_FILENAME)) ||
+      dirExists(path.join(process.cwd(), CODEX_FILENAME))
     );
   },
 
   projectPath(root: string): string | null {
-    return path.join(root, ".codex", "config.toml");
+    return path.join(root, CODEX_FILENAME, "config.toml");
   },
 
   globalPath(): string | null {
-    return path.join(homedir(), ".codex", "config.toml");
+    return path.join(homedir(), CODEX_FILENAME, "config.toml");
   },
 
   write(configPath: string, entry: McpServerEntry): void {
