@@ -32,6 +32,19 @@ export interface McpConfigAdapter {
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
 
+type CodexConfig = {
+  mcp_servers?: {
+    argent?: {
+      tools?: Record<
+        string,
+        {
+          approval_mode: string;
+        }
+      >;
+    };
+  };
+};
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 function buildMcpEntry(): McpServerEntry {
@@ -441,20 +454,6 @@ const geminiAdapter: McpConfigAdapter = {
 // Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
 
 const CODEX_FILENAME = ".codex";
-
-// TODO: Move elsewhere
-type CodexConfig = {
-  mcp_servers?: {
-    argent?: {
-      tools?: Record<
-        string,
-        {
-          approval_mode: string;
-        }
-      >;
-    };
-  };
-};
 
 const codexAdapter: McpConfigAdapter = {
   name: "Codex",
