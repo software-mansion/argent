@@ -1,21 +1,34 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 
-const execFileAsync = promisify(execFile);
 const FLOWS_DIR_NAME = ".argent";
 
 // ── Paths ────────────────────────────────────────────────────────────
 
-async function getGitRoot(): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
-  return stdout.trim();
+/**
+ * Walk up from the current working directory looking for a directory that
+ * already contains a `.argent/` entry — that directory is the project root.
+ * Falls back to `process.cwd()` so the first `flow-start-recording` call
+ * creates `.argent/` in-place.
+ */
+async function findProjectRoot(): Promise<string> {
+  let dir = process.cwd();
+  while (true) {
+    try {
+      const stat = await fs.stat(path.join(dir, FLOWS_DIR_NAME));
+      if (stat.isDirectory()) return dir;
+    } catch {
+      // not found at this level — keep walking
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return process.cwd();
+    dir = parent;
+  }
 }
 
 export async function getFlowsDir(): Promise<string> {
-  const root = await getGitRoot();
+  const root = await findProjectRoot();
   return path.join(root, FLOWS_DIR_NAME);
 }
 
