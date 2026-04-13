@@ -17,6 +17,7 @@ import {
   getInstalledVersion,
   getLatestVersion,
   isOnline,
+  isSkillsCliAvailable,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
@@ -77,17 +78,18 @@ export async function init(args: string[]): Promise<void> {
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
   const online = await isOnline();
+  const skillsCached = !online && isSkillsCliAvailable();
   if (!online) {
-    p.note(
-      [
-        pc.red("You appear to be offline."),
-        ``,
-        `You can continue, but the following will be skipped:`,
-        `  • Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`,
-        `  • Installing skills via ${pc.cyan("npx skills")} (unless already cached; manual install always works)`,
-      ].join("\n"),
-      pc.red("Offline mode")
-    );
+    const lines = [
+      pc.red("You appear to be offline."),
+      ``,
+      `You can continue, but the following will be skipped:`,
+      `  • Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`,
+    ];
+    if (!skillsCached) {
+      lines.push(`  • Installing skills via ${pc.cyan("npx skills")} (use the manual option instead)`);
+    }
+    p.note(lines.join("\n"), pc.red("Offline mode"));
   }
 
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
@@ -402,28 +404,30 @@ export async function init(args: string[]): Promise<void> {
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
 
+  const skillsCliReady = online || skillsCached;
+
   if (nonInteractive) {
-    skillsMethod = online ? "default" : "manual";
+    skillsMethod = skillsCliReady ? "default" : "manual";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
 
     const choice = await p.select({
       message: "How would you like to install skills?",
-      initialValue: online ? "default" : "manual",
+      initialValue: skillsCliReady ? "default" : "manual",
       options: [
         {
           value: "default" as const,
           label: "Automatic",
-          hint: online
+          hint: skillsCliReady
             ? "Installs all skills automatically with npx skills"
-            : "May require network if not already cached",
+            : "Requires network - unavailable offline",
         },
         {
           value: "interactive" as const,
           label: "Interactive",
-          hint: online
+          hint: skillsCliReady
             ? "Full npx skills TUI - choose skills, agents, and method"
-            : "May require network if not already cached",
+            : "Requires network - unavailable offline",
         },
         {
           value: "manual" as const,

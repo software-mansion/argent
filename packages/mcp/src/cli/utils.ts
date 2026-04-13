@@ -95,6 +95,17 @@ export function getLatestVersion(): string {
   return result.trim();
 }
 
+export function isSkillsCliAvailable(): boolean {
+  try {
+    execSync("npx --no-install skills --version", {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function isOnline(timeoutMs = 1500): Promise<boolean> {
   const host = new URL(NPM_REGISTRY).hostname;
   const lookup = new Promise<boolean>((resolve) => {
