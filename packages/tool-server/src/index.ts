@@ -73,14 +73,34 @@ export function start(): void {
   });
 }
 
+export function getAvailableTools(): Array<{
+  id: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+}> {
+  const registry = createRegistry();
+  return registry.getAllTools().map((id) => {
+    const def = registry.getTool(id)!;
+    return { id: def.id, description: def.description, inputSchema: def.inputSchema };
+  });
+}
+
 function printUsage(stream: NodeJS.WriteStream): void {
-  stream.write("Usage: tool-server <command>\n\nCommands:\n  start    Start the tool server\n");
+  stream.write(
+    "Usage: tool-server <command>\n\n" +
+      "Commands:\n" +
+      "  start                        Start the tool server\n" +
+      "  -t, --get-available-tools    Print available tools as JSON and exit\n"
+  );
 }
 
 if (require.main === module) {
   const cmd = process.argv[2];
   if (cmd === "start") {
     start();
+  } else if (cmd === "-t" || cmd === "--get-available-tools") {
+    process.stdout.write(JSON.stringify(getAvailableTools(), null, 2) + "\n");
+    process.exit(0);
   } else if (cmd === "-h" || cmd === "--help") {
     printUsage(process.stdout);
     process.exit(0);
