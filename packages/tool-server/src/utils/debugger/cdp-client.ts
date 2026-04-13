@@ -53,9 +53,7 @@ interface CDPExceptionDetails {
 function formatExceptionDetails(details: CDPExceptionDetails): string {
   // exception.description already contains the JS Error message + its own JS stack
   const description =
-    details.exception?.description ??
-    details.text ??
-    "Script evaluation threw an exception";
+    details.exception?.description ?? details.text ?? "Script evaluation threw an exception";
 
   // If the description already embeds a stack trace (Error: msg\n  at ...) use it as-is.
   // Otherwise append the CDP-reported call frames.
