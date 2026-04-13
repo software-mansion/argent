@@ -87,7 +87,8 @@ function printUsage(stream: NodeJS.WriteStream): void {
     "Usage: tool-server <command>\n\n" +
       "Commands:\n" +
       "  start                        Start the tool server\n" +
-      "  -t, --get-available-tools    Print available tools as JSON and exit\n"
+      "  -t, --get-available-tools    Print available tools as JSON and exit\n" +
+      "  -h, --help                   Show this menu\n"
   );
 }
 
