@@ -131,7 +131,12 @@ const COMMIT_CAPTURE_SCRIPT = `
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .optional()
+    .describe(
+      "iOS Simulator UDID (logicalDeviceId). Required when multiple simulators are connected to the same Metro port. Omit to auto-select the first available target."
+    ),
   sample_interval_us: z.coerce
     .number()
     .int()
@@ -169,8 +174,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${params.device_id}`;
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;
+      const deviceSuffix = params.device_id ? `:${params.device_id}` : "";
+      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}${deviceSuffix}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}${deviceSuffix}`;
       const ignore = () => {};
 
       async function disposeAndWait() {
@@ -274,7 +280,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         )
         .catch(ignore);
 
-      clearCachedProfilerPaths(api.port, api.deviceId);
+      clearCachedProfilerPaths(api.port, api.deviceId ?? undefined);
       api.sessionPaths = null;
       api.profilingActive = true;
       api.anyCompilerOptimized = null;

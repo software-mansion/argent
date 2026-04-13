@@ -31,7 +31,12 @@ const annotationSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .optional()
+    .describe(
+      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
+    ),
   project_root: z
     .string()
     .describe("Absolute path to the RN project root for session context detection"),

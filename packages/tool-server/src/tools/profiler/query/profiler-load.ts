@@ -37,8 +37,10 @@ const zodSchema = z.object({
     ),
   device_id: z
     .string()
+    .optional()
     .describe(
-      "iOS Simulator UDID (logicalDeviceId). Used to cache the loaded React session under the correct port+device key, and required to resolve the iOS session for load_instruments."
+      "iOS Simulator UDID (logicalDeviceId). Required for load_instruments. " +
+        "For load_react: caches the session under this device ID so query tools can look it up by port+device."
     ),
 });
 
@@ -121,7 +123,7 @@ async function loadReactSession(
   debugDir: string,
   sessionId: string,
   port: number,
-  deviceId: string
+  deviceId?: string
 ): Promise<string> {
   const cpuPath = path.join(debugDir, `react-profiler-${sessionId}_cpu.json`);
   const commitsPath = path.join(debugDir, `react-profiler-${sessionId}_commits.json`);
@@ -295,7 +297,7 @@ Fails if the session_id is not found or required XML files are missing from disk
   zodSchema,
   services: (params) => {
     const svcs: Record<string, string> = {};
-    if (params.mode === "load_instruments") {
+    if (params.mode === "load_instruments" && params.device_id) {
       svcs.session = `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`;
     }
     return svcs;
@@ -321,6 +323,9 @@ Fails if the session_id is not found or required XML files are missing from disk
           throw new Error(
             "load_instruments mode requires the session_id parameter. Use list mode first."
           );
+        }
+        if (!params.device_id) {
+          throw new Error("load_instruments mode requires the device_id parameter.");
         }
         const api = services.session as IosProfilerSessionApi;
         return loadInstrumentsSession(debugDir, params.session_id, api);

@@ -42,7 +42,6 @@ const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
   includeBody: z.coerce
     .boolean()
@@ -111,7 +110,7 @@ Large response bodies are truncated. Use when you need headers, body, or timing 
 Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
   services: (params) => ({
-    inspector: `NetworkInspector:${params.port}:${params.device_id}`,
+    inspector: `NetworkInspector:${params.port}`,
   }),
   async execute(services, params) {
     const api = services.inspector as NetworkInspectorApi;

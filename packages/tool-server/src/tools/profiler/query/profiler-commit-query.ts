@@ -15,7 +15,12 @@ const timeRangeSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .optional()
+    .describe(
+      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
+    ),
   mode: z
     .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
     .describe(
@@ -39,7 +44,7 @@ const zodSchema = z.object({
 
 async function getCommitTree(
   port: number,
-  deviceId: string
+  deviceId: string | undefined
 ): Promise<DevToolsCommitTree> {
   const sessionPaths = getCachedProfilerPaths(port, deviceId);
   if (!sessionPaths?.commitsPath) {

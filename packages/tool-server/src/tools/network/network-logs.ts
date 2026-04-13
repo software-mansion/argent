@@ -57,7 +57,6 @@ function formatEntry(entry: LogEntry): string {
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
     .default("latest")
@@ -76,7 +75,7 @@ Use when inspecting outbound HTTP traffic or debugging API calls in the running 
 Fails if the app is not connected or no network interceptor could be injected.`,
   zodSchema,
   services: (params) => ({
-    inspector: `NetworkInspector:${params.port}:${params.device_id}`,
+    inspector: `NetworkInspector:${params.port}`,
   }),
   async execute(services, params) {
     const api = services.inspector as NetworkInspectorApi;
