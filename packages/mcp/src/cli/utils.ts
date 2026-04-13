@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as dns from "node:dns";
 import { execSync } from "node:child_process";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -89,8 +90,20 @@ export function getInstalledVersion(): string | null {
 export function getLatestVersion(): string {
   const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
     encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
   });
   return result.trim();
+}
+
+export async function isOnline(timeoutMs = 1500): Promise<boolean> {
+  const host = new URL(NPM_REGISTRY).hostname;
+  const lookup = new Promise<boolean>((resolve) => {
+    dns.lookup(host, (err) => resolve(!err));
+  });
+  const timeout = new Promise<boolean>((resolve) => {
+    setTimeout(() => resolve(false), timeoutMs);
+  });
+  return Promise.race([lookup, timeout]);
 }
 
 // ── Package manager detection ─────────────────────────────────────────────────

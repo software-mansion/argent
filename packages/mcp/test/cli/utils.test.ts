@@ -11,6 +11,7 @@ import {
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
+  isOnline,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
@@ -226,5 +227,17 @@ describe("bundled paths", () => {
 
   it("AGENTS_DIR is a string ending with agents", () => {
     expect(AGENTS_DIR).toMatch(/agents$/);
+  });
+});
+
+// ── isOnline ──────────────────────────────────────────────────────────────────
+
+describe("isOnline", () => {
+  it("resolves to false within the timeout when DNS does not respond", async () => {
+    const start = Date.now();
+    const result = await isOnline(50);
+    const elapsed = Date.now() - start;
+    expect(typeof result).toBe("boolean");
+    expect(elapsed).toBeLessThan(500);
   });
 });

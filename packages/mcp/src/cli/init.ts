@@ -16,6 +16,7 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  isOnline,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
@@ -74,6 +75,20 @@ export async function init(args: string[]): Promise<void> {
 
   let version = getInstalledVersion() ?? "unknown";
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
+
+  const online = await isOnline();
+  if (!online) {
+    p.note(
+      [
+        pc.red("You appear to be offline."),
+        ``,
+        `You can continue, but the following will be skipped:`,
+        `  • Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`,
+        `  • Installing skills via ${pc.cyan("npx skills")} (use the manual option instead)`,
+      ].join("\n"),
+      pc.red("Offline mode")
+    );
+  }
 
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
@@ -135,7 +150,7 @@ export async function init(args: string[]): Promise<void> {
       p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
-  } else {
+  } else if (online) {
     let latest: string | null = null;
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
@@ -388,22 +403,27 @@ export async function init(args: string[]): Promise<void> {
   let skillsMethod: SkillsMethod;
 
   if (nonInteractive) {
-    skillsMethod = "default";
+    skillsMethod = online ? "default" : "manual";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
 
     const choice = await p.select({
       message: "How would you like to install skills?",
+      initialValue: online ? "default" : "manual",
       options: [
         {
           value: "default" as const,
           label: "Automatic",
-          hint: "Installs all skills automatically with npx skills",
+          hint: online
+            ? "Installs all skills automatically with npx skills"
+            : "Requires network - unavailable offline",
         },
         {
           value: "interactive" as const,
           label: "Interactive",
-          hint: "Full npx skills TUI - choose skills, agents, and method",
+          hint: online
+            ? "Full npx skills TUI - choose skills, agents, and method"
+            : "Requires network - unavailable offline",
         },
         {
           value: "manual" as const,
