@@ -91,7 +91,7 @@ function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> 
       logFd = fs.openSync("/dev/null", "w");
     }
 
-    const child = spawn("node", [BUNDLE_PATH], {
+    const child = spawn("node", [BUNDLE_PATH, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],
       env: buildToolsServerEnv(port),
