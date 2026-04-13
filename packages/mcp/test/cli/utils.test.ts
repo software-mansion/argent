@@ -12,6 +12,7 @@ import {
   globalUninstallCommand,
   formatShellCommand,
   isOnline,
+  resolveProjectRoot,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
@@ -107,6 +108,46 @@ describe("dirExists", () => {
     const file = path.join(tmpDir, "file.txt");
     fs.writeFileSync(file, "");
     expect(dirExists(file)).toBe(false);
+  });
+});
+
+// ── resolveProjectRoot ────────────────────────────────────────────────────────
+
+describe("resolveProjectRoot", () => {
+  it("returns the nearest managed project root", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    const nestedDir = path.join(projectRoot, "src", "deep");
+    fs.mkdirSync(path.join(projectRoot, ".claude"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(projectRoot);
+  });
+
+  it("prefers a nearer managed root over an ancestor git root", () => {
+    const repoRoot = path.join(tmpDir, "repo");
+    const nestedProjectRoot = path.join(repoRoot, "packages", "app");
+    const nestedDir = path.join(nestedProjectRoot, "src");
+    fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(nestedProjectRoot, ".cursor"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(nestedProjectRoot);
+  });
+
+  it("falls back to git root when no managed markers exist", () => {
+    const repoRoot = path.join(tmpDir, "repo");
+    const nestedDir = path.join(repoRoot, "src");
+    fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(repoRoot);
+  });
+
+  it("falls back to the starting directory when no markers exist", () => {
+    const nestedDir = path.join(tmpDir, "plain", "src");
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(nestedDir);
   });
 });
 
