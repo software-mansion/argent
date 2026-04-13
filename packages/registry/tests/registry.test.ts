@@ -486,7 +486,6 @@ describe("Registry -- getAllTools", () => {
     registry.registerTool(createMockToolDef("ToolC", () => ({})));
 
     const tools = registry.getAllTools();
-    console.log("Registered tools:", tools);
 
     expect(tools).toContain("ToolA");
     expect(tools).toContain("ToolB");
@@ -497,7 +496,6 @@ describe("Registry -- getAllTools", () => {
   it("returns empty array when no tools registered", () => {
     const registry = new Registry();
     const tools = registry.getAllTools();
-    console.log("No tools registered:", tools);
     expect(tools).toEqual([]);
   });
 });

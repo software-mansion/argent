@@ -39,7 +39,6 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
-    "@argent/tool-server": "file:../tool-server",
     "@clack/prompts": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "picocolors": "^1.1.1",
