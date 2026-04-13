@@ -28,6 +28,18 @@ vi.mock("node:os", async (importOriginal) => {
   };
 });
 
+// Stub the tool-server CLI shell-out used by the Codex adapter's allowlist
+// logic so tests don't need the bundled `tool-server.cjs` on disk.
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...original,
+    execFileSync: vi.fn(() =>
+      JSON.stringify([{ id: "tool-a" }, { id: "tool-b" }, { id: "tool-c" }])
+    ),
+  };
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 let tmpDir: string;
@@ -457,6 +469,63 @@ describe("Codex adapter", () => {
     expect(content).toContain('model = "o3"');
     expect(content).toContain("[mcp_servers.other]");
     expect(content).toContain("[mcp_servers.argent]");
+  });
+
+  it("addAllowlist writes approval_mode per tool under mcp_servers.argent.tools (local)", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("[mcp_servers.argent.tools.tool-a]");
+    expect(content).toContain("[mcp_servers.argent.tools.tool-b]");
+    expect(content).toContain("[mcp_servers.argent.tools.tool-c]");
+    expect(content).toContain('approval_mode = "approve"');
+  });
+
+  it("addAllowlist works with global scope", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "global");
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain("[mcp_servers.argent.tools.tool-a]");
+  });
+
+  it("addAllowlist preserves the existing argent entry", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain('command = "argent"');
+  });
+
+  it("removeAllowlist deletes tool entries added by addAllowlist", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).not.toContain("[mcp_servers.argent.tools.tool-a]");
+    expect(content).not.toContain("[mcp_servers.argent.tools.tool-b]");
+    expect(content).not.toContain("[mcp_servers.argent.tools.tool-c]");
+    expect(content).toContain('command = "argent"');
+  });
+
+  it("removeAllowlist is a no-op when no tools section exists", () => {
+    const configPath = path.join(tmpDir, ".codex", "config.toml");
+    adapter.write(configPath, getMcpEntry());
+
+    expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
+    const content = fs.readFileSync(configPath, "utf8");
+    expect(content).toContain('command = "argent"');
   });
 });
 

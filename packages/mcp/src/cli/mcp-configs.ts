@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
   MCP_SERVER_KEY,
@@ -9,7 +10,16 @@ import {
 } from "./constants.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
 
+const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "..", "tool-server.cjs");
+
+function getAvailableToolIds(): string[] {
+  const out = execFileSync("node", [TOOL_SERVER_BUNDLE, "-t"], { encoding: "utf8" });
+  const tools = JSON.parse(out) as Array<{ id: string }>;
+  return tools.map((t) => t.id);
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
+// MARK: Types
 
 export interface McpServerEntry {
   command: string;
@@ -28,6 +38,19 @@ export interface McpConfigAdapter {
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
 
+type CodexConfig = {
+  mcp_servers?: {
+    argent?: {
+      tools?: Record<
+        string,
+        {
+          approval_mode: string;
+        }
+      >;
+    };
+  };
+};
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 function buildMcpEntry(): McpServerEntry {
@@ -44,6 +67,7 @@ export function getMcpEntry(): McpServerEntry {
 }
 
 // ── Cursor adapter ────────────────────────────────────────────────────────────
+// MARK: Cursor
 // Format: { mcpServers: { argent: { command, args, env } } }
 
 const cursorAdapter: McpConfigAdapter = {
@@ -111,6 +135,7 @@ const cursorAdapter: McpConfigAdapter = {
 };
 
 // ── Claude Code adapter ───────────────────────────────────────────────────────
+// MARK: Claude
 // Format: { mcpServers: { argent: { type: "stdio", command, args, env } } }
 // Project: .mcp.json   Global: ~/.claude.json
 // Also manages permissions in .claude/settings.json
@@ -168,6 +193,7 @@ const claudeAdapter: McpConfigAdapter = {
 };
 
 // ── VS Code adapter ──────────────────────────────────────────────────────────
+// MARK: VSCode
 // Format: { servers: { argent: { type: "stdio", command, args, env } } }
 // Project only: .vscode/mcp.json
 
@@ -213,6 +239,7 @@ const vscodeAdapter: McpConfigAdapter = {
 };
 
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
+// MARK: Windsurf
 // Format: { mcpServers: { argent: { command, args, env } } }
 // Global only: ~/.codeium/windsurf/mcp_config.json
 
@@ -276,6 +303,7 @@ const windsurfAdapter: McpConfigAdapter = {
 };
 
 // ── Zed adapter ──────────────────────────────────────────────────────────────
+// MARK: Zed
 // Format: merges { context_servers: { argent: { source: "custom", command, args, env } } }
 // Into existing settings.json
 
@@ -352,6 +380,7 @@ const zedAdapter: McpConfigAdapter = {
 };
 
 // ── Gemini CLI adapter ────────────────────────────────────────────────────────
+// MARK: Gemini
 // Format: { mcpServers: { argent: { command, args, env } } }
 // Project: <root>/.gemini/settings.json   Global: ~/.gemini/settings.json
 
@@ -364,11 +393,11 @@ const geminiAdapter: McpConfigAdapter = {
     );
   },
 
-  projectPath(root: string): string | null {
+  projectPath(root: string): string {
     return path.join(root, ".gemini", "settings.json");
   },
 
-  globalPath(): string | null {
+  globalPath(): string {
     return path.join(homedir(), ".gemini", "settings.json");
   },
 
@@ -395,10 +424,12 @@ const geminiAdapter: McpConfigAdapter = {
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
-    const configPath =
-      scope === "global"
-        ? path.join(homedir(), ".gemini", "settings.json")
-        : path.join(root, ".gemini", "settings.json");
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath) {
+      return;
+    }
+
     const config = readJson(configPath);
     const servers = (config.mcpServers ?? {}) as Record<string, Record<string, unknown>>;
     const entry = servers[MCP_SERVER_KEY];
@@ -408,11 +439,12 @@ const geminiAdapter: McpConfigAdapter = {
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
-    const configPath =
-      scope === "global"
-        ? path.join(homedir(), ".gemini", "settings.json")
-        : path.join(root, ".gemini", "settings.json");
-    if (!fs.existsSync(configPath)) return;
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath || !fs.existsSync(configPath)) {
+      return;
+    }
+
     const config = readJson(configPath);
     const servers = config.mcpServers as Record<string, Record<string, unknown>> | undefined;
     const entry = servers?.[MCP_SERVER_KEY];
@@ -423,24 +455,28 @@ const geminiAdapter: McpConfigAdapter = {
 };
 
 // ── Codex CLI adapter ────────────────────────────────────────────────────────
+// MARK: Codex
 // Format (TOML): [mcp_servers.argent] command = "argent" args = ["mcp"] env = { ... }
 // Project: <root>/.codex/config.toml   Global: ~/.codex/config.toml
+
+const CODEX_FILENAME = ".codex";
 
 const codexAdapter: McpConfigAdapter = {
   name: "Codex",
 
   detect(): boolean {
     return (
-      dirExists(path.join(homedir(), ".codex")) || dirExists(path.join(process.cwd(), ".codex"))
+      dirExists(path.join(homedir(), CODEX_FILENAME)) ||
+      dirExists(path.join(process.cwd(), CODEX_FILENAME))
     );
   },
 
   projectPath(root: string): string | null {
-    return path.join(root, ".codex", "config.toml");
+    return path.join(root, CODEX_FILENAME, "config.toml");
   },
 
   globalPath(): string | null {
-    return path.join(homedir(), ".codex", "config.toml");
+    return path.join(homedir(), CODEX_FILENAME, "config.toml");
   },
 
   write(configPath: string, entry: McpServerEntry): void {
@@ -464,9 +500,58 @@ const codexAdapter: McpConfigAdapter = {
     writeToml(configPath, config);
     return true;
   },
+
+  addAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath) {
+      return;
+    }
+
+    const tools = getAvailableToolIds();
+    const config = readToml(configPath) as CodexConfig;
+
+    config.mcp_servers ??= {};
+    config.mcp_servers.argent ??= {};
+    config.mcp_servers.argent.tools ??= {};
+    const toolsConfig = config.mcp_servers.argent.tools;
+
+    for (const tool of tools) {
+      toolsConfig[tool] = {
+        approval_mode: "approve",
+      };
+    }
+
+    writeToml(configPath, config);
+  },
+
+  removeAllowlist(root, scope): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+
+    if (!configPath) {
+      return;
+    }
+
+    const tools = getAvailableToolIds();
+    const config = readToml(configPath) as CodexConfig;
+    const toolsConfig = config?.mcp_servers?.argent?.tools;
+
+    if (toolsConfig === undefined) {
+      return;
+    }
+
+    for (const tool of tools) {
+      if (tool in toolsConfig) {
+        delete toolsConfig[tool];
+      }
+    }
+
+    writeToml(configPath, config);
+  },
 };
 
 // ── Registry ──────────────────────────────────────────────────────────────────
+// MARK: Registry
 
 export const ALL_ADAPTERS: McpConfigAdapter[] = [
   cursorAdapter,
@@ -659,6 +744,7 @@ export function removeCodexRules(configPath: string): boolean {
 }
 
 // ── Copy orchestrator ────────────────────────────────────────────────────────
+// MARK: Copy orchestrator
 
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
