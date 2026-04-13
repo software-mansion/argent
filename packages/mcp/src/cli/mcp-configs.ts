@@ -43,6 +43,60 @@ export function getMcpEntry(): McpServerEntry {
   return buildMcpEntry();
 }
 
+function removeDirIfEmpty(dirPath: string): void {
+  try {
+    if (!fs.existsSync(dirPath)) return;
+    if (!fs.statSync(dirPath).isDirectory()) return;
+    if (fs.readdirSync(dirPath).length > 0) return;
+    fs.rmdirSync(dirPath);
+  } catch {
+    // non-fatal
+  }
+}
+
+function pruneEmptyConfig(value: unknown): unknown | undefined {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value : undefined;
+  }
+
+  if (value && typeof value === "object") {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const next = pruneEmptyConfig(entry);
+      if (next !== undefined) cleaned[key] = next;
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+  }
+
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
+  const cleaned = pruneEmptyConfig(data);
+  if (!isRecord(cleaned)) {
+    fs.rmSync(filePath, { force: true });
+    removeDirIfEmpty(path.dirname(filePath));
+    return;
+  }
+
+  writeJson(filePath, cleaned);
+}
+
+function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
+  const cleaned = pruneEmptyConfig(data);
+  if (!isRecord(cleaned)) {
+    fs.rmSync(filePath, { force: true });
+    removeDirIfEmpty(path.dirname(filePath));
+    return;
+  }
+
+  writeToml(filePath, cleaned);
+}
+
 // ── Cursor adapter ────────────────────────────────────────────────────────────
 // Format: { mcpServers: { argent: { command, args, env } } }
 
@@ -81,7 +135,7 @@ const cursorAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -106,7 +160,7 @@ const cursorAdapter: McpConfigAdapter = {
     if (idx === -1) return;
     list.splice(idx, 1);
     config.mcpAllowlist = list;
-    writeJson(permPath, config);
+    writeJsonOrRemove(permPath, config);
   },
 };
 
@@ -154,7 +208,7 @@ const claudeAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -207,7 +261,7 @@ const vscodeAdapter: McpConfigAdapter = {
     const servers = config.servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 };
@@ -249,7 +303,7 @@ const windsurfAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -271,7 +325,7 @@ const windsurfAdapter: McpConfigAdapter = {
     const entry = servers[MCP_SERVER_KEY];
     if (!entry?.alwaysAllow) return;
     delete entry.alwaysAllow;
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
   },
 };
 
@@ -313,7 +367,7 @@ const zedAdapter: McpConfigAdapter = {
     const servers = config.context_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -347,7 +401,7 @@ const zedAdapter: McpConfigAdapter = {
       | undefined;
     if (!perms || perms.default !== "allow") return;
     perms.default = "confirm";
-    writeJson(settingsPath, config);
+    writeJsonOrRemove(settingsPath, config);
   },
 };
 
@@ -390,7 +444,7 @@ const geminiAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -418,7 +472,7 @@ const geminiAdapter: McpConfigAdapter = {
     const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.trust) return;
     delete entry.trust;
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
   },
 };
 
@@ -461,7 +515,7 @@ const codexAdapter: McpConfigAdapter = {
     const servers = config.mcp_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeToml(configPath, config);
+    writeTomlOrRemove(configPath, config);
     return true;
   },
 };
@@ -518,7 +572,7 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
   const idx = allow.indexOf(PERMISSION_RULE);
   if (idx === -1) return;
   allow.splice(idx, 1);
-  writeJson(settingsPath, config);
+  writeJsonOrRemove(settingsPath, config);
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
@@ -654,7 +708,7 @@ export function removeCodexRules(configPath: string): boolean {
   } else {
     delete config.developer_instructions;
   }
-  writeToml(configPath, config);
+  writeTomlOrRemove(configPath, config);
   return true;
 }
 

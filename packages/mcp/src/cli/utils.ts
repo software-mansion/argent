@@ -19,9 +19,18 @@ export function resolvePackageRoot(dirname: string): string {
 }
 
 export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
-export const SKILLS_DIR = path.join(PACKAGE_ROOT, "skills");
-export const RULES_DIR = path.join(PACKAGE_ROOT, "rules");
-export const AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
+
+function resolveBundledDir(dirName: "skills" | "rules" | "agents"): string {
+  const packagedDir = path.join(PACKAGE_ROOT, dirName);
+  if (fs.existsSync(packagedDir)) return packagedDir;
+
+  // In the monorepo source tree, these assets live under packages/skills/.
+  return path.resolve(PACKAGE_ROOT, "..", "skills", dirName);
+}
+
+export const SKILLS_DIR = resolveBundledDir("skills");
+export const RULES_DIR = resolveBundledDir("rules");
+export const AGENTS_DIR = resolveBundledDir("agents");
 
 // ── TOML helpers ─────────────────────────────────────────────────────────────
 
