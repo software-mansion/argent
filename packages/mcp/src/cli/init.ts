@@ -80,16 +80,7 @@ export async function init(args: string[]): Promise<void> {
   const online = await isOnline();
   const skillsCached = !online && isSkillsCliAvailable();
   if (!online) {
-    const lines = [
-      pc.red("You appear to be offline."),
-      ``,
-      `You can continue, but the following will be skipped:`,
-      `  • Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`,
-    ];
-    if (!skillsCached) {
-      lines.push(`  • Installing skills via ${pc.cyan("npx skills")} (use the manual option instead)`);
-    }
-    p.note(lines.join("\n"), pc.red("Offline mode"));
+    printOfflineBanner({ skillsCached });
   }
 
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
@@ -526,6 +517,22 @@ export async function init(args: string[]): Promise<void> {
 
   p.note(summaryLines.join("\n"), "Summary");
   p.outro(pc.green("Argent is ready!"));
+}
+
+function printOfflineBanner({ skillsCached }: { skillsCached: boolean }): void {
+  const bullets = [`Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`];
+  if (!skillsCached) {
+    bullets.push(`Installing skills via ${pc.cyan("npx skills")} (use the manual option instead)`);
+  }
+
+  const body = [
+    pc.red("You appear to be offline."),
+    "",
+    "You can continue, but the following will be skipped:",
+    ...bullets.map((b) => `  • ${b}`),
+  ].join("\n");
+
+  p.note(body, pc.red("Offline mode"));
 }
 
 export function printBanner(): void {
