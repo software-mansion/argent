@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
@@ -9,17 +10,25 @@ const FLOWS_DIR_NAME = ".argent";
 /**
  * Walk up from the current working directory looking for a directory that
  * already contains a `.argent/` entry — that directory is the project root.
+ *
+ * `$HOME` is skipped on purpose: the MCP launcher stores its own state in
+ * `~/.argent/` (logs, tool-server pid, etc.), which would otherwise trick
+ * the walk into treating the home directory as a project root.
+ *
  * Falls back to `process.cwd()` so the first `flow-start-recording` call
  * creates `.argent/` in-place.
  */
 async function findProjectRoot(): Promise<string> {
+  const home = os.homedir();
   let dir = process.cwd();
   while (true) {
-    try {
-      const stat = await fs.stat(path.join(dir, FLOWS_DIR_NAME));
-      if (stat.isDirectory()) return dir;
-    } catch {
-      // not found at this level — keep walking
+    if (dir !== home) {
+      try {
+        const stat = await fs.stat(path.join(dir, FLOWS_DIR_NAME));
+        if (stat.isDirectory()) return dir;
+      } catch {
+        // not found at this level — keep walking
+      }
     }
     const parent = path.dirname(dir);
     if (parent === dir) return process.cwd();
