@@ -1,11 +1,9 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
 import type { ToolDefinition } from "@argent/registry";
-import { REACT_PROFILER_SESSION_NAMESPACE } from "../../../blueprints/react-profiler-session";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
   component_name: z.string().describe("Name of the React component to look up"),
   project_root: z.string().describe("Absolute path to the RN project root"),
 });
@@ -19,9 +17,7 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
 Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).`,
   zodSchema,
-  services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
-  }),
+  services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
     const entry = astIndex.index.get(params.component_name);

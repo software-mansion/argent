@@ -1,10 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import {
-  REACT_PROFILER_SESSION_NAMESPACE,
-  type ReactProfilerSessionApi,
-  getCachedProfilerPaths,
-} from "../../../blueprints/react-profiler-session";
+import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   HermesProfileNode,
   HermesCpuProfile,
@@ -14,6 +10,12 @@ import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z
+    .string()
+    .optional()
+    .describe(
+      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
+    ),
   top_n: z.coerce
     .number()
     .int()
@@ -123,13 +125,9 @@ Call react-profiler-stop first. Reads directly from the stored cpuProfile.
 Returns a markdown table of the top hotspot functions with self-time, total-time, and location.
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
-  services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
-  }),
-  async execute(services, params) {
-    const api = services.profilerSession as ReactProfilerSessionApi;
-
-    const sessionPaths = api.sessionPaths ?? getCachedProfilerPaths(api.port);
+  services: () => ({}),
+  async execute(_services, params) {
+    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
     if (!sessionPaths?.cpuProfilePath) {
       throw new Error(
         "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop."
