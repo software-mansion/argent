@@ -38,15 +38,10 @@ export interface ProfilerSessionPaths {
   anyCompilerOptimized: boolean | null;
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
-  deviceId: string | null;
-  deviceName: string | null;
-  appName: string | null;
-  projectRoot: string | null;
 }
 
 export interface ReactProfilerSessionApi {
   port: number;
-  deviceId: string | null;
   cdp: CDPClient;
   projectRoot: string;
   hermesVersion: string;
@@ -64,17 +59,12 @@ export interface ReactProfilerSessionApi {
 export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessionApi, string> = {
   namespace: REACT_PROFILER_SESSION_NAMESPACE,
 
-  // payload is either "port" or "port:deviceId"
-  getURN(payload: string) {
-    return `${REACT_PROFILER_SESSION_NAMESPACE}:${payload}`;
+  getURN(port: string) {
+    return `${REACT_PROFILER_SESSION_NAMESPACE}:${port}`;
   },
 
-  getDependencies(payload: string) {
-    const colonIdx = payload.indexOf(":");
-    const portStr = colonIdx >= 0 ? payload.slice(0, colonIdx) : payload;
-    const deviceId = colonIdx >= 0 ? payload.slice(colonIdx + 1) : undefined;
-    const depPayload = deviceId ? `${portStr}:${deviceId}` : portStr;
-    return { debugger: `JsRuntimeDebugger:${depPayload}` };
+  getDependencies(port: string) {
+    return { debugger: `JsRuntimeDebugger:${port}` };
   },
 
   async factory(deps, _payload) {
@@ -91,7 +81,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
 
     const state: ReactProfilerSessionApi = {
       port: debuggerApi.port,
-      deviceId: debuggerApi.logicalDeviceId ?? null,
       cdp,
       projectRoot: debuggerApi.projectRoot,
       hermesVersion: "unknown",
@@ -167,11 +156,6 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     }
 
     cdp.events.on("disconnected", (error) => {
-      // Only clear cache if profiling was in progress — preserves data from a completed session
-      // that survived app restart, while preventing stale in-flight data from being returned.
-      if (state.profilingActive) {
-        clearCachedProfilerPaths(state.port, state.deviceId ?? undefined);
-      }
       events.emit("terminated", error ?? new Error("CDP disconnected"));
     });
 
@@ -186,27 +170,16 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
   },
 };
 
-const profilerPathsCache = new Map<string, ProfilerSessionPaths>();
+const profilerPathsCache = new Map<number, ProfilerSessionPaths>();
 
-function cacheKey(port: number, deviceId?: string): string {
-  return deviceId ? `${port}:${deviceId}` : `${port}`;
+export function cacheProfilerPaths(port: number, paths: ProfilerSessionPaths): void {
+  profilerPathsCache.set(port, paths);
 }
 
-export function cacheProfilerPaths(
-  port: number,
-  paths: ProfilerSessionPaths,
-  deviceId?: string
-): void {
-  profilerPathsCache.set(cacheKey(port, deviceId), paths);
+export function getCachedProfilerPaths(port: number): ProfilerSessionPaths | undefined {
+  return profilerPathsCache.get(port);
 }
 
-export function getCachedProfilerPaths(
-  port: number,
-  deviceId?: string
-): ProfilerSessionPaths | undefined {
-  return profilerPathsCache.get(cacheKey(port, deviceId));
-}
-
-export function clearCachedProfilerPaths(port: number, deviceId?: string): void {
-  profilerPathsCache.delete(cacheKey(port, deviceId));
+export function clearCachedProfilerPaths(port: number): void {
+  profilerPathsCache.delete(port);
 }

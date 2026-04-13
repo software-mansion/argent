@@ -38,10 +38,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Required for load_instruments. " +
-        "For load_react: caches the session under this device ID so query tools can look it up by port+device."
-    ),
+    .describe("iOS Simulator UDID — required for load_instruments to populate the iOS session"),
 });
 
 async function listSessions(debugDir: string): Promise<string> {
@@ -122,8 +119,7 @@ async function listSessions(debugDir: string): Promise<string> {
 async function loadReactSession(
   debugDir: string,
   sessionId: string,
-  port: number,
-  deviceId?: string
+  port: number
 ): Promise<string> {
   const cpuPath = path.join(debugDir, `react-profiler-${sessionId}_cpu.json`);
   const commitsPath = path.join(debugDir, `react-profiler-${sessionId}_commits.json`);
@@ -203,13 +199,9 @@ async function loadReactSession(
     anyCompilerOptimized,
     hotCommitIndices,
     totalReactCommits,
-    deviceId: deviceId ?? null,
-    deviceName: null,
-    appName: null,
-    projectRoot: null,
   };
 
-  cacheProfilerPaths(port, sessionPaths, deviceId);
+  cacheProfilerPaths(port, sessionPaths);
 
   const lines: string[] = [
     `Loaded React profiler session \`${sessionId}\` into port ${port}.`,
@@ -319,7 +311,7 @@ Fails if the session_id is not found or required XML files are missing from disk
             "load_react mode requires the session_id parameter. Use list mode first."
           );
         }
-        return loadReactSession(debugDir, params.session_id, params.port, params.device_id);
+        return loadReactSession(debugDir, params.session_id, params.port);
       }
 
       case "load_instruments": {

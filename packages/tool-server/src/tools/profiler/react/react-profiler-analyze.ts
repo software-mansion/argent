@@ -2,6 +2,8 @@ import { z } from "zod";
 import { promises as fsPromises } from "fs";
 import type { ToolDefinition } from "@argent/registry";
 import {
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
@@ -31,12 +33,6 @@ const annotationSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
-    ),
   project_root: z
     .string()
     .describe("Absolute path to the RN project root for session context detection"),
@@ -71,13 +67,15 @@ is returned by react-profiler-start.
 Use when the profiling session is complete and you need to interpret the collected data.
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
-  services: () => ({}),
-  async execute(_services, params) {
-    // Read-only: resolve paths from cache only — no live CDP connection needed.
-    const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
-      params.port,
-      params.device_id
-    );
+  services: (params) => ({
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
+  }),
+  async execute(services, params) {
+    const api = services.profilerSession as ReactProfilerSessionApi;
+
+    // Resolve session paths from session or cache
+    const sessionPaths: ProfilerSessionPaths | undefined =
+      api.sessionPaths ?? getCachedProfilerPaths(api.port) ?? undefined;
 
     if (!sessionPaths) {
       throw new Error(

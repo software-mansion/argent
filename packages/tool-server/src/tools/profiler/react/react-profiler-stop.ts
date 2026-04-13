@@ -15,12 +15,6 @@ import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/deb
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start."
-    ),
 });
 
 export function createReactProfilerStopTool(
@@ -37,8 +31,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const deviceSuffix = params.device_id ? `:${params.device_id}` : "";
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}${deviceSuffix}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`;
       const snapshot = registry.getSnapshot();
       const entry = snapshot.services.get(psUrn);
 
@@ -263,10 +256,6 @@ Fails if no active profiling session exists or the CDP connection was lost durin
             hotCommitIndices: api.hotCommitIndices,
             totalReactCommits: api.totalReactCommits,
             profileStartWallMs: api.profileStartWallMs,
-            // Provenance fields — used by profiler-load to display session origin
-            projectRoot: api.projectRoot,
-            deviceId: api.deviceId,
-            port: api.port,
           },
         }
       );
@@ -281,13 +270,9 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         anyCompilerOptimized: api.anyCompilerOptimized,
         hotCommitIndices: api.hotCommitIndices,
         totalReactCommits: api.totalReactCommits,
-        deviceId: api.deviceId,
-        deviceName: null,
-        appName: null,
-        projectRoot: api.projectRoot,
       };
 
-      cacheProfilerPaths(api.port, sessionPaths, api.deviceId ?? undefined);
+      cacheProfilerPaths(api.port, sessionPaths);
       api.sessionPaths = sessionPaths;
       api.disposeSession();
 

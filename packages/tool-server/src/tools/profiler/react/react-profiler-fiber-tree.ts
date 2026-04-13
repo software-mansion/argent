@@ -90,12 +90,6 @@ function buildFiberTreeScript(maxDepth: number, filter: string): string {
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Required when multiple simulators are connected to the same Metro port."
-    ),
   max_depth: z.coerce
     .number()
     .int()
@@ -113,7 +107,7 @@ Returns a nested JSON tree of fiber nodes with name, tag, actualDuration, selfBa
 Fails if the React DevTools hook is not present or no fiber roots have been committed yet.`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}${params.device_id ? `:${params.device_id}` : ""}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;

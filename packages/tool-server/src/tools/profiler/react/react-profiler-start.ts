@@ -9,17 +9,12 @@ import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-de
 
 const COMMIT_CAPTURE_SCRIPT = `
 (function __argent_commitCaptureInit() {
-  // Always reset the data array and commit index so each start() begins fresh.
   globalThis.__ARGENT_DEVTOOLS_COMMITS__ = [];
-  globalThis.__ARGENT_DEVTOOLS_COMMIT_INDEX__ = 0;
   var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) return;
-  // Idempotency guard: only wrap onCommitFiberRoot once per JS runtime lifetime.
-  // Subsequent start() calls reset the arrays above but skip re-wrapping the hook,
-  // preventing N nested wrappers (and N duplicate entries per commit) on re-use.
-  if (hook.__argent_commit_capture__) return;
   hook.__argent_commit_capture__ = true;
   var origOnCommit = hook.onCommitFiberRoot;
+  var commitIndex = 0;
 
   function __argent_getChangedHookIndices(fiber) {
     if (!fiber.alternate) return null;
@@ -51,7 +46,7 @@ const COMMIT_CAPTURE_SCRIPT = `
 
   hook.onCommitFiberRoot = function __argent_onCommitFiberRoot(rendererID, root, priorityLevel) {
     var ts = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var idx = globalThis.__ARGENT_DEVTOOLS_COMMIT_INDEX__++;
+    var idx = commitIndex++;
     var commitDur = (root && root.current && typeof root.current.actualDuration === 'number')
       ? root.current.actualDuration : 0;
     var stack = root && root.current ? [root.current] : [];
@@ -131,12 +126,6 @@ const COMMIT_CAPTURE_SCRIPT = `
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Required when multiple simulators are connected to the same Metro port. Omit to auto-select the first available target."
-    ),
   sample_interval_us: z.coerce
     .number()
     .int()
@@ -174,9 +163,8 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const deviceSuffix = params.device_id ? `:${params.device_id}` : "";
-      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}${deviceSuffix}`;
-      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}${deviceSuffix}`;
+      const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}`;
+      const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`;
       const ignore = () => {};
 
       async function disposeAndWait() {
@@ -280,7 +268,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         )
         .catch(ignore);
 
-      clearCachedProfilerPaths(api.port, api.deviceId ?? undefined);
+      clearCachedProfilerPaths(api.port);
       api.sessionPaths = null;
       api.profilingActive = true;
       api.anyCompilerOptimized = null;

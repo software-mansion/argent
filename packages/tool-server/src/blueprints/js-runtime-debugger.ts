@@ -108,13 +108,10 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
   },
 
   async factory(_deps, payload, options?) {
-    // payload is either "port" or "port:deviceId"
-    const colonIdx = payload.indexOf(":");
-    const port = colonIdx >= 0 ? parseInt(payload.slice(0, colonIdx), 10) : parseInt(payload, 10);
-    const deviceId = colonIdx >= 0 ? payload.slice(colonIdx + 1) : undefined;
+    const port = parseInt(payload, 10);
 
     const metro = await discoverMetro(port);
-    const selected = selectTarget(metro.targets, port, { ...options, ...(deviceId && { deviceId }) });
+    const selected = selectTarget(metro.targets, port, options);
 
     const cdp = new CDPClient(selected.webSocketUrl);
     await cdp.connect();

@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
@@ -22,12 +24,6 @@ const timeWindowSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
-    ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
     .describe(
@@ -51,7 +47,7 @@ const zodSchema = z.object({
     .describe("For call_tree mode: also show callers of the function"),
 });
 
-async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
+async function getIndex(api: ReactProfilerSessionApi): Promise<{
   index: CpuSampleIndex;
   commitTree: {
     commits: {
@@ -62,6 +58,9 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     }[];
   } | null;
 }> {
+  const sessionPaths: ProfilerSessionPaths | undefined =
+    api.sessionPaths ?? getCachedProfilerPaths(api.port) ?? undefined;
+
   if (!sessionPaths?.cpuProfilePath) {
     throw new Error(
       "No CPU profile stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first."
@@ -349,15 +348,12 @@ Use when investigating JS CPU hotspots or correlating CPU cost with specific com
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored — run react-profiler-stop first.`,
   zodSchema,
-  services: () => ({}),
-  async execute(_services, params) {
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
-    if (!sessionPaths) {
-      throw new Error(
-        "No profiling data stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first."
-      );
-    }
-    const { index, commitTree } = await getIndex(sessionPaths);
+  services: (params) => ({
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
+  }),
+  async execute(services, params) {
+    const api = services.profilerSession as ReactProfilerSessionApi;
+    const { index, commitTree } = await getIndex(api);
 
     switch (params.mode) {
       case "top_functions":

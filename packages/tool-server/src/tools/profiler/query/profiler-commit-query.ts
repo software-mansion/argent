@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
+import {
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
+  getCachedProfilerPaths,
+} from "../../../blueprints/react-profiler-session";
 import type {
   DevToolsFiberCommit,
   DevToolsCommitTree,
@@ -15,12 +19,6 @@ const timeRangeSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
-    ),
   mode: z
     .enum(["by_component", "by_time_range", "by_index", "cascade_tree"])
     .describe(
@@ -42,11 +40,8 @@ const zodSchema = z.object({
     .describe("Max results to return (default 20)"),
 });
 
-async function getCommitTree(
-  port: number,
-  deviceId: string | undefined
-): Promise<DevToolsCommitTree> {
-  const sessionPaths = getCachedProfilerPaths(port, deviceId);
+async function getCommitTree(api: ReactProfilerSessionApi): Promise<DevToolsCommitTree> {
+  const sessionPaths = api.sessionPaths ?? getCachedProfilerPaths(api.port);
   if (!sessionPaths?.commitsPath) {
     throw new Error(
       "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first."
@@ -331,9 +326,12 @@ Use when drilling into specific components or time windows after react-profiler-
 Returns a markdown table or tree of commit data matching the requested mode.
 Fails if react-profiler-stop has not been called or no commit data is stored.`,
   zodSchema,
-  services: () => ({}),
-  async execute(_services, params) {
-    const commitTree = await getCommitTree(params.port, params.device_id);
+  services: (params) => ({
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
+  }),
+  async execute(services, params) {
+    const api = services.profilerSession as ReactProfilerSessionApi;
+    const commitTree = await getCommitTree(api);
 
     switch (params.mode) {
       case "by_component": {

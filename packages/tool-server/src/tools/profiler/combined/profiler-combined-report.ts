@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
+import {
+  REACT_PROFILER_SESSION_NAMESPACE,
+  type ReactProfilerSessionApi,
+  getCachedProfilerPaths,
+} from "../../../blueprints/react-profiler-session";
 import {
   IOS_PROFILER_SESSION_NAMESPACE,
   type IosProfilerSessionApi,
@@ -44,9 +48,11 @@ Returns a markdown report correlating hangs with React commits, memory leaks, an
 Fails if either react-profiler-analyze or ios-profiler-analyze has not been called first.`,
   zodSchema,
   services: (params) => ({
+    reactSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
     iosSession: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
-  async execute(services, params) {
+  async execute(services) {
+    const reactApi = services.reactSession as ReactProfilerSessionApi;
     const iosApi = services.iosSession as IosProfilerSessionApi;
 
     // Validate prerequisites
@@ -54,8 +60,7 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
       throw new Error("No iOS Instruments data. Run ios-profiler-analyze first.");
     }
 
-    // Read-only: resolve react paths from cache only — no live CDP connection needed.
-    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
+    const sessionPaths = reactApi.sessionPaths ?? getCachedProfilerPaths(reactApi.port);
     if (!sessionPaths?.commitsPath) {
       throw new Error("No React commit data. Run react-profiler-analyze first.");
     }
@@ -71,7 +76,7 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
       cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
     }
 
-    const reactWallStart = onDisk.meta?.profileStartWallMs ?? null;
+    const reactWallStart = reactApi.profileStartWallMs ?? onDisk.meta?.profileStartWallMs ?? null;
     const iosWallStart = iosApi.wallClockStartMs;
 
     if (!reactWallStart && !iosWallStart) {
@@ -98,7 +103,7 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
-    const hotIndices = sessionPaths.hotCommitIndices ?? [];
+    const hotIndices = sessionPaths.hotCommitIndices ?? reactApi.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
 
