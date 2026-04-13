@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import {
   MCP_SERVER_KEY,
@@ -8,9 +9,14 @@ import {
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
 import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
-import { createRegistry } from "@argent/tool-server";
 
-const registry = createRegistry();
+const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "..", "tool-server.cjs");
+
+function getAvailableToolIds(): string[] {
+  const out = execFileSync("node", [TOOL_SERVER_BUNDLE, "-t"], { encoding: "utf8" });
+  const tools = JSON.parse(out) as Array<{ id: string }>;
+  return tools.map((t) => t.id);
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 // MARK: Types
@@ -502,7 +508,7 @@ const codexAdapter: McpConfigAdapter = {
       return;
     }
 
-    const tools = registry.getAllTools();
+    const tools = getAvailableToolIds();
     const config = readToml(configPath) as CodexConfig;
 
     config.mcp_servers ??= {};
@@ -526,7 +532,7 @@ const codexAdapter: McpConfigAdapter = {
       return;
     }
 
-    const tools = registry.getAllTools();
+    const tools = getAvailableToolIds();
     const config = readToml(configPath) as CodexConfig;
     const toolsConfig = config?.mcp_servers?.argent?.tools;
 
