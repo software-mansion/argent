@@ -66,6 +66,60 @@ export function getMcpEntry(): McpServerEntry {
   return buildMcpEntry();
 }
 
+function removeDirIfEmpty(dirPath: string): void {
+  try {
+    if (!fs.existsSync(dirPath)) return;
+    if (!fs.statSync(dirPath).isDirectory()) return;
+    if (fs.readdirSync(dirPath).length > 0) return;
+    fs.rmdirSync(dirPath);
+  } catch {
+    // non-fatal
+  }
+}
+
+function pruneEmptyConfig(value: unknown): unknown | undefined {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value : undefined;
+  }
+
+  if (value && typeof value === "object") {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const next = pruneEmptyConfig(entry);
+      if (next !== undefined) cleaned[key] = next;
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+  }
+
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function writeJsonOrRemove(filePath: string, data: Record<string, unknown>): void {
+  const cleaned = pruneEmptyConfig(data);
+  if (!isRecord(cleaned)) {
+    fs.rmSync(filePath, { force: true });
+    removeDirIfEmpty(path.dirname(filePath));
+    return;
+  }
+
+  writeJson(filePath, cleaned);
+}
+
+function writeTomlOrRemove(filePath: string, data: Record<string, unknown>): void {
+  const cleaned = pruneEmptyConfig(data);
+  if (!isRecord(cleaned)) {
+    fs.rmSync(filePath, { force: true });
+    removeDirIfEmpty(path.dirname(filePath));
+    return;
+  }
+
+  writeToml(filePath, cleaned);
+}
+
 // ── Cursor adapter ────────────────────────────────────────────────────────────
 // MARK: Cursor
 // Format: { mcpServers: { argent: { command, args, env } } }
@@ -105,7 +159,7 @@ const cursorAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -130,7 +184,7 @@ const cursorAdapter: McpConfigAdapter = {
     if (idx === -1) return;
     list.splice(idx, 1);
     config.mcpAllowlist = list;
-    writeJson(permPath, config);
+    writeJsonOrRemove(permPath, config);
   },
 };
 
@@ -179,7 +233,7 @@ const claudeAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -233,7 +287,7 @@ const vscodeAdapter: McpConfigAdapter = {
     const servers = config.servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 };
@@ -276,7 +330,7 @@ const windsurfAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -298,7 +352,7 @@ const windsurfAdapter: McpConfigAdapter = {
     const entry = servers[MCP_SERVER_KEY];
     if (!entry?.alwaysAllow) return;
     delete entry.alwaysAllow;
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
   },
 };
 
@@ -341,7 +395,7 @@ const zedAdapter: McpConfigAdapter = {
     const servers = config.context_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -375,7 +429,7 @@ const zedAdapter: McpConfigAdapter = {
       | undefined;
     if (!perms || perms.default !== "allow") return;
     perms.default = "confirm";
-    writeJson(settingsPath, config);
+    writeJsonOrRemove(settingsPath, config);
   },
 };
 
@@ -419,7 +473,7 @@ const geminiAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 
@@ -450,7 +504,7 @@ const geminiAdapter: McpConfigAdapter = {
     const entry = servers?.[MCP_SERVER_KEY];
     if (!entry?.trust) return;
     delete entry.trust;
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
   },
 };
 
@@ -497,7 +551,7 @@ const codexAdapter: McpConfigAdapter = {
     const servers = config.mcp_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeToml(configPath, config);
+    writeTomlOrRemove(configPath, config);
     return true;
   },
 
@@ -603,61 +657,118 @@ export function removeClaudePermission(root: string, scope: "local" | "global"):
   const idx = allow.indexOf(PERMISSION_RULE);
   if (idx === -1) return;
   allow.splice(idx, 1);
-  writeJson(settingsPath, config);
+  writeJsonOrRemove(settingsPath, config);
 }
 
 // ── Rules / Agents copy helpers ───────────────────────────────────────────────
 
-interface CopyTarget {
+export type ManagedContentScope = "local" | "global";
+
+export interface ManagedContentTarget {
   editorName: string;
-  rulesDir: string;
-  agentsDir?: string;
+  targetPath: string;
+  label: string;
 }
 
-function getCopyTargets(
+export interface ManagedContentTargets {
+  skillTargets: ManagedContentTarget[];
+  ruleTargets: ManagedContentTarget[];
+  agentTargets: ManagedContentTarget[];
+  codexConfigTargets: ManagedContentTarget[];
+  skillsLockTargets: ManagedContentTarget[];
+}
+
+function formatManagedPathLabel(targetPath: string, root: string): string {
+  const home = homedir();
+  if (targetPath === home || targetPath.startsWith(`${home}${path.sep}`)) {
+    return `~${targetPath.slice(home.length)}`;
+  }
+
+  const relative = path.relative(root, targetPath);
+  if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return relative;
+  }
+
+  return targetPath;
+}
+
+function addManagedTarget(
+  targets: ManagedContentTarget[],
+  editorName: string,
+  targetPath: string,
+  root: string
+): void {
+  targets.push({
+    editorName,
+    targetPath,
+    label: formatManagedPathLabel(targetPath, root),
+  });
+}
+
+function getAdapterBasePath(
+  adapter: McpConfigAdapter,
+  root: string,
+  scope: ManagedContentScope
+): string | null {
+  const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
+  return configPath ? path.dirname(configPath) : null;
+}
+
+export function getManagedContentTargets(
   adapters: McpConfigAdapter[],
   root: string,
-  scope: "local" | "global"
-): CopyTarget[] {
-  const targets: CopyTarget[] = [];
+  scope: ManagedContentScope
+): ManagedContentTargets {
+  const targets: ManagedContentTargets = {
+    skillTargets: [],
+    ruleTargets: [],
+    agentTargets: [],
+    codexConfigTargets: [],
+    skillsLockTargets: [],
+  };
+
+  const workspaceBase = scope === "global" ? homedir() : root;
+  addManagedTarget(
+    targets.skillTargets,
+    "skills",
+    path.join(workspaceBase, ".agents", "skills"),
+    root
+  );
+  addManagedTarget(
+    targets.skillsLockTargets,
+    "skills",
+    path.join(workspaceBase, "skills-lock.json"),
+    root
+  );
 
   for (const adapter of adapters) {
-    const base =
-      scope === "global"
-        ? adapter.globalPath()
-          ? path.dirname(adapter.globalPath()!)
-          : null
-        : adapter.projectPath(root)
-          ? path.dirname(adapter.projectPath(root)!)
-          : null;
-
-    if (!base) continue;
-
     switch (adapter.name) {
-      case "Cursor":
-        targets.push({
-          editorName: adapter.name,
-          rulesDir: path.join(base, "rules"),
-        });
+      case "Cursor": {
+        const base = getAdapterBasePath(adapter, root, scope);
+        if (!base) break;
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(base, "skills"), root);
+        addManagedTarget(targets.ruleTargets, adapter.name, path.join(base, "rules"), root);
         break;
+      }
       case "Claude Code": {
         const claudeBase =
           scope === "global" ? path.join(homedir(), ".claude") : path.join(root, ".claude");
-        targets.push({
-          editorName: adapter.name,
-          rulesDir: path.join(claudeBase, "rules"),
-          agentsDir: path.join(claudeBase, "agents"),
-        });
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(claudeBase, "skills"), root);
+        addManagedTarget(targets.ruleTargets, adapter.name, path.join(claudeBase, "rules"), root);
+        addManagedTarget(targets.agentTargets, adapter.name, path.join(claudeBase, "agents"), root);
         break;
       }
       case "Gemini": {
         const geminiBase =
           scope === "global" ? path.join(homedir(), ".gemini") : path.join(root, ".gemini");
-        targets.push({
-          editorName: adapter.name,
-          rulesDir: path.join(geminiBase, "rules"),
-          agentsDir: path.join(geminiBase, "agents"),
-        });
+        addManagedTarget(targets.ruleTargets, adapter.name, path.join(geminiBase, "rules"), root);
+        addManagedTarget(targets.agentTargets, adapter.name, path.join(geminiBase, "agents"), root);
+        break;
+      }
+      case "Codex": {
+        const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
+        if (!configPath) break;
+        addManagedTarget(targets.codexConfigTargets, adapter.name, configPath, root);
         break;
       }
     }
@@ -739,7 +850,7 @@ export function removeCodexRules(configPath: string): boolean {
   } else {
     delete config.developer_instructions;
   }
-  writeToml(configPath, config);
+  writeTomlOrRemove(configPath, config);
   return true;
 }
 
@@ -749,49 +860,46 @@ export function removeCodexRules(configPath: string): boolean {
 export function copyRulesAndAgents(
   adapters: McpConfigAdapter[],
   root: string,
-  scope: "local" | "global",
+  scope: ManagedContentScope,
   rulesDir: string,
   agentsDir: string
 ): string[] {
   const results: string[] = [];
-  const targets = getCopyTargets(adapters, root, scope);
+  const managedTargets = getManagedContentTargets(adapters, root, scope);
 
-  for (const target of targets) {
+  for (const target of managedTargets.ruleTargets) {
     try {
       if (fs.existsSync(rulesDir)) {
-        fs.mkdirSync(target.rulesDir, { recursive: true });
-        fs.cpSync(rulesDir, target.rulesDir, { recursive: true });
-        results.push(`  Copied rules to ${target.rulesDir}`);
+        fs.mkdirSync(target.targetPath, { recursive: true });
+        fs.cpSync(rulesDir, target.targetPath, { recursive: true });
+        results.push(`  Copied rules to ${target.targetPath}`);
       }
     } catch (err) {
-      results.push(`  Could not copy rules to ${target.rulesDir}: ${err}`);
+      results.push(`  Could not copy rules to ${target.targetPath}: ${err}`);
     }
+  }
 
-    if (target.agentsDir) {
-      try {
-        if (fs.existsSync(agentsDir)) {
-          fs.mkdirSync(target.agentsDir, { recursive: true });
-          fs.cpSync(agentsDir, target.agentsDir, { recursive: true });
-          results.push(`  Copied agents to ${target.agentsDir}`);
-        }
-      } catch (err) {
-        results.push(`  Could not copy agents to ${target.agentsDir}: ${err}`);
+  for (const target of managedTargets.agentTargets) {
+    try {
+      if (fs.existsSync(agentsDir)) {
+        fs.mkdirSync(target.targetPath, { recursive: true });
+        fs.cpSync(agentsDir, target.targetPath, { recursive: true });
+        results.push(`  Copied agents to ${target.targetPath}`);
       }
+    } catch (err) {
+      results.push(`  Could not copy agents to ${target.targetPath}: ${err}`);
     }
   }
 
   // Codex: inject rules into developer_instructions in config.toml
-  for (const adapter of adapters) {
-    if (adapter.name !== "Codex") continue;
-    const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
-    if (!configPath) continue;
+  for (const target of managedTargets.codexConfigTargets) {
     try {
-      const injected = injectCodexRules(configPath, rulesDir);
+      const injected = injectCodexRules(target.targetPath, rulesDir);
       if (injected) {
-        results.push(`  Injected rules into ${configPath} (developer_instructions)`);
+        results.push(`  Injected rules into ${target.targetPath} (developer_instructions)`);
       }
     } catch (err) {
-      results.push(`  Could not inject rules into ${configPath}: ${err}`);
+      results.push(`  Could not inject rules into ${target.targetPath}: ${err}`);
     }
   }
 

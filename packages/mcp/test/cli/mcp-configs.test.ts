@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
   copyRulesAndAgents,
+  getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
   type McpConfigAdapter,
@@ -114,10 +115,7 @@ describe("Cursor adapter", () => {
 
     const removed = adapter.remove(configPath);
     expect(removed).toBe(true);
-
-    const config = readJsonFile(configPath);
-    const servers = config.mcpServers as Record<string, unknown>;
-    expect(servers).not.toHaveProperty("argent");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("returns false when removing from non-existent file", () => {
@@ -175,8 +173,7 @@ describe("Claude Code adapter", () => {
     adapter.write(configPath, getMcpEntry());
 
     expect(adapter.remove(configPath)).toBe(true);
-    const config = readJsonFile(configPath);
-    expect(config.mcpServers as Record<string, unknown>).not.toHaveProperty("argent");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("projectPath returns .mcp.json", () => {
@@ -210,8 +207,7 @@ describe("VS Code adapter", () => {
     adapter.write(configPath, getMcpEntry());
 
     expect(adapter.remove(configPath)).toBe(true);
-    const config = readJsonFile(configPath);
-    expect(config.servers as Record<string, unknown>).not.toHaveProperty("argent");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("globalPath returns null (project-only)", () => {
@@ -279,8 +275,7 @@ describe("Zed adapter", () => {
     adapter.write(configPath, getMcpEntry());
 
     expect(adapter.remove(configPath)).toBe(true);
-    const config = readJsonFile(configPath);
-    expect(config.context_servers as Record<string, unknown>).not.toHaveProperty("argent");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("globalPath returns ~/.config/zed/settings.json", () => {
@@ -311,10 +306,7 @@ describe("Gemini adapter", () => {
 
     const removed = adapter.remove(configPath);
     expect(removed).toBe(true);
-
-    const config = readJsonFile(configPath);
-    const servers = config.mcpServers as Record<string, unknown>;
-    expect(servers).not.toHaveProperty("argent");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("returns false when removing from non-existent file", () => {
@@ -425,9 +417,7 @@ describe("Codex adapter", () => {
 
     const removed = adapter.remove(configPath);
     expect(removed).toBe(true);
-
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).not.toContain("[mcp_servers.argent]");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("returns false when removing from non-existent file", () => {
@@ -556,9 +546,7 @@ describe("addClaudePermission / removeClaudePermission", () => {
     removeClaudePermission(tmpDir, "local");
 
     const settingsPath = path.join(tmpDir, ".claude", "settings.json");
-    const config = readJsonFile(settingsPath);
-    const allow = (config.permissions as Record<string, unknown>).allow as string[];
-    expect(allow).not.toContain("mcp__argent");
+    expect(fs.existsSync(settingsPath)).toBe(false);
   });
 
   it("removeClaudePermission is a no-op when file does not exist", () => {
@@ -567,6 +555,53 @@ describe("addClaudePermission / removeClaudePermission", () => {
 });
 
 // ── copyRulesAndAgents ────────────────────────────────────────────────────────
+
+describe("getManagedContentTargets", () => {
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  it("derives local managed paths from adapter definitions", () => {
+    const adapters = ALL_ADAPTERS.filter((a) =>
+      ["Claude Code", "Cursor", "Gemini", "Codex"].includes(a.name)
+    );
+
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".claude/skills", ".cursor/skills", ".agents/skills"])
+    );
+    expect(targets.ruleTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".claude/rules", ".cursor/rules", ".gemini/rules"])
+    );
+    expect(targets.agentTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".claude/agents", ".gemini/agents"])
+    );
+    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual([".codex/config.toml"]);
+    expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["skills-lock.json"]);
+  });
+
+  it("derives global managed paths from adapter definitions", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) =>
+      ["Claude Code", "Cursor", "Gemini", "Codex"].includes(a.name)
+    );
+
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.claude/skills", "~/.cursor/skills", "~/.agents/skills"])
+    );
+    expect(targets.ruleTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.claude/rules", "~/.cursor/rules", "~/.gemini/rules"])
+    );
+    expect(targets.agentTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.claude/agents", "~/.gemini/agents"])
+    );
+    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual(["~/.codex/config.toml"]);
+    expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["~/skills-lock.json"]);
+  });
+});
 
 describe("copyRulesAndAgents", () => {
   let rulesDir: string;
@@ -721,9 +756,7 @@ describe("injectCodexRules / removeCodexRules", () => {
     injectCodexRules(configPath, rulesDir);
 
     removeCodexRules(configPath);
-
-    const content = fs.readFileSync(configPath, "utf8");
-    expect(content).not.toContain("developer_instructions");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("removeCodexRules returns false when no argent section exists", () => {
