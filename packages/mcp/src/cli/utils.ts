@@ -32,6 +32,39 @@ export const SKILLS_DIR = resolveBundledDir("skills");
 export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
 
+const PROJECT_ROOT_MARKERS = [
+  ".mcp.json",
+  ".claude",
+  ".cursor",
+  ".vscode",
+  ".gemini",
+  ".codex",
+  ".agents",
+  ".zed",
+  "skills-lock.json",
+];
+
+export function resolveProjectRoot(startDir: string): string {
+  const initialDir = path.resolve(startDir);
+  let currentDir = initialDir;
+
+  while (true) {
+    if (PROJECT_ROOT_MARKERS.some((marker) => fs.existsSync(path.join(currentDir, marker)))) {
+      return currentDir;
+    }
+
+    if (fs.existsSync(path.join(currentDir, ".git"))) {
+      return currentDir;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return initialDir;
+    }
+    currentDir = parentDir;
+  }
+}
+
 // ── TOML helpers ─────────────────────────────────────────────────────────────
 
 export function readToml(filePath: string): Record<string, unknown> {

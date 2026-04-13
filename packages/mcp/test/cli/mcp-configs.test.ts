@@ -8,6 +8,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
   copyRulesAndAgents,
+  getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
   type McpConfigAdapter,
@@ -485,6 +486,53 @@ describe("addClaudePermission / removeClaudePermission", () => {
 });
 
 // ── copyRulesAndAgents ────────────────────────────────────────────────────────
+
+describe("getManagedContentTargets", () => {
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  it("derives local managed paths from adapter definitions", () => {
+    const adapters = ALL_ADAPTERS.filter((a) =>
+      ["Claude Code", "Cursor", "Gemini", "Codex"].includes(a.name)
+    );
+
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".claude/skills", ".cursor/skills", ".agents/skills"])
+    );
+    expect(targets.ruleTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".claude/rules", ".cursor/rules", ".gemini/rules"])
+    );
+    expect(targets.agentTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".claude/agents", ".gemini/agents"])
+    );
+    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual([".codex/config.toml"]);
+    expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["skills-lock.json"]);
+  });
+
+  it("derives global managed paths from adapter definitions", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) =>
+      ["Claude Code", "Cursor", "Gemini", "Codex"].includes(a.name)
+    );
+
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.claude/skills", "~/.cursor/skills", "~/.agents/skills"])
+    );
+    expect(targets.ruleTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.claude/rules", "~/.cursor/rules", "~/.gemini/rules"])
+    );
+    expect(targets.agentTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.claude/agents", "~/.gemini/agents"])
+    );
+    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual(["~/.codex/config.toml"]);
+    expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["~/skills-lock.json"]);
+  });
+});
 
 describe("copyRulesAndAgents", () => {
   let rulesDir: string;

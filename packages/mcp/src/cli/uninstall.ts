@@ -3,13 +3,18 @@ import pc from "picocolors";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { homedir } from "node:os";
-import { ALL_ADAPTERS, removeCodexRules } from "./mcp-configs.js";
+import {
+  ALL_ADAPTERS,
+  getManagedContentTargets,
+  removeCodexRules,
+  type ManagedContentTarget,
+} from "./mcp-configs.js";
 import {
   AGENTS_DIR,
   detectPackageManager,
   formatShellCommand,
   globalUninstallCommand,
+  resolveProjectRoot,
   RULES_DIR,
   SKILLS_DIR,
 } from "./utils.js";
@@ -24,11 +29,6 @@ export interface BundledContentRemoval {
 export interface SkillsLockCleanup {
   removedSkills: string[];
   removedFile: boolean;
-}
-
-interface CleanupTarget {
-  targetDir: string;
-  label: string;
 }
 
 function removeDirIfEmpty(dirPath: string): boolean {
@@ -235,12 +235,12 @@ export function cleanupSkillsLockFile(lockPath: string, skillNames: string[]): S
   return { removedSkills, removedFile: false };
 }
 
-function cleanupBundledSkills(skillNames: string[], targets: CleanupTarget[]): string[] {
+function cleanupBundledSkills(skillNames: string[], targets: ManagedContentTarget[]): string[] {
   const results: string[] = [];
 
-  for (const { targetDir, label } of targets) {
+  for (const { targetPath, label } of targets) {
     try {
-      const { removedPaths, removedRoot } = removeBundledSkillInstalls(skillNames, targetDir);
+      const { removedPaths, removedRoot } = removeBundledSkillInstalls(skillNames, targetPath);
       if (removedPaths.length === 0 && !removedRoot) continue;
 
       const itemsLabel = removedPaths.length === 1 ? "skill entry" : "skill entries";
@@ -258,14 +258,14 @@ function cleanupBundledSkills(skillNames: string[], targets: CleanupTarget[]): s
 
 function cleanupBundledTargets(
   sourceDir: string,
-  targets: CleanupTarget[],
+  targets: ManagedContentTarget[],
   contentLabel: string
 ): string[] {
   const results: string[] = [];
 
-  for (const { targetDir, label } of targets) {
+  for (const { targetPath, label } of targets) {
     try {
-      const { removedPaths, removedRoot } = removeBundledContent(sourceDir, targetDir);
+      const { removedPaths, removedRoot } = removeBundledContent(sourceDir, targetPath);
       if (removedPaths.length === 0 && !removedRoot) continue;
 
       const itemsLabel =
@@ -284,7 +284,6 @@ function cleanupBundledTargets(
 
 export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
-  const pruneFlag = args.includes("--prune");
 
   p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
@@ -302,7 +301,7 @@ export async function uninstall(args: string[]): Promise<void> {
     }
   }
 
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot(process.cwd());
   const results: string[] = [];
 
   // ── Remove MCP entries ──────────────────────────────────────────────────────
@@ -346,14 +345,14 @@ export async function uninstall(args: string[]): Promise<void> {
 
   // ── Prune skills / rules / agents ───────────────────────────────────────────
 
-  let shouldPrune = pruneFlag;
+  let shouldPrune = nonInteractive;
 
-  if (!shouldPrune && !nonInteractive) {
+  if (!nonInteractive) {
     p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const pruneChoice = await p.confirm({
       message: "Also remove Argent-owned skills, rules, and agents?",
-      initialValue: false,
+      initialValue: true,
     });
 
     if (!p.isCancel(pruneChoice)) {
@@ -363,25 +362,23 @@ export async function uninstall(args: string[]): Promise<void> {
 
   if (shouldPrune) {
     const pruneResults: string[] = [];
+    const localTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local");
+    const globalTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global");
 
     const bundledSkillNames = getBundledSkillNames(SKILLS_DIR);
-    const skillTargets: CleanupTarget[] = [
-      { targetDir: path.join(projectRoot, ".claude", "skills"), label: ".claude/skills" },
-      { targetDir: path.join(projectRoot, ".cursor", "skills"), label: ".cursor/skills" },
-      { targetDir: path.join(projectRoot, ".agents", "skills"), label: ".agents/skills" },
-      { targetDir: path.join(homedir(), ".claude", "skills"), label: "~/.claude/skills" },
-      { targetDir: path.join(homedir(), ".cursor", "skills"), label: "~/.cursor/skills" },
-      { targetDir: path.join(homedir(), ".agents", "skills"), label: "~/.agents/skills" },
-    ];
+    pruneResults.push(
+      ...cleanupBundledSkills(bundledSkillNames, [
+        ...localTargets.skillTargets,
+        ...globalTargets.skillTargets,
+      ])
+    );
 
-    pruneResults.push(...cleanupBundledSkills(bundledSkillNames, skillTargets));
-
-    for (const [lockPath, label] of [
-      [path.join(projectRoot, "skills-lock.json"), "skills-lock.json"],
-      [path.join(homedir(), "skills-lock.json"), "~/skills-lock.json"],
-    ] as const) {
+    for (const { targetPath, label } of [
+      ...localTargets.skillsLockTargets,
+      ...globalTargets.skillsLockTargets,
+    ]) {
       try {
-        const { removedSkills, removedFile } = cleanupSkillsLockFile(lockPath, bundledSkillNames);
+        const { removedSkills, removedFile } = cleanupSkillsLockFile(targetPath, bundledSkillNames);
         if (removedSkills.length === 0 && !removedFile) continue;
 
         const itemsLabel = removedSkills.length === 1 ? "skill" : "skills";
@@ -396,29 +393,17 @@ export async function uninstall(args: string[]): Promise<void> {
 
     const bundledTargets: Array<{
       sourceDir: string;
-      targets: CleanupTarget[];
+      targets: ManagedContentTarget[];
       contentLabel: string;
     }> = [
       {
         sourceDir: AGENTS_DIR,
-        targets: [
-          { targetDir: path.join(projectRoot, ".claude", "agents"), label: ".claude/agents" },
-          { targetDir: path.join(projectRoot, ".gemini", "agents"), label: ".gemini/agents" },
-          { targetDir: path.join(homedir(), ".claude", "agents"), label: "~/.claude/agents" },
-          { targetDir: path.join(homedir(), ".gemini", "agents"), label: "~/.gemini/agents" },
-        ],
+        targets: [...localTargets.agentTargets, ...globalTargets.agentTargets],
         contentLabel: "agent",
       },
       {
         sourceDir: RULES_DIR,
-        targets: [
-          { targetDir: path.join(projectRoot, ".claude", "rules"), label: ".claude/rules" },
-          { targetDir: path.join(projectRoot, ".cursor", "rules"), label: ".cursor/rules" },
-          { targetDir: path.join(projectRoot, ".gemini", "rules"), label: ".gemini/rules" },
-          { targetDir: path.join(homedir(), ".claude", "rules"), label: "~/.claude/rules" },
-          { targetDir: path.join(homedir(), ".cursor", "rules"), label: "~/.cursor/rules" },
-          { targetDir: path.join(homedir(), ".gemini", "rules"), label: "~/.gemini/rules" },
-        ],
+        targets: [...localTargets.ruleTargets, ...globalTargets.ruleTargets],
         contentLabel: "rule",
       },
     ];
@@ -432,16 +417,16 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     // Codex: remove argent rules from developer_instructions in config.toml
-    for (const configPath of [
-      path.join(projectRoot, ".codex", "config.toml"),
-      path.join(homedir(), ".codex", "config.toml"),
+    for (const { targetPath, label } of [
+      ...localTargets.codexConfigTargets,
+      ...globalTargets.codexConfigTargets,
     ]) {
       try {
-        if (removeCodexRules(configPath)) {
-          pruneResults.push(`${pc.green("+")} Removed argent rules from ${configPath}`);
+        if (removeCodexRules(targetPath)) {
+          pruneResults.push(`${pc.green("+")} Removed argent rules from ${label}`);
         }
       } catch (err) {
-        pruneResults.push(`${pc.red("x")} Could not clean ${configPath}: ${err}`);
+        pruneResults.push(`${pc.red("x")} Could not clean ${label}: ${err}`);
       }
     }
 
@@ -451,7 +436,7 @@ export async function uninstall(args: string[]): Promise<void> {
       p.log.info(pc.dim("No Argent-owned skills, rules, or agents found to remove."));
     }
   } else {
-    p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents. Pass --prune to remove them."));
+    p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
   }
 
   // ── Uninstall the global package ────────────────────────────────────────────
