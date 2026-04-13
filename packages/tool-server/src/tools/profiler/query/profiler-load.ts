@@ -203,6 +203,10 @@ async function loadReactSession(
     anyCompilerOptimized,
     hotCommitIndices,
     totalReactCommits,
+    deviceId: deviceId ?? null,
+    deviceName: null,
+    appName: null,
+    projectRoot: null,
   };
 
   cacheProfilerPaths(port, sessionPaths, deviceId);

@@ -281,6 +281,10 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         anyCompilerOptimized: api.anyCompilerOptimized,
         hotCommitIndices: api.hotCommitIndices,
         totalReactCommits: api.totalReactCommits,
+        deviceId: api.deviceId,
+        deviceName: null,
+        appName: null,
+        projectRoot: api.projectRoot,
       };
 
       cacheProfilerPaths(api.port, sessionPaths, api.deviceId ?? undefined);

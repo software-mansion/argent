@@ -38,6 +38,10 @@ export interface ProfilerSessionPaths {
   anyCompilerOptimized: boolean | null;
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
+  deviceId: string | null;
+  deviceName: string | null;
+  appName: string | null;
+  projectRoot: string | null;
 }
 
 export interface ReactProfilerSessionApi {
