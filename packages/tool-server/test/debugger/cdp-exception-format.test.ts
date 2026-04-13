@@ -89,9 +89,7 @@ describe("CDPClient.evaluate — formatExceptionDetails", () => {
       exception: { value: null },
     });
 
-    await expect(client.evaluate("null()")).rejects.toThrow(
-      "Script evaluation threw an exception"
-    );
+    await expect(client.evaluate("null()")).rejects.toThrow("Script evaluation threw an exception");
     await client.disconnect();
   });
 

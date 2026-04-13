@@ -63,9 +63,7 @@ describe("warnOnError pattern", () => {
   it("works as a .catch() handler (receives single argument)", async () => {
     const warnOnError = createWarnOnError("JsRuntimeDebugger", 8081);
 
-    await Promise.reject(new Error("CDP not connected")).catch(
-      warnOnError("Runtime.enable")
-    );
+    await Promise.reject(new Error("CDP not connected")).catch(warnOnError("Runtime.enable"));
 
     expect(stderrSpy).toHaveBeenCalledOnce();
     const output = stderrSpy.mock.calls[0]![0] as string;
