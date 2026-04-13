@@ -76,7 +76,7 @@ export function getAvailableTools(): Array<{
   inputSchema?: Record<string, unknown>;
 }> {
   const registry = createRegistry();
-  return registry.getAllTools().map((id) => {
+  return registry.getSnapshot().tools.map((id) => {
     const def = registry.getTool(id)!;
     return { id: def.id, description: def.description, inputSchema: def.inputSchema };
   });
