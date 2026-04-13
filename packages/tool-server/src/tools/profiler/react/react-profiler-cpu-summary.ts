@@ -10,12 +10,7 @@ import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .optional()
-    .describe(
-      "iOS Simulator UDID (logicalDeviceId). Must match the value passed to react-profiler-start/stop."
-    ),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   top_n: z.coerce
     .number()
     .int()
