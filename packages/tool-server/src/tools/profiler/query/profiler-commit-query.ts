@@ -37,10 +37,7 @@ const zodSchema = z.object({
     .describe("Max results to return (default 20)"),
 });
 
-async function getCommitTree(
-  port: number,
-  deviceId: string
-): Promise<DevToolsCommitTree> {
+async function getCommitTree(port: number, deviceId: string): Promise<DevToolsCommitTree> {
   const sessionPaths = getCachedProfilerPaths(port, deviceId);
   if (!sessionPaths?.commitsPath) {
     throw new Error(

@@ -74,7 +74,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     const cdp = debuggerApi.cdp;
     const port = debuggerApi.port;
     const colonIdx = payload.indexOf(":");
-    const deviceId = colonIdx >= 0 ? payload.slice(colonIdx + 1) : debuggerApi.logicalDeviceId ?? "";
+    const deviceId =
+      colonIdx >= 0 ? payload.slice(colonIdx + 1) : (debuggerApi.logicalDeviceId ?? "");
     const ignore = () => {};
     const warnOnError = (label: string) => (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
