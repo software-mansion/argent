@@ -24,11 +24,15 @@ export const networkInspectorBlueprint: ServiceBlueprint<NetworkInspectorApi, st
   async factory(deps, _payload) {
     const debuggerApi = deps.debugger as JsRuntimeDebuggerApi;
     const cdp = debuggerApi.cdp;
-    const ignore = () => {};
 
     // Inject the fetch-level network interceptor. Idempotent — the script
     // guards itself with __argent_network_installed.
-    await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch(ignore);
+    await cdp.evaluate(NETWORK_INTERCEPTOR_SCRIPT).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[NetworkInspector:${debuggerApi.port}] NETWORK_INTERCEPTOR_SCRIPT failed (non-fatal): ${msg}\n`
+      );
+    });
 
     const api: NetworkInspectorApi = { port: debuggerApi.port, cdp };
 

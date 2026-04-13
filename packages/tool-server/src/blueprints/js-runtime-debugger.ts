@@ -123,6 +123,11 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     });
 
     const ignore = () => {};
+    const warnOnError = (label: string) => (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[JsRuntimeDebugger:${port}] ${label} failed (non-fatal): ${msg}\n`);
+    };
+
     await cdp.send("FuseboxClient.setClientMetadata", {}).catch(ignore);
     await cdp.send("ReactNativeApplication.enable", {}).catch(ignore);
     await cdp.send("Runtime.enable");
@@ -132,7 +137,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     await cdp.send("Runtime.runIfWaitingForDebugger").catch(ignore);
     await cdp.addBinding("__argent_callback");
 
-    await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(ignore);
+    await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 
     await sourceMaps.waitForPending();
 
