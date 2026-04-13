@@ -522,7 +522,7 @@ export async function init(args: string[]): Promise<void> {
 function printOfflineBanner({ skillsCached }: { skillsCached: boolean }): void {
   const bullets = [`Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`];
   if (!skillsCached) {
-    bullets.push(`Installing skills via ${pc.cyan("npx skills")} (use the manual option instead)`);
+    bullets.push(`Installing skills via ${pc.cyan("npx skills")}`);
   }
 
   const body = [
