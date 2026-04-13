@@ -149,14 +149,21 @@ export function isSkillsCliAvailable(): boolean {
 }
 
 export async function isOnline(timeoutMs = 1500): Promise<boolean> {
-  const host = new URL(NPM_REGISTRY).hostname;
-  const lookup = new Promise<boolean>((resolve) => {
-    dns.lookup(host, (err) => resolve(!err));
+  let host: string;
+  try {
+    host = new URL(NPM_REGISTRY).hostname;
+  } catch {
+    return false;
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref();
+    dns.lookup(host, (err) => {
+      clearTimeout(timer);
+      resolve(!err);
+    });
   });
-  const timeout = new Promise<boolean>((resolve) => {
-    setTimeout(() => resolve(false), timeoutMs);
-  });
-  return Promise.race([lookup, timeout]);
 }
 
 // ── Package manager detection ─────────────────────────────────────────────────
