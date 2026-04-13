@@ -84,7 +84,7 @@ export async function init(args: string[]): Promise<void> {
         ``,
         `You can continue, but the following will be skipped:`,
         `  • Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`,
-        `  • Installing skills via ${pc.cyan("npx skills")} (use the manual option instead)`,
+        `  • Installing skills via ${pc.cyan("npx skills")} (unless already cached; manual install always works)`,
       ].join("\n"),
       pc.red("Offline mode")
     );
@@ -416,14 +416,14 @@ export async function init(args: string[]): Promise<void> {
           label: "Automatic",
           hint: online
             ? "Installs all skills automatically with npx skills"
-            : "Requires network - unavailable offline",
+            : "May require network if not already cached",
         },
         {
           value: "interactive" as const,
           label: "Interactive",
           hint: online
             ? "Full npx skills TUI - choose skills, agents, and method"
-            : "Requires network - unavailable offline",
+            : "May require network if not already cached",
         },
         {
           value: "manual" as const,
