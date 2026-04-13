@@ -514,7 +514,7 @@ const codexAdapter: McpConfigAdapter = {
     config.mcp_servers ??= {};
     config.mcp_servers.argent ??= {};
     config.mcp_servers.argent.tools ??= {};
-    const toolsConfig = config?.mcp_servers?.argent?.tools;
+    const toolsConfig = config.mcp_servers.argent.tools;
 
     for (const tool of tools) {
       toolsConfig[tool] = {
