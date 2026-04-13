@@ -247,32 +247,26 @@ export class Registry {
 
       return instance.api as T;
     } catch (error) {
-      this._transition(node, ServiceState.ERROR);
+      const cause = error instanceof Error ? error : new Error(String(error));
+      this._transition(node, ServiceState.ERROR, cause);
       node.initPromise = null;
 
       if (error instanceof ServiceInitializationError) {
         throw error;
       }
-      throw new ServiceInitializationError(
-        urn,
-        error instanceof Error ? error.message : String(error),
-        {
-          cause: error instanceof Error ? error : new Error(String(error)),
-        }
-      );
+      throw new ServiceInitializationError(urn, cause.message, { cause });
     }
   }
 
-  private _transition(node: ServiceNode, to: ServiceState): void {
+  private _transition(node: ServiceNode, to: ServiceState, cause?: Error): void {
     const from = node.state;
     node.state = to;
     this.events.emit("serviceStateChange", node.urn, from, to);
     if (to === ServiceState.ERROR) {
-      this.events.emit(
-        "serviceError",
-        node.urn,
-        new Error(`Service "${node.urn}" entered ERROR state`)
-      );
+      const err = cause
+        ? new Error(`Service "${node.urn}" entered ERROR state: ${cause.message}`, { cause })
+        : new Error(`Service "${node.urn}" entered ERROR state`);
+      this.events.emit("serviceError", node.urn, err);
     }
   }
 
@@ -307,7 +301,7 @@ export class Registry {
     node.instance = null;
     node.initPromise = null;
     node.dependents.clear();
-    this._transition(node, error ? ServiceState.ERROR : ServiceState.IDLE);
+    this._transition(node, error ? ServiceState.ERROR : ServiceState.IDLE, error);
   }
 
   private async _teardown(urn: string, cause?: Error): Promise<void> {
@@ -341,6 +335,6 @@ export class Registry {
     node.instance = null;
     node.initPromise = null;
     node.dependents.clear();
-    this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE);
+    this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
 }

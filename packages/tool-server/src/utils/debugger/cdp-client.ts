@@ -34,6 +34,46 @@ export type CDPClientEvents = {
   consoleAPICalled: (params: ConsoleAPICalledParams) => void;
 };
 
+interface CDPExceptionDetails {
+  text?: string;
+  exception?: { description?: string; value?: unknown };
+  stackTrace?: {
+    callFrames: Array<{
+      functionName: string;
+      url: string;
+      lineNumber: number;
+      columnNumber: number;
+    }>;
+  };
+  lineNumber?: number;
+  columnNumber?: number;
+  url?: string;
+}
+
+function formatExceptionDetails(details: CDPExceptionDetails): string {
+  // exception.description already contains the JS Error message + its own JS stack
+  const description =
+    details.exception?.description ?? details.text ?? "Script evaluation threw an exception";
+
+  // If the description already embeds a stack trace (Error: msg\n  at ...) use it as-is.
+  // Otherwise append the CDP-reported call frames.
+  if (description.includes("\n    at ") || description.includes("\n  at ")) {
+    return description;
+  }
+
+  const frames = details.stackTrace?.callFrames ?? [];
+  if (frames.length === 0) return description;
+
+  const frameLines = frames
+    .map((f) => {
+      const loc = `${f.url || "<anonymous>"}:${f.lineNumber + 1}:${f.columnNumber + 1}`;
+      return `  at ${f.functionName || "<anonymous>"} (${loc})`;
+    })
+    .join("\n");
+
+  return `${description}\n${frameLines}`;
+}
+
 interface PendingRequest {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
@@ -155,11 +195,11 @@ export class CDPClient {
   async evaluate(expression: string, options?: { timeout?: number }): Promise<unknown> {
     const result = (await this.send("Runtime.evaluate", { expression }, options?.timeout)) as {
       result?: { type?: string; value?: unknown; description?: string };
-      exceptionDetails?: unknown;
+      exceptionDetails?: CDPExceptionDetails;
     };
 
     if (result.exceptionDetails) {
-      throw new Error(`Evaluation error: ${JSON.stringify(result.exceptionDetails)}`);
+      throw new Error(formatExceptionDetails(result.exceptionDetails));
     }
 
     return result.result?.value;

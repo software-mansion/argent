@@ -70,7 +70,12 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
   async factory(deps, _payload) {
     const debuggerApi = deps.debugger as JsRuntimeDebuggerApi;
     const cdp = debuggerApi.cdp;
+    const port = debuggerApi.port;
     const ignore = () => {};
+    const warnOnError = (label: string) => (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[ReactProfilerSession:${port}] ${label} failed (non-fatal): ${msg}\n`);
+    };
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -91,7 +96,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     };
 
     // Enable Profiler domain
-    await cdp.send("Profiler.enable").catch(ignore);
+    await cdp.send("Profiler.enable").catch(warnOnError("Profiler.enable"));
 
     // Track script sources for source map resolution in analyze_profile
     cdp.events.on("scriptParsed", (script) => {
@@ -104,7 +109,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     });
 
     // Inject fiber root tracker (idempotent — guarded in JS)
-    await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(ignore);
+    await cdp.evaluate(FIBER_ROOT_TRACKER_SCRIPT).catch(warnOnError("FIBER_ROOT_TRACKER_SCRIPT"));
 
     // Detect RN architecture
     try {
@@ -132,8 +137,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
           state.detectedArchitecture = "bridge";
         }
       }
-    } catch {
-      // non-fatal
+    } catch (err) {
+      warnOnError("architecture detection")(err);
     }
 
     // Get Hermes version
@@ -146,8 +151,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
         const props = JSON.parse(propsJson) as Record<string, unknown>;
         state.hermesVersion = (props["OSS Release Version"] as string) ?? "unknown";
       }
-    } catch {
-      // non-fatal
+    } catch (err) {
+      warnOnError("Hermes version probe")(err);
     }
 
     cdp.events.on("disconnected", (error) => {
