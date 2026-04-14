@@ -53,13 +53,16 @@ esbuild.buildSync({
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
 
-// Copy simulator-server binary
+// Copy simulator-server binary (downloaded via scripts/download-simulator-server.sh)
 if (fs.existsSync(BIN_SRC)) {
   fs.copyFileSync(BIN_SRC, BIN_DEST);
   fs.chmodSync(BIN_DEST, 0o755);
   console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
 } else {
-  console.warn(`⚠ simulator-server binary not found at ${BIN_SRC} — skipping copy`);
+  throw new Error(
+    `simulator-server binary not found at ${BIN_SRC}.\n` +
+      `Run: bash scripts/download-simulator-server.sh`
+  );
 }
 
 // Copy ax-service binary

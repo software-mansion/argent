@@ -8,7 +8,8 @@
     "build": "tsc --build",
     "start": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
-    "pack:mcp": "npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
+    "download:simulator-server": "bash scripts/download-simulator-server.sh",
+    "pack:mcp": "npm run download:simulator-server && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write ."
   },
