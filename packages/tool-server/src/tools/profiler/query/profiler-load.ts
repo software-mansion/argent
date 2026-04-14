@@ -98,9 +98,7 @@ async function listSessions(debugDir: string): Promise<string> {
         }
       }
       const project = projectRoot ? path.basename(projectRoot) : null;
-      lines.push(
-        `| \`${sid}\` | ${appName ?? "—"} | ${deviceName ?? "—"} | ${project ?? "—"} |`
-      );
+      lines.push(`| \`${sid}\` | ${appName ?? "—"} | ${deviceName ?? "—"} | ${project ?? "—"} |`);
     }
     lines.push("");
   }

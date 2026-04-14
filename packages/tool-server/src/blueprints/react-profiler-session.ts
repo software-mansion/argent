@@ -76,9 +76,7 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     const port = debuggerApi.port;
     const colonIdx = payload.indexOf(":");
     if (colonIdx < 0) {
-      throw new Error(
-        `ReactProfilerSession payload must be "port:deviceId", got: "${payload}"`
-      );
+      throw new Error(`ReactProfilerSession payload must be "port:deviceId", got: "${payload}"`);
     }
     const deviceId = payload.slice(colonIdx + 1);
     if (!deviceId) {

@@ -15,10 +15,10 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 
 ### Connect & diagnostics
 
-| Tool               | Purpose                                                                                                                  |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| Tool               | Purpose                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger/network/profiler call. |
-| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**                                       |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**                                                                                                                                        |
 
 ### Reload & recovery
 

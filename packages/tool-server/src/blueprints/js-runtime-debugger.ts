@@ -110,9 +110,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
   async factory(_deps, payload, options?) {
     const colonIdx = payload.indexOf(":");
     if (colonIdx < 0) {
-      throw new Error(
-        `JsRuntimeDebugger payload must be "port:deviceId", got: "${payload}"`
-      );
+      throw new Error(`JsRuntimeDebugger payload must be "port:deviceId", got: "${payload}"`);
     }
     const deviceId = payload.slice(colonIdx + 1);
     if (!deviceId) {
