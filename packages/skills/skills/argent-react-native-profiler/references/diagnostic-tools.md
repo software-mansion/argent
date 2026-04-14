@@ -5,7 +5,7 @@ These tools can be called independently without starting a profiling session.
 ## Live render stats
 
 ```json
-{ "port": 8081, "top_n": 20 }
+{ "port": 8081, "device_id": "<UDID>", "top_n": 20 }
 ```
 
 Call `react-profiler-renders`. Returns render counts and durations per component — useful for spotting hot components before a full profile.
@@ -13,7 +13,7 @@ Call `react-profiler-renders`. Returns render counts and durations per component
 ## Component hierarchy
 
 ```json
-{ "port": 8081, "max_depth": 10, "filter": "MyComponent" }
+{ "port": 8081, "device_id": "<UDID>", "max_depth": 10, "filter": "MyComponent" }
 ```
 
 Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm React Compiler is active for a given component. If `useMemoCache` is absent, the compiler bailed out for that component — memoization hints are safe to propose.
@@ -21,7 +21,7 @@ Call `react-profiler-fiber-tree`. Inspect `useMemoCache` presence to confirm Rea
 ## Console logs
 
 ```json
-{ "port": 8081 }
+{ "port": 8081, "device_id": "<UDID>" }
 ```
 
 Call `debugger-log-registry`. Returns a summary with entry counts by level, message clusters, and the log file path. Use `Grep`/`Read` on the log file to filter by level or search for specific messages.
@@ -35,7 +35,7 @@ These require a completed profiling session (`react-profiler-stop` + `react-prof
 ## CPU query (replaces react-profiler-cpu-summary)
 
 ```json
-{ "port": 8081, "mode": "top_functions", "top_n": 15 }
+{ "port": 8081, "device_id": "<UDID>", "mode": "top_functions", "top_n": 15 }
 ```
 
 Call `profiler-cpu-query`. Modes:
@@ -48,7 +48,7 @@ Call `profiler-cpu-query`. Modes:
 ## Commit query
 
 ```json
-{ "port": 8081, "mode": "by_component", "component_name": "AppNavigator" }
+{ "port": 8081, "device_id": "<UDID>", "mode": "by_component", "component_name": "AppNavigator" }
 ```
 
 Call `profiler-commit-query`. Modes:
@@ -88,7 +88,7 @@ Call `profiler-combined-report` when both React Profiler and iOS Instruments ran
 Call `profiler-load`. Modes:
 
 - `list` — show all saved profiling sessions (React + iOS) in `/tmp/argent-profiler-cwd/`.
-- `load_react` — reload a React profiler session by `session_id`. Populates the in-memory cache for `profiler-cpu-query` and `profiler-commit-query`.
+- `load_react` — reload a React profiler session by `session_id` + `device_id`. Populates the `port:device_id`-keyed in-memory cache for `profiler-cpu-query` and `profiler-commit-query` (which must be called with the same `device_id` afterward).
 - `load_instruments` — re-parse iOS Instruments XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
 
 Use this to revisit an earlier profiling session without re-profiling. Each `react-profiler-analyze` run saves raw data with a unique timestamp.
