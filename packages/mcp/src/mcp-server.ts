@@ -12,6 +12,7 @@ import {
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
+import { toMcpTool, type ToolMeta } from "./tool-mapping.js";
 
 export async function startMcpServer(): Promise<void> {
   let TOOLS_URL: string;
@@ -66,13 +67,6 @@ export async function startMcpServer(): Promise<void> {
     }
   }
 
-  type ToolMeta = {
-    name: string;
-    description: string;
-    inputSchema: Record<string, unknown>;
-    outputHint?: string;
-  };
-
   async function fetchTools(): Promise<ToolMeta[]> {
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`);
     const json = (await res.json()) as { tools: ToolMeta[] };
@@ -124,13 +118,7 @@ export async function startMcpServer(): Promise<void> {
       event: "list_tools",
       count: tools.length,
     });
-    return {
-      tools: tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: { type: "object" as const, ...t.inputSchema },
-      })),
-    };
+    return { tools: tools.map(toMcpTool) };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {

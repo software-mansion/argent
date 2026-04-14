@@ -71,6 +71,18 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   inputSchema?: Record<string, unknown>;
   /** Optional hint for adapters (e.g. "image" for MCP to return base64 image content). */
   outputHint?: string;
+  /**
+   * When true, the MCP adapter marks the tool with `_meta["anthropic/alwaysLoad"] = true`
+   * so Claude Code opts it out of progressive tool loading (ToolSearch). Use for the
+   * handful of tools the model needs on every turn (discovery + core interactions).
+   */
+  alwaysLoad?: boolean;
+  /**
+   * Short phrase used by Claude Code's ToolSearch BM25 ranker to surface the tool
+   * for relevant queries without needing the full description in context. Forwarded
+   * via `_meta["anthropic/searchHint"]`.
+   */
+  searchHint?: string;
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
   execute(

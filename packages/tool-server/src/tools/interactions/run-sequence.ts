@@ -85,6 +85,8 @@ Example — type text and submit:
   ]}
 
 Stops on the first error and returns partial results.`,
+    alwaysLoad: true,
+    searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     services: (params) => ({
       simulatorServer: `SimulatorServer:${params.udid}`,
