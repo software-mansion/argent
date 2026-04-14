@@ -78,7 +78,7 @@ async function listSessions(debugDir: string): Promise<string> {
 
   if (reactSessions.size > 0) {
     lines.push("### React Profiler Sessions", "");
-    lines.push("| Session ID | App | Device | Project |");
+    lines.push("| Session ID | Runtime | Device | Metro bundle |");
     lines.push("|---|---|---|---|");
     for (const [sid, files] of [...reactSessions.entries()].sort().reverse()) {
       let appName: string | null = null;
@@ -228,11 +228,12 @@ async function loadReactSession(
   const lines: string[] = [
     `Loaded React profiler session \`${sessionId}\` into port ${port}.`,
     "",
-    `- App: ${appName ?? "unknown"}`,
+    `- Runtime: ${appName ?? "unknown"}`,
     `- Device: ${deviceName ?? "unknown"}`,
-    `- Project: ${projectRoot ? path.basename(projectRoot) : "unknown"}`,
+    `- Metro bundle: ${projectRoot ? path.basename(projectRoot) : "unknown"}`,
     `- CPU profile: ${sampleInfo}`,
-    `- Commits: ${commitCount} fiber renders`,
+    `- Commits persisted (hot ±1 margin, ≥16ms): ${commitCount}`,
+    `- Total React commits: ${totalReactCommits ?? "unknown"}`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",
