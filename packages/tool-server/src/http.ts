@@ -5,6 +5,19 @@ import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
+import { runWithContext } from "./request-context";
+
+const PROJECT_ROOT_HEADER = "x-argent-project-root";
+
+function parseProjectRootHeader(raw: string | string[] | undefined): string | undefined {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return undefined;
+  }
+}
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -104,10 +117,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
-      try {
-        const data = await registry.invokeTool(name, parsedData, {
+      const projectRoot = parseProjectRootHeader(req.headers[PROJECT_ROOT_HEADER]);
+      const invoke = () =>
+        registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
+
+      try {
+        const data = projectRoot
+          ? await runWithContext({ projectRoot }, invoke)
+          : await invoke();
         const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
         const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
         if (shouldNotify) {

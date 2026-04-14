@@ -1,22 +1,14 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import { requireProjectRoot } from "../../request-context";
 
-const execFileAsync = promisify(execFile);
 const FLOWS_DIR_NAME = ".argent";
 
 // ── Paths ────────────────────────────────────────────────────────────
 
-async function getGitRoot(): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
-  return stdout.trim();
-}
-
 export async function getFlowsDir(): Promise<string> {
-  const root = await getGitRoot();
-  return path.join(root, FLOWS_DIR_NAME);
+  return path.join(requireProjectRoot(), FLOWS_DIR_NAME);
 }
 
 export async function getFlowPath(name: string): Promise<string> {
