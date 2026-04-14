@@ -60,7 +60,6 @@ export interface ReactProfilerSessionApi {
 export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessionApi, string> = {
   namespace: REACT_PROFILER_SESSION_NAMESPACE,
 
-  // payload is "port:deviceId"
   getURN(payload: string) {
     return `${REACT_PROFILER_SESSION_NAMESPACE}:${payload}`;
   },
@@ -74,8 +73,15 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
     const cdp = debuggerApi.cdp;
     const port = debuggerApi.port;
     const colonIdx = payload.indexOf(":");
-    const deviceId =
-      colonIdx >= 0 ? payload.slice(colonIdx + 1) : (debuggerApi.logicalDeviceId ?? "");
+    if (colonIdx < 0) {
+      throw new Error(
+        `ReactProfilerSession payload must be "port:deviceId", got: "${payload}"`
+      );
+    }
+    const deviceId = payload.slice(colonIdx + 1);
+    if (!deviceId) {
+      throw new Error(`ReactProfilerSession payload missing deviceId: "${payload}"`);
+    }
     const ignore = () => {};
     const warnOnError = (label: string) => (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);

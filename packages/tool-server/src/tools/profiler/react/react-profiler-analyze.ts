@@ -68,7 +68,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    // Read-only: resolve paths from cache only — no live CDP connection needed.
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
       params.port,
       params.device_id
