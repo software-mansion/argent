@@ -45,6 +45,8 @@ export interface ReactProfilerSessionApi {
   deviceId: string;
   cdp: CDPClient;
   projectRoot: string;
+  appName: string;
+  deviceName: string;
   hermesVersion: string;
   detectedArchitecture: "bridge" | "bridgeless" | null;
   sessionPaths: ProfilerSessionPaths | null;
@@ -95,6 +97,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       deviceId,
       cdp,
       projectRoot: debuggerApi.projectRoot,
+      appName: debuggerApi.appName,
+      deviceName: debuggerApi.deviceName,
       hermesVersion: "unknown",
       detectedArchitecture: null,
       sessionPaths: null,

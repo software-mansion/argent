@@ -261,6 +261,8 @@ Fails if no active profiling session exists or the CDP connection was lost durin
             projectRoot: api.projectRoot,
             deviceId: api.deviceId,
             port: api.port,
+            appName: api.appName,
+            deviceName: api.deviceName,
           },
         }
       );

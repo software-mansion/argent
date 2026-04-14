@@ -78,15 +78,29 @@ async function listSessions(debugDir: string): Promise<string> {
 
   if (reactSessions.size > 0) {
     lines.push("### React Profiler Sessions", "");
-    lines.push("| Session ID | Files |");
-    lines.push("|---|---|");
+    lines.push("| Session ID | App | Device | Project |");
+    lines.push("|---|---|---|---|");
     for (const [sid, files] of [...reactSessions.entries()].sort().reverse()) {
-      const hasCpu = files.some((f) => f.includes("_cpu.json"));
-      const hasCommits = files.some((f) => f.includes("_commits.json"));
-      const parts: string[] = [];
-      if (hasCpu) parts.push("CPU profile");
-      if (hasCommits) parts.push("commits");
-      lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
+      let appName: string | null = null;
+      let deviceName: string | null = null;
+      let projectRoot: string | null = null;
+      const commitsFile = files.find((f) => f.includes("_commits.json"));
+      if (commitsFile) {
+        try {
+          const onDisk = await readCommitTree(path.join(debugDir, commitsFile));
+          if (onDisk.meta) {
+            appName = onDisk.meta.appName ?? null;
+            deviceName = onDisk.meta.deviceName ?? null;
+            projectRoot = onDisk.meta.projectRoot ?? null;
+          }
+        } catch {
+          // older session or corrupted file — fall through to "—" placeholders
+        }
+      }
+      const project = projectRoot ? path.basename(projectRoot) : null;
+      lines.push(
+        `| \`${sid}\` | ${appName ?? "—"} | ${deviceName ?? "—"} | ${project ?? "—"} |`
+      );
     }
     lines.push("");
   }
@@ -162,6 +176,9 @@ async function loadReactSession(
   let anyCompilerOptimized: boolean | null = null;
   let hotCommitIndices: number[] | null = null;
   let totalReactCommits: number | null = null;
+  let appName: string | null = null;
+  let deviceName: string | null = null;
+  let projectRoot: string | null = null;
   let commitCount = 0;
   let sampleInfo = "not available";
 
@@ -174,6 +191,9 @@ async function loadReactSession(
         anyCompilerOptimized = onDisk.meta.anyCompilerOptimized ?? null;
         hotCommitIndices = onDisk.meta.hotCommitIndices ?? null;
         totalReactCommits = onDisk.meta.totalReactCommits ?? null;
+        appName = onDisk.meta.appName ?? null;
+        deviceName = onDisk.meta.deviceName ?? null;
+        projectRoot = onDisk.meta.projectRoot ?? null;
       }
     } catch {
       // non-fatal — file may be corrupted
@@ -208,6 +228,9 @@ async function loadReactSession(
   const lines: string[] = [
     `Loaded React profiler session \`${sessionId}\` into port ${port}.`,
     "",
+    `- App: ${appName ?? "unknown"}`,
+    `- Device: ${deviceName ?? "unknown"}`,
+    `- Project: ${projectRoot ? path.basename(projectRoot) : "unknown"}`,
     `- CPU profile: ${sampleInfo}`,
     `- Commits: ${commitCount} fiber renders`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
