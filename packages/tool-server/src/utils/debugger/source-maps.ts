@@ -149,12 +149,13 @@ export class SourceMapsRegistry {
       }
 
       const consumer = new SourceMapConsumer(rawData as any);
-      const sources: string[] = [];
-      consumer.eachMapping((mapping) => {
-        if (mapping.source && !sources.includes(mapping.source)) {
-          sources.push(mapping.source);
-        }
-      });
+      const consumerSources = (consumer as any).sources;
+      const rawSources = (rawData as any)?.sources;
+      const sources: string[] = Array.isArray(consumerSources)
+        ? Array.from(consumerSources)
+        : Array.isArray(rawSources)
+          ? rawSources.slice()
+          : [];
 
       this.maps.push({ scriptUrl, scriptId, consumer, sources });
     } catch {
