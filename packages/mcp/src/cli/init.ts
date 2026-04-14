@@ -456,7 +456,13 @@ export async function init(args: string[]): Promise<void> {
       "Manual Skills Installation"
     );
   } else {
-    const skillsArgs = ["skills", "add", SKILLS_DIR];
+    // When offline we rely on npx's own cache — pass --no-install so npx
+    // does not attempt to fetch a newer `skills` package from the registry,
+    // which would fail and mask the cached copy that `isSkillsCliAvailable`
+    // already confirmed is present.
+    const skillsArgs = skillsCached
+      ? ["--no-install", "skills", "add", SKILLS_DIR]
+      : ["skills", "add", SKILLS_DIR];
 
     if (scope === "global") {
       skillsArgs.push("-g");
@@ -484,7 +490,11 @@ export async function init(args: string[]): Promise<void> {
         spinner.stop(pc.red("Skills installation failed."));
       }
       p.log.error(`Failed to run npx skills: ${err}`);
-      p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
+      // Strip `--no-install` from the manual-recovery hint: if the cached
+      // copy just failed, the user's actual recovery path is almost always
+      // re-running with network access, not forcing the same offline mode.
+      const manualArgs = skillsArgs[0] === "--no-install" ? skillsArgs.slice(1) : skillsArgs;
+      p.log.info(`You can install skills manually:\n  npx ${manualArgs.join(" ")}`);
     }
   }
 

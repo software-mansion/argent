@@ -133,6 +133,7 @@ export function getLatestVersion(): string {
   const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 10_000,
   });
   return result.trim();
 }
@@ -141,6 +142,7 @@ export function isSkillsCliAvailable(): boolean {
   try {
     execSync("npx --no-install skills --version", {
       stdio: ["ignore", "ignore", "ignore"],
+      timeout: 2_000,
     });
     return true;
   } catch {

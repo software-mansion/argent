@@ -1,7 +1,36 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+
+// ── Module mocks ─────────────────────────────────────────────────────────────
+// These are hoisted so `vi.mock` can reference them. They let the network-
+// dependent helpers (`isOnline`, `isSkillsCliAvailable`, `getLatestVersion`)
+// be tested deterministically without touching DNS or spawning `npm`/`npx`.
+
+const { dnsLookupMock, execSyncMock } = vi.hoisted(() => ({
+  dnsLookupMock: vi.fn(),
+  execSyncMock: vi.fn(),
+}));
+
+vi.mock("node:dns", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns")>();
+  return {
+    ...actual,
+    default: { ...actual, lookup: dnsLookupMock },
+    lookup: dnsLookupMock,
+  };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    default: { ...actual, execSync: execSyncMock },
+    execSync: execSyncMock,
+  };
+});
+
 import {
   readJson,
   writeJson,
@@ -11,12 +40,15 @@ import {
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
+  getLatestVersion,
   isOnline,
+  isSkillsCliAvailable,
   resolveProjectRoot,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
 } from "../../src/cli/utils.js";
+import { NPM_REGISTRY, PACKAGE_NAME } from "../../src/cli/constants.js";
 
 let tmpDir: string;
 
@@ -272,13 +304,172 @@ describe("bundled paths", () => {
 });
 
 // ── isOnline ──────────────────────────────────────────────────────────────────
+// `isOnline` wraps `dns.lookup` with a timeout. All tests below run against
+// the mocked `dns.lookup` set up at the top of this file — they never touch
+// real DNS, which keeps them deterministic on offline runners and CI machines
+// that deny outbound network access.
 
 describe("isOnline", () => {
-  it("resolves to false within the timeout when DNS does not respond", async () => {
+  beforeEach(() => {
+    dnsLookupMock.mockReset();
+  });
+
+  it("returns true when DNS resolution succeeds", async () => {
+    dnsLookupMock.mockImplementation((_host: string, callback: (err: Error | null) => void) => {
+      setImmediate(() => callback(null));
+    });
+
+    await expect(isOnline()).resolves.toBe(true);
+    expect(dnsLookupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when DNS resolution errors", async () => {
+    dnsLookupMock.mockImplementation((_host: string, callback: (err: Error | null) => void) => {
+      setImmediate(() => callback(Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" })));
+    });
+
+    await expect(isOnline()).resolves.toBe(false);
+  });
+
+  it("returns false when DNS never responds before the timeout", async () => {
+    dnsLookupMock.mockImplementation(() => {
+      // Never invoke the callback — simulate a hanging DNS query.
+    });
+
     const start = Date.now();
-    const result = await isOnline(50);
+    const result = await isOnline(30);
     const elapsed = Date.now() - start;
-    expect(typeof result).toBe("boolean");
+
+    expect(result).toBe(false);
+    expect(elapsed).toBeGreaterThanOrEqual(25);
     expect(elapsed).toBeLessThan(500);
+  });
+
+  it("looks up the hostname from NPM_REGISTRY", async () => {
+    const expectedHost = new URL(NPM_REGISTRY).hostname;
+    dnsLookupMock.mockImplementation((_host: string, callback: (err: Error | null) => void) => {
+      setImmediate(() => callback(null));
+    });
+
+    await isOnline();
+
+    expect(dnsLookupMock).toHaveBeenCalledWith(expectedHost, expect.any(Function));
+  });
+
+  it("settles once even if DNS responds after the timeout has already fired", async () => {
+    let dnsCallback: ((err: Error | null) => void) | null = null;
+    dnsLookupMock.mockImplementation((_host: string, callback: (err: Error | null) => void) => {
+      dnsCallback = callback;
+    });
+
+    const result = await isOnline(10);
+    expect(result).toBe(false);
+
+    // Late DNS callback must not throw, log, or re-resolve the already-
+    // settled promise. This mirrors what happens when DNS responds after
+    // we have already given up waiting.
+    expect(() => dnsCallback?.(null)).not.toThrow();
+  });
+});
+
+// ── isSkillsCliAvailable ─────────────────────────────────────────────────────
+
+describe("isSkillsCliAvailable", () => {
+  beforeEach(() => {
+    execSyncMock.mockReset();
+  });
+
+  it("returns true when `npx --no-install skills --version` exits successfully", () => {
+    execSyncMock.mockReturnValue(Buffer.from("0.1.0\n"));
+
+    expect(isSkillsCliAvailable()).toBe(true);
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+    const [cmd] = execSyncMock.mock.calls[0]!;
+    expect(cmd).toBe("npx --no-install skills --version");
+  });
+
+  it("returns false when the probe throws (skills CLI not in npx cache)", () => {
+    execSyncMock.mockImplementation(() => {
+      throw new Error("command failed");
+    });
+
+    expect(isSkillsCliAvailable()).toBe(false);
+  });
+
+  it("fully silences stdio so nothing leaks to the terminal", () => {
+    execSyncMock.mockReturnValue(Buffer.from(""));
+
+    isSkillsCliAvailable();
+
+    const opts = execSyncMock.mock.calls[0]![1] as
+      | { stdio?: [unknown, unknown, unknown] }
+      | undefined;
+    expect(opts?.stdio).toEqual(["ignore", "ignore", "ignore"]);
+  });
+
+  it("passes a timeout so a wedged npx cannot hang init forever", () => {
+    execSyncMock.mockReturnValue(Buffer.from(""));
+
+    isSkillsCliAvailable();
+
+    const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
+    expect(typeof opts?.timeout).toBe("number");
+    expect(opts!.timeout!).toBeGreaterThan(0);
+  });
+});
+
+// ── getLatestVersion ─────────────────────────────────────────────────────────
+
+describe("getLatestVersion", () => {
+  beforeEach(() => {
+    execSyncMock.mockReset();
+  });
+
+  it("returns the trimmed version reported by `npm view`", () => {
+    execSyncMock.mockReturnValue("9.9.9\n");
+
+    expect(getLatestVersion()).toBe("9.9.9");
+  });
+
+  it("queries the package name and registry from constants", () => {
+    execSyncMock.mockReturnValue("1.0.0\n");
+
+    getLatestVersion();
+
+    const [cmd] = execSyncMock.mock.calls[0]!;
+    expect(cmd).toContain(`npm view ${PACKAGE_NAME} version`);
+    expect(cmd).toContain(`--registry ${NPM_REGISTRY}`);
+  });
+
+  it("pipes stderr so 404s do not leak to the terminal", () => {
+    // Regression guard for the previous behavior where `stdio: 'inherit'` let
+    // `npm view`'s 404 output bleed into the init UI on fresh/private
+    // packages. stderr must be captured (piped), not inherited.
+    execSyncMock.mockReturnValue("1.0.0\n");
+
+    getLatestVersion();
+
+    const opts = execSyncMock.mock.calls[0]![1] as
+      | { stdio?: [unknown, unknown, unknown] }
+      | undefined;
+    expect(opts?.stdio).toEqual(["ignore", "pipe", "pipe"]);
+  });
+
+  it("passes a timeout to bound the registry probe", () => {
+    execSyncMock.mockReturnValue("1.0.0\n");
+
+    getLatestVersion();
+
+    const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
+    expect(typeof opts?.timeout).toBe("number");
+    expect(opts!.timeout!).toBeGreaterThan(0);
+  });
+
+  it("propagates errors from `npm view` to the caller", () => {
+    execSyncMock.mockImplementation(() => {
+      throw new Error("E404");
+    });
+
+    expect(() => getLatestVersion()).toThrow("E404");
   });
 });
