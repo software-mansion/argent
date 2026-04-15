@@ -8,7 +8,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the project root directory that contains `.argent/<name>.yaml`."
+      "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
     ),
   prerequisiteAcknowledged: z
     .boolean()
@@ -40,7 +40,7 @@ export function createRunFlowTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "flow-execute",
-    description: `Run a saved flow from the .argent/ directory.
+    description: `Run a saved flow from the .argent/flows/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
 echo steps print a message. Returns the result of every step, including images.
 Use when you want to replay a recorded flow or run a scripted sequence of simulator actions.

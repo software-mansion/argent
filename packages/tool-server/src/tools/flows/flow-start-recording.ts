@@ -15,7 +15,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the project root directory (the directory that contains or should contain `.argent/`). The flow file is created at `<project_root>/.argent/<name>.yaml`."
+      "Absolute path to the project root directory (the directory that contains or should contain `.argent/flows/`). The flow file is created at `<project_root>/.argent/flows/<name>.yaml`."
     ),
   executionPrerequisite: z
     .string()
@@ -29,10 +29,10 @@ export const flowStartRecordingTool: ToolDefinition<
   { message: string; previousFlow?: string; flowFile: string }
 > = {
   id: "flow-start-recording",
-  description: `Start recording a new flow. Creates a .yaml file in the .argent/ directory.
+  description: `Start recording a new flow. Creates a .yaml file in the .argent/flows/ directory.
 Use when you want to capture a reusable sequence of simulator interactions for later replay.
 Returns { message, flowFile } and optionally { previousFlow } if a prior recording was abandoned.
-Fails if the .argent/ directory cannot be created or the flow file cannot be written.
+Fails if the .argent/flows/ directory cannot be created or the flow file cannot be written.
 
 After starting, use flow-add-step to append tool calls — each step is executed
 LIVE so you can verify it works before it gets recorded. Use flow-add-echo

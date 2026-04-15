@@ -8,7 +8,7 @@ const zodSchema = z.object({
   project_root: z
     .string()
     .describe(
-      "Absolute path to the project root directory that contains `.argent/<name>.yaml`."
+      "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
     ),
 });
 
@@ -20,7 +20,7 @@ export const flowReadPrerequisiteTool: ToolDefinition<
   description: `Read the execution prerequisite of a saved flow without running it.
 Returns the prerequisite description so you can verify the required state is met before calling flow-execute.
 Use when you need to check what app/simulator state is required before executing a flow.
-Fails if the flow file does not exist in the .argent/ directory.`,
+Fails if the flow file does not exist in the .argent/flows/ directory.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

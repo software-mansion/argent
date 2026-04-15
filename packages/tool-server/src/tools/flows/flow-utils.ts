@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 
-const FLOWS_DIR_NAME = ".argent";
+const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
 // ── Paths ────────────────────────────────────────────────────────────
 

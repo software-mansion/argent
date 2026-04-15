@@ -41,7 +41,7 @@ function createMockRegistry(
 }
 
 async function readFlowFile(name: string): Promise<string> {
-  return fs.readFile(path.join(tmpDir, ".argent", `${name}.yaml`), "utf8");
+  return fs.readFile(path.join(tmpDir, ".argent", "flows", `${name}.yaml`), "utf8");
 }
 
 const PREREQ = "App on home screen";
@@ -63,7 +63,7 @@ afterEach(async () => {
 // ── flow-start-recording ─────────────────────────────────────────────
 
 describe("flow-start-recording", () => {
-  it("creates the .argent dir and a .yaml file with header", async () => {
+  it("creates the .argent/flows dir and a .yaml file with header", async () => {
     const result = await flowStartRecordingTool.execute(
       {},
       { name: "test-flow", project_root: tmpDir, executionPrerequisite: PREREQ }
@@ -395,7 +395,7 @@ describe("flow-finish-recording", () => {
     );
     const result = await flowFinishRecordingTool.execute({}, {});
 
-    expect(result.path).toContain(".argent");
+    expect(result.path).toContain(path.join(".argent", "flows"));
     expect(result.path).toContain("path-check.yaml");
   });
 
@@ -486,7 +486,7 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
 
     // Manually write a flow file in YAML format
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",
@@ -525,7 +525,7 @@ describe("flow-execute", () => {
     });
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "Ready",
@@ -548,7 +548,7 @@ describe("flow-execute", () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "App freshly reloaded",
@@ -568,7 +568,7 @@ describe("flow-execute", () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "Device unlocked",
@@ -593,7 +593,7 @@ describe("flow-execute", () => {
     });
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "Device unlocked",
@@ -617,7 +617,7 @@ describe("flow-execute", () => {
     });
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",
@@ -636,7 +636,7 @@ describe("flow-execute", () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "App on settings page",
@@ -661,7 +661,7 @@ describe("flow-execute", () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",
@@ -680,7 +680,7 @@ describe("flow-execute", () => {
     const registry = createMockRegistry({});
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",
@@ -712,7 +712,7 @@ describe("flow-execute", () => {
     });
     const runFlow = createRunFlowTool(registry);
 
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",
@@ -751,7 +751,7 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
 
     // Write a flow to run
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",
@@ -781,7 +781,7 @@ describe("flow-execute", () => {
 
 describe("flow-read-prerequisite", () => {
   it("reads the prerequisite from a saved flow", async () => {
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "App on home screen",
@@ -799,7 +799,7 @@ describe("flow-read-prerequisite", () => {
   });
 
   it("returns empty string when flow has no prerequisite", async () => {
-    const dir = path.join(tmpDir, ".argent");
+    const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
     const content = serializeFlow({
       executionPrerequisite: "",

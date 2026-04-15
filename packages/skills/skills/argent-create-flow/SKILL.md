@@ -5,7 +5,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
+A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
 
 ## 2. Tools
 
@@ -173,7 +173,7 @@ For silent misfires and partial divergence, echo annotations (§10.5) are your r
 Choose the lightest strategy that fits:
 
 **Strategy 1 — Edit the YAML** (coordinate drift, parameter changes).
-Read `.argent/<flow-name>.yaml`, update the broken step's `x`/`y`, `bundleId`, `text`, or other args. Re-run `flow-execute` to verify.
+Read `.argent/flows/<flow-name>.yaml`, update the broken step's `x`/`y`, `bundleId`, `text`, or other args. Re-run `flow-execute` to verify.
 
 **Strategy 2 — Manual recovery + continue** (timing/transient issues, one-off replay).
 Manually execute the failed step with corrected coordinates from §10.2 discovery, then manually execute remaining steps. Does not fix the YAML — use only when re-recording is not worth it.
