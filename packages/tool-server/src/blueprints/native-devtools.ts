@@ -97,8 +97,11 @@ function splitDyldInsertLibraries(value: string): string[] {
 }
 
 /**
- * Only strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name).
- * All other entries are kept verbatim so third-party injectors (e.g. SimCam) are never dropped.
+ * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
+ * and entries that don't exist on disk (truncated artifacts from the simctl getenv
+ * 127-byte bug, stale paths from old installs, etc.).
+ * Entries starting with '@' (loader-path references) are always preserved.
+ * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
  */
 function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
   if (entry === bootstrapPath) {
@@ -109,7 +112,11 @@ function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: st
     return false;
   }
 
-  return true;
+  if (entry.startsWith("@")) {
+    return true;
+  }
+
+  return fs.existsSync(entry);
 }
 
 export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
@@ -144,10 +151,15 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
 async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   const bootstrapPath = bootstrapDylibPath();
 
-  // xcrun simctl getenv exits non-zero when the var is unset — suppress rejection
-  const result = await execFileAsync("xcrun", ["simctl", "getenv", udid, "DYLD_INSERT_LIBRARIES"], {
-    encoding: "utf8",
-  }).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
+  // Read from launchctl inside the simulator (via simctl spawn) instead of
+  // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
+  // which corrupts the colon-separated path list and causes stale entries to
+  // accumulate on every ensureEnv() cycle.
+  const result = await execFileAsync(
+    "xcrun",
+    ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
+    { encoding: "utf8" }
+  ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
   const updated = buildDyldInsertLibraries(existing, bootstrapPath);
