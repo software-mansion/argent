@@ -9,14 +9,14 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 ### React Profiler (Hermes / React commits)
 
-| Tool                              | Purpose                                                                                                                                    |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Auto-connects to Metro. Optional: `sample_interval_us` (default 100).               |
-| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                 |
-| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits and findings sorted by `totalRenderMs` DESC. Saves raw data to disk for later reload. |
-| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                            |
-| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                                                  |
-| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                                                         |
+| Tool                              | Purpose                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Optional: `sample_interval_us` (default 100).          |
+| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                    |
+| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits, sorted by `totalRenderMs` DESC. Saves raw data to disk. |
+| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                               |
+| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                     |
+| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                            |
 
 ### Drill-Down Query Tools (call after analyze)
 
@@ -36,7 +36,7 @@ For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `argent
 
 Follow these rules throughout the profiling workflow:
 
-- Start `react-profiler-start` and `ios-profiler-start` in parallel (two tool calls in one message). This gives best coverage.
+- Start `react-profiler-start` and `ios-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later. This gives best coverage.
 - If the user only wants iOS-only, use the `argent-ios-profiler` skill workflow. Only skip `ios-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
 
 ### After analysis: ask about next steps
@@ -77,7 +77,7 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 
 ### Step 1: Start profiling
 
-Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
 
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
@@ -93,7 +93,7 @@ If `hook_installed: false` or `fiber_renders_captured: 0`, warn the user — Rea
 
 ### Step 3: Analyze
 
-Call `react-profiler-analyze` with `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
+Call `react-profiler-analyze` with `port`, `device_id`, `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
 
 If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
 
@@ -126,10 +126,10 @@ Repeat as needed until you identify the root cause function and file, referring 
 
 If you profiled multiple scenarios and need to revisit earlier data:
 
-1. Call `profiler-load` mode=`list` to see all saved sessions with timestamps.
-2. Call `profiler-load` mode=`load_react` session_id=`<timestamp>` to reload React data.
+1. Call `profiler-load` mode=`list` to see all saved sessions with timestamps (the list now also shows Runtime / Device / Metro bundle columns to help identify the right session).
+2. Call `profiler-load` mode=`load_react` session_id=`<timestamp>` device_id=`<UDID>` to reload React data. `device_id` scopes the reload into the `port:device_id` cache slot.
 3. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to reload iOS data.
-4. Query tools now operate on the reloaded session data.
+4. Query tools now operate on the reloaded session data — **pass the same `device_id` you loaded with**, otherwise they will miss the cache.
 
 This is useful for before/after comparisons: profile, fix, re-profile, then reload the original session to compare metrics side by side.
 

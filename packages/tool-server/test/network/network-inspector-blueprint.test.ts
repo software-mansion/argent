@@ -12,22 +12,24 @@ describe("NetworkInspector blueprint", () => {
   });
 
   it("getURN returns correct format", () => {
-    expect(networkInspectorBlueprint.getURN("8081")).toBe("NetworkInspector:8081");
-    expect(networkInspectorBlueprint.getURN("3000")).toBe("NetworkInspector:3000");
+    expect(networkInspectorBlueprint.getURN("8081:SIM-UDID-123")).toBe(
+      "NetworkInspector:8081:SIM-UDID-123"
+    );
+    expect(networkInspectorBlueprint.getURN("3000:DEV-B")).toBe("NetworkInspector:3000:DEV-B");
   });
 
   it("declares JsRuntimeDebugger as a dependency via getDependencies", () => {
     expect(networkInspectorBlueprint.getDependencies).toBeDefined();
-    const deps = networkInspectorBlueprint.getDependencies!("8081");
-    expect(deps).toEqual({ debugger: "JsRuntimeDebugger:8081" });
+    const deps = networkInspectorBlueprint.getDependencies!("8081:SIM-UDID-123");
+    expect(deps).toEqual({ debugger: "JsRuntimeDebugger:8081:SIM-UDID-123" });
   });
 
-  it("getDependencies uses the port context for the JsRuntimeDebugger URN", () => {
-    const deps3000 = networkInspectorBlueprint.getDependencies!("3000");
-    expect(deps3000).toEqual({ debugger: "JsRuntimeDebugger:3000" });
+  it("getDependencies uses the composite port:deviceId payload for the JsRuntimeDebugger URN", () => {
+    const deps3000 = networkInspectorBlueprint.getDependencies!("3000:DEV-A");
+    expect(deps3000).toEqual({ debugger: "JsRuntimeDebugger:3000:DEV-A" });
 
-    const deps9090 = networkInspectorBlueprint.getDependencies!("9090");
-    expect(deps9090).toEqual({ debugger: "JsRuntimeDebugger:9090" });
+    const deps9090 = networkInspectorBlueprint.getDependencies!("9090:DEV-B");
+    expect(deps9090).toEqual({ debugger: "JsRuntimeDebugger:9090:DEV-B" });
   });
 
   it("factory reuses the CDP client from the debugger dependency (does NOT create its own)", async () => {
@@ -147,8 +149,8 @@ describe("NetworkInspector blueprint", () => {
     // Register a fake JsRuntimeDebugger blueprint
     registry.registerBlueprint({
       namespace: "JsRuntimeDebugger",
-      getURN(port: string) {
-        return `JsRuntimeDebugger:${port}`;
+      getURN(payload: string) {
+        return `JsRuntimeDebugger:${payload}`;
       },
       async factory() {
         const { TypedEventEmitter } = await import("@argent/registry");
@@ -163,7 +165,7 @@ describe("NetworkInspector blueprint", () => {
 
     registry.registerBlueprint(networkInspectorBlueprint);
 
-    const api = (await registry.resolveService("NetworkInspector:8081")) as {
+    const api = (await registry.resolveService("NetworkInspector:8081:SIM-UDID-123")) as {
       port: number;
       cdp: unknown;
     };
@@ -172,8 +174,12 @@ describe("NetworkInspector blueprint", () => {
     expect(api.cdp).toBe(mockCdp);
 
     // Both services should be RUNNING
-    expect(registry.getServiceState("JsRuntimeDebugger:8081")).toBe(ServiceState.RUNNING);
-    expect(registry.getServiceState("NetworkInspector:8081")).toBe(ServiceState.RUNNING);
+    expect(registry.getServiceState("JsRuntimeDebugger:8081:SIM-UDID-123")).toBe(
+      ServiceState.RUNNING
+    );
+    expect(registry.getServiceState("NetworkInspector:8081:SIM-UDID-123")).toBe(
+      ServiceState.RUNNING
+    );
 
     await registry.dispose();
   });

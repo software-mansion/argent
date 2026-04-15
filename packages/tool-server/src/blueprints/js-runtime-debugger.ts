@@ -103,15 +103,29 @@ export interface JsRuntimeDebuggerApi {
 export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
   namespace: JS_RUNTIME_DEBUGGER_NAMESPACE,
 
-  getURN(port: string) {
-    return `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${port}`;
+  getURN(payload: string) {
+    return `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
   },
 
   async factory(_deps, payload, options?) {
-    const port = parseInt(payload, 10);
+    const colonIdx = payload.indexOf(":");
+    if (colonIdx < 0) {
+      throw new Error(`JsRuntimeDebugger payload must be "port:deviceId", got: "${payload}"`);
+    }
+    const deviceId = payload.slice(colonIdx + 1);
+    if (!deviceId) {
+      throw new Error(`JsRuntimeDebugger payload missing deviceId: "${payload}"`);
+    }
+    const port = parseInt(payload.slice(0, colonIdx), 10);
+    if (!Number.isFinite(port)) {
+      throw new Error(`JsRuntimeDebugger payload has invalid port: "${payload}"`);
+    }
 
     const metro = await discoverMetro(port);
-    const selected = selectTarget(metro.targets, port, options);
+    const selected = selectTarget(metro.targets, port, {
+      ...options,
+      deviceId,
+    });
 
     const cdp = new CDPClient(selected.webSocketUrl);
     await cdp.connect();
