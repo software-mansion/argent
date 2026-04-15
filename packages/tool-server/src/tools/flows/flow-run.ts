@@ -1,10 +1,15 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { getFlowPath, parseFlow, type FlowStep } from "./flow-utils";
+import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
+    ),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()
@@ -35,7 +40,7 @@ export function createRunFlowTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, FlowRunResult | FlowPrerequisiteNotice> {
   return {
     id: "flow-execute",
-    description: `Run a saved flow from the .argent/ directory.
+    description: `Run a saved flow from the .argent/flows/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
 echo steps print a message. Returns the result of every step, including images.
 Use when you want to replay a recorded flow or run a scripted sequence of simulator actions.
@@ -47,7 +52,8 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const filePath = await getFlowPath(params.name);
+      setActiveProjectRoot(params.project_root);
+      const filePath = getFlowPath(params.name);
       const fileContent = await fs.readFile(filePath, "utf8");
       const flow = parseFlow(fileContent);
 

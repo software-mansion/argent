@@ -1,32 +1,47 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 
-const execFileAsync = promisify(execFile);
-const FLOWS_DIR_NAME = ".argent";
+const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
 // ── Paths ────────────────────────────────────────────────────────────
 
-async function getGitRoot(): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
-  return stdout.trim();
-}
-
-export async function getFlowsDir(): Promise<string> {
-  const root = await getGitRoot();
-  return path.join(root, FLOWS_DIR_NAME);
-}
-
-export async function getFlowPath(name: string): Promise<string> {
-  const dir = await getFlowsDir();
-  return path.join(dir, `${name}.yaml`);
-}
-
-// ── Active flow state ────────────────────────────────────────────────
+// ── Active session state ─────────────────────────────────────────────
 
 let activeFlowName: string | null = null;
+let activeProjectRoot: string | null = null;
+
+export function setActiveProjectRoot(root: string): void {
+  if (!path.isAbsolute(root)) {
+    throw new Error(
+      `project_root must be an absolute path (got "${root}"). ` +
+        `Pass the absolute path to the project root directory — the same cwd ` +
+        `the calling agent is working in.`
+    );
+  }
+  activeProjectRoot = root;
+}
+
+export function requireActiveProjectRoot(): string {
+  if (!activeProjectRoot) {
+    throw new Error(
+      "No active project root. The calling flow tool must pass project_root before any path is resolved."
+    );
+  }
+  return activeProjectRoot;
+}
+
+export function clearActiveProjectRoot(): void {
+  activeProjectRoot = null;
+}
+
+export function getFlowsDir(): string {
+  return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
+}
+
+export function getFlowPath(name: string): string {
+  return path.join(getFlowsDir(), `${name}.yaml`);
+}
 
 export function setActiveFlow(name: string): void {
   activeFlowName = name;
