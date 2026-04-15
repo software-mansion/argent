@@ -132,10 +132,7 @@ describe("flow-start-recording edge cases", () => {
     expect(result.previousFlow).toBe("first-flow");
 
     // Adding a step should target second-flow, not first-flow
-    const echoResult = await flowInsertEchoTool.execute(
-      {},
-      { message: "goes to second" }
-    );
+    const echoResult = await flowInsertEchoTool.execute({}, { message: "goes to second" });
     expect(echoResult.message).toContain("second-flow");
 
     // first-flow should still exist on disk but be empty
@@ -186,10 +183,7 @@ describe("flow-add-echo", () => {
       {},
       { name: "echo-test", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    const result = await flowInsertEchoTool.execute(
-      {},
-      { message: "Hello world" }
-    );
+    const result = await flowInsertEchoTool.execute({}, { message: "Hello world" });
 
     expect(result.message).toContain("echo-test");
     const flow = parseFlow(result.flowFile);
@@ -202,10 +196,7 @@ describe("flow-add-echo", () => {
       { name: "multi-echo", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
     await flowInsertEchoTool.execute({}, { message: "First" });
-    const result = await flowInsertEchoTool.execute(
-      {},
-      { message: "Second" }
-    );
+    const result = await flowInsertEchoTool.execute({}, { message: "Second" });
 
     const flow = parseFlow(result.flowFile);
     expect(flow.steps).toEqual([
@@ -215,9 +206,9 @@ describe("flow-add-echo", () => {
   });
 
   it("throws when no active flow", async () => {
-    await expect(
-      flowInsertEchoTool.execute({}, { message: "oops" })
-    ).rejects.toThrow("No active flow");
+    await expect(flowInsertEchoTool.execute({}, { message: "oops" })).rejects.toThrow(
+      "No active flow"
+    );
   });
 });
 
@@ -234,10 +225,7 @@ describe("flow-add-step", () => {
       {},
       { name: "step-test", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    const result = await tool.execute(
-      {},
-      { command: "tap", args: '{"x":0.5,"y":0.3}' }
-    );
+    const result = await tool.execute({}, { command: "tap", args: '{"x":0.5,"y":0.3}' });
 
     expect(result.toolResult).toEqual({ tapped: true });
     const flow = parseFlow(result.flowFile);
@@ -258,9 +246,9 @@ describe("flow-add-step", () => {
       {},
       { name: "fail-test", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    await expect(
-      tool.execute({}, { command: "tap", args: '{"x":0.5}' })
-    ).rejects.toThrow('Tool "tap" failed');
+    await expect(tool.execute({}, { command: "tap", args: '{"x":0.5}' })).rejects.toThrow(
+      'Tool "tap" failed'
+    );
 
     const content = await readFlowFile("fail-test");
     const flow = parseFlow(content);
@@ -291,9 +279,9 @@ describe("flow-add-step", () => {
     });
     const tool = createFlowAddStepTool(registry);
 
-    await expect(
-      tool.execute({}, { command: "tap", args: '{"x":0.5}' })
-    ).rejects.toThrow("No active flow");
+    await expect(tool.execute({}, { command: "tap", args: '{"x":0.5}' })).rejects.toThrow(
+      "No active flow"
+    );
   });
 
   it("throws on invalid JSON in args", async () => {
@@ -324,9 +312,9 @@ describe("flow-add-step", () => {
       {},
       { name: "missing-tool", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    await expect(
-      tool.execute({}, { command: "nonexistent-tool", args: "{}" })
-    ).rejects.toThrow('Tool "nonexistent-tool" not found');
+    await expect(tool.execute({}, { command: "nonexistent-tool", args: "{}" })).rejects.toThrow(
+      'Tool "nonexistent-tool" not found'
+    );
 
     // Flow file should remain unchanged
     const content = await readFlowFile("missing-tool");
@@ -353,15 +341,13 @@ describe("flow-finish-recording", () => {
     expect(result.summary).toEqual(["1. echo: Step 1"]);
 
     // Active flow should be cleared
-    await expect(
-      flowInsertEchoTool.execute({}, { message: "after finish" })
-    ).rejects.toThrow("No active flow");
+    await expect(flowInsertEchoTool.execute({}, { message: "after finish" })).rejects.toThrow(
+      "No active flow"
+    );
   });
 
   it("throws when no active flow", async () => {
-    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow(
-      "No active flow"
-    );
+    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow("No active flow");
   });
 
   it("handles empty flow", async () => {
@@ -383,9 +369,7 @@ describe("flow-finish-recording", () => {
     await flowFinishRecordingTool.execute({}, {});
 
     // Second call should fail — active flow was cleared
-    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow(
-      "No active flow"
-    );
+    await expect(flowFinishRecordingTool.execute({}, {})).rejects.toThrow("No active flow");
   });
 
   it("returns the file path so the agent knows where it was written", async () => {
@@ -769,10 +753,7 @@ describe("flow-execute", () => {
     await runFlow.execute({}, { name: "side-effect", project_root: tmpDir });
 
     // We should still be able to add steps to the recording
-    const result = await flowInsertEchoTool.execute(
-      {},
-      { message: "still recording" }
-    );
+    const result = await flowInsertEchoTool.execute({}, { message: "still recording" });
     expect(result.message).toContain("recording");
   });
 });
