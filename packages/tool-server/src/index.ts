@@ -82,14 +82,21 @@ export function getAvailableTools(): Array<{
   });
 }
 
-function printUsage(stream: NodeJS.WriteStream): void {
-  stream.write(
+function usageText(): string {
+  return (
     "Usage: tool-server <command>\n\n" +
-      "Commands:\n" +
-      "  start                        Start the tool server\n" +
-      "  -t, --get-available-tools    Print available tools as JSON and exit\n" +
-      "  -h, --help                   Show this menu\n"
+    "Commands:\n" +
+    "  start                        Start the tool server\n" +
+    "  -t, --get-available-tools    Print available tools as JSON and exit\n" +
+    "  -h, --help                   Show this menu\n"
   );
+}
+
+// process.exit() does not drain Node's WriteStream buffer when stdout/stderr
+// is a pipe, so large writes must be flushed via the write callback before
+// exiting.
+function writeAndExit(stream: NodeJS.WriteStream, chunk: string, code: number): void {
+  stream.write(chunk, () => process.exit(code));
 }
 
 if (require.main === module) {
@@ -97,14 +104,11 @@ if (require.main === module) {
   if (cmd === "start") {
     start();
   } else if (cmd === "-t" || cmd === "--get-available-tools") {
-    process.stdout.write(JSON.stringify(getAvailableTools(), null, 2) + "\n");
-    process.exit(0);
+    writeAndExit(process.stdout, JSON.stringify(getAvailableTools(), null, 2) + "\n", 0);
   } else if (cmd === "-h" || cmd === "--help") {
-    printUsage(process.stdout);
-    process.exit(0);
+    writeAndExit(process.stdout, usageText(), 0);
   } else {
-    if (cmd) process.stderr.write(`Unknown command: ${cmd}\n\n`);
-    printUsage(process.stderr);
-    process.exit(1);
+    const prefix = cmd ? `Unknown command: ${cmd}\n\n` : "";
+    writeAndExit(process.stderr, prefix + usageText(), 1);
   }
 }
