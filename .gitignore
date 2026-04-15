@@ -26,8 +26,10 @@ packages/*/node_modules/
 *.log
 1export
 
-# Downloaded signed binary (fetched via scripts/download-simulator-server.sh)
+# Downloaded signed binaries (fetched via scripts/download-*.sh)
 packages/native-devtools-ios/bin/simulator-server
+packages/native-devtools-ios/bin/ax-service
+packages/native-devtools-ios/dylibs/
 
 # MCP package generated assets (copied/bundled at build time)
 packages/mcp/bin/

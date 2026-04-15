@@ -25,6 +25,9 @@ jobs:
       - name: Download signed simulator-server binary
         run: bash scripts/download-simulator-server.sh
 
+      - name: Download signed native binaries (dylibs + ax-service)
+        run: bash scripts/download-native-binaries.sh
+
       - run: npm ci
 
       - run: npm run build -w @swmansion/argent
