@@ -9,7 +9,8 @@
     "start": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",
-    "pack:mcp": "npm run download:simulator-server && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
+    "download:native-binaries": "bash scripts/download-native-binaries.sh",
+    "pack:mcp": "npm run download:simulator-server && npm run download:native-binaries && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write ."
   },
