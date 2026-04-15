@@ -6,28 +6,42 @@ const FLOWS_DIR_NAME = ".argent";
 
 // ── Paths ────────────────────────────────────────────────────────────
 
-function assertAbsoluteProjectRoot(projectRoot: string): void {
-  if (!path.isAbsolute(projectRoot)) {
+// ── Active session state ─────────────────────────────────────────────
+
+let activeFlowName: string | null = null;
+let activeProjectRoot: string | null = null;
+
+export function setActiveProjectRoot(root: string): void {
+  if (!path.isAbsolute(root)) {
     throw new Error(
-      `project_root must be an absolute path (got "${projectRoot}"). ` +
+      `project_root must be an absolute path (got "${root}"). ` +
         `Pass the absolute path to the project root directory — the same cwd ` +
         `the calling agent is working in.`
     );
   }
+  activeProjectRoot = root;
 }
 
-export function getFlowsDir(projectRoot: string): string {
-  assertAbsoluteProjectRoot(projectRoot);
-  return path.join(projectRoot, FLOWS_DIR_NAME);
+export function requireActiveProjectRoot(): string {
+  if (!activeProjectRoot) {
+    throw new Error(
+      "No active project root. Call flow-start-recording with project_root first."
+    );
+  }
+  return activeProjectRoot;
 }
 
-export function getFlowPath(projectRoot: string, name: string): string {
-  return path.join(getFlowsDir(projectRoot), `${name}.yaml`);
+export function clearActiveProjectRoot(): void {
+  activeProjectRoot = null;
 }
 
-// ── Active flow state ────────────────────────────────────────────────
+export function getFlowsDir(): string {
+  return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
+}
 
-let activeFlowName: string | null = null;
+export function getFlowPath(name: string): string {
+  return path.join(getFlowsDir(), `${name}.yaml`);
+}
 
 export function setActiveFlow(name: string): void {
   activeFlowName = name;

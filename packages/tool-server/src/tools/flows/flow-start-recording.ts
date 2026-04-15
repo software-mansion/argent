@@ -6,6 +6,7 @@ import {
   getFlowPath,
   getActiveFlowOrNull,
   setActiveFlow,
+  setActiveProjectRoot,
   serializeFlow,
 } from "./flow-utils";
 
@@ -42,12 +43,13 @@ to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
+    setActiveProjectRoot(params.project_root);
     const previousFlow = getActiveFlowOrNull();
 
-    const dir = getFlowsDir(params.project_root);
+    const dir = getFlowsDir();
     await fs.mkdir(dir, { recursive: true });
 
-    const filePath = getFlowPath(params.project_root, params.name);
+    const filePath = getFlowPath(params.name);
     const flowFile = serializeFlow({
       executionPrerequisite: params.executionPrerequisite,
       steps: [],

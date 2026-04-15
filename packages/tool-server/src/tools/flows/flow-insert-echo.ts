@@ -4,11 +4,6 @@ import { getFlowPath, getActiveFlow, appendStep } from "./flow-utils";
 
 const zodSchema = z.object({
   message: z.string().describe("Message to echo when the flow is replayed"),
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root directory (same path passed to flow-start-recording)."
-    ),
 });
 
 export const flowInsertEchoTool: ToolDefinition<
@@ -23,7 +18,7 @@ Returns { message, flowFile }. Fails if no active flow recording is in progress.
   services: () => ({}),
   async execute(_services, params) {
     const flowName = getActiveFlow();
-    const filePath = getFlowPath(params.project_root, flowName);
+    const filePath = getFlowPath(flowName);
 
     const flowFile = await appendStep(filePath, {
       kind: "echo",

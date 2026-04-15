@@ -3,13 +3,7 @@ import * as fs from "node:fs/promises";
 import type { ToolDefinition } from "@argent/registry";
 import { getFlowPath, getActiveFlow, clearActiveFlow, parseFlow } from "./flow-utils";
 
-const zodSchema = z.object({
-  project_root: z
-    .string()
-    .describe(
-      "Absolute path to the project root directory (same path passed to flow-start-recording)."
-    ),
-});
+const zodSchema = z.object({});
 
 export const flowFinishRecordingTool: ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -27,9 +21,9 @@ export const flowFinishRecordingTool: ToolDefinition<
 You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
-  async execute(_services, params) {
+  async execute(_services, _params) {
     const flowName = getActiveFlow();
-    const filePath = getFlowPath(params.project_root, flowName);
+    const filePath = getFlowPath(flowName);
     const flowFile = await fs.readFile(filePath, "utf8");
     const flow = parseFlow(flowFile);
 

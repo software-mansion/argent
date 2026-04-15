@@ -5,9 +5,6 @@ import { getFlowPath, parseFlow, type FlowStep } from "./flow-utils";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
-  project_root: z
-    .string()
-    .describe("Absolute path to the project root directory that contains `.argent/<name>.yaml`."),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()
@@ -50,7 +47,7 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
-      const filePath = getFlowPath(params.project_root, params.name);
+      const filePath = getFlowPath(params.name);
       const fileContent = await fs.readFile(filePath, "utf8");
       const flow = parseFlow(fileContent);
 
