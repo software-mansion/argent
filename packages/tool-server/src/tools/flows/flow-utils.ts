@@ -25,7 +25,7 @@ export function setActiveProjectRoot(root: string): void {
 export function requireActiveProjectRoot(): string {
   if (!activeProjectRoot) {
     throw new Error(
-      "No active project root. Call flow-start-recording with project_root first."
+      "No active project root. The calling flow tool must pass project_root before any path is resolved."
     );
   }
   return activeProjectRoot;
