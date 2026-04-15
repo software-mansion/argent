@@ -7,9 +7,7 @@ const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
   project_root: z
     .string()
-    .describe(
-      "Absolute path to the project root directory that contains `.argent/<name>.yaml`."
-    ),
+    .describe("Absolute path to the project root directory that contains `.argent/<name>.yaml`."),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()

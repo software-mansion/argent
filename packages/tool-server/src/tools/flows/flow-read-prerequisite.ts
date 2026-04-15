@@ -7,9 +7,7 @@ const zodSchema = z.object({
   name: z.string().describe('Name of the flow to inspect (e.g. "settings-explore")'),
   project_root: z
     .string()
-    .describe(
-      "Absolute path to the project root directory that contains `.argent/<name>.yaml`."
-    ),
+    .describe("Absolute path to the project root directory that contains `.argent/<name>.yaml`."),
 });
 
 export const flowReadPrerequisiteTool: ToolDefinition<

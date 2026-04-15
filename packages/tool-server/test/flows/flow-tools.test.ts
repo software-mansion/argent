@@ -73,10 +73,7 @@ describe("flow-start-recording", () => {
       {},
       { name: "my-flow", project_root: tmpDir, executionPrerequisite: PREREQ }
     );
-    const result = await flowInsertEchoTool.execute(
-      {},
-      { project_root: tmpDir, message: "test" }
-    );
+    const result = await flowInsertEchoTool.execute({}, { project_root: tmpDir, message: "test" });
     expect(result.message).toContain("my-flow");
   });
 
@@ -354,9 +351,9 @@ describe("flow-finish-recording", () => {
   });
 
   it("throws when no active flow", async () => {
-    await expect(
-      flowFinishRecordingTool.execute({}, { project_root: tmpDir })
-    ).rejects.toThrow("No active flow");
+    await expect(flowFinishRecordingTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      "No active flow"
+    );
   });
 
   it("handles empty flow", async () => {
@@ -378,9 +375,9 @@ describe("flow-finish-recording", () => {
     await flowFinishRecordingTool.execute({}, { project_root: tmpDir });
 
     // Second call should fail — active flow was cleared
-    await expect(
-      flowFinishRecordingTool.execute({}, { project_root: tmpDir })
-    ).rejects.toThrow("No active flow");
+    await expect(flowFinishRecordingTool.execute({}, { project_root: tmpDir })).rejects.toThrow(
+      "No active flow"
+    );
   });
 
   it("returns the file path so the agent knows where it was written", async () => {
