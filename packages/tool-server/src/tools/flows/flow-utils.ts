@@ -10,8 +10,24 @@ const FLOWS_DIR_NAME = ".argent";
 // ── Paths ────────────────────────────────────────────────────────────
 
 async function getGitRoot(): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
-  return stdout.trim();
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
+    const root = stdout.trim();
+    if (!root) {
+      throw new Error("git rev-parse returned empty output");
+    }
+    return root;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not determine project root from git. The tool-server daemon's ` +
+        `current working directory (${process.cwd()}) is not inside a git repository, ` +
+        `so \`git rev-parse --show-toplevel\` failed. Flows are stored in ` +
+        `\`<project>/.argent/\`, which requires a git root to anchor. ` +
+        `Run this tool from inside a git repository, or initialise one at your ` +
+        `project root with \`git init\`. Underlying error: ${detail}`
+    );
+  }
 }
 
 export async function getFlowsDir(): Promise<string> {
