@@ -4,6 +4,11 @@ import { getFlowPath, getActiveFlow, appendStep } from "./flow-utils";
 
 const zodSchema = z.object({
   command: z.string().describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root directory (same path passed to flow-start-recording)."
+    ),
   args: z
     .string()
     .optional()
@@ -25,7 +30,7 @@ export function createFlowAddStepTool(
     services: () => ({}),
     async execute(_services, params) {
       const flowName = getActiveFlow();
-      const filePath = await getFlowPath(flowName);
+      const filePath = getFlowPath(params.project_root, flowName);
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
       const toolResult = await registry.invokeTool(params.command, args);

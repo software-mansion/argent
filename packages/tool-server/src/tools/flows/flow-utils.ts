@@ -1,43 +1,28 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 
-const execFileAsync = promisify(execFile);
 const FLOWS_DIR_NAME = ".argent";
 
 // ── Paths ────────────────────────────────────────────────────────────
 
-async function getGitRoot(): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "--show-toplevel"]);
-    const root = stdout.trim();
-    if (!root) {
-      throw new Error("git rev-parse returned empty output");
-    }
-    return root;
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
+function assertAbsoluteProjectRoot(projectRoot: string): void {
+  if (!path.isAbsolute(projectRoot)) {
     throw new Error(
-      `Could not determine project root from git. The tool-server daemon's ` +
-        `current working directory (${process.cwd()}) is not inside a git repository, ` +
-        `so \`git rev-parse --show-toplevel\` failed. Flows are stored in ` +
-        `\`<project>/.argent/\`, which requires a git root to anchor. ` +
-        `Run this tool from inside a git repository, or initialise one at your ` +
-        `project root with \`git init\`. Underlying error: ${detail}`
+      `project_root must be an absolute path (got "${projectRoot}"). ` +
+        `Pass the absolute path to the project root directory — the same cwd ` +
+        `the calling agent is working in.`
     );
   }
 }
 
-export async function getFlowsDir(): Promise<string> {
-  const root = await getGitRoot();
-  return path.join(root, FLOWS_DIR_NAME);
+export function getFlowsDir(projectRoot: string): string {
+  assertAbsoluteProjectRoot(projectRoot);
+  return path.join(projectRoot, FLOWS_DIR_NAME);
 }
 
-export async function getFlowPath(name: string): Promise<string> {
-  const dir = await getFlowsDir();
-  return path.join(dir, `${name}.yaml`);
+export function getFlowPath(projectRoot: string, name: string): string {
+  return path.join(getFlowsDir(projectRoot), `${name}.yaml`);
 }
 
 // ── Active flow state ────────────────────────────────────────────────

@@ -11,6 +11,11 @@ import {
 
 const zodSchema = z.object({
   name: z.string().describe('Name for this flow (e.g. "settings-explore")'),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root directory (the directory that contains or should contain `.argent/`). The flow file is created at `<project_root>/.argent/<name>.yaml`."
+    ),
   executionPrerequisite: z
     .string()
     .describe(
@@ -39,10 +44,10 @@ to remove or reorder steps.`,
   async execute(_services, params) {
     const previousFlow = getActiveFlowOrNull();
 
-    const dir = await getFlowsDir();
+    const dir = getFlowsDir(params.project_root);
     await fs.mkdir(dir, { recursive: true });
 
-    const filePath = await getFlowPath(params.name);
+    const filePath = getFlowPath(params.project_root, params.name);
     const flowFile = serializeFlow({
       executionPrerequisite: params.executionPrerequisite,
       steps: [],
