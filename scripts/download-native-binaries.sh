@@ -3,21 +3,15 @@ set -euo pipefail
 
 # Downloads signed native binaries (dylibs + ax-service) from argent-private-releases.
 #
-# Usage: ./scripts/download-native-binaries.sh <release-tag>
-#   release-tag  Tag to download from (e.g. argent-v0.4.3). Required.
+# Usage: ./scripts/download-native-binaries.sh [release-tag]
+#   release-tag  Tag to download from (e.g. argent-v0.4.3). Defaults to argent-main.
 #
 # Requires:
 #   - gh CLI (no authentication needed — the repo is public)
 
 REPO="software-mansion-labs/argent-private-releases"
 
-if [[ -z "${1:-}" ]]; then
-  echo "Error: release tag is required." >&2
-  echo "Usage: $0 <release-tag>  (e.g. argent-v0.4.3)" >&2
-  exit 1
-fi
-
-TAG="$1"
+TAG="${1:-argent-main}"
 
 # Verify the release exists before attempting downloads.
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
