@@ -1,10 +1,15 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { ToolDefinition } from "@argent/registry";
-import { getFlowPath, parseFlow } from "./flow-utils";
+import { getFlowPath, parseFlow, setActiveProjectRoot } from "./flow-utils";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to inspect (e.g. "settings-explore")'),
+  project_root: z
+    .string()
+    .describe(
+      "Absolute path to the project root directory that contains `.argent/<name>.yaml`."
+    ),
 });
 
 export const flowReadPrerequisiteTool: ToolDefinition<
@@ -19,6 +24,7 @@ Fails if the flow file does not exist in the .argent/ directory.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
+    setActiveProjectRoot(params.project_root);
     const filePath = getFlowPath(params.name);
     const fileContent = await fs.readFile(filePath, "utf8");
     const flow = parseFlow(fileContent);

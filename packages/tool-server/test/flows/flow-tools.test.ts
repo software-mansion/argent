@@ -448,7 +448,7 @@ describe("flow-execute", () => {
     // Run the flow
     const result = await runFlow.execute(
       {},
-      { name: "run-test", prerequisiteAcknowledged: true }
+      { name: "run-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
 
     expect(result.flow).toBe("run-test");
@@ -497,7 +497,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "error-test.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "error-test" });
+    const result = await runFlow.execute({}, { name: "error-test", project_root: tmpDir });
 
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0]).toMatchObject({
@@ -512,7 +512,7 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
 
     await expect(
-      runFlow.execute({}, { name: "nonexistent" })
+      runFlow.execute({}, { name: "nonexistent", project_root: tmpDir })
     ).rejects.toThrow();
   });
 
@@ -535,7 +535,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "hint-test", prerequisiteAcknowledged: true }
+      { name: "hint-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
 
     expect(result.steps[0]).toMatchObject({
@@ -558,7 +558,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "prereq-test", prerequisiteAcknowledged: true }
+      { name: "prereq-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
 
     expect(result.executionPrerequisite).toBe("App freshly reloaded");
@@ -576,7 +576,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "gated.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "gated" });
+    const result = await runFlow.execute({}, { name: "gated", project_root: tmpDir });
 
     expect(result).toMatchObject({
       flow: "gated",
@@ -603,7 +603,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "ack-test", prerequisiteAcknowledged: true }
+      { name: "ack-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
 
     expect(result).toHaveProperty("steps");
@@ -625,7 +625,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "no-gate.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "no-gate" });
+    const result = await runFlow.execute({}, { name: "no-gate", project_root: tmpDir });
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toHaveLength(1);
@@ -646,7 +646,7 @@ describe("flow-execute", () => {
 
     const result = await runFlow.execute(
       {},
-      { name: "explicit-false", prerequisiteAcknowledged: false }
+      { name: "explicit-false", project_root: tmpDir, prerequisiteAcknowledged: false }
     );
 
     expect(result).toMatchObject({
@@ -669,7 +669,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "empty-flow.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "empty-flow" });
+    const result = await runFlow.execute({}, { name: "empty-flow", project_root: tmpDir });
 
     expect(result).toHaveProperty("steps");
     expect((result as { steps: unknown[] }).steps).toEqual([]);
@@ -692,7 +692,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "echo-only.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "echo-only" });
+    const result = await runFlow.execute({}, { name: "echo-only", project_root: tmpDir });
 
     expect(result).toHaveProperty("steps");
     const steps = (result as { steps: unknown[] }).steps;
@@ -725,7 +725,7 @@ describe("flow-execute", () => {
     });
     await fs.writeFile(path.join(dir, "mid-error.yaml"), content);
 
-    const result = await runFlow.execute({}, { name: "mid-error" });
+    const result = await runFlow.execute({}, { name: "mid-error", project_root: tmpDir });
 
     expect(result).toHaveProperty("steps");
     const steps = (result as { steps: { kind: string }[] }).steps;
@@ -766,7 +766,7 @@ describe("flow-execute", () => {
     );
 
     // Execute a saved flow — this should NOT affect the active recording
-    await runFlow.execute({}, { name: "side-effect" });
+    await runFlow.execute({}, { name: "side-effect", project_root: tmpDir });
 
     // We should still be able to add steps to the recording
     const result = await flowInsertEchoTool.execute(
@@ -791,7 +791,7 @@ describe("flow-read-prerequisite", () => {
 
     const result = await flowReadPrerequisiteTool.execute(
       {},
-      { name: "read-test" }
+      { name: "read-test", project_root: tmpDir }
     );
 
     expect(result.flow).toBe("read-test");
@@ -809,7 +809,7 @@ describe("flow-read-prerequisite", () => {
 
     const result = await flowReadPrerequisiteTool.execute(
       {},
-      { name: "empty-prereq" }
+      { name: "empty-prereq", project_root: tmpDir }
     );
 
     expect(result.flow).toBe("empty-prereq");
@@ -818,7 +818,7 @@ describe("flow-read-prerequisite", () => {
 
   it("throws when the flow file does not exist", async () => {
     await expect(
-      flowReadPrerequisiteTool.execute({}, { name: "nonexistent" })
+      flowReadPrerequisiteTool.execute({}, { name: "nonexistent", project_root: tmpDir })
     ).rejects.toThrow();
   });
 });

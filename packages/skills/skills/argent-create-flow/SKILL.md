@@ -86,11 +86,11 @@ flow-finish-recording  {}
 ## 7. Replay Example
 
 ```
-flow-execute   { name: "open-settings" }
+flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp" }
 → Returns: notice with executionPrerequisite: "Simulator booted with app installed"
   "Verify the prerequisite is met and call flow-execute again with prerequisiteAcknowledged set to true."
 
-flow-execute   { name: "open-settings", prerequisiteAcknowledged: true }
+flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp", prerequisiteAcknowledged: true }
 → Runs all steps, returns merged results with status and output for every step
 ```
 
