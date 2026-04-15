@@ -20,8 +20,6 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ## 3. Workflow
 
-Every flow tool takes `project_root` — the absolute path to the directory that contains (or should contain) `.argent/`. This is normally the current working directory of the calling agent. The tool-server is a singleton daemon and cannot infer this on its own, so **you must pass `project_root` on every flow tool call**.
-
 ### Recording
 
 1. **Start**: Call `flow-start-recording` with a descriptive name, the absolute `project_root`, and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
