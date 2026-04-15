@@ -3,11 +3,11 @@ import { promises as fs } from "fs";
 import type { ToolDefinition } from "@argent/registry";
 import { REACT_PROFILER_SESSION_NAMESPACE } from "../../../blueprints/react-profiler-session";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
-import { requireProjectRoot } from "../../../request-context";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   component_name: z.string().describe("Name of the React component to look up"),
+  project_root: z.string().describe("Absolute path to the RN project root"),
 });
 
 export const reactProfilerComponentSourceTool: ToolDefinition<
@@ -23,15 +23,14 @@ Returns found: false if the component is not found in user-owned code (e.g. live
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
   }),
   async execute(_services, params) {
-    const projectRoot = requireProjectRoot();
-    const astIndex = await buildAstIndexWithDiagnostics(projectRoot);
+    const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
     const entry = astIndex.index.get(params.component_name);
 
     if (!entry) {
       return {
         found: false,
         component: params.component_name,
-        message: `Component "${params.component_name}" not found in ${projectRoot}`,
+        message: `Component "${params.component_name}" not found in ${params.project_root}`,
       };
     }
 

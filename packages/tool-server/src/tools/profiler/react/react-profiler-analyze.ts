@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { promises as fsPromises } from "fs";
 import type { ToolDefinition } from "@argent/registry";
-import { requireProjectRoot } from "../../../request-context";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -34,6 +33,9 @@ const annotationSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  project_root: z
+    .string()
+    .describe("Absolute path to the RN project root for session context detection"),
   platform: z.enum(["ios", "android"]).default("ios").describe("Target platform"),
   rn_version: z.coerce.string().default("unknown").describe('React Native version (e.g. "0.73.4")'),
   annotations: z
@@ -70,7 +72,6 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
-    const projectRoot = requireProjectRoot();
 
     // Resolve session paths from session or cache
     const sessionPaths: ProfilerSessionPaths | undefined =
@@ -109,7 +110,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         deviceId: "simulator",
         platform: params.platform,
         rnVersion: params.rn_version,
-        projectRoot,
+        projectRoot: params.project_root,
         ...(detectedArchitecture !== null && {
           detectedArchitecture,
         }),
@@ -139,7 +140,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     // Enrich component findings with source locations via AST index
     try {
-      const astIndex = await buildAstIndexWithDiagnostics(projectRoot);
+      const astIndex = await buildAstIndexWithDiagnostics(params.project_root);
       for (const finding of pipelineOutput.componentFindings) {
         const entry = astIndex.index.get(finding.component);
         if (entry) {

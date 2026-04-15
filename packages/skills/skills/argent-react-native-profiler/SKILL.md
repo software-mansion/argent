@@ -93,7 +93,7 @@ If `hook_installed: false` or `fiber_renders_captured: 0`, warn the user — Rea
 
 ### Step 3: Analyze
 
-Call `react-profiler-analyze` with `platform` and `rn_version`. The project root is resolved automatically from the calling workspace. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
+Call `react-profiler-analyze` with `project_root`, `platform`, and `rn_version`. The report includes metadata such as `reactCompilerEnabled`, `strictModeEnabled`, and `buildMode` — check these in the returned markdown report.
 
 If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
 

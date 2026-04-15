@@ -94,10 +94,7 @@ export async function startMcpServer(): Promise<void> {
     const meta = tools.find((t) => t.name === name);
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Argent-Project-Root": encodeURIComponent(process.cwd()),
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(args ?? {}),
     });
 
