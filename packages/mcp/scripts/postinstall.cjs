@@ -2,7 +2,7 @@
 // @ts-check
 "use strict";
 
-// Runs automatically after `npm install @software-mansion/argent`.
+// Runs automatically after `npm install @swmansion/argent`.
 // Set ARGENT_SKIP_POSTINSTALL=1 to suppress the init message (used by `argent update`).
 
 const os = require("os");
@@ -26,7 +26,7 @@ if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {
 }
 
 console.log(`
-@software-mansion/argent installed.
+@swmansion/argent installed.
 
 To set up your workspace (MCP server, skills, rules), run:
 

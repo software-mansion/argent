@@ -15,7 +15,7 @@ const zodSchema = z.object({
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.5 if unset. Use 1.0 for full resolution."
+      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset. Use 1.0 for full resolution."
     ),
 });
 
@@ -24,8 +24,9 @@ export const screenshotTool: ToolDefinition<
   { url: string; path: string }
 > = {
   id: "screenshot",
-  description: `Take a screenshot of the simulator screen. Returns { url, path }.
-The MCP adapter returns this as a visible image.`,
+  description: `Capture a screenshot of the simulator screen. Returns { url, path } and the MCP adapter renders it as a visible image.
+Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
+Fails if the simulator server is not running or the screenshot request times out.`,
   zodSchema,
   outputHint: "image",
   services: (params) => ({

@@ -6,6 +6,7 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
+  "references": [{ "path": "../registry" }, { "path": "../native-devtools-ios" }],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

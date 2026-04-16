@@ -44,12 +44,11 @@ export const gesturePinchTool: ToolDefinition<
   { pinched: boolean; timestampMs: number }
 > = {
   id: "gesture-pinch",
-  description: `Perform a smooth two-finger pinch gesture. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
-startDistance > endDistance = pinch in (zoom out).
-startDistance < endDistance = pinch out (zoom in).
+  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
+startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
-Auto-generates interpolated frames at ~60fps for a natural feel.
-The angle parameter controls the axis (0 = horizontal, 90 = vertical).`,
+Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical).
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

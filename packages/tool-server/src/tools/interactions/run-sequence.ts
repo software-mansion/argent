@@ -53,7 +53,8 @@ export function createRunSequenceTool(
     description: `Execute multiple simulator interaction steps in a single call.
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
-A screenshot is captured only once after the entire sequence completes.
+Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
+No screenshot is captured automatically — call screenshot separately after the sequence if needed.
 
 ONLY use this when every step is known in advance. If any step depends on the
 result of a previous one (e.g. tapping a menu item that only appears after

@@ -29,9 +29,12 @@ async function initSimulator(
   watchedUdids.add(udid);
   try {
     await registry.resolveService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
-  } catch {
+  } catch (err) {
     // Service failed to start (e.g. simulator shut down mid-init); retry next tick
     watchedUdids.delete(udid);
+    process.stderr.write(
+      `[simulator-watcher] initSimulator failed for ${udid}: ${err instanceof Error ? err.message : err}\n`
+    );
   }
 }
 
@@ -58,7 +61,9 @@ export function startSimulatorWatcher(registry: Registry): {
       await Promise.all(newUdids.map((udid) => initSimulator(registry, watchedUdids, udid)));
     } else {
       // Subsequent polls: fire-and-forget to avoid blocking the interval tick.
-      newUdids.forEach((udid) => initSimulator(registry, watchedUdids, udid));
+      newUdids.forEach((udid) => {
+        initSimulator(registry, watchedUdids, udid).catch(() => {});
+      });
     }
 
     // Simulators that shut down: dispose service and clean up
@@ -75,7 +80,7 @@ export function startSimulatorWatcher(registry: Registry): {
   const ready = poll(true);
 
   // Subsequent polls are fire-and-forget.
-  const interval = setInterval(() => poll(false), POLL_INTERVAL_MS);
+  const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
 
   return { stop: () => clearInterval(interval), ready };
 }

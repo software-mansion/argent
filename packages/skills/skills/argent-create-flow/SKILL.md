@@ -5,7 +5,7 @@ description: Record a reusable flow (scripted sequence of MCP tool calls) that c
 
 ## 1. Overview
 
-A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
+A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `.argent/flows/` directory. Each step is **executed live** as you add it, so you verify it works before it becomes part of the flow. Replay a finished flow with `flow-execute`.
 
 ## 2. Tools
 
@@ -22,7 +22,7 @@ A flow is a recorded sequence of MCP tool calls saved to a `.yaml` file in the `
 
 ### Recording
 
-1. **Start**: Call `flow-start-recording` with a descriptive name and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload").
+1. **Start**: Call `flow-start-recording` with a descriptive name, the absolute `project_root`, and an `executionPrerequisite` describing the required app state before running the flow (e.g. "App on home screen after a fresh reload"). `project_root` is stored for the session — you do **not** need to pass it again to subsequent tools.
 2. **Build step-by-step**: For each action, call `flow-add-step` with the tool name and args. The tool runs immediately — check the result before moving on.
 3. **Add labels**: Use `flow-add-echo` between steps to describe what each section does.
 4. **Finish**: Call `flow-finish-recording` to stop recording. It returns the file path where the flow was saved and a summary of all steps. You can edit the `.yaml` file directly afterwards to remove, reorder, or tweak steps.
@@ -64,6 +64,7 @@ For tools with no arguments, omit `args` entirely.
 
 - **Every step runs live.** You will see the real tool result (including screenshots). Use this to verify the step worked before continuing.
 - **Only successful steps are recorded.** If a tool call fails, nothing is written to the flow file — fix the issue and try again.
+- **Pass `project_root` only to `flow-start-recording`.** It is stored for the session and automatically used by all subsequent flow tools. An error is returned if the path is not absolute.
 - **You do NOT need to pass a flow name** to `flow-add-step`, `flow-add-echo`, or `flow-finish-recording`. The active flow is tracked automatically after `flow-start-recording`.
 - **Start before adding.** Calling `flow-add-step`, `flow-add-echo`, or `flow-finish-recording` without an active recording returns an error: _"No active flow. Call flow-start-recording first."_
 - **One flow at a time.** If you call `flow-start-recording` while already recording, the active flow switches to the new one. The response tells you which flow was abandoned and which is now active. The old flow's file remains on disk.
@@ -72,7 +73,7 @@ For tools with no arguments, omit `args` entirely.
 ## 6. Example Session
 
 ```
-flow-start-recording  { name: "open-settings", executionPrerequisite: "Simulator booted with app installed" }
+flow-start-recording  { name: "open-settings", project_root: "/Users/dev/MyApp", executionPrerequisite: "Simulator booted with app installed" }
 flow-add-echo  { message: "Launch Settings app" }
 flow-add-step  { command: "launch-app", args: "{\"udid\": \"ABC\", \"bundleId\": \"com.apple.Preferences\"}" }
 flow-add-echo  { message: "Tap General" }
@@ -85,11 +86,11 @@ flow-finish-recording  {}
 ## 7. Replay Example
 
 ```
-flow-execute   { name: "open-settings" }
+flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp" }
 → Returns: notice with executionPrerequisite: "Simulator booted with app installed"
   "Verify the prerequisite is met and call flow-execute again with prerequisiteAcknowledged set to true."
 
-flow-execute   { name: "open-settings", prerequisiteAcknowledged: true }
+flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp", prerequisiteAcknowledged: true }
 → Runs all steps, returns merged results with status and output for every step
 ```
 
@@ -172,7 +173,7 @@ For silent misfires and partial divergence, echo annotations (§10.5) are your r
 Choose the lightest strategy that fits:
 
 **Strategy 1 — Edit the YAML** (coordinate drift, parameter changes).
-Read `.argent/<flow-name>.yaml`, update the broken step's `x`/`y`, `bundleId`, `text`, or other args. Re-run `flow-execute` to verify.
+Read `.argent/flows/<flow-name>.yaml`, update the broken step's `x`/`y`, `bundleId`, `text`, or other args. Re-run `flow-execute` to verify.
 
 **Strategy 2 — Manual recovery + continue** (timing/transient issues, one-off replay).
 Manually execute the failed step with corrected coordinates from §10.2 discovery, then manually execute remaining steps. Does not fix the YAML — use only when re-recording is not worth it.
@@ -209,4 +210,4 @@ Apply these when recording new flows to reduce future breakage:
 - **Add screenshot steps after critical navigation.** Insert `screenshot` steps after screen transitions. These produce images in the flow result you can inspect during diagnosis.
 - **Write specific executionPrerequisites.** `"App on home tab, user logged in, simulator UDID is <X>"` — not `"App running"`. Verify with `screenshot` + `describe` before acknowledging.
 - **Prefer launch-app / open-url over navigation chains.** Deep links are more resilient to layout changes than tap sequences.
-- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates.
+- **Echo accessibility labels for coordinate taps.** When recording a tap, add an echo with the target's label or testID: `"Tapping 'Submit' button (testID: submit-btn) at 0.5, 0.82"`. During repair, use `describe` to find the element by label and update coordinates. Only use `screenshot` for permission or system overlays when `describe` cannot expose the target reliably.

@@ -42,6 +42,7 @@ const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
   includeBody: z.coerce
     .boolean()
@@ -106,10 +107,11 @@ export const networkRequestTool: ToolDefinition<
   id: "view-network-request-details",
   description: `Get full details of a specific network request by its requestId (from view-network-logs).
 Returns request/response headers (sensitive headers redacted), status, timing, and optionally the response body.
-Large response bodies are truncated. Use this after view-network-logs to inspect individual requests.`,
+Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
+Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
   services: (params) => ({
-    inspector: `NetworkInspector:${params.port}`,
+    inspector: `NetworkInspector:${params.port}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.inspector as NetworkInspectorApi;

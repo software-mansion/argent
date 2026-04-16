@@ -1,6 +1,6 @@
 ---
 name: argent-simulator-interact
-description: Interact with a running iOS simulator using argent MCP tools. Use when tapping UI elements, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, or performing any gesture on the simulator.
+description: Interact with an iOS simulator using argent MCP tools. Use when tapping UI elements, perfroming gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
 ---
 
 ## 1. Before You Start
@@ -20,6 +20,7 @@ Use `list-devices` to find available simulators. **Pick the first result** if sp
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing** — try `paste` first, fall back to `keyboard`.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
+6. **For native iOS app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -47,7 +48,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | ---------------- | ---------------- | --------------------------------------------------------- |
 | Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)     |
 | Open an app      | `launch-app`     | **Always — never tap home-screen icons**                  |
-| Restart an app   | `restart-app`    | Reinstall or reconnect to Metro                           |
+| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                       |
 | Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                        |
 | Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                |
 | Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                             |
@@ -56,7 +57,7 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 | Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                  |
 | Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation               |
 | Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation         |
-| Hardware key     | `button`         | Home, back, power, volume                                 |
+| Hardware key     | `button`         | Home, back, power, volume, appSwitch, actionButton        |
 | Type text (fast) | `paste`          | Form fields — uses clipboard                              |
 | Type text        | `keyboard`       | Fallback when paste fails; supports Enter, Escape, arrows |
 | Rotate device    | `rotate`         | Orientation changes                                       |
@@ -65,11 +66,33 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
-| App type     | Discovery tool            | What it returns                                                                       |
-| ------------ | ------------------------- | ------------------------------------------------------------------------------------- |
-| Any iOS app  | `describe`                | iOS accessibility element tree with normalized frame coordinates                      |
-| React Native | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                         |
-| Fallback     | `screenshot`              | when cannot determine using the above methods, use screenshot as a heuristic fallback |
+| App type                          | Discovery tool            | What it returns                                                                                                                                                                          |
+| --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target app discovery              | `describe`                | Accessibility element tree for the current simulator screen with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
+| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                            |
+| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                     |
+| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls               |
+| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                   |
+
+Point follow-up native diagnostics after you already have a candidate point:
+
+- `native-user-interactable-view-at-point`: deepest native view that would receive touch at a known raw iOS point; requires `bundleId`
+- `native-view-at-point`: deepest visible native view at a known raw iOS point; requires `bundleId`
+
+### If `describe` Fails
+
+Read the exact error and choose the action that matches it:
+
+- Error mentions `ax-service` not available or daemon startup failure:
+  the ax-service daemon could not start. Check that the simulator is booted. Use `screenshot` as a temporary fallback, or use `native-describe-screen` with an explicit `bundleId` if the app has native devtools injected.
+- `describe` returns an empty element list:
+  the screen may be blank, loading, or showing content without accessibility labels. Use `screenshot` to see what is visible, then retry after the content has loaded.
+- `describe` succeeds but is not detailed enough for a React Native app:
+  use `debugger-component-tree` next.
+- You need app-scoped inspection with full UIKit properties (`accessibilityIdentifier`, `viewClassName`):
+  use `native-describe-screen` with an explicit `bundleId`. This requires native devtools (dylib) injection — call `restart-app` first if needed.
+- You already have a candidate point and want to confirm what would actually receive touch:
+  use `native-user-interactable-view-at-point`. Use `native-view-at-point` when you want the visually deepest view instead of the hit-test target.
 
 ## 6. Tool Usage
 
@@ -89,7 +112,7 @@ Before tapping near the bottom of the screen in React Native apps, check that "O
 { "udid": "<UDID>", "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 }
 ```
 
-Swipe **up** (`fromY > toY`) = scroll content **down**. Optional: `"durationMs": 500` for slower swipe.
+Swipe **up** (`fromY > toY`) = scroll content **down**. Default duration: 300ms. Optional: `"durationMs": 500` for slower swipe.
 
 ### gesture-pinch — Two-finger pinch
 
@@ -97,7 +120,7 @@ Swipe **up** (`fromY > toY`) = scroll content **down**. Optional: `"durationMs":
 { "udid": "<UDID>", "centerX": 0.5, "centerY": 0.5, "startDistance": 0.2, "endDistance": 0.6 }
 ```
 
-All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same as all other gesture tools. `startDistance: 0.2` means fingers start 20% of the screen apart; `endDistance: 0.6` means they end 60% apart. `startDistance < endDistance` = pinch out (zoom in). `startDistance > endDistance` = pinch in (zoom out). Optional: `"angle": 90` for vertical axis, `"durationMs": 500` for slower pinch.
+All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same as all other gesture tools. `startDistance: 0.2` means fingers start 20% of the screen apart; `endDistance: 0.6` means they end 60% apart. `startDistance < endDistance` = pinch out (zoom in). `startDistance > endDistance` = pinch in (zoom out). Defaults: `angle: 0` (horizontal), `durationMs: 300`. Optional: `"angle": 90` for vertical axis, `"durationMs": 500` for slower pinch.
 
 ### gesture-rotate — Two-finger rotation
 
@@ -112,7 +135,7 @@ All values are normalized 0.0–1.0 (fractions of screen, not pixels) — same a
 }
 ```
 
-All positions and radius are normalized 0.0–1.0 (fractions of screen, not pixels). `radius: 0.15` means each finger is 15% of the screen away from center. `endAngle > startAngle` = clockwise. Optional: `"durationMs": 500` for slower rotation.
+All positions and radius are normalized 0.0–1.0 (fractions of screen, not pixels). `radius: 0.15` means each finger is 15% of the screen away from center. `endAngle > startAngle` = clockwise. Default duration: 300ms. Optional: `"durationMs": 500` for slower rotation.
 
 ### gesture-custom — Custom touch sequence
 
@@ -140,7 +163,7 @@ Tap the field first, then paste. Fall back to `keyboard` if it doesn't work.
 { "udid": "<UDID>", "text": "search query", "key": "enter" }
 ```
 
-Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`
+Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow-down`, `arrow-left`, `arrow-right`, `f1`–`f12`. Optional: `"delayMs": 100` between keystrokes (default 50ms).
 
 ### rotate — Change orientation
 
@@ -160,19 +183,25 @@ Use the explicit `screenshot` tool only when:
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
+- A permission dialog, system alert, or native modal overlay is visible and `describe` did not expose reliable targets.
+
+When using `screenshot` for permission or native modal navigation:
+
+- Do not switch to screenshot-driven navigation just because a modal is visible. On regular app screens and in-app modals, keep using `describe`.
+- Prefer obvious, centered alert buttons such as `Allow`, `OK`, `Don't Allow`, `Not Now`, or `Continue`.
+- Tap one control at a time and inspect the returned auto-screenshot before doing anything else.
+- After the modal is dismissed, return to normal discovery with `describe`, `native-describe-screen`, or `debugger-component-tree`.
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
-Screenshots are downscaled by default (30% of original resolution) to reduce context size. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
+Screenshots are downscaled by default (30% of original resolution) to reduce context size. `scale` accepts values from 0.01 to 1.0. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
 
 ### Troubleshooting
 
-| Problem              | Solution                                                                               |
-| -------------------- | -------------------------------------------------------------------------------------- |
-| Screenshot times out | Restart simulator-server via the `simulator-server` tool with a JWT token, then retry. |
-| No booted simulator  | Run `boot-simulator` first.                                                            |
-
-Note: Screenshots require a Pro/Team/Enterprise JWT token. The token only needs to be passed once — subsequent calls reuse the running process.
+| Problem              | Solution                                                      |
+| -------------------- | ------------------------------------------------------------- |
+| Screenshot times out | Restart the simulator-server via `stop-simulator-server` tool |
+| No booted simulator  | Run `boot-simulator` first.                                   |
 
 ---
 

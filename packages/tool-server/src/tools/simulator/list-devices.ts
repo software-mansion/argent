@@ -31,8 +31,8 @@ const zodSchema = z.object({
 export const listDevicesTool: ToolDefinition = {
   id: "list-devices",
   description: [
-    "List available iOS devices (simulators and optionally physical devices).",
-    "By default returns only simulators (fast). Set `include_physical_devices: true` to also scan for physical devices connected via USB or Wi-Fi (slower, requires Xcode 15+).",
+    "List available iOS devices (simulators and optionally physical devices). Use when you need a UDID or want to see which simulators are Booted vs Shutdown.",
+    "By default returns only simulators (fast) — each with udid, name, state, runtime, and isAvailable. Set `include_physical_devices: true` to also scan for physical devices connected via USB or Wi-Fi (slower, requires Xcode 15+); physical-device entries additionally include model, osVersion, and connectionType.",
     "",
     "WHEN TO INCLUDE PHYSICAL DEVICES:",
     "- User explicitly asks to run/test on a real device",
@@ -43,6 +43,8 @@ export const listDevicesTool: ToolDefinition = {
     "IMPORTANT LIMITATION: Physical devices do NOT support automated interaction (taps, swipes, screenshots, describe, etc.) — the user must navigate the device by hand. Only profiling and debugging tools work on physical devices.",
     "",
     "PREFER SIMULATORS for: fast iteration, CI, UI testing, automated interaction, and most development workflows.",
+    "",
+    "Fails if Xcode command-line tools are not installed.",
   ].join("\n"),
   zodSchema,
   services: () => ({}),

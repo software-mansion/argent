@@ -36,7 +36,10 @@ export const iosInstrumentsStartTool: ToolDefinition<
   id: "ios-profiler-start",
   description: `Start iOS Instruments profiling via xctrace on a booted simulator or connected device.
 Auto-detects the running app process unless app_process is explicitly provided.
-After starting, let the user interact with the app, then call ios-profiler-stop.`,
+After starting, let the user interact with the app, then call ios-profiler-stop.
+Use when you want to capture native CPU, hang, and memory data for a running iOS app.
+Returns { status, pid, traceFile } confirming the recording has started.
+Fails if no app is running on the simulator or xctrace cannot attach to the process.`,
   zodSchema,
   services: (params) => ({
     session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,

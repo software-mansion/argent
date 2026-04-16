@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
 - **macOS** with Xcode installed (required for `xcrun simctl` and iOS simulator support)
 - **Node.js 18+**
-- The `simulator-server` binary (arm64 macOS, installed separately via `npx @software-mansion/argent install`)
+- The `simulator-server` and `ax-service` binaries in `packages/native-devtools-ios/bin/` (arm64 macOS, installed separately via `npx @swmansion/argent install`)
 
 ---
 
@@ -66,7 +66,7 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 | ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@argent/registry`            | `packages/registry`            | Core library: dependency-aware service lifecycle, blueprints, tools, URNs                                                                               |
 | `@argent/tool-server`         | `packages/tool-server`         | HTTP API over the registry (port 3001). Registers all blueprints and tools                                                                              |
-| `@software-mansion/argent`    | `packages/mcp`                 | MCP bridge — exposes tools to AI assistants via Model Context Protocol                                                                                  |
+| `@swmansion/argent`           | `packages/mcp`                 | MCP bridge — exposes tools to AI assistants via Model Context Protocol                                                                                  |
 | `@argent/skills`              | `packages/skills`              | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools                                                              |
 | `@argent/native-devtools-ios` | `packages/native-devtools-ios` | Pre-built dylibs for iOS simulator injection (view hierarchy, network inspection). ObjC source lives in `packages/argent-private` _(private submodule)_ |
 
@@ -102,7 +102,7 @@ npm run build -w @argent/tool-server
 To build and bundle the distributable MCP package:
 
 ```bash
-npm run build -w @software-mansion/argent
+npm run build -w @swmansion/argent
 # or, to also produce a .tgz tarball:
 npm run pack:mcp
 ```
@@ -152,7 +152,7 @@ npm run test:watch -w @argent/tool-server
 ## Code style
 
 - **TypeScript strict mode** is enabled across all packages (`"strict": true` in `tsconfig.base.json`). All code must compile without errors.
-- **Target:** ES2022 with CommonJS modules (except `@software-mansion/argent` which uses ESM).
+- **Target:** ES2022 with CommonJS modules (except `@swmansion/argent` which uses ESM).
 - Prefer explicit types over `any`. Use Zod schemas for runtime validation where the codebase already does so.
 - Keep commits focused. Prefix commit messages with a type: `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`. This feeds the auto-generated changelog on release.
 

@@ -1,66 +1,64 @@
 ---
 name: argent-react-native-optimization
-description: Optimize a React Native app for performance using argent profiler and debugger tools. Entry-point skill for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to `argent-react-native-profiler` for measurement.
+description: Optimizes a React Native app by profiling first to find real bottlenecks, then sweeping for mechanical issues. Entry-point for all performance work. Use when the app feels slow, user asks to optimize, fix re-renders, reduce jank, or improve startup. Delegates to react-native-profiler for measurement.
 ---
 
-## 1. Tools
+## Rules
 
-This skill orchestrates tools from two measurement skills. Load them for full tool reference:
+- Do not apply shotgun optimizations. Measure first, define what "good enough" looks like (target metric + threshold), fix the top offender, re-measure honestly.
+- **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
+- **Deep measure** — load `react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
+- **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
+- **Verify correctness** - before fixing, recollect information from steps above and make a logical conclusion whether the approach is worth undertaking.
+- **Fix** — apply one fix. Validate with `debugger-evaluate` before committing.
+- **Re-measure** — report whether the target metric improved, regressed, or stayed flat. Check for regressions in other areas. If no net benefit or unacceptable tradeoffs, revert.
+- **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
+- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped — re-profile once after the batch. When the measurement involves simulator interaction, record it as a flow (`create-flow` skill) before the first run so all subsequent cycles replay identical steps.
+- **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
+- **Sub-agents**: Phases 1–2 dispatch sub-agents — one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the simulator - all profiling and E2E verification must happen in the main agent.
 
-- **`argent-react-native-profiler`** — React/Hermes profiling (renders, commits, CPU).
-- **`argent-ios-profiler`** — Native iOS profiling (CPU hotspots, UI hangs, memory leaks).
+## Pipeline
 
-On react-native apps, use both of the available tool workflows for best coverage.
+**Lint and semantic sweeps catch deterministic issues cheaply. Profiling finds runtime bottlenecks that static analysis misses. Do both.**
 
-Quick-access tools (no profiling session required):
+Copy this checklist into your TODO list:
 
-- `react-profiler-renders` — live render count table, instant spot-check
-- `debugger-evaluate` — run JS in app runtime to test a fix live
-- `react-profiler-component-source` — AST lookup for file, line, memoization status
+```
+Optimization Progress:
+- [ ] Phase 1: Lint sweep (deterministic — catch mechanical issues without a running app)
+- [ ] Phase 2: Semantic sweep (judgment — memoization, lists, animations, etc.)
+- [ ] Phase 3: Baseline profile (find real bottlenecks, fix top offenders)
+- [ ] Phase 4: Verify no regressions (crashes, errors, red screens)
+```
 
----
+### Phase 1: Lint sweep
 
-## 2. Workflow
+Run ESLint once at the project root with a comprehensive RN performance ruleset. Dispatch sub-agents to fix results — one per file.
+See [references/lint-rules.md](references/lint-rules.md) for ruleset and procedure.
 
-**Rule: Profile before optimizing.** Do not apply shotgun optimizations. Measure first, define what "good enough" looks like (target metric + threshold), fix the top offender, re-measure honestly.
+### Phase 2: Semantic sweep
 
-1. **Quick scan** — `react-profiler-renders` for a live render count table. Identifies hot components instantly.
-2. **Deep measure** — load `argent-react-native-profiler` skill. `react-profiler-start` → interact → `react-profiler-stop` → `react-profiler-analyze`.
-3. **Inspect** — `react-profiler-component-source` per finding. `react-profiler-fiber-tree` to trace component ancestry and render cost.
-4. **Verify correctness** - before attempting fixing, recollect the information from steps &1, &2, &3 and make logical conclusion whether the approach is worth undertaking
-5. **Fix** — apply one fix from §3. Validate with `debugger-evaluate` before committing.
-6. **Re-measure** — re-run step 1 or 2. Report whether the target metric improved, regressed, or stayed flat. Check whether the fix introduced regressions in other areas (e.g., fewer re-renders but higher CPU, or new jank in a different screen). If no net benefit or unacceptable tradeoffs, revert. **One fix per cycle** — never batch. When the measurement involves simulator interaction, record the interaction as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps. If a recorded flow breaks after applying a fix (e.g., UI layout changed), follow `argent-create-flow` skill §10 to repair the flow rather than silently discarding it.
+Review each area requiring judgment — memoization, list rendering, animations, async patterns, effect cleanup, state hygiene, context architecture. Dispatch one sub-agent per checklist item.
+See [references/semantic-checklist.md](references/semantic-checklist.md) for full checklist.
 
----
+### Phase 3: Visual profiling
 
-## 3. Fix Reference
+1. Load `react-native-profiler` skill, start dual profiling
+2. Exercise key user flows (navigate screens the user specified, or all major flows)
+3. Analyze with `react-profiler-analyze` + `ios-profiler-analyze` + `profiler-combined-report`
+4. Cross-reference profiling results with Phase 1–2 findings
+5. Fix highest-impact issues. Re-profile after architectural changes; batch mechanical fixes. If a recorded flow breaks after a fix (e.g., UI layout changed), follow `create-flow` skill to repair the flow rather than silently discarding it.
 
-Match `react-profiler-analyze` / `react-profiler-renders` findings to fixes:
+### Phase 4: Verify no regressions
 
-| Finding                                            | Fix                                                                           | Detail                                                                                             |
-| -------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Re-renders with same props                         | `React.memo(Comp)`                                                            | **Skip if React Compiler active** — `react-profiler-analyze` reports compiler status per component |
-| Expensive recomputation / unstable callbacks       | `useMemo(fn, [deps])` / `useCallback(fn, [deps])`                             | `useCallback` must pair with `React.memo` on child                                                 |
-| Inline objects/arrays in JSX                       | `StyleSheet.create()` / module const                                          | New ref every render breaks shallow equality                                                       |
-| List jank                                          | `removeClippedSubviews`, `maxToRenderPerBatch`, `windowSize`, `getItemLayout` | Or `@shopify/flash-list` with `estimatedItemSize`                                                  |
-| JS-thread animation jank                           | `useNativeDriver: true` or `react-native-reanimated`                          | `useNativeDriver` only for `transform`/`opacity`                                                   |
-| Heavy work during transitions                      | `InteractionManager.runAfterInteractions()`                                   | Defer until animation completes                                                                    |
-| Slow startup                                       | Hermes + inline requires in `metro.config.js`                                 | Lazy `require()` for heavy modules                                                                 |
-| Redundant, heavy, unoptimized or n+1 network calls | `view-network-logs` → `view-network-request-details`                          | Batch, debounce, or cache at data layer                                                            |
+Navigate every screen and UI flow within scope, confirm each renders without errors. If no scope was specified, verify the entire app — cover all reachable screens via `simulator-interact`. Use `debugger-log-registry` to check for runtime errors and take screenshots to check for red/yellow error screens. Check for regressions introduced by fixes (e.g., fewer re-renders but higher CPU, or new jank in a different screen). Main agent only.
 
----
+## App-wide optimization
 
-## 4. App-Wide Optimization
+1. **Phase 1**: run lint centrally (one command), dispatch sub-agents to fix per-file in parallel
+2. **Phase 2**: one sub-agent per checklist item for semantic sweep
+3. **Phase 3**: main agent profiles top offending screens; fixes architectural issues top-down
+4. **Phase 4**: main agent navigates all screens to verify nothing crashes
 
-When optimizing the entire app, **dispatch parallel sub-agents** — one per distinct code feature.
-
-1. **Discover targets** — read project source structure to identify major features/modules.
-2. **Spawn one sub-agent per target** in parallel. Each agent:
-   - Analyzes the code for known anti-patterns and performance issues (§3)
-   - Runs `react-profiler-component-source` on suspect components to check memoization status
-   - Compares code to best practices — static analysis, not E2E testing
-   - Returns: feature name, ranked findings with file:line, suggested fix from §3
-3. **Merge results** — prioritize findings by severity across all sub-agents.
-4. **Fix top-down** — apply fixes starting from worst offender, re-measure after each. Report honestly whether each fix helped, was neutral, or introduced regressions.
-
-Use `react-profiler-renders` as a live pre-scan to validate static findings against runtime behavior.
+After the entire run, run lint again to verify no new issues were introduced with your changes.
+This also helps ensure you haven't missed any issues which could've been fixed.

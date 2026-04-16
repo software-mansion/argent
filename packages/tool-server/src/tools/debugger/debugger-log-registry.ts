@@ -5,10 +5,14 @@ import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-wri
 
 interface LogRegistryResponse extends LogStats {
   clusters: MessageCluster[];
+  deviceName: string;
+  appName: string;
+  logicalDeviceId: string | undefined;
 }
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
 });
 
 export const debuggerLogRegistryTool: ToolDefinition<
@@ -18,11 +22,10 @@ export const debuggerLogRegistryTool: ToolDefinition<
   id: "debugger-log-registry",
   description: `Get a summary of all console logs captured from the React Native app.
 Returns the log file path, entry counts by level, and message clusters (grouped by similarity).
-Use this tool first to get an overview, then grep or tail the returned file path for details.
-The app must be connected via debugger-connect first (auto-connects if needed).`,
+Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -32,6 +35,9 @@ The app must be connected via debugger-connect first (auto-connects if needed).`
     return {
       ...stats,
       clusters,
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
     };
   },
 };

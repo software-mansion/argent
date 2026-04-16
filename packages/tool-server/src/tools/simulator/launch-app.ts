@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,8 +17,8 @@ export const launchAppTool: ToolDefinition<
   { launched: boolean; bundleId: string }
 > = {
   id: "launch-app",
-  description: `Launch an app on the simulator by bundle ID.
-Prefer this over tapping home-screen icons — it is instant and reliable.
+  description: `Open an app on the simulator by bundle ID.
+Use when starting any app — prefer this over tapping home-screen icons. Also prepares native-devtools launch injection before the app starts. Returns { launched, bundleId }. Fails if the bundle ID is not installed on the simulator.
 
 Common bundle IDs:
 - Messages:  com.apple.MobileSMS
@@ -31,8 +33,12 @@ Common bundle IDs:
 - Calendar:  com.apple.mobilecal
 - Contacts:  com.apple.MobileAddressBook`,
   zodSchema,
-  services: () => ({}),
-  async execute(_services, params) {
+  services: (params) => ({
+    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+  }),
+  async execute(services, params) {
+    const api = services.nativeDevtools as NativeDevtoolsApi;
+    await api.ensureEnvReady();
     await execFileAsync("xcrun", ["simctl", "launch", params.udid, params.bundleId]);
     return { launched: true, bundleId: params.bundleId };
   },

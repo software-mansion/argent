@@ -1,12 +1,13 @@
 {
+  "private": true,
   "name": "@argent/tool-server",
-  "version": "0.3.3",
+  "version": "0.5.2",
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc && cp src/utils/ios-profiler/Argent.tracetemplate dist/utils/ios-profiler/",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js start",
+    "dev": "ts-node src/index.ts start",
     "test": "vitest run",
     "test:watch": "vitest"
   },

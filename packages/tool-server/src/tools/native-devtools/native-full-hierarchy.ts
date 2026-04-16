@@ -52,17 +52,11 @@ type Result =
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
   description: `Get the complete UIKit view tree for the running app.
-
-WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially
-those built with SwiftUI. Prefer native-find-views for targeted queries.
-
-Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce
-output size. Use the fields param to request only the properties you need.
-
-Useful for: deep layout debugging, finding views with no accessibility labels,
-verifying view structure not exposed through the accessibility tree.
-
-If status is restart_required: call restart-app then retry.`,
+WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
+Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce output size. Use the fields param to request only the properties you need.
+Use when you need deep layout debugging, finding views with no accessibility labels, or verifying view structure not exposed through the accessibility tree.
+Returns { status: "ok", windows } with the full view hierarchy, or { status: "restart_required" } if the dylib is not injected.
+Fails if native devtools are not connected or the app is not running.`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,

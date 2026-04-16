@@ -11,13 +11,14 @@ export const flowInsertEchoTool: ToolDefinition<
   { message: string; flowFile: string }
 > = {
   id: "flow-add-echo",
-  description: `Append an echo step to the active flow. Echo steps print a message when
-the flow is replayed — useful as labels between tool calls.`,
+  description: `Record an echo step in the active flow. Echo steps print a message when the flow is replayed — useful as labels between tool calls.
+Use when you want to annotate a recorded flow with a human-readable label or checkpoint message.
+Returns { message, flowFile }. Fails if no active flow recording is in progress.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
     const flowName = getActiveFlow();
-    const filePath = await getFlowPath(flowName);
+    const filePath = getFlowPath(flowName);
 
     const flowFile = await appendStep(filePath, {
       kind: "echo",

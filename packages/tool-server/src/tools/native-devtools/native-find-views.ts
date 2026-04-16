@@ -38,12 +38,10 @@ type Result =
 export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
-
-Returns matching views with their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy — use this when you know what you're looking for.
-
+Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
+Returns { status: "ok", matches } with matching views including their frames, properties, optional ancestors, and optional children. Much more targeted than native-full-hierarchy.
 At least one of className, identifier, label, tag, or nativeID must be provided.
-
-If status is restart_required: call restart-app then retry.`,
+Fails if native devtools are not connected, the app is not running, or status is restart_required (call restart-app then retry).`,
   zodSchema,
   services: (params) => ({
     nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,

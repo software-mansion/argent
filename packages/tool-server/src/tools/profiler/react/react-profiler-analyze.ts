@@ -2,8 +2,6 @@ import { z } from "zod";
 import { promises as fsPromises } from "fs";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  REACT_PROFILER_SESSION_NAMESPACE,
-  type ReactProfilerSessionApi,
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
@@ -33,6 +31,7 @@ const annotationSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   project_root: z
     .string()
     .describe("Absolute path to the RN project root for session context detection"),
@@ -63,17 +62,16 @@ Requires react-profiler-stop to have been called first.
 Optional annotations param: provide Array<{offsetMs, label}> to annotate commits with
 the user action that preceded them. Compute offsetMs = tapTimestampMs - startedAtEpochMs
 where tapTimestampMs is the timestampMs returned by the tap/swipe tool and startedAtEpochMs
-is returned by react-profiler-start.`,
+is returned by react-profiler-start.
+Use when the profiling session is complete and you need to interpret the collected data.
+Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
-  services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
-  }),
-  async execute(services, params) {
-    const api = services.profilerSession as ReactProfilerSessionApi;
-
-    // Resolve session paths from session or cache
-    const sessionPaths: ProfilerSessionPaths | undefined =
-      api.sessionPaths ?? getCachedProfilerPaths(api.port) ?? undefined;
+  services: () => ({}),
+  async execute(_services, params) {
+    const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
+      params.port,
+      params.device_id
+    );
 
     if (!sessionPaths) {
       throw new Error(

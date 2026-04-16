@@ -4,6 +4,7 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
 });
 
 export const debuggerStatusTool: ToolDefinition<
@@ -12,6 +13,8 @@ export const debuggerStatusTool: ToolDefinition<
     port: number;
     projectRoot: string;
     deviceName: string;
+    appName: string;
+    logicalDeviceId: string | undefined;
     isNewDebugger: boolean;
     connected: boolean;
     loadedScripts: number;
@@ -21,11 +24,10 @@ export const debuggerStatusTool: ToolDefinition<
 > = {
   id: "debugger-status",
   description: `Get JS runtime debugger connection status and diagnostic info.
-Connects to the debugger if not already connected (idempotent with debugger-connect).
-Includes source map readiness status for breakpoint resolution.`,
+Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot, deviceName, appName, logicalDeviceId, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning). Fails if Metro is unreachable.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -34,6 +36,8 @@ Includes source map readiness status for breakpoint resolution.`,
       port: api.port,
       projectRoot: api.projectRoot,
       deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
       isNewDebugger: api.isNewDebugger,
       connected: api.cdp.isConnected(),
       loadedScripts: api.cdp.getLoadedScripts().size,

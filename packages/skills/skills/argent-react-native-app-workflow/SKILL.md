@@ -55,7 +55,7 @@ Optional: specify device or simulator, e.g. `npx react-native run-ios --simulato
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If simulator not booted: use the `boot-simulator` tool with proper UUID. Refer to the `argent-simulator-setup` skill.
+- [ ] If simulator not booted: use the `boot-simulator` tool with proper UDID. Refer to the `argent-simulator-setup` skill.
 
 ---
 
@@ -128,21 +128,21 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                         |
 | Native code or `pod install` / project config changed | Rebuild: `npx react-native run-ios` (Metro can stay running).                         |
 | `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild. |
-| App needs reinstalling from .app path                 | Use `reinstall-app` tool with bundle ID and .app path.                                |
+| App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                         |
 | Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                |
 
 ### 3.5 iOS Simulator Control
 
-| Action                     | Tool / Command                                         |
-| -------------------------- | ------------------------------------------------------ |
-| List devices               | `list-devices` tool                                    |
-| Boot a simulator           | `boot-simulator` tool (pass UDID)                      |
-| Launch an app              | `launch-app` tool (pass bundle ID)                     |
-| Restart an app             | `restart-app` tool (terminate + relaunch by bundle ID) |
-| Open a URL / deep link     | `open-url` tool                                        |
-| Rotate simulator           | `rotate` tool                                          |
-| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID)     |
-| Stop all simulator servers | `stop-all-simulator-servers` tool                      |
+| Action                     | Tool / Command                                     |
+| -------------------------- | -------------------------------------------------- |
+| List devices               | `list-devices` tool                                |
+| Boot a simulator           | `boot-simulator` tool (pass UDID)                  |
+| Launch an app              | `launch-app` tool (pass UDID + bundle ID)          |
+| Restart an app             | `restart-app` tool (pass UDID + bundle ID)         |
+| Open a URL / deep link     | `open-url` tool (pass UDID + URL)                  |
+| Rotate simulator           | `rotate` tool                                      |
+| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID) |
+| Stop all simulator servers | `stop-all-simulator-servers` tool                  |
 
 For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
@@ -152,16 +152,16 @@ For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
 ### 4.1 Where to Look
 
-| Problem type                      | Tool / Where to look                                                                                                                            |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search. Use `debugger-console-listen` for real-time logs. |
-| **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific coordinates.                                      |
-| **Visual state of the app**       | Use `screenshot` tool to capture the current screen, or `describe` tool for the accessibility element tree.                                     |
-| **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                            |
-| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                                                           |
-| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                                                    |
+| Problem type                      | Tool / Where to look                                                                                                                                                                                                                                              |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **JavaScript errors / logs**      | Use `debugger-log-registry` to get a summary and log file path, then `Grep`/`Read` to search.                                                                                                                                                                     |
+| **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific logical pixel coordinates (not normalized 0-1).                                                                                                                     |
+| **Visual state of the app**       | Use `screenshot` tool to capture the current screen, but prefer `describe` or `debugger-component-tree` for actual navigation and target discovery. If a permission prompt or system-owned modal overlay is not exposed reliably, then fall back to `screenshot`. |
+| **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                                                                                                                                              |
+| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                                                                                                                                                                             |
+| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                                                                                                                                                                      |
 
-For comprehensive Metro debugging workflows (breakpoints, stepping, pausing), refer to the `argent-metro-debugger` skill.
+For comprehensive Metro debugging workflows (component inspection, console logs, JS evaluation), refer to the `argent-metro-debugger` skill.
 
 ### 4.2 JS Console Logs (Log Registry)
 
@@ -203,24 +203,24 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 
 ## Quick Reference: Tools & Commands
 
-| Goal                          | Tool / Command                                 |
-| ----------------------------- | ---------------------------------------------- |
-| Check port 8081               | `lsof -i :8081`                                |
-| Kill Metro                    | `stop-metro` tool                              |
-| Start Metro                   | `npx react-native start`                       |
-| Start Metro (reset cache)     | `npx react-native start --reset-cache`         |
-| Run iOS app                   | `npx react-native run-ios`                     |
-| List devices                  | `list-devices` tool                            |
-| Boot simulator                | `boot-simulator` tool                          |
-| Take screenshot               | `screenshot` tool                              |
-| Describe screen (a11y tree)   | `describe` tool                                |
-| Read JS console logs          | `debugger-console-logs` tool                   |
-| Reload JS bundle              | `debugger-reload-metro` tool                   |
-| Check Metro status            | `debugger-status` tool                         |
-| Inspect React component tree  | `debugger-component-tree` tool                 |
-| Run JS in app                 | `debugger-evaluate` tool                       |
-| iOS native logs               | `npx react-native log-ios`                     |
-| Clean + reinstall (nuclear)   | See §3.1 step 3                                |
+| Goal                         | Tool / Command                                                                                                                           |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Check port 8081              | `lsof -i :8081`                                                                                                                          |
+| Kill Metro                   | `stop-metro` tool                                                                                                                        |
+| Start Metro                  | `npx react-native start`                                                                                                                 |
+| Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
+| Run iOS app                  | `npx react-native run-ios`                                                                                                               |
+| List devices                 | `list-devices` tool                                                                                                                      |
+| Boot simulator               | `boot-simulator` tool                                                                                                                    |
+| Take screenshot              | `screenshot` tool                                                                                                                        |
+| Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
+| Read JS console logs         | `debugger-log-registry` tool                                                                                                             |
+| Reload JS bundle             | `debugger-reload-metro` tool                                                                                                             |
+| Check Metro status           | `debugger-status` tool                                                                                                                   |
+| Inspect React component tree | `debugger-component-tree` tool                                                                                                           |
+| Run JS in app                | `debugger-evaluate` tool                                                                                                                 |
+| iOS native logs              | `npx react-native log-ios`                                                                                                               |
+| Clean + reinstall (nuclear)  | See §3.1 step 3                                                                                                                          |
 
 ---
 
@@ -230,7 +230,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | ------------------------------ | ------------------------------------------------------------------------------- |
 | `argent-simulator-setup`       | Initial simulator boot and connection setup                                     |
 | `argent-simulator-interact`    | Tapping, swiping, typing, hardware buttons, gestures on the simulator           |
-| `argent-metro-debugger`        | Full Metro CDP debugging: breakpoints, stepping, component inspection           |
+| `argent-metro-debugger`        | Full Metro CDP debugging: component inspection, console logs, JS evaluation     |
 | `argent-react-native-profiler` | Profiling performance, finding re-render issues, CPU hotspots                   |
 | `argent-test-ui-flow`          | Interactive UI testing with automatic screenshot verification after each action |
 

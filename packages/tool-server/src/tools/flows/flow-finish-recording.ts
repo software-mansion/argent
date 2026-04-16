@@ -17,12 +17,13 @@ export const flowFinishRecordingTool: ToolDefinition<
   }
 > = {
   id: "flow-finish-recording",
-  description: `Finish recording the active flow. Returns a summary of all recorded steps. You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
+  description: `Finish recording the active flow. Returns a summary of all recorded steps and the final YAML content. Use when you have added all desired steps and want to finalize the flow file. Fails if no active flow recording is in progress.
+You can still edit the .yaml file directly afterwards to remove or reorder steps.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
     const flowName = getActiveFlow();
-    const filePath = await getFlowPath(flowName);
+    const filePath = getFlowPath(flowName);
     const flowFile = await fs.readFile(filePath, "utf8");
     const flow = parseFlow(flowFile);
 

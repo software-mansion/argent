@@ -16,7 +16,7 @@ export const openUrlTool: ToolDefinition<
 > = {
   id: "open-url",
   description: `Open a URL or URL scheme on the simulator.
-Use this to open web pages in Safari, or launch apps via their URL schemes.
+Use when you need to navigate to a web page or deep-link into an app. Returns { opened, url }. Fails if the URL scheme is not registered on the simulator.
 
 Common URL schemes:
 - messages://              — Messages app

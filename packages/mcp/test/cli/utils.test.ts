@@ -10,6 +10,8 @@ import {
   detectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
+  formatShellCommand,
+  resolveProjectRoot,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
@@ -108,6 +110,46 @@ describe("dirExists", () => {
   });
 });
 
+// ── resolveProjectRoot ────────────────────────────────────────────────────────
+
+describe("resolveProjectRoot", () => {
+  it("returns the nearest managed project root", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    const nestedDir = path.join(projectRoot, "src", "deep");
+    fs.mkdirSync(path.join(projectRoot, ".claude"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(projectRoot);
+  });
+
+  it("prefers a nearer managed root over an ancestor git root", () => {
+    const repoRoot = path.join(tmpDir, "repo");
+    const nestedProjectRoot = path.join(repoRoot, "packages", "app");
+    const nestedDir = path.join(nestedProjectRoot, "src");
+    fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(nestedProjectRoot, ".cursor"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(nestedProjectRoot);
+  });
+
+  it("falls back to git root when no managed markers exist", () => {
+    const repoRoot = path.join(tmpDir, "repo");
+    const nestedDir = path.join(repoRoot, "src");
+    fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(repoRoot);
+  });
+
+  it("falls back to the starting directory when no markers exist", () => {
+    const nestedDir = path.join(tmpDir, "plain", "src");
+    fs.mkdirSync(nestedDir, { recursive: true });
+
+    expect(resolveProjectRoot(nestedDir)).toBe(nestedDir);
+  });
+});
+
 // ── detectPackageManager ──────────────────────────────────────────────────────
 
 describe("detectPackageManager", () => {
@@ -143,31 +185,72 @@ describe("detectPackageManager", () => {
 
 describe("globalInstallCommand", () => {
   it("npm", () => {
-    expect(globalInstallCommand("npm", "pkg")).toBe("npm install -g pkg");
+    expect(globalInstallCommand("npm", "pkg")).toEqual({
+      bin: "npm",
+      args: ["install", "-g", "pkg"],
+    });
   });
   it("yarn", () => {
-    expect(globalInstallCommand("yarn", "pkg")).toBe("yarn global add pkg");
+    expect(globalInstallCommand("yarn", "pkg")).toEqual({
+      bin: "yarn",
+      args: ["global", "add", "pkg"],
+    });
   });
   it("pnpm", () => {
-    expect(globalInstallCommand("pnpm", "pkg")).toBe("pnpm add -g pkg");
+    expect(globalInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-g", "pkg"],
+    });
   });
   it("bun", () => {
-    expect(globalInstallCommand("bun", "pkg")).toBe("bun add -g pkg");
+    expect(globalInstallCommand("bun", "pkg")).toEqual({ bin: "bun", args: ["add", "-g", "pkg"] });
+  });
+  it("preserves paths with spaces", () => {
+    const cmd = globalInstallCommand("npm", "/path/with spaces/pkg.tgz");
+    expect(cmd.args[2]).toBe("/path/with spaces/pkg.tgz");
   });
 });
 
 describe("globalUninstallCommand", () => {
   it("npm", () => {
-    expect(globalUninstallCommand("npm", "pkg")).toBe("npm uninstall -g pkg");
+    expect(globalUninstallCommand("npm", "pkg")).toEqual({
+      bin: "npm",
+      args: ["uninstall", "-g", "pkg"],
+    });
   });
   it("yarn", () => {
-    expect(globalUninstallCommand("yarn", "pkg")).toBe("yarn global remove pkg");
+    expect(globalUninstallCommand("yarn", "pkg")).toEqual({
+      bin: "yarn",
+      args: ["global", "remove", "pkg"],
+    });
   });
   it("pnpm", () => {
-    expect(globalUninstallCommand("pnpm", "pkg")).toBe("pnpm remove -g pkg");
+    expect(globalUninstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["remove", "-g", "pkg"],
+    });
   });
   it("bun", () => {
-    expect(globalUninstallCommand("bun", "pkg")).toBe("bun remove -g pkg");
+    expect(globalUninstallCommand("bun", "pkg")).toEqual({
+      bin: "bun",
+      args: ["remove", "-g", "pkg"],
+    });
+  });
+});
+
+// ── formatShellCommand ───────────────────────────────────────────────────────
+
+describe("formatShellCommand", () => {
+  it("joins bin and args", () => {
+    expect(formatShellCommand({ bin: "npm", args: ["install", "-g", "pkg"] })).toBe(
+      "npm install -g pkg"
+    );
+  });
+
+  it("quotes args that contain spaces", () => {
+    expect(
+      formatShellCommand({ bin: "npm", args: ["install", "-g", "/path/with spaces/pkg.tgz"] })
+    ).toBe('npm install -g "/path/with spaces/pkg.tgz"');
   });
 });
 

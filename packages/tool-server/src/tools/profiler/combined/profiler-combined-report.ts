@@ -1,10 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import {
-  REACT_PROFILER_SESSION_NAMESPACE,
-  type ReactProfilerSessionApi,
-  getCachedProfilerPaths,
-} from "../../../blueprints/react-profiler-session";
+import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import {
   IOS_PROFILER_SESSION_NAMESPACE,
   type IosProfilerSessionApi,
@@ -43,14 +39,14 @@ export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema
   description: `Generate a cross-correlated report combining React Profiler and iOS Instruments data.
 Maps iOS Instruments hangs to React commits using wall-clock time alignment.
 Requires both react-profiler-analyze and ios-profiler-analyze to have been called first.
-Call this tool when both profilers were run in parallel on the same session.`,
+Call this tool when both profilers were run in parallel on the same session.
+Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
+Fails if either react-profiler-analyze or ios-profiler-analyze has not been called first.`,
   zodSchema,
   services: (params) => ({
-    reactSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
     iosSession: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
-  async execute(services) {
-    const reactApi = services.reactSession as ReactProfilerSessionApi;
+  async execute(services, params) {
     const iosApi = services.iosSession as IosProfilerSessionApi;
 
     // Validate prerequisites
@@ -58,7 +54,8 @@ Call this tool when both profilers were run in parallel on the same session.`,
       throw new Error("No iOS Instruments data. Run ios-profiler-analyze first.");
     }
 
-    const sessionPaths = reactApi.sessionPaths ?? getCachedProfilerPaths(reactApi.port);
+    // Read-only: resolve react paths from cache only — no live CDP connection needed.
+    const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
     if (!sessionPaths?.commitsPath) {
       throw new Error("No React commit data. Run react-profiler-analyze first.");
     }
@@ -74,7 +71,7 @@ Call this tool when both profilers were run in parallel on the same session.`,
       cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
     }
 
-    const reactWallStart = reactApi.profileStartWallMs ?? onDisk.meta?.profileStartWallMs ?? null;
+    const reactWallStart = onDisk.meta?.profileStartWallMs ?? null;
     const iosWallStart = iosApi.wallClockStartMs;
 
     if (!reactWallStart && !iosWallStart) {
@@ -101,7 +98,7 @@ Call this tool when both profilers were run in parallel on the same session.`,
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
-    const hotIndices = sessionPaths.hotCommitIndices ?? reactApi.hotCommitIndices ?? [];
+    const hotIndices = sessionPaths.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
 

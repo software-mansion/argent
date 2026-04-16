@@ -11,8 +11,25 @@ const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
 // __dirname in ESM (compiled from TS) will be dist/
-const BUNDLE_PATH = path.join(import.meta.dirname, "tool-server.cjs");
-const BINARY_DIR = path.join(import.meta.dirname, "..", "bin");
+export const BUNDLED_RUNTIME_PATHS = {
+  bundlePath: path.join(import.meta.dirname, "tool-server.cjs"),
+  simulatorServerDir: path.join(import.meta.dirname, "..", "bin"),
+  nativeDevtoolsDir: path.join(import.meta.dirname, "..", "dylibs"),
+};
+
+const BUNDLE_PATH = BUNDLED_RUNTIME_PATHS.bundlePath;
+
+export function buildToolsServerEnv(
+  port: number,
+  baseEnv: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    PORT: String(port),
+    ARGENT_SIMULATOR_SERVER_DIR: BUNDLED_RUNTIME_PATHS.simulatorServerDir,
+    ARGENT_NATIVE_DEVTOOLS_DIR: BUNDLED_RUNTIME_PATHS.nativeDevtoolsDir,
+  };
+}
 
 interface ToolsServerState {
   port: number;
@@ -74,14 +91,10 @@ function spawnToolsServer(port: number): Promise<{ port: number; pid: number }> 
       logFd = fs.openSync("/dev/null", "w");
     }
 
-    const child = spawn("node", [BUNDLE_PATH], {
+    const child = spawn("node", [BUNDLE_PATH, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],
-      env: {
-        ...process.env,
-        PORT: String(port),
-        ARGENT_SIMULATOR_SERVER_DIR: BINARY_DIR,
-      },
+      env: buildToolsServerEnv(port),
     });
 
     child.unref();

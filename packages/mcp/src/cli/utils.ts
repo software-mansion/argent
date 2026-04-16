@@ -19,9 +19,51 @@ export function resolvePackageRoot(dirname: string): string {
 }
 
 export const PACKAGE_ROOT = resolvePackageRoot(import.meta.dirname);
-export const SKILLS_DIR = path.join(PACKAGE_ROOT, "skills");
-export const RULES_DIR = path.join(PACKAGE_ROOT, "rules");
-export const AGENTS_DIR = path.join(PACKAGE_ROOT, "agents");
+
+function resolveBundledDir(dirName: "skills" | "rules" | "agents"): string {
+  const packagedDir = path.join(PACKAGE_ROOT, dirName);
+  if (fs.existsSync(packagedDir)) return packagedDir;
+
+  // In the monorepo source tree, these assets live under packages/skills/.
+  return path.resolve(PACKAGE_ROOT, "..", "skills", dirName);
+}
+
+export const SKILLS_DIR = resolveBundledDir("skills");
+export const RULES_DIR = resolveBundledDir("rules");
+export const AGENTS_DIR = resolveBundledDir("agents");
+
+const PROJECT_ROOT_MARKERS = [
+  ".mcp.json",
+  ".claude",
+  ".cursor",
+  ".vscode",
+  ".gemini",
+  ".codex",
+  ".agents",
+  ".zed",
+  "skills-lock.json",
+];
+
+export function resolveProjectRoot(startDir: string): string {
+  const initialDir = path.resolve(startDir);
+  let currentDir = initialDir;
+
+  while (true) {
+    if (PROJECT_ROOT_MARKERS.some((marker) => fs.existsSync(path.join(currentDir, marker)))) {
+      return currentDir;
+    }
+
+    if (fs.existsSync(path.join(currentDir, ".git"))) {
+      return currentDir;
+    }
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) {
+      return initialDir;
+    }
+    currentDir = parentDir;
+  }
+}
 
 // ── TOML helpers ─────────────────────────────────────────────────────────────
 
@@ -97,6 +139,16 @@ export function getLatestVersion(): string {
 
 export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
 
+export interface ShellCommand {
+  bin: string;
+  args: string[];
+}
+
+export function formatShellCommand(cmd: ShellCommand): string {
+  const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
+  return parts.join(" ");
+}
+
 export function detectPackageManager(): PackageManager {
   const agent = process.env.npm_config_user_agent ?? "";
   if (agent.startsWith("yarn")) return "yarn";
@@ -105,28 +157,28 @@ export function detectPackageManager(): PackageManager {
   return "npm";
 }
 
-export function globalInstallCommand(pm: PackageManager, pkg: string): string {
+export function globalInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
-      return `yarn global add ${pkg}`;
+      return { bin: "yarn", args: ["global", "add", pkg] };
     case "pnpm":
-      return `pnpm add -g ${pkg}`;
+      return { bin: "pnpm", args: ["add", "-g", pkg] };
     case "bun":
-      return `bun add -g ${pkg}`;
+      return { bin: "bun", args: ["add", "-g", pkg] };
     default:
-      return `npm install -g ${pkg}`;
+      return { bin: "npm", args: ["install", "-g", pkg] };
   }
 }
 
-export function globalUninstallCommand(pm: PackageManager, pkg: string): string {
+export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
-      return `yarn global remove ${pkg}`;
+      return { bin: "yarn", args: ["global", "remove", pkg] };
     case "pnpm":
-      return `pnpm remove -g ${pkg}`;
+      return { bin: "pnpm", args: ["remove", "-g", pkg] };
     case "bun":
-      return `bun remove -g ${pkg}`;
+      return { bin: "bun", args: ["remove", "-g", pkg] };
     default:
-      return `npm uninstall -g ${pkg}`;
+      return { bin: "npm", args: ["uninstall", "-g", pkg] };
   }
 }

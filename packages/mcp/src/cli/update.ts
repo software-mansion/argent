@@ -1,12 +1,13 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
   getInstalledVersion,
   getLatestVersion,
   detectPackageManager,
   globalInstallCommand,
+  formatShellCommand,
   RULES_DIR,
   AGENTS_DIR,
 } from "./utils.js";
@@ -46,6 +47,7 @@ export async function update(args: string[]): Promise<void> {
 
     const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+    const cmdStr = formatShellCommand(cmd);
 
     if (!nonInteractive) {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
@@ -61,12 +63,12 @@ export async function update(args: string[]): Promise<void> {
       }
     }
 
-    p.log.info(`Running: ${pc.dim(cmd)}`);
+    p.log.info(`Running: ${pc.dim(cmdStr)}`);
 
     await killToolServer();
 
     try {
-      execSync(cmd, {
+      execFileSync(cmd.bin, cmd.args, {
         stdio: "inherit",
         env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
       });
@@ -133,7 +135,7 @@ export async function update(args: string[]): Promise<void> {
     p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
     const checkSkills = await p.confirm({
-      message: "Check if skills have updates? (runs npx skills check)",
+      message: "Check if skills have updates? — runs npx skills check",
       initialValue: true,
     });
 

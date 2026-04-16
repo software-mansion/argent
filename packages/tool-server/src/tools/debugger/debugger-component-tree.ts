@@ -485,6 +485,7 @@ export function buildTextTree(
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   onScreenOnly: z
     .boolean()
     .default(true)
@@ -513,7 +514,7 @@ const zodSchema = z.object({
 
 export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "debugger-component-tree",
-  description: `Describe the current screen of a running React Native app as a compact text tree.
+  description: `Fetch the current screen of a running React Native app as a compact component text tree.
 Only shows on-screen components with unique positions — off-screen (scrolled) content,
 full-screen transparent wrappers, and implementation-detail components are pruned.
 
@@ -528,10 +529,11 @@ Workflow:
   3. Use the (tap: x,y) coordinates directly with the tap tool.
 
 Call again after navigation or state changes since positions may shift.
-Set includeSkipped=true to see a summary of all filtered components.`,
+Set includeSkipped=true to see a summary of all filtered components.
+Use when you need tap coordinates for a React Native UI element. Returns a compact text tree with (tap: x,y) coords. Fails if Metro debugger is not connected.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -554,10 +556,18 @@ Set includeSkipped=true to see a summary of all filtered components.`,
       return `Error: ${parsed.error}`;
     }
 
-    return buildTextTree(parsed, {
+    const tree = buildTextTree(parsed, {
       onScreenOnly: params.onScreenOnly,
       maxNodes: params.maxNodes,
       includeSkipped: params.includeSkipped,
     });
+
+    const deviceLine = [
+      `device: ${api.deviceName}`,
+      `app: ${api.appName}`,
+      ...(api.logicalDeviceId ? [`udid: ${api.logicalDeviceId}`] : []),
+    ].join(" | ");
+
+    return `[${deviceLine}]\n${tree}`;
   },
 };

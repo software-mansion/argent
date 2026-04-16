@@ -1,5 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { execSync, spawn } from "node:child_process";
 import {
   detectAdapters,
@@ -16,31 +18,39 @@ import {
   getLatestVersion,
   detectPackageManager,
   globalInstallCommand,
+  formatShellCommand,
+  type ShellCommand,
 } from "./utils.js";
-import { PACKAGE_NAME } from "./constants.js";
+import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
+
+// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
+// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
+// so `which argent` succeeds even though argent is not permanently installed globally.
+const TEMP_RUNNER_MARKERS = [
+  "_npx",
+  "/dlx-",
+  "\\dlx-",
+  "bun/install/cache",
+  ".bun\\install\\cache",
+];
 
 function isGloballyInstalled(): boolean {
   try {
-    const raw = execSync(`npm list -g ${PACKAGE_NAME} --depth=0 --json`, {
+    const cmd = process.platform === "win32" ? "where" : "which";
+    const binaryPath = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    });
-    const data = JSON.parse(raw) as {
-      dependencies?: Record<string, unknown>;
-    };
-    return !!data?.dependencies?.[PACKAGE_NAME];
+    }).trim();
+    return !TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
   } catch {
     return false;
   }
 }
 
-function runShellCommand(cmd: string): Promise<void> {
+function runShellCommand(cmd: ShellCommand): Promise<void> {
   return new Promise((resolve, reject) => {
-    const parts = cmd.split(" ");
-    const bin = parts[0]!;
-    const args = parts.slice(1);
     const isWin = process.platform === "win32";
-    const child = spawn(isWin ? `${bin}.cmd` : bin, args, {
+    const child = spawn(isWin ? `${cmd.bin}.cmd` : cmd.bin, cmd.args, {
       stdio: ["ignore", "pipe", "pipe"],
       shell: isWin,
     });
@@ -73,7 +83,7 @@ export async function init(args: string[]): Promise<void> {
 
   p.intro(pc.bgCyan(pc.black(" argent init ")));
 
-  const version = getInstalledVersion() ?? "unknown";
+  let version = getInstalledVersion() ?? "unknown";
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
@@ -83,7 +93,7 @@ export async function init(args: string[]): Promise<void> {
   if (!globallyInstalled) {
     if (!nonInteractive) {
       const installChoice = await p.select({
-        message: "argent is not installed globally. Would you like to install it?",
+        message: "Argent is not installed globally. Would you like to install it?",
         options: [
           {
             value: "global" as const,
@@ -106,15 +116,34 @@ export async function init(args: string[]): Promise<void> {
     const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
     const cmd = globalInstallCommand(pm, installTarget);
+    const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
+      version = getInstalledVersion() ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install argent manually with: ${pc.cyan(cmd)}`);
+      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+      process.exit(1);
+    }
+  } else if (fromTar) {
+    // --from flag: reinstall from the specified tarball/path
+    const pm = detectPackageManager();
+    const cmd = globalInstallCommand(pm, fromTar);
+    const cmdStr = formatShellCommand(cmd);
+    const spinner = p.spinner();
+    spinner.start(`Installing from ${fromTar}...`);
+    try {
+      await runShellCommand(cmd);
+      spinner.stop(pc.green("Installed from tarball."));
+      version = getInstalledVersion() ?? version;
+    } catch (err) {
+      spinner.stop(pc.red("Installation failed."));
+      p.log.error(`${err}`);
+      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
   } else {
@@ -124,7 +153,7 @@ export async function init(args: string[]): Promise<void> {
     try {
       latest = getLatestVersion();
     } catch {
-      // Registry unreachable — silently skip
+      // Registry unreachable - silently skip
     }
     spinner.stop(pc.dim("Version check complete."));
 
@@ -148,15 +177,17 @@ export async function init(args: string[]): Promise<void> {
         if (!p.isCancel(updateChoice) && updateChoice === "update") {
           const pm = detectPackageManager();
           const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+          const cmdStr = formatShellCommand(cmd);
           const updateSpinner = p.spinner();
           updateSpinner.start(`Updating to v${latest}...`);
           try {
             await runShellCommand(cmd);
             updateSpinner.stop(pc.green(`Updated to v${latest}.`));
+            version = getInstalledVersion() ?? version;
           } catch (err) {
             updateSpinner.stop(pc.red("Update failed."));
             p.log.error(`${err}`);
-            p.log.info(`You can update manually later: ${pc.cyan(cmd)}`);
+            p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
           }
         }
       }
@@ -184,7 +215,7 @@ export async function init(args: string[]): Promise<void> {
     p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
 
     const selected = await p.multiselect({
-      message: "Which editors should argent be configured for?",
+      message: "Which editors should Argent be configured for?",
       options: choices,
       initialValues: detected,
       required: true,
@@ -200,11 +231,12 @@ export async function init(args: string[]): Promise<void> {
 
   p.log.info(`Editors: ${selectedAdapters.map((a) => pc.cyan(a.name)).join(", ")}`);
 
-  // Ask scope: global or local
-  let scope: "local" | "global";
+  // Ask scope: global, local, or custom path
+  let scope: "local" | "global" | "custom";
+  let customRoot: string | undefined;
 
   if (nonInteractive) {
-    scope = "global";
+    scope = "local";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
 
@@ -212,14 +244,19 @@ export async function init(args: string[]): Promise<void> {
       message: "Install MCP server globally or locally?",
       options: [
         {
-          value: "global" as const,
-          label: "Global",
-          hint: "Available across all projects (~/.*/mcp.json)",
-        },
-        {
           value: "local" as const,
           label: "Local",
-          hint: "Current project only (.cursor/mcp.json, .mcp.json, ...)",
+          hint: "Current project only - .cursor/mcp.json, .mcp.json, ...",
+        },
+        {
+          value: "global" as const,
+          label: "Global",
+          hint: "Available across all projects - ~/.*/mcp.json",
+        },
+        {
+          value: "custom" as const,
+          label: "Specify installation directory",
+          hint: "Specify a directory to use as the project root",
         },
       ],
     });
@@ -229,15 +266,38 @@ export async function init(args: string[]): Promise<void> {
       process.exit(0);
     }
 
-    scope = scopeChoice as "local" | "global";
+    scope = scopeChoice as "local" | "global" | "custom";
+
+    if (scope === "custom") {
+      const customPathInput = await p.text({
+        message: "Enter the path to use as the project root for MCP config:",
+        placeholder: process.cwd(),
+        validate(value) {
+          if (!value?.trim()) return "Path cannot be empty.";
+          const resolved = resolve(value.trim());
+          if (!existsSync(resolved))
+            return `Path does not exist: ${resolved}. Please verify and enter a valid path.`;
+        },
+      });
+
+      if (p.isCancel(customPathInput)) {
+        p.cancel("Initialization cancelled.");
+        process.exit(0);
+      }
+
+      customRoot = resolve((customPathInput as string).trim());
+    }
   }
 
   const projectRoot = process.cwd();
+  const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
+  const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
   const mcpEntry = getMcpEntry();
   const mcpResults: string[] = [];
 
   for (const adapter of selectedAdapters) {
-    const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(projectRoot);
+    const configPath =
+      scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
 
     if (!configPath) {
       if (scope === "global" && adapter.projectPath(projectRoot)) {
@@ -278,7 +338,7 @@ export async function init(args: string[]): Promise<void> {
   if (adaptersWithAllowlist.length > 0) {
     p.log.info(
       `By default, editors ask for confirmation before running each MCP tool.\n` +
-        `  Adding argent to the auto-approve allowlist lets tools run without\n` +
+        `  Adding Argent to the auto-approve allowlist lets tools run without\n` +
         `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`
     );
 
@@ -288,7 +348,7 @@ export async function init(args: string[]): Promise<void> {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const allowlistChoice = await p.confirm({
-        message: "Add argent tools to editor auto-approve lists? (recommended)",
+        message: "Add Argent tools to editor auto-approve lists? - recommended",
         initialValue: true,
       });
 
@@ -305,8 +365,16 @@ export async function init(args: string[]): Promise<void> {
     const allowlistResults: string[] = [];
 
     for (const adapter of adaptersWithAllowlist) {
+      const hasPath =
+        normalizedScope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
+      if (!hasPath) {
+        allowlistResults.push(
+          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config for this scope)")}`
+        );
+        continue;
+      }
       try {
-        adapter.addAllowlist!(projectRoot, scope);
+        adapter.addAllowlist!(effectiveRoot, normalizedScope);
         allowlistResults.push(`${pc.green("+")} ${adapter.name}`);
       } catch (err) {
         allowlistResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
@@ -315,7 +383,7 @@ export async function init(args: string[]): Promise<void> {
 
     for (const adapter of adaptersWithoutAllowlist) {
       allowlistResults.push(
-        `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no auto-approve API — configure manually)")}`
+        `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no auto-approve API - configure manually)")}`
       );
     }
 
@@ -325,7 +393,7 @@ export async function init(args: string[]): Promise<void> {
   // ── Step 2: Skills Installation ─────────────────────────────────────────────
 
   p.log.step(pc.bold("Step 2: Skills Installation"));
-  p.log.warn(pc.yellow("Skills installation is required for argent to function properly."));
+  p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
 
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
@@ -346,7 +414,7 @@ export async function init(args: string[]): Promise<void> {
         {
           value: "interactive" as const,
           label: "Interactive",
-          hint: "Full npx skills TUI — choose skills, agents, and method",
+          hint: "Full npx skills TUI - choose skills, agents, and method",
         },
         {
           value: "manual" as const,
@@ -373,10 +441,10 @@ export async function init(args: string[]): Promise<void> {
         `To install manually, copy them to your editor's skills directory:`,
         ``,
         `  ${pc.dim("# Claude Code")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : ".claude/skills/"}`,
+        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
         ``,
         `  ${pc.dim("# Cursor")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : ".cursor/skills/"}`,
+        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
         ``,
         `  ${pc.dim("# Or use npx skills directly:")}`,
         `  npx skills add ${SKILLS_DIR}`,
@@ -402,7 +470,8 @@ export async function init(args: string[]): Promise<void> {
     }
 
     try {
-      await runNpxSkills(skillsArgs, skillsMethod === "interactive");
+      const skillsCwd = scope === "custom" ? customRoot : undefined;
+      await runNpxSkills(skillsArgs, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
@@ -421,8 +490,8 @@ export async function init(args: string[]): Promise<void> {
 
   const copyResults = copyRulesAndAgents(
     selectedAdapters,
-    projectRoot,
-    scope,
+    effectiveRoot,
+    normalizedScope,
     RULES_DIR,
     AGENTS_DIR
   );
@@ -443,7 +512,7 @@ export async function init(args: string[]): Promise<void> {
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
-  p.outro(pc.green("argent is ready!"));
+  p.outro(pc.green("Argent is ready!"));
 }
 
 export function printBanner(): void {
@@ -468,12 +537,13 @@ export function printBanner(): void {
   console.log();
 }
 
-function runNpxSkills(args: string[], interactive: boolean): Promise<void> {
+function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
     const child = spawn(npxCmd, args, {
       stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
+      ...(cwd ? { cwd } : {}),
     });
 
     let stdout = "";

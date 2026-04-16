@@ -1,4 +1,5 @@
 node_modules/
+.yarn
 
 # Build outputs
 dist/
@@ -25,11 +26,18 @@ packages/*/node_modules/
 *.log
 1export
 
+# Downloaded signed binaries (fetched via scripts/download-*.sh)
+packages/native-devtools-ios/bin/simulator-server
+packages/native-devtools-ios/bin/ax-service
+packages/native-devtools-ios/dylibs/
+
 # MCP package generated assets (copied/bundled at build time)
 packages/mcp/bin/
+packages/mcp/dylibs/
 packages/mcp/skills/
 packages/mcp/agents/
 packages/mcp/rules/
+packages/mcp/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/

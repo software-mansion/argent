@@ -5,19 +5,26 @@ import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logb
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
 });
 
 export const debuggerReloadMetroTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { reloaded: boolean; port: number; method: "cdp" | "http" }
+  {
+    reloaded: boolean;
+    port: number;
+    method: "cdp" | "http";
+    deviceName: string;
+    appName: string;
+    logicalDeviceId: string | undefined;
+  }
 > = {
   id: "debugger-reload-metro",
-  description: `Ask the Metro server currently in use to reload the connected app's JS bundle.
-Equivalent to pressing "r" in the Metro terminal. Use after code changes or to get a clean app state without restarting the native process.
-Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Bridgeless), then falls back to Metro's HTTP /reload endpoint for older setups.`,
+  description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
+Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -30,10 +37,16 @@ Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Br
 
     // Primary: CDP Page.reload — works reliably with RN 0.76+ (Fusebox/Bridgeless).
     // Triggers a full JS execution context teardown and restart without touching the native shell.
+    const context = {
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
+    };
+
     try {
       await api.cdp.send("Page.reload");
       disableLogBox();
-      return { reloaded: true, port, method: "cdp" };
+      return { reloaded: true, port, method: "cdp", ...context };
     } catch {
       // Fall through to HTTP fallback
     }
@@ -49,6 +62,6 @@ Tries the CDP Page.reload method first (works with React Native 0.76+ Fusebox/Br
       );
     }
     disableLogBox();
-    return { reloaded: true, port, method: "http" };
+    return { reloaded: true, port, method: "http", ...context };
   },
 };

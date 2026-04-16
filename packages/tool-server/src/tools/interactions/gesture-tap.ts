@@ -16,10 +16,11 @@ export const gestureTapTool: ToolDefinition<
   { tapped: boolean; timestampMs: number }
 > = {
   id: "gesture-tap",
-  description: `Tap the simulator screen at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
+  description: `Press the simulator screen at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
 Sends a Down event followed by an Up event at the same point.
-
-Before tapping, determine the correct coordinates by using debugger-component-tree, describe or screenshot tools. More information in simulator-interact skill`,
+Use when you need to tap a button, link, or any tappable element on the simulator screen.
+Returns { tapped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.
+Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`simulator-interact\` skill`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

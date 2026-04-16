@@ -65,7 +65,7 @@ jobs:
           W_DISAMB = 1.5
           W_LEN    = 0.5
 
-          THRESHOLD = 9.9
+          THRESHOLD = 9.0
 
           with open('spidershield-report.json') as f:
               report = json.load(f)

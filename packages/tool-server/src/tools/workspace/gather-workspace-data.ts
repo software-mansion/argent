@@ -13,7 +13,7 @@ export const gatherWorkspaceDataTool: ToolDefinition<
   WorkspaceSnapshot
 > = {
   id: "gather-workspace-data",
-  description: `Gather a structured snapshot of a mobile app project's workspace.
+  description: `Fetch a structured snapshot of a mobile app project's workspace.
 
 Returns package.json contents, metro/babel config text, app.json, eas.json, tsconfig,
 platform directory presence (ios/, android/), lockfile type, .env file keys (no values),
@@ -26,7 +26,10 @@ If you are a subagent tasked with exploring the project environment, run this as
 provides the raw data needed to determine the project type (React Native, Expo,
 Flutter, native iOS/Android, or other), build commands, startup scripts, platform
 support, package manager, and QA tooling. Follow up with Read/Glob/Grep for deeper
-exploration of anything the snapshot surfaces.`,
+exploration of anything the snapshot surfaces.
+Use when you need to inspect project configuration without manually reading multiple files.
+Returns partial data if workspacePath does not exist or is not readable; missing items are represented as null or empty collections.
+Fails if the workspacePath is not an absolute path or the directory cannot be accessed.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

@@ -35,14 +35,14 @@ execSync("npm run pack:mcp", { cwd: root, stdio: "inherit" });
 const mcpPkg = JSON.parse(
   fs.readFileSync(path.join(root, "packages", "mcp", "package.json"), "utf8")
 );
-const tarball = path.join(root, `software-mansion-argent-${mcpPkg.version}.tgz`);
+const tarball = path.join(root, `swmansion-argent-${mcpPkg.version}.tgz`);
 
 // ---------------------------------------------------------------------------
 // Uninstall existing argent, then init from tarball
 // ---------------------------------------------------------------------------
 console.log(`\nUninstalling existing argent...`);
 try {
-  execSync("npm uninstall @software-mansion/argent", {
+  execSync("npm uninstall @swmansion/argent", {
     cwd: projectRoot,
     stdio: "inherit",
   });
@@ -50,7 +50,7 @@ try {
   // Not installed locally — that's fine
 }
 try {
-  execSync("npm uninstall -g @software-mansion/argent", { stdio: "inherit" });
+  execSync("npm uninstall -g @swmansion/argent", { stdio: "inherit" });
 } catch {
   // Not installed globally — that's fine
 }
