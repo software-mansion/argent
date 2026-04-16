@@ -97,8 +97,9 @@ export function start(): void {
     });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
-  process.on("SIGINT", () => (shutdown ? shutdown() : process.exit(0)));
-  process.on("SIGTERM", () => (shutdown ? shutdown() : process.exit(0)));
+  // Arrow wrapper prevents Node passing the signal string as `exitCode`
+  process.on("SIGINT", () => shutdown!());
+  process.on("SIGTERM", () => shutdown!());
 
   // When stdout is piped to a parent that stops reading (e.g. the MCP launcher
   // after it captures the startup line), writes via console.log emit EPIPE.
