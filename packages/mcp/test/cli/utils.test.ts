@@ -5,8 +5,8 @@ import * as os from "node:os";
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 // These are hoisted so `vi.mock` can reference them. They let the network-
-// dependent helpers (`isOnline`, `isSkillsCliAvailable`, `getLatestVersion`)
-// be tested deterministically without touching DNS or spawning `npm`/`npx`.
+// dependent helpers (`isOnline`, `isSkillsCliAvailable`) be tested
+// deterministically without touching DNS or spawning `npx`.
 
 const { dnsLookupMock, execSyncMock } = vi.hoisted(() => ({
   dnsLookupMock: vi.fn(),

@@ -407,7 +407,6 @@ export async function init(args: string[]): Promise<void> {
 
     const choice = await p.select({
       message: "How would you like to install skills?",
-      initialValue: skillsCliReady ? "default" : "manual",
       options: [
         {
           value: "default" as const,
