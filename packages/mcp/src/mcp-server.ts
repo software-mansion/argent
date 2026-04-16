@@ -63,7 +63,8 @@ export async function startMcpServer(): Promise<void> {
   }
 
   const parsedTimeout = parseInt(process.env.ARGENT_FETCH_TIMEOUT_MS ?? "30000", 10);
-  const FETCH_TIMEOUT_MS = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30_000;
+  const FETCH_TIMEOUT_MS =
+    Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30_000;
 
   async function fetchWithReconnect(getUrl: () => string, init?: RequestInit): Promise<Response> {
     const MAX_RETRIES = 4;
