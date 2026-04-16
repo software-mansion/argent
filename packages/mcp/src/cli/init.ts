@@ -468,9 +468,7 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    const npxArgs = offlineWithCache
-      ? ["--no-install", ...skillsArgs]
-      : skillsArgs;
+    const npxArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
 
     p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
 

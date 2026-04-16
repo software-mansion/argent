@@ -416,4 +416,3 @@ describe("isSkillsCliAvailable", () => {
     expect(opts!.timeout!).toBeGreaterThan(0);
   });
 });
-

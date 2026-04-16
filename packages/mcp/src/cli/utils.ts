@@ -136,11 +136,13 @@ export function getLatestVersion(): string {
   return result.trim();
 }
 
+const PROBE_TIMEOUT_MS = 8_000;
+
 export function isSkillsCliAvailable(): boolean {
   try {
     execSync("npx --no-install skills --version", {
       stdio: ["ignore", "ignore", "ignore"],
-      timeout: 2_000,
+      timeout: PROBE_TIMEOUT_MS,
     });
     return true;
   } catch {
@@ -148,7 +150,7 @@ export function isSkillsCliAvailable(): boolean {
   }
 }
 
-export async function isOnline(timeoutMs = 1500): Promise<boolean> {
+export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
   let host: string;
   try {
     host = new URL(NPM_REGISTRY).hostname;
