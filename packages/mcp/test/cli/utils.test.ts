@@ -40,7 +40,6 @@ import {
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
-  getLatestVersion,
   isOnline,
   isSkillsCliAvailable,
   resolveProjectRoot,
@@ -48,7 +47,7 @@ import {
   RULES_DIR,
   AGENTS_DIR,
 } from "../../src/cli/utils.js";
-import { NPM_REGISTRY, PACKAGE_NAME } from "../../src/cli/constants.js";
+import { NPM_REGISTRY } from "../../src/cli/constants.js";
 
 let tmpDir: string;
 
@@ -418,58 +417,3 @@ describe("isSkillsCliAvailable", () => {
   });
 });
 
-// ── getLatestVersion ─────────────────────────────────────────────────────────
-
-describe("getLatestVersion", () => {
-  beforeEach(() => {
-    execSyncMock.mockReset();
-  });
-
-  it("returns the trimmed version reported by `npm view`", () => {
-    execSyncMock.mockReturnValue("9.9.9\n");
-
-    expect(getLatestVersion()).toBe("9.9.9");
-  });
-
-  it("queries the package name and registry from constants", () => {
-    execSyncMock.mockReturnValue("1.0.0\n");
-
-    getLatestVersion();
-
-    const [cmd] = execSyncMock.mock.calls[0]!;
-    expect(cmd).toContain(`npm view ${PACKAGE_NAME} version`);
-    expect(cmd).toContain(`--registry ${NPM_REGISTRY}`);
-  });
-
-  it("pipes stderr so 404s do not leak to the terminal", () => {
-    // Regression guard for the previous behavior where `stdio: 'inherit'` let
-    // `npm view`'s 404 output bleed into the init UI on fresh/private
-    // packages. stderr must be captured (piped), not inherited.
-    execSyncMock.mockReturnValue("1.0.0\n");
-
-    getLatestVersion();
-
-    const opts = execSyncMock.mock.calls[0]![1] as
-      | { stdio?: [unknown, unknown, unknown] }
-      | undefined;
-    expect(opts?.stdio).toEqual(["ignore", "pipe", "pipe"]);
-  });
-
-  it("passes a timeout to bound the registry probe", () => {
-    execSyncMock.mockReturnValue("1.0.0\n");
-
-    getLatestVersion();
-
-    const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
-    expect(typeof opts?.timeout).toBe("number");
-    expect(opts!.timeout!).toBeGreaterThan(0);
-  });
-
-  it("propagates errors from `npm view` to the caller", () => {
-    execSyncMock.mockImplementation(() => {
-      throw new Error("E404");
-    });
-
-    expect(() => getLatestVersion()).toThrow("E404");
-  });
-});

@@ -132,8 +132,6 @@ export function getInstalledVersion(): string | null {
 export function getLatestVersion(): string {
   const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 10_000,
   });
   return result.trim();
 }
