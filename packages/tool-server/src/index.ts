@@ -105,10 +105,14 @@ export function start(): void {
       process.stderr.write(`[tool-server] stdout error: ${err.message}\n`);
     }
   });
-  process.stderr.on("error", () => {
-    // stderr is broken — can't log there. Writing to stdout instead would risk
-    // corrupting the startup handshake (launcher reads the first stdout line to
-    // extract the tool-server URL). Safest to swallow silently.
+  process.stderr.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code !== "EPIPE") {
+      try {
+        process.stdout.write(`[tool-server] stderr error: ${err.message}\n`);
+      } catch {
+        /* both streams broken */
+      }
+    }
   });
 }
 
