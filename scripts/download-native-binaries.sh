@@ -4,7 +4,7 @@ set -euo pipefail
 # Downloads signed native binaries (dylibs + ax-service) from argent-private-releases.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
-#   release-tag  Tag to download from (e.g. argent-v0.4.3). Defaults to argent-main.
+#   release-tag  Tag to download from (e.g. argent-v0.4.5). Defaults to argent-main.
 #
 # Requires:
 #   - gh CLI (no authentication needed — the repo is public)
