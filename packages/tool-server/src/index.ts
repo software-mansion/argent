@@ -60,7 +60,9 @@ export function start(): void {
     httpHandle.dispose();
     await registry.dispose();
     if (server) {
+      const forceExit = setTimeout(() => process.exit(exitCode), 5_000);
       await new Promise<void>((resolve) => server!.close(() => resolve()));
+      clearTimeout(forceExit);
     }
     process.exit(exitCode);
   };
