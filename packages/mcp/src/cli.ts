@@ -15,6 +15,18 @@ import { PACKAGE_NAME } from "./cli/constants.js";
 import { getInstalledVersion } from "./cli/utils.js";
 
 const [, , command, ...rest] = process.argv;
+const isMcpServer = command === "mcp";
+
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`[argent] Uncaught exception: ${err.stack ?? err}\n`);
+  if (!isMcpServer) process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(
+    `[argent] Unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : reason}\n`
+  );
+  if (!isMcpServer) process.exit(1);
+});
 
 function printHelp(): void {
   const version = getInstalledVersion() ?? "unknown";
