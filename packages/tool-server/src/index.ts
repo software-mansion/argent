@@ -6,6 +6,17 @@ import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
 
 export function start(): void {
+  process.on("uncaughtException", (err) => {
+    process.stderr.write(`[tool-server] Uncaught exception: ${err.stack ?? err}\n`);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    process.stderr.write(
+      `[tool-server] Unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : reason}\n`
+    );
+    process.exit(1);
+  });
+
   // ── Config ────────────────────────────────────────────────────────
   const PORT = parseInt(process.env.PORT ?? "3001", 10);
   const idleMinutes = parseInt(

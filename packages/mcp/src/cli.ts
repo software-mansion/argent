@@ -67,6 +67,17 @@ async function main(): Promise<void> {
   }
 }
 
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`[argent] Uncaught exception: ${err.stack ?? err}\n`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(
+    `[argent] Unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : reason}\n`
+  );
+  process.exit(1);
+});
+
 main().catch((err) => {
   console.error(err);
   process.exit(1);
