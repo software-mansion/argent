@@ -12,6 +12,7 @@ import {
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
+import { PROCESS_TIMEOUT_MS } from "./consts.js";
 
 export async function startMcpServer(): Promise<void> {
   let TOOLS_URL: string;
@@ -272,7 +273,7 @@ export async function startMcpServer(): Promise<void> {
   if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
     process.stdin.on("close", () => {
       fetch(`${TOOLS_URL}/shutdown`, { method: "POST" }).catch(() => {});
-      setTimeout(() => process.exit(0), 5_000);
+      setTimeout(() => process.exit(0), PROCESS_TIMEOUT_MS);
     });
   }
 }

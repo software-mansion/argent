@@ -4,6 +4,7 @@ import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
+import { PROCESS_TIMEOUT_MS } from "./consts";
 
 export function start(): void {
   // ── Global error handlers ─────────────────────────────────────────
@@ -16,8 +17,7 @@ export function start(): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     if (shuttingDown) return; // avoid re-entrant shutdown
     shuttingDown = true;
-    // 5s grace period for registry.dispose() to clean up child processes
-    const forceExit = setTimeout(() => process.exit(1), 5_000);
+    setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
     } else {
@@ -60,7 +60,7 @@ export function start(): void {
     httpHandle.dispose();
     await registry.dispose();
     if (server) {
-      const forceExit = setTimeout(() => process.exit(exitCode), 5_000);
+      const forceExit = setTimeout(() => process.exit(exitCode), PROCESS_TIMEOUT_MS);
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       clearTimeout(forceExit);
     }
