@@ -88,8 +88,10 @@ export const listDevicesTool: ToolDefinition = {
     });
 
     // Optionally scan for physical devices
+    let physicalDevicesError: string | undefined;
     if (include_physical_devices) {
-      const physicalDevices = await listPhysicalDevices();
+      const { devices: physicalDevices, error } = await listPhysicalDevices();
+      physicalDevicesError = error;
       for (const pd of physicalDevices) {
         devices.push({
           type: "physical_device",
@@ -102,6 +104,8 @@ export const listDevicesTool: ToolDefinition = {
       }
     }
 
-    return { devices };
+    return physicalDevicesError
+      ? { devices, physicalDevicesError }
+      : { devices };
   },
 };

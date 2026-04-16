@@ -306,11 +306,18 @@ export interface PhysicalDevice {
   connectionType: string;
 }
 
+export interface ListPhysicalDevicesResult {
+  devices: PhysicalDevice[];
+  error?: string;
+}
+
 /**
  * List physical iOS devices connected to the host via `devicectl`.
- * Returns an empty array if devicectl is unavailable (Xcode < 15).
+ * Returns `{ devices: [] }` on success with no devices, or `{ devices: [], error }`
+ * when devicectl itself fails (e.g. Xcode < 15, device locked/untrusted) so the
+ * caller can surface the reason instead of silently reporting "no devices".
  */
-export async function listPhysicalDevices(): Promise<PhysicalDevice[]> {
+export async function listPhysicalDevices(): Promise<ListPhysicalDevicesResult> {
   const tmpFile = tmpJsonPath();
   try {
     await execFileAsync(
@@ -321,7 +328,7 @@ export async function listPhysicalDevices(): Promise<PhysicalDevice[]> {
 
     const data = await readDevicectlJson<DevicectlListResult>(tmpFile);
 
-    return data.result.devices
+    const devices = data.result.devices
       .filter((d) => d.hardwareProperties.platform === "iOS")
       .map((d) => ({
         udid: d.hardwareProperties.udid,
@@ -333,8 +340,15 @@ export async function listPhysicalDevices(): Promise<PhysicalDevice[]> {
         osVersion: d.deviceProperties.osVersionNumber,
         connectionType: d.connectionProperties.transportType,
       }));
-  } catch {
-    return [];
+
+    return { devices };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const hint =
+      msg.includes("ENOENT") || msg.includes("not found")
+        ? "devicectl not found — physical device listing requires Xcode 15+."
+        : `devicectl failed: ${msg}. Ensure the device is unlocked, connected, and trusted.`;
+    return { devices: [], error: hint };
   } finally {
     await fs.promises.unlink(tmpFile).catch(() => {});
   }

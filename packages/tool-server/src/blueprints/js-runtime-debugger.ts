@@ -134,7 +134,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
     // Let source maps load in the background – consumers that need them
     // (e.g. debugger-set-breakpoint) already call waitForPending() themselves.
-    void sourceMaps.waitForPending();
+    sourceMaps.waitForPending().catch(ignore);
 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
 
