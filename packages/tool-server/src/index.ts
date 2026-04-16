@@ -59,7 +59,9 @@ export function start(): void {
     stopWatcher();
     httpHandle.dispose();
     await registry.dispose();
-    server?.close();
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+    }
     process.exit(exitCode);
   };
 
@@ -104,7 +106,9 @@ export function start(): void {
     }
   });
   process.stderr.on("error", () => {
-    // stderr is broken — writing to stdout could corrupt the startup handshake
+    // stderr is broken — can't log there. Writing to stdout instead would risk
+    // corrupting the startup handshake (launcher reads the first stdout line to
+    // extract the tool-server URL). Safest to swallow silently.
   });
 }
 
