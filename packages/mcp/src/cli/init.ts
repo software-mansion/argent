@@ -459,11 +459,7 @@ export async function init(args: string[]): Promise<void> {
       "Manual Skills Installation"
     );
   } else {
-    // Offline with a cached skills CLI: --no-install prevents npx from
-    // hitting the registry for a newer version that it can't reach.
-    const skillsArgs = offlineWithCache
-      ? ["--no-install", "skills", "add", SKILLS_DIR]
-      : ["skills", "add", SKILLS_DIR];
+    const skillsArgs = ["skills", "add", SKILLS_DIR];
 
     if (scope === "global") {
       skillsArgs.push("-g");
@@ -473,7 +469,11 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(skillsArgs.join(" "))}`);
+    const npxArgs = offlineWithCache
+      ? ["--no-install", ...skillsArgs]
+      : skillsArgs;
+
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -482,7 +482,7 @@ export async function init(args: string[]): Promise<void> {
 
     try {
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(skillsArgs, skillsMethod === "interactive", skillsCwd);
+      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
@@ -491,11 +491,7 @@ export async function init(args: string[]): Promise<void> {
         spinner.stop(pc.red("Skills installation failed."));
       }
       p.log.error(`Failed to run npx skills: ${err}`);
-      // Strip `--no-install` from the manual-recovery hint: if the cached
-      // copy just failed, the user's actual recovery path is almost always
-      // re-running with network access, not forcing the same offline mode.
-      const manualArgs = skillsArgs[0] === "--no-install" ? skillsArgs.slice(1) : skillsArgs;
-      p.log.info(`You can install skills manually:\n  npx ${manualArgs.join(" ")}`);
+      p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
     }
   }
 
