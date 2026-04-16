@@ -52,7 +52,7 @@ Before starting to interact with the app, read the `argent-simulator-interact` s
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
-- When waiting for an action - do not call `screenshot` repitedly without using proper wait mechanism. For example: six consecutive `screenshot` calls without proper timeout in-between will cause context bloat.
+- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
 <react_native_detection>
