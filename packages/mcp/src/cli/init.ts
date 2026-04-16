@@ -26,10 +26,13 @@ import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 function isGloballyInstalled(): boolean {
   try {
     const cmd = process.platform === "win32" ? "where" : "which";
-    execSync(`${cmd} ${MCP_BINARY_NAME}`, {
+    const resolvedPath = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    });
+    }).trim();
+    // When run via npx, the binary is on PATH temporarily inside the npx cache.
+    // That path disappears after npx exits, so it's not a real global install.
+    if (resolvedPath.includes("_npx")) return false;
     return true;
   } catch {
     return false;
