@@ -135,10 +135,10 @@ export function startUpdateChecker(): { dispose(): void } {
   }
 
   // Fire-and-forget initial check — don't block startup.
-  check();
+  check().catch(() => {});
 
   interval = setInterval(() => {
-    check();
+    check().catch(() => {});
   }, CHECK_INTERVAL_MS);
   interval.unref(); // don't keep the process alive for update checks
 
