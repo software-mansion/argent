@@ -4,7 +4,8 @@ import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
-import { PROCESS_TIMEOUT_MS } from "./consts";
+
+const PROCESS_TIMEOUT_MS = 5_000;
 
 export function start(): void {
   // ── Global error handlers ─────────────────────────────────────────
