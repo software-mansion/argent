@@ -137,4 +137,26 @@ describe("idle timeout", () => {
     vi.advanceTimersByTime(10 * 60_000);
     expect(onIdle).not.toHaveBeenCalled();
   });
+
+  it("resets the timer on GET /tools (list tools)", async () => {
+    const onIdle = vi.fn();
+    const handle = createHttpApp(stubRegistry(), {
+      idleTimeoutMs: 5 * 60_000,
+      onIdle,
+    });
+
+    const request = await import("supertest").then((m) => m.default);
+
+    // Poll GET /tools every minute — well within the 5-min idle window.
+    for (let i = 0; i < 6; i++) {
+      vi.advanceTimersByTime(60_000);
+      await request(handle.app).get("/tools").expect(200);
+    }
+
+    // 6 minutes have passed total, but the timer should have been
+    // refreshed each time — so onIdle must NOT fire.
+    expect(onIdle).not.toHaveBeenCalled();
+
+    handle.dispose();
+  });
 });
