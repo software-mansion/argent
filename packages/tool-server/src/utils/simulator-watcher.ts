@@ -29,9 +29,12 @@ async function initSimulator(
   watchedUdids.add(udid);
   try {
     await registry.resolveService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
-  } catch {
+  } catch (err) {
     // Service failed to start (e.g. simulator shut down mid-init); retry next tick
     watchedUdids.delete(udid);
+    process.stderr.write(
+      `[simulator-watcher] initSimulator failed for ${udid}: ${err instanceof Error ? err.message : err}\n`
+    );
   }
 }
 

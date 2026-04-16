@@ -43,7 +43,7 @@ export async function startMcpServer(): Promise<void> {
   }
 
   async function fetchWithReconnect(getUrl: () => string, init?: RequestInit): Promise<Response> {
-    const MAX_RETRIES = 5;
+    const MAX_RETRIES = 4;
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -56,8 +56,8 @@ export async function startMcpServer(): Promise<void> {
           // First failure: trigger reconnect (spawns new server if dead)
           await reconnect();
         }
-        // Exponential backoff: 500ms, 1s, 2s, 4s, 8s (~15.5s total)
-        await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+        // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
+        await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
       }
     }
     throw lastError;
