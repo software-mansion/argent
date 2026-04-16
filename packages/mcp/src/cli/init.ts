@@ -77,12 +77,6 @@ export async function init(args: string[]): Promise<void> {
   let version = getInstalledVersion() ?? "unknown";
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
-  const online = await isOnline();
-  const skillsCached = !online && isSkillsCliAvailable();
-  if (!online) {
-    printOfflineBanner({ skillsCached });
-  }
-
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
   const globallyInstalled = isGloballyInstalled();
@@ -143,7 +137,7 @@ export async function init(args: string[]): Promise<void> {
       p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
-  } else if (online) {
+  } else {
     let latest: string | null = null;
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
@@ -395,7 +389,16 @@ export async function init(args: string[]): Promise<void> {
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
 
-  const skillsCliReady = online || skillsCached;
+  const online = await isOnline();
+  const offlineWithCache = !online && isSkillsCliAvailable();
+  const skillsCliReady = online || offlineWithCache;
+
+  if (!skillsCliReady) {
+    p.log.warn(
+      pc.yellow("You appear to be offline. ") +
+        "Automatic skills installation requires a network connection."
+    );
+  }
 
   if (nonInteractive) {
     skillsMethod = skillsCliReady ? "default" : "manual";
@@ -456,11 +459,9 @@ export async function init(args: string[]): Promise<void> {
       "Manual Skills Installation"
     );
   } else {
-    // When offline we rely on npx's own cache — pass --no-install so npx
-    // does not attempt to fetch a newer `skills` package from the registry,
-    // which would fail and mask the cached copy that `isSkillsCliAvailable`
-    // already confirmed is present.
-    const skillsArgs = skillsCached
+    // Offline with a cached skills CLI: --no-install prevents npx from
+    // hitting the registry for a newer version that it can't reach.
+    const skillsArgs = offlineWithCache
       ? ["--no-install", "skills", "add", SKILLS_DIR]
       : ["skills", "add", SKILLS_DIR];
 
@@ -527,22 +528,6 @@ export async function init(args: string[]): Promise<void> {
 
   p.note(summaryLines.join("\n"), "Summary");
   p.outro(pc.green("Argent is ready!"));
-}
-
-function printOfflineBanner({ skillsCached }: { skillsCached: boolean }): void {
-  const bullets = [`Installing or updating ${pc.cyan(PACKAGE_NAME)} from npm`];
-  if (!skillsCached) {
-    bullets.push(`Installing skills via ${pc.cyan("npx skills")}`);
-  }
-
-  const body = [
-    pc.red("You appear to be offline."),
-    "",
-    "You can continue, but the following will be skipped:",
-    ...bullets.map((b) => `  • ${b}`),
-  ].join("\n");
-
-  p.note(body, pc.red("Offline mode"));
 }
 
 export function printBanner(): void {
