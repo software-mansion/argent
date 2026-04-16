@@ -43,21 +43,25 @@ export function start(): void {
   // Block advertising readiness until the first watcher poll completes — this
   // guarantees DYLD_INSERT_LIBRARIES is set in launchd for all currently-booted
   // simulators before any agent tool call (e.g. launch-app) can arrive.
-  watcherReady.then(() => {
-    server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
-      const addr = server!.address();
-      const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
-      process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
-      process.stderr.write(`  GET  http://127.0.0.1:${boundPort}/tools\n`);
-      process.stderr.write(`  POST http://127.0.0.1:${boundPort}/tools/:name\n`);
-      if (idleTimeoutMs > 0) {
-        process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
-      }
+  watcherReady
+    .then(() => {
+      server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
+        const addr = server!.address();
+        const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
+        process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
+        process.stderr.write(`  GET  http://127.0.0.1:${boundPort}/tools\n`);
+        process.stderr.write(`  POST http://127.0.0.1:${boundPort}/tools/:name\n`);
+        if (idleTimeoutMs > 0) {
+          process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
+        }
+      });
+    })
+    .catch((err) => {
+      process.stderr.write(
+        `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
+      );
+      process.exit(1);
     });
-  }).catch((err) => {
-    process.stderr.write(`[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`);
-    process.exit(1);
-  });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
   process.on("SIGINT", shutdown);
