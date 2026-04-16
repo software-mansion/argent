@@ -14,26 +14,6 @@ import {
 } from "./auto-screenshot.js";
 
 export async function startMcpServer(): Promise<void> {
-  // The MCP server is a long-lived stdio process. It must survive
-  // transient errors (broken pipes, tool-server crashes) so Codex
-  // doesn't see "Transport Closed" for every subsequent tool call.
-  process.stdout.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") {
-      process.stderr.write(`[argent] stdout error: ${err.message}\n`);
-    }
-  });
-  process.stderr.on("error", () => {
-    // stderr itself is broken — nothing we can safely write to.
-  });
-  process.on("uncaughtException", (err) => {
-    process.stderr.write(`[argent] Uncaught exception: ${err.stack ?? err}\n`);
-  });
-  process.on("unhandledRejection", (reason) => {
-    process.stderr.write(
-      `[argent] Unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : reason}\n`
-    );
-  });
-
   let TOOLS_URL: string;
   if (process.env.ARGENT_TOOLS_URL) {
     TOOLS_URL = process.env.ARGENT_TOOLS_URL;
