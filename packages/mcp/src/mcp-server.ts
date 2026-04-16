@@ -53,8 +53,13 @@ export async function startMcpServer(): Promise<void> {
         lastError = err;
         if (attempt === MAX_RETRIES) break;
         if (attempt === 0) {
-          // First failure: trigger reconnect (spawns new server if dead)
-          await reconnect();
+          try {
+            await reconnect();
+          } catch (reconnectErr) {
+            process.stderr.write(
+              `[argent] Reconnect failed: ${reconnectErr instanceof Error ? reconnectErr.message : reconnectErr}\n`
+            );
+          }
         }
         // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
         await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
@@ -87,6 +92,7 @@ export async function startMcpServer(): Promise<void> {
 
   async function fetchTools(): Promise<ToolMeta[]> {
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`);
+    if (!res.ok) throw new Error(`/tools returned ${res.status}: ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
@@ -130,26 +136,19 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    try {
-      const tools = await fetchTools();
-      await spyLog({
-        ts: new Date().toISOString(),
-        event: "list_tools",
-        count: tools.length,
-      });
-      return {
-        tools: tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: { type: "object" as const, ...t.inputSchema },
-        })),
-      };
-    } catch (err) {
-      process.stderr.write(
-        `[argent] Failed to list tools: ${err instanceof Error ? err.message : err}\n`
-      );
-      return { tools: [] };
-    }
+    const tools = await fetchTools();
+    await spyLog({
+      ts: new Date().toISOString(),
+      event: "list_tools",
+      count: tools.length,
+    });
+    return {
+      tools: tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: { type: "object" as const, ...t.inputSchema },
+      })),
+    };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
@@ -242,7 +241,8 @@ export async function startMcpServer(): Promise<void> {
     const healthInterval = setInterval(async () => {
       try {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 3_000);
+        // 10s: tool server is single-threaded — a busy tool call blocks /tools; only a truly dead server should trigger reconnect
+        const timer = setTimeout(() => controller.abort(), 10_000);
         try {
           const res = await fetch(`${TOOLS_URL}/tools`, { signal: controller.signal });
           if (!res.ok) throw new Error(`health check returned ${res.status}`);

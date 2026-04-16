@@ -10,16 +10,16 @@ export function start(): void {
   // The tool server should exit on uncaught errors (state may be corrupted),
   // but attempt graceful cleanup first so child processes are not orphaned.
   let shuttingDown = false;
-  let shutdown: (() => Promise<void>) | null = null;
+  let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
   function crashShutdown(label: string, detail: string): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     if (shuttingDown) return; // avoid re-entrant shutdown
     shuttingDown = true;
+    // 5s grace period for registry.dispose() to clean up child processes
     const forceExit = setTimeout(() => process.exit(1), 5_000);
-    forceExit.unref();
     if (shutdown) {
-      shutdown().catch(() => process.exit(1));
+      shutdown(1).catch(() => process.exit(1));
     } else {
       process.exit(1);
     }
@@ -54,13 +54,13 @@ export function start(): void {
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
-  shutdown = async () => {
+  shutdown = async (exitCode = 0) => {
     updateChecker.dispose();
     stopWatcher();
     httpHandle.dispose();
     await registry.dispose();
     server?.close();
-    process.exit(0);
+    process.exit(exitCode);
   };
 
   const httpHandle = createHttpApp(registry, {
@@ -93,8 +93,8 @@ export function start(): void {
     });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => (shutdown ? shutdown() : process.exit(0)));
+  process.on("SIGTERM", () => (shutdown ? shutdown() : process.exit(0)));
 
   // When stdout is piped to a parent that stops reading (e.g. the MCP launcher
   // after it captures the startup line), writes via console.log emit EPIPE.
@@ -103,14 +103,8 @@ export function start(): void {
       process.stderr.write(`[tool-server] stdout error: ${err.message}\n`);
     }
   });
-  process.stderr.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") {
-      try {
-        process.stdout.write(`[tool-server] stderr error: ${err.message}\n`);
-      } catch {
-        /* both streams broken */
-      }
-    }
+  process.stderr.on("error", () => {
+    // stderr is broken — writing to stdout could corrupt the startup handshake
   });
 }
 

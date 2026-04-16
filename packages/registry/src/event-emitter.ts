@@ -17,7 +17,14 @@ export class TypedEventEmitter<
   emit<K extends keyof T>(event: K, ...args: Parameters<T[K]>): void {
     this.listeners.get(event)?.forEach((fn) => {
       try {
-        fn(...args);
+        const result = fn(...args) as unknown;
+        if (result instanceof Promise) {
+          result.catch((err: unknown) => {
+            process.stderr.write(
+              `[registry] Async event listener error (${String(event)}): ${err instanceof Error ? err.message : err}\n`
+            );
+          });
+        }
       } catch (err) {
         process.stderr.write(
           `[registry] Event listener error (${String(event)}): ${err instanceof Error ? err.message : err}\n`
