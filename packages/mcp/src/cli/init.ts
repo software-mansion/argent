@@ -400,8 +400,10 @@ export async function init(args: string[]): Promise<void> {
     );
   }
 
-  if (nonInteractive) {
-    skillsMethod = skillsCliReady ? "default" : "manual";
+  if (!skillsCliReady) {
+    skillsMethod = "manual";
+  } else if (nonInteractive) {
+    skillsMethod = "default";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
 
@@ -411,16 +413,12 @@ export async function init(args: string[]): Promise<void> {
         {
           value: "default" as const,
           label: "Automatic",
-          hint: skillsCliReady
-            ? "Installs all skills automatically with npx skills"
-            : "Requires network - unavailable offline",
+          hint: "Installs all skills automatically with npx skills",
         },
         {
           value: "interactive" as const,
           label: "Interactive",
-          hint: skillsCliReady
-            ? "Full npx skills TUI - choose skills, agents, and method"
-            : "Requires network - unavailable offline",
+          hint: "Full npx skills TUI - choose skills, agents, and method",
         },
         {
           value: "manual" as const,
