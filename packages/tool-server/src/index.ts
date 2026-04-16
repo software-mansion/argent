@@ -63,10 +63,19 @@ export function start(): void {
   // When stdout is piped to a parent that stops reading (e.g. the MCP launcher
   // after it captures the startup line), writes via console.log emit EPIPE.
   process.stdout.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") throw err;
+    if (err.code !== "EPIPE") {
+      process.stderr.write(`[tool-server] stdout error: ${err.message}\n`);
+    }
   });
   process.stderr.on("error", (err: NodeJS.ErrnoException) => {
-    if (err.code !== "EPIPE") throw err;
+    // stderr itself is broken — write to stdout as last resort
+    if (err.code !== "EPIPE") {
+      try {
+        process.stdout.write(`[tool-server] stderr error: ${err.message}\n`);
+      } catch {
+        /* both streams broken — nothing we can do */
+      }
+    }
   });
 }
 
