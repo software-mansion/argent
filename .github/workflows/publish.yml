@@ -33,9 +33,13 @@ jobs:
 
       - name: Download signed simulator-server binary
         run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download signed native binaries (dylibs + ax-service)
         run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: npm ci
 
