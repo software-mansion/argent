@@ -12,7 +12,6 @@ import {
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
-import { PROCESS_TIMEOUT_MS } from "./consts.js";
 
 export async function startMcpServer(): Promise<void> {
   let TOOLS_URL: string;
@@ -43,42 +42,13 @@ export async function startMcpServer(): Promise<void> {
     return reconnectPromise;
   }
 
-  const parsedTimeout = parseInt(process.env.ARGENT_FETCH_TIMEOUT_MS ?? "30000", 10);
-  const FETCH_TIMEOUT_MS =
-    Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 30_000;
-
   async function fetchWithReconnect(getUrl: () => string, init?: RequestInit): Promise<Response> {
-    const MAX_RETRIES = 4;
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-      if (init?.signal) {
-        init.signal.addEventListener("abort", () => controller.abort(), { once: true });
-      }
-      try {
-        const res = await fetch(getUrl(), { ...init, signal: controller.signal });
-        clearTimeout(timer);
-        return res;
-      } catch (err) {
-        clearTimeout(timer);
-        lastError = err;
-        if (attempt === MAX_RETRIES) break;
-        if (attempt === 0) {
-          try {
-            await reconnect();
-          } catch (reconnectErr) {
-            process.stderr.write(
-              `[argent] Reconnect failed: ${reconnectErr instanceof Error ? reconnectErr.message : reconnectErr}\n`
-            );
-          }
-        }
-        // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
-        await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
-      }
+    try {
+      return await fetch(getUrl(), init);
+    } catch {
+      await reconnect();
+      return fetch(getUrl(), init);
     }
-    throw lastError;
   }
 
   const LOG_FILE = process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
@@ -105,7 +75,6 @@ export async function startMcpServer(): Promise<void> {
 
   async function fetchTools(): Promise<ToolMeta[]> {
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`);
-    if (!res.ok) throw new Error(`/tools returned ${res.status}: ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
@@ -248,32 +217,10 @@ export async function startMcpServer(): Promise<void> {
 
   await server.connect(new StdioServerTransport());
 
-  // Proactive health monitoring — restart tool server if it dies between requests
-  if (!process.env.ARGENT_TOOLS_URL) {
-    const HEALTH_INTERVAL_MS = 30_000;
-    const healthInterval = setInterval(async () => {
-      try {
-        const controller = new AbortController();
-        // 10s: tool server is single-threaded — a busy tool call blocks /tools; only a truly dead server should trigger reconnect
-        const timer = setTimeout(() => controller.abort(), 10_000);
-        try {
-          const res = await fetch(`${TOOLS_URL}/tools`, { signal: controller.signal });
-          if (!res.ok) throw new Error(`health check returned ${res.status}`);
-        } finally {
-          clearTimeout(timer);
-        }
-      } catch {
-        process.stderr.write("[argent] Health check failed — reconnecting tool server\n");
-        reconnect().catch(() => {});
-      }
-    }, HEALTH_INTERVAL_MS);
-    healthInterval.unref();
-  }
-
   if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
     process.stdin.on("close", () => {
       fetch(`${TOOLS_URL}/shutdown`, { method: "POST" }).catch(() => {});
-      setTimeout(() => process.exit(0), PROCESS_TIMEOUT_MS);
+      setTimeout(() => process.exit(0), 5_000);
     });
   }
 }
