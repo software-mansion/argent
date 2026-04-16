@@ -27,7 +27,7 @@
   "private": false,
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
-    "access": "restricted"
+    "access": "public"
   },
   "files": [
     "dist/",
