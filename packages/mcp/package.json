@@ -2,6 +2,7 @@
   "name": "@swmansion/argent",
   "version": "0.5.1",
   "description": "MCP server for iOS Simulator control",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/software-mansion/argent.git"
