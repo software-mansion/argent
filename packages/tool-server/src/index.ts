@@ -97,7 +97,7 @@ export function start(): void {
     });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
-  // `process.on` passes "SIGINT" as the first arg. Using `() =>` ignores it.
+  // `process.on` passes "SIGINT" as the first arg. Passing it would cause a TypeError crash. Using `() =>` ignores it.
   process.on("SIGINT", () => shutdown());
   process.on("SIGTERM", () => shutdown());
 
