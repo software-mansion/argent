@@ -54,6 +54,9 @@ export function start(): void {
         process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
       }
     });
+  }).catch((err) => {
+    process.stderr.write(`[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`);
+    process.exit(1);
   });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
