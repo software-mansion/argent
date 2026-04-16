@@ -129,14 +129,15 @@ export function getInstalledVersion(): string | null {
   }
 }
 
+const PROBE_TIMEOUT_MS = 3_000;
+
 export function getLatestVersion(): string {
   const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
     encoding: "utf8",
+    timeout: PROBE_TIMEOUT_MS,
   });
   return result.trim();
 }
-
-const PROBE_TIMEOUT_MS = 8_000;
 
 export function isSkillsCliAvailable(): boolean {
   try {
