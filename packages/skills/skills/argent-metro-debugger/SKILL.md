@@ -7,11 +7,21 @@ description: Debug a React Native app via Metro CDP using argent debugger tools.
 
 The debugger requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
 
+### Android: reverse port for Metro
+
+Android emulators and physical devices do not resolve the host's `localhost` by default. Before the RN app can reach Metro, forward port 8081 (or whichever port Metro is on) from the device back to the host:
+
+```bash
+adb -s <serial> reverse tcp:8081 tcp:8081
+```
+
+`<serial>` comes from `android-list-emulators`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
+
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, a.k.a. `logicalDeviceId`). Always make sure you target the correct app on the correct device.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID or Android serial, a.k.a. `logicalDeviceId` — the CDP-reported id that matches the device). Always make sure you target the correct app on the correct device.
 
-One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
+One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
 ### Connect & diagnostics
 

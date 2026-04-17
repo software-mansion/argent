@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-app-workflow
-description: Step-by-step workflows for developing or debugging React Native apps with iOS simulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
+description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
 ## 1. Starting the React Native App
@@ -56,6 +56,36 @@ Optional: specify device or simulator, e.g. `npx react-native run-ios --simulato
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
 - [ ] If simulator not booted: use the `boot-simulator` tool with proper UDID. Refer to the `argent-simulator-setup` skill.
+
+### 1.4 Run the Android App
+
+In a **separate** terminal:
+
+**Use the project's custom script if one exists** (e.g. `npm run android`, `yarn android:debug`). Otherwise build and install via Gradle + the Android tools:
+
+```bash
+# Build the debug APK from the android/ directory
+cd android && ./gradlew :app:assembleDebug && cd ..
+
+# Resulting APK is typically at:
+#   android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Then, using the argent MCP tools (note: the interaction tools are unified — pass the Android serial as `udid`):
+
+1. `android-list-emulators` — pick a ready serial (or boot one via `android-boot-emulator`). See the `argent-android-emulator-setup` skill.
+2. `reinstall-app` with `udid=<serial>`, `bundleId=<applicationId>`, absolute `appPath=<path to .apk>`. Set `grantPermissions: true` to skip runtime permission prompts on first launch.
+3. `launch-app` with `udid=<serial>` and `bundleId=<applicationId>` (from `android/app/build.gradle` — the environment inspector surfaces this as `android_application_id`).
+4. **Metro reachability**: run `adb -s <serial> reverse tcp:8081 tcp:8081` so the app on the device can reach Metro on your host. Repeat if the device restarts or adb drops. See the `argent-metro-debugger` skill.
+
+Alternative one-shot: `npx react-native run-android` builds, installs, and launches in a single step. Use this when you don't need explicit control over the emulator serial.
+
+**Agent checklist:**
+
+- [ ] Metro is running
+- [ ] `adb -s <serial> reverse tcp:8081 tcp:8081` done
+- [ ] Command run from project root (or `./gradlew` from `android/`)
+- [ ] If emulator not booted: `android-boot-emulator` first
 
 ---
 

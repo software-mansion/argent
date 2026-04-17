@@ -1,39 +1,64 @@
 ---
-description: Argent iOS Simulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
+description: Argent Mobile App Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling iOS simulator and Android emulator apps
 alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator control. Argent MCP tools are the preferred form of interaction with the application.
+Argent MCP tools are available in this project for iOS simulator and Android emulator control. Argent MCP tools are the preferred form of interaction with the application.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
 Use cases:
 
-- User mentions iOS simulator, device, or app interaction
-- The app user is working with is a mobile application which can be run in the simulator
+- User mentions iOS simulator, Android emulator, device, or app interaction
+- The app user is working with is a mobile application which can be run in a simulator/emulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
-- Running, debugging, or testing a React Native app
-- Profiling performance or diagnosing re-renders in a React Native app
+- Running, debugging, or testing a React Native app (iOS or Android)
+- Profiling performance or diagnosing re-renders in a React Native app (iOS profiler tooling is iOS-only; React profiler works on either platform)
   </description>
+
+<platform_dispatch>
+<important>Interaction tools are unified across iOS and Android. Pass the device id as `udid` and the tool-server dispatches based on its shape.</important>
+
+- **iOS udid**: UUID shape — `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX` (from `list-simulators`). Or iOS 17+ short form `XXXXXXXX-XXXXXXXXXXXXXXXX`.
+- **Android udid**: adb serial (from `android-list-emulators`) — `emulator-5554`, `R5CT12345678`, `192.168.1.7:5555`, etc.
+
+Unified tools (pass `udid`): `gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`.
+
+Navigation + gestures (including multi-touch pinch/rotate/custom) route through `simulator-server`, which the binary dispatches to iOS or Android internally. `describe` uses AXRuntime → native-devtools fallback on iOS and `uiautomator dump` on Android; app-lifecycle tools (`launch-app` / `restart-app` / `reinstall-app` / `open-url`) use `xcrun simctl` on iOS and `adb` / `am` / `monkey` on Android.
+
+Platform-specific tools (no unified counterpart):
+
+- **iOS**: `list-simulators`, `boot-simulator`, `stop-simulator-server`, `stop-all-simulator-servers`, native-devtools suite, iOS Instruments profiler, `paste`.
+- **Android**: `android-list-emulators`, `android-boot-emulator`, `android-stop-app`, `android-logcat`.
+
+If the project only has an `android/` directory (no `ios/`), start from `android-list-emulators`; if only iOS, start from `list-simulators`. For hybrid projects, ask the user which platform to target. Never pass an iOS UDID to an Android-only tool or vice versa.
+</platform_dispatch>
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
 Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
 
-- `describe` - native app-level components and safely targetable foreground apps.
+**iOS:**
+
+- `describe` - native app-level components and safely targetable foreground apps
 - `native-describe-screen` - accessibility screen description via injected native devtools
 - `debugger-component-tree` - react-native specific components
 
 `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point.
 
-Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+**Android:**
+
+- `android-describe-screen` - uiautomator-based UI tree (same shape as iOS `describe`)
+- `debugger-component-tree` - react-native specific components (requires `adb reverse tcp:8081 tcp:8081` so Metro is reachable)
+
+Whenever something changed YOU MUST first call the platform's describe tool, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use a discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 
-If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` to choose the correct next action.
+If the describe tool fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android).
 
-Before starting to interact with the app, read the `argent-simulator-interact` skill first.
+Before starting to interact with the app, read `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android).
 </tapping_rule>
 
 <skill_reading_rule>
@@ -42,17 +67,17 @@ Before starting to interact with the app, read the `argent-simulator-interact` s
 
 <general_rules>
 
-- All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
-  raw `curl` to simulator ports, or the simulator-server binary directly.
+- All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`, raw `adb` for tap/swipe/screenshot, `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
-- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
-  Call `screenshot` separately only for a baseline before any action or after a delay.
-- Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
-- When the session ends or the user says they are done: call `stop-all-simulator-servers`.
-  If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
-- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
+- Interaction tools (`gesture-tap`, `gesture-swipe`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`, `run-sequence`) return a screenshot automatically. Call `screenshot` separately only for a baseline before any action or after a delay.
+- Always open apps with `launch-app` / `open-url` — never tap home-screen / launcher icons.
+- Use `run-sequence` when performing multiple sequential actions where you don't need to observe the screen between steps. Works on both iOS and Android; iOS-only step types (gesture-pinch / gesture-rotate / gesture-custom) throw if the run-sequence udid is Android.
+- When the session ends or the user says they are done:
+  - iOS — call `stop-all-simulator-servers`.
+  - Android — shut down the emulator from its own UI or via `adb -s <serial> emu kill` if the user wants it off. Argent does not keep persistent per-emulator state, so no server-side teardown is required.
+  - If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- If tools provided by mcp-server are not sufficient and an action can be done using `xcrun` / raw `adb` / other commands, use the command. Examples: simulator lock/shake, `adb emu rotate`, `adb reverse tcp:8081 tcp:8081` for Android Metro reachability.
+- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Six consecutive screenshot calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
 <react_native_detection>
@@ -62,24 +87,32 @@ source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding. Always use subagents if available to run `gather-workspace-data` data tool, if possible do not run yourself.
 
-When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
+When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery — if the responses are large or unhelpful, fall back to `describe` (iOS) or `android-describe-screen` (Android).
 </react_native_detection>
 
 <skill_routing>
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
 
-SIMULATOR SETUP
+iOS SIMULATOR SETUP
 Skill: `argent-simulator-setup`
-When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
+When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
 
-TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
+ANDROID EMULATOR SETUP
+Skill: `argent-android-emulator-setup`
+When: Beginning a task that involves the Android emulator, no emulator running yet, need a serial, or about to install an APK.
+
+iOS TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-simulator-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
+When: Performing touch interactions on iOS, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
+
+ANDROID TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
+Skill: `argent-android-emulator-interact`
+When: Performing touch interactions on Android, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, reading logcat, or taking standalone screenshots.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
-When: Project is react-native, starting Metro or running iOS app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
+When: Project is react-native, starting Metro or running the iOS / Android app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app. Includes `./gradlew` and `adb reverse` guidance for the Android path.
 
 JS EVALUATION, METRO CONNECTION, REACT NATIVE
 Skill: `argent-metro-debugger`

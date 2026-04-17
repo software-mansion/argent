@@ -1,13 +1,21 @@
 ---
 name: argent-simulator-interact
-description: Interact with an iOS simulator using argent MCP tools. Use when tapping UI elements, perfroming gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
+description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
 ---
+
+## Unified tool surface
+
+All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, anything else → Android adb serial). You use the same tool names on both platforms.
+
+For Android-specific caveats (gestures that only exist on iOS, Android-only buttons, Metro `adb reverse`, locked-screen describe errors) see `argent-android-emulator-interact`.
 
 ## 1. Before You Start
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-simulators` to find available simulators. **Pick the first result** if specific not specified by user — booted iPhones are listed first. If none are booted, use `boot-simulator` first.
+iOS: use `list-simulators`. **Pick the first result** if not specified by the user — booted iPhones are listed first. If none are booted, use `boot-simulator` first.
+
+Android: use `android-list-emulators`. Pick the first `state: "device"`. If none are booted, use `android-boot-emulator` first. See `argent-android-emulator-setup`.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 
