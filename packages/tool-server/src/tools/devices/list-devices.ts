@@ -1,18 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { listAndroidDevices, listAvds } from "../../utils/adb";
+import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { warmDeviceCache } from "../../utils/platform-detect";
 
-const execFileAsync = promisify(execFile);
-
-type IosDevice = {
-  platform: "ios";
-  udid: string;
-  name: string;
-  state: string;
-  runtime: string;
-};
+type IosDevice = IosSimulator & { platform: "ios" };
 
 type AndroidDevice = {
   platform: "android";
@@ -28,45 +20,6 @@ type ListDevicesResult = {
   devices: Array<IosDevice | AndroidDevice>;
   avds: Array<{ name: string }>;
 };
-
-interface SimctlDevice {
-  udid: string;
-  name: string;
-  state: string;
-  deviceTypeIdentifier: string;
-  isAvailable: boolean;
-}
-
-interface SimctlOutput {
-  devices: Record<string, SimctlDevice[]>;
-}
-
-async function listIosSimulators(): Promise<IosDevice[]> {
-  try {
-    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
-      timeout: 10_000,
-    });
-    const data: SimctlOutput = JSON.parse(stdout);
-    const out: IosDevice[] = [];
-    for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      if (!runtimeId.includes("iOS")) continue;
-      for (const d of devices) {
-        if (!d.isAvailable) continue;
-        out.push({
-          platform: "ios",
-          udid: d.udid,
-          name: d.name,
-          state: d.state,
-          runtime: runtimeId,
-        });
-      }
-    }
-    return out;
-  } catch {
-    // macOS without Xcode, or non-mac host — no iOS devices to report
-    return [];
-  }
-}
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
@@ -103,7 +56,8 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
       listAndroidDevices().catch(() => []),
       listAvds(),
     ]);
-    ios.sort(sortIos);
+    const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
+    iosTagged.sort(sortIos);
     const androidTagged: AndroidDevice[] = android.map((d) => ({
       platform: "android",
       serial: d.serial,
@@ -114,6 +68,14 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
       sdkLevel: d.sdkLevel,
     }));
     androidTagged.sort(sortAndroid);
-    return { devices: [...ios, ...androidTagged], avds };
+
+    // Populate the classify cache so the next interaction tool call on any of
+    // these ids is a cache hit and doesn't re-run simctl + adb.
+    warmDeviceCache([
+      ...iosTagged.map((d) => ({ udid: d.udid, platform: "ios" as const })),
+      ...androidTagged.map((d) => ({ udid: d.serial, platform: "android" as const })),
+    ]);
+
+    return { devices: [...iosTagged, ...androidTagged], avds };
   },
 };

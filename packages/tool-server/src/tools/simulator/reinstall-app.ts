@@ -3,13 +3,16 @@ import { promisify } from "node:util";
 import { resolve as resolvePath } from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { detectPlatform } from "../../utils/platform-detect";
+import { classifyDevice } from "../../utils/platform-detect";
 import { runAdb } from "../../utils/adb";
 
 const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z
+    .string()
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
     .describe(
@@ -43,7 +46,7 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
   async execute(_services, params) {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
-    if (detectPlatform(udid) === "android") {
+    if ((await classifyDevice(udid)) === "android") {
       const args = ["-s", udid, "install", "-r"];
       if (params.allowDowngrade) args.push("-d");
       if (params.grantPermissions) args.push("-g");

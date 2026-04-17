@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Registry } from "@argent/registry";
 
 const execFileMock = vi.fn();
 vi.mock("node:child_process", async () => {
@@ -20,36 +21,40 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { restartAppTool } from "../src/tools/simulator/restart-app";
+import { createRestartAppTool } from "../src/tools/simulator/restart-app";
+import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
 
 const iosUdid = "11111111-2222-3333-4444-555555555555";
 const androidSerial = "emulator-5554";
 const iosNativeApi = { ensureEnvReady: vi.fn().mockResolvedValue(undefined) };
+const resolveService = vi.fn(async () => iosNativeApi);
+const registry = { resolveService } as unknown as Registry;
 
 beforeEach(() => {
   execFileMock.mockReset().mockReturnValue({ stdout: "", stderr: "" });
   iosNativeApi.ensureEnvReady.mockClear().mockResolvedValue(undefined);
+  resolveService.mockClear().mockResolvedValue(iosNativeApi);
+  __resetClassifyCacheForTests();
+  warmDeviceCache([
+    { udid: iosUdid, platform: "ios" },
+    { udid: androidSerial, platform: "android" },
+  ]);
 });
 
-describe("restart-app.services", () => {
-  it("requests nativeDevtools on iOS so the AX injection is ready pre-launch", () => {
-    expect(restartAppTool.services({ udid: iosUdid, bundleId: "com.foo" })).toEqual({
-      nativeDevtools: `NativeDevtools:${iosUdid}`,
-    });
-  });
-
-  it("requests no services on Android — NativeDevtools is iOS-only", () => {
-    expect(restartAppTool.services({ udid: androidSerial, bundleId: "com.foo" })).toEqual({});
+describe("restart-app.services — no pre-declared services (factory form)", () => {
+  it("declares no services; platform-specific service resolution is deferred to execute", () => {
+    const tool = createRestartAppTool(registry);
+    expect(tool.services({ udid: iosUdid, bundleId: "com.foo" })).toEqual({});
+    expect(tool.services({ udid: androidSerial, bundleId: "com.foo" })).toEqual({});
   });
 });
 
 describe("restart-app.execute — iOS (behaviour preserved)", () => {
   it("terminates then launches via simctl, refreshing native-devtools between", async () => {
-    await restartAppTool.execute!(
-      { nativeDevtools: iosNativeApi },
-      { udid: iosUdid, bundleId: "com.apple.Preferences" }
-    );
+    const tool = createRestartAppTool(registry);
+    await tool.execute!({}, { udid: iosUdid, bundleId: "com.apple.Preferences" });
 
+    expect(resolveService).toHaveBeenCalledWith(`NativeDevtools:${iosUdid}`);
     expect(iosNativeApi.ensureEnvReady).toHaveBeenCalledTimes(1);
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock.mock.calls[0]![1]).toEqual([
@@ -74,18 +79,17 @@ describe("restart-app.execute — iOS (behaviour preserved)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    const result = await restartAppTool.execute!(
-      { nativeDevtools: iosNativeApi },
-      { udid: iosUdid, bundleId: "com.apple.Preferences" }
-    );
+    const tool = createRestartAppTool(registry);
+    const result = await tool.execute!({}, { udid: iosUdid, bundleId: "com.apple.Preferences" });
     expect(result).toEqual({ restarted: true, bundleId: "com.apple.Preferences" });
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("restart-app.execute — Android", () => {
-  it("force-stops then monkey-launches — no xcrun calls", async () => {
-    await restartAppTool.execute!({}, { udid: androidSerial, bundleId: "com.android.settings" });
+  it("force-stops then monkey-launches — no xcrun, no NativeDevtools resolve", async () => {
+    const tool = createRestartAppTool(registry);
+    await tool.execute!({}, { udid: androidSerial, bundleId: "com.android.settings" });
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(execFileMock.mock.calls[0]![1]).toEqual([
       "-s",
@@ -100,6 +104,7 @@ describe("restart-app.execute — Android", () => {
       "monkey -p com.android.settings -c android.intent.category.LAUNCHER 1",
     ]);
     expect(execFileMock).not.toHaveBeenCalledWith("xcrun", expect.anything(), expect.anything());
+    expect(resolveService).not.toHaveBeenCalled();
   });
 
   it("throws when monkey cannot find an activity to relaunch", async () => {
@@ -115,8 +120,9 @@ describe("restart-app.execute — Android", () => {
       return { stdout: "", stderr: "" };
     });
 
+    const tool = createRestartAppTool(registry);
     await expect(
-      restartAppTool.execute!({}, { udid: androidSerial, bundleId: "com.not.installed" })
+      tool.execute!({}, { udid: androidSerial, bundleId: "com.not.installed" })
     ).rejects.toThrow(/relaunch failed/);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Registry } from "@argent/registry";
 
-// Mock the child_process boundary so we don't actually shell out to xcrun / adb.
 const execFileMock = vi.fn();
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -12,7 +12,6 @@ vi.mock("node:child_process", async () => {
       opts: unknown,
       cb?: (err: Error | null, out: { stdout: string; stderr: string }) => void
     ) => {
-      // promisify(execFile) calls it as `execFile(cmd, args, opts, cb)` — cb is the last arg.
       const callback = typeof opts === "function" ? opts : cb!;
       const options = typeof opts === "function" ? undefined : opts;
       const result = execFileMock(cmd, args, options);
@@ -22,41 +21,48 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { launchAppTool } from "../src/tools/simulator/launch-app";
+import { createLaunchAppTool } from "../src/tools/simulator/launch-app";
+import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
 
 const iosUdid = "11111111-2222-3333-4444-555555555555";
 const androidSerial = "emulator-5554";
+
 const iosNativeApi = { ensureEnvReady: vi.fn().mockResolvedValue(undefined) };
+const resolveService = vi.fn(async () => iosNativeApi);
+const registry = { resolveService } as unknown as Registry;
 
 beforeEach(() => {
   execFileMock.mockReset().mockReturnValue({ stdout: "", stderr: "" });
   iosNativeApi.ensureEnvReady.mockClear().mockResolvedValue(undefined);
+  resolveService.mockClear().mockResolvedValue(iosNativeApi);
+  __resetClassifyCacheForTests();
+  // Pre-populate the classify cache so tests don't shell out for xcrun / adb
+  // list lookups (those paths are covered separately in classify-device.test.ts).
+  warmDeviceCache([
+    { udid: iosUdid, platform: "ios" },
+    { udid: androidSerial, platform: "android" },
+  ]);
 });
 
-describe("launch-app.services — platform-dependent ServiceRef", () => {
-  it("requests the nativeDevtools service for iOS udids", () => {
-    expect(launchAppTool.services({ udid: iosUdid, bundleId: "com.example" })).toEqual({
-      nativeDevtools: `NativeDevtools:${iosUdid}`,
-    });
-  });
-
-  it("requests no services for Android serials — avoids spawning the iOS-only NativeDevtools service", () => {
-    // This is critical: NativeDevtools depends on xcrun simctl APIs and will
-    // blow up on non-UUID udids. A stray nativeDevtools request for an
-    // Android serial would break every Android launch.
-    expect(launchAppTool.services({ udid: androidSerial, bundleId: "com.example" })).toEqual({});
+describe("launch-app.services — no pre-declared services (factory form)", () => {
+  it("declares no services; platform-specific service resolution is deferred to execute", () => {
+    // We moved NativeDevtools resolution into execute so the platform check
+    // can be async (list-based classifyDevice). If a future change re-adds a
+    // service request here, the udid-shape it would use is an iOS-only URN
+    // that would fail for Android devices.
+    const tool = createLaunchAppTool(registry);
+    expect(tool.services({ udid: iosUdid, bundleId: "com.example" })).toEqual({});
+    expect(tool.services({ udid: androidSerial, bundleId: "com.example" })).toEqual({});
   });
 });
 
-describe("launch-app.execute — iOS path (unchanged behavior)", () => {
+describe("launch-app.execute — iOS path (behavior preserved through factory refactor)", () => {
   it("prepares native devtools then calls `xcrun simctl launch`", async () => {
-    await launchAppTool.execute!(
-      { nativeDevtools: iosNativeApi },
-      { udid: iosUdid, bundleId: "com.apple.Preferences" }
-    );
+    const tool = createLaunchAppTool(registry);
+    await tool.execute!({}, { udid: iosUdid, bundleId: "com.apple.Preferences" });
 
+    expect(resolveService).toHaveBeenCalledWith(`NativeDevtools:${iosUdid}`);
     expect(iosNativeApi.ensureEnvReady).toHaveBeenCalledTimes(1);
-    expect(execFileMock).toHaveBeenCalledTimes(1);
     expect(execFileMock).toHaveBeenCalledWith(
       "xcrun",
       ["simctl", "launch", iosUdid, "com.apple.Preferences"],
@@ -64,7 +70,7 @@ describe("launch-app.execute — iOS path (unchanged behavior)", () => {
     );
   });
 
-  it("ensureEnvReady is awaited *before* launch (injection must be in place pre-spawn)", async () => {
+  it("ensureEnvReady awaits *before* launch (injection must be in place pre-spawn)", async () => {
     const order: string[] = [];
     iosNativeApi.ensureEnvReady.mockImplementation(async () => {
       order.push("ensureEnvReady");
@@ -74,17 +80,15 @@ describe("launch-app.execute — iOS path (unchanged behavior)", () => {
       return { stdout: "", stderr: "" };
     });
 
-    await launchAppTool.execute!(
-      { nativeDevtools: iosNativeApi },
-      { udid: iosUdid, bundleId: "com.apple.Preferences" }
-    );
-
+    const tool = createLaunchAppTool(registry);
+    await tool.execute!({}, { udid: iosUdid, bundleId: "com.apple.Preferences" });
     expect(order).toEqual(["ensureEnvReady", "xcrun"]);
   });
 
   it("ignores an `activity` arg on iOS (Android-only parameter)", async () => {
-    await launchAppTool.execute!(
-      { nativeDevtools: iosNativeApi },
+    const tool = createLaunchAppTool(registry);
+    await tool.execute!(
+      {},
       { udid: iosUdid, bundleId: "com.apple.Preferences", activity: ".Root" }
     );
     expect(execFileMock).toHaveBeenCalledWith(
@@ -97,7 +101,8 @@ describe("launch-app.execute — iOS path (unchanged behavior)", () => {
 
 describe("launch-app.execute — Android path", () => {
   it("defaults to `monkey` LAUNCHER intent when no activity is provided", async () => {
-    await launchAppTool.execute!({}, { udid: androidSerial, bundleId: "com.android.settings" });
+    const tool = createLaunchAppTool(registry);
+    await tool.execute!({}, { udid: androidSerial, bundleId: "com.android.settings" });
     expect(execFileMock).toHaveBeenCalledWith(
       "adb",
       [
@@ -108,13 +113,14 @@ describe("launch-app.execute — Android path", () => {
       ],
       expect.any(Object)
     );
-    // Critically, NO xcrun call — running iOS tooling for an Android device is
-    // the exact class of regression this test guards against.
-    expect(execFileMock).not.toHaveBeenCalledWith("xcrun", expect.anything(), expect.anything());
+    // NativeDevtools (iOS-only) must NOT be resolved on the Android path —
+    // its factory would blow up trying to launchctl into a non-existent sim.
+    expect(resolveService).not.toHaveBeenCalled();
   });
 
   it("uses `am start -W -n pkg/.Activity` when activity starts with a dot", async () => {
-    await launchAppTool.execute!(
+    const tool = createLaunchAppTool(registry);
+    await tool.execute!(
       {},
       { udid: androidSerial, bundleId: "com.example.app", activity: ".MainActivity" }
     );
@@ -126,7 +132,8 @@ describe("launch-app.execute — Android path", () => {
   });
 
   it("passes pre-qualified `pkg/.Activity` strings through unchanged", async () => {
-    await launchAppTool.execute!(
+    const tool = createLaunchAppTool(registry);
+    await tool.execute!(
       {},
       {
         udid: androidSerial,
@@ -146,8 +153,9 @@ describe("launch-app.execute — Android path", () => {
       stdout: "Error: Activity class {com.foo/.Bar} does not exist.",
       stderr: "",
     });
+    const tool = createLaunchAppTool(registry);
     await expect(
-      launchAppTool.execute!({}, { udid: androidSerial, bundleId: "com.foo", activity: ".Bar" })
+      tool.execute!({}, { udid: androidSerial, bundleId: "com.foo", activity: ".Bar" })
     ).rejects.toThrow(/am start failed/);
   });
 
@@ -156,8 +164,9 @@ describe("launch-app.execute — Android path", () => {
       stdout: "** No activities found to run, monkey aborted.",
       stderr: "",
     });
+    const tool = createLaunchAppTool(registry);
     await expect(
-      launchAppTool.execute!({}, { udid: androidSerial, bundleId: "com.not.installed" })
+      tool.execute!({}, { udid: androidSerial, bundleId: "com.not.installed" })
     ).rejects.toThrow(/monkey launch failed/);
   });
 });

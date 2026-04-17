@@ -22,6 +22,7 @@ vi.mock("node:child_process", async () => {
 });
 
 import { createDescribeTool } from "../src/tools/interactions/describe";
+import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
 
 const fakeRegistry: Registry = {
   resolveService: vi.fn(),
@@ -31,10 +32,17 @@ const fakeRegistry: Registry = {
 // `wm size` output for 5 s per serial. Reusing a serial across tests leaks the
 // first test's mocked screen size into the second.
 let nextSerial = 7000;
-const mkSerial = () => `emulator-${nextSerial++}`;
+const mkSerial = () => {
+  const s = `emulator-${nextSerial++}`;
+  // Warm the classify cache so describe's platform check is O(1) and doesn't
+  // shell out to xcrun / adb list lookups.
+  warmDeviceCache([{ udid: s, platform: "android" }]);
+  return s;
+};
 
 beforeEach(() => {
   execFileMock.mockReset();
+  __resetClassifyCacheForTests();
 });
 
 function sampleDump(): string {

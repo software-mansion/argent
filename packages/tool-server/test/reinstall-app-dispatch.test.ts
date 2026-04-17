@@ -22,12 +22,21 @@ vi.mock("node:child_process", async () => {
 });
 
 import { reinstallAppTool } from "../src/tools/simulator/reinstall-app";
+import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
 
 const iosUdid = "11111111-2222-3333-4444-555555555555";
 const androidSerial = "emulator-5554";
 
 beforeEach(() => {
   execFileMock.mockReset().mockReturnValue({ stdout: "", stderr: "" });
+  __resetClassifyCacheForTests();
+  // Pre-populate the classify cache so the platform branch doesn't shell out
+  // to `xcrun simctl list` / `adb devices` (that's what classify-device.test.ts
+  // covers). Here we only care about the reinstall tool's own behavior.
+  warmDeviceCache([
+    { udid: iosUdid, platform: "ios" },
+    { udid: androidSerial, platform: "android" },
+  ]);
 });
 
 describe("reinstall-app — iOS path (unchanged semantics)", () => {

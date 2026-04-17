@@ -2,13 +2,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { detectPlatform } from "../../utils/platform-detect";
+import { classifyDevice } from "../../utils/platform-detect";
 import { adbShell } from "../../utils/adb";
 
 const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z
+    .string()
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   url: z
     .string()
     .describe(
@@ -28,7 +31,7 @@ Returns { opened, url }. Fails if no app is registered to handle the URI.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    if (detectPlatform(params.udid) === "android") {
+    if ((await classifyDevice(params.udid)) === "android") {
       const quoted = `'${params.url.replace(/'/g, "'\\''")}'`;
       const out = await adbShell(
         params.udid,

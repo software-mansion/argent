@@ -9,13 +9,16 @@ import { adaptAXDescribeToDescribeResult } from "./describe-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./describe-native-adapter";
 import { parseNativeDescribeScreenResult } from "../native-devtools/native-describe-contract";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
-import { detectPlatform } from "../../utils/platform-detect";
+import { classifyDevice } from "../../utils/platform-detect";
 import { adbExecOutBinary } from "../../utils/adb";
 import { getAndroidScreenSize } from "../../utils/android-screen";
 import { parseUiAutomatorDump } from "../../utils/uiautomator-parser";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z
+    .string()
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
     .optional()
@@ -25,11 +28,17 @@ const zodSchema = z.object({
 });
 
 async function describeAndroid(udid: string): Promise<DescribeResult> {
+  // Per-call dump path so concurrent describes on the same serial don't race
+  // on /sdcard/window_dump.xml (one call's cat would read the other's dump
+  // mid-write). `uiautomator` rejects unwritable paths, so we target
+  // /data/local/tmp/ which is world-writable on every Android we support.
+  const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+  const dumpPath = `/data/local/tmp/argent-ui-dump-${randomSuffix}.xml`;
   const [size, rawBuf] = await Promise.all([
     getAndroidScreenSize(udid),
     adbExecOutBinary(
       udid,
-      "uiautomator dump /sdcard/window_dump.xml >/dev/null && cat /sdcard/window_dump.xml",
+      `uiautomator dump ${dumpPath} >/dev/null && cat ${dumpPath} && rm -f ${dumpPath}`,
       { timeoutMs: 20_000 }
     ),
   ]);
@@ -59,7 +68,7 @@ Call before every tap — never guess coordinates from a screenshot.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, _options) {
-      if (detectPlatform(params.udid) === "android") {
+      if ((await classifyDevice(params.udid)) === "android") {
         return describeAndroid(params.udid);
       }
       const axApi = await registry.resolveService<AXServiceApi>(

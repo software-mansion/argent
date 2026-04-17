@@ -12,10 +12,22 @@ import { Readable } from "node:stream";
 
 const spawnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
+// classifyDevice shells out to xcrun + adb. We stub execFile so tests are
+// hermetic — the stub returns empty results, which makes classify fall back
+// to the shape heuristic (covered comprehensively in classify-device.test.ts).
+const execFileMock = vi.fn().mockImplementation((_cmd, _args, opts, cb) => {
+  const callback = typeof opts === "function" ? opts : cb!;
+  callback(new Error("stubbed"), { stdout: "", stderr: "" });
+});
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, spawn: spawnMock };
+  return {
+    ...actual,
+    spawn: spawnMock,
+    execFile: (cmd: string, args: readonly string[], opts: unknown, cb?: unknown) =>
+      execFileMock(cmd, args, opts, cb),
+  };
 });
 
 vi.mock("../src/blueprints/ax-service", () => ({
@@ -53,9 +65,12 @@ function signalReady(proc: ReturnType<typeof makeFakeProc>, port: number) {
 }
 
 describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     spawnMock.mockReset();
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    // Reset classify cache so each test's first call re-runs the (stubbed) lookup.
+    const { __resetClassifyCacheForTests } = await import("../src/utils/platform-detect");
+    __resetClassifyCacheForTests();
   });
 
   afterEach(() => {
@@ -112,19 +127,25 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
-  it("also dispatches to `android` for the iOS-17 short UUID form? — no, it stays on `ios`", async () => {
+  it("does NOT route the iOS-17 physical-device short UUID form to `ios` (simctl cannot drive physical devices)", async () => {
+    // Review issue #8: the 8-16 hex form is physical-device-only. Routing it
+    // to `ios` surfaced an opaque "Invalid device" error from simctl. With
+    // list-based classify, an id that isn't in simctl's list falls back to
+    // the android subcommand — the caller gets "device not found" from adb,
+    // which at least correctly signals "this tool stack does not drive that
+    // target" rather than pretending simctl might work.
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
 
-    // iOS 17+ physical-device short form (8-16 hex).
-    const udid = "00008030-001C25120C22802E";
-    const factoryPromise = simulatorServerBlueprint.factory({}, udid);
+    const shortForm = "00008030-001C25120C22802E";
+    const factoryPromise = simulatorServerBlueprint.factory({}, shortForm);
     signalReady(fakeProc, 55557);
     await factoryPromise;
 
-    expect(spawnMock.mock.calls[0]![1]).toEqual(["ios", "--id", udid]);
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(udid);
+    // No longer routed to `ios` (was a regression in the shape-heuristic world).
+    expect(spawnMock.mock.calls[0]![1]![0]).toBe("android");
+    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
   it("pressKey writes the shared stdin command protocol regardless of platform", async () => {

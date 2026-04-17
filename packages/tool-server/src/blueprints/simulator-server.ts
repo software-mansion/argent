@@ -8,7 +8,7 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
-import { detectPlatform } from "../utils/platform-detect";
+import { classifyDevice } from "../utils/platform-detect";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -37,15 +37,17 @@ export interface SimulatorServerApi {
  * stdin MUST stay open — the server treats EOF on stdin as a shutdown signal.
  * `stdio: ["pipe", "pipe", "pipe"]` below provides that.
  */
-function spawnSimulatorServerProcess(udid: string): Promise<{
+function spawnSimulatorServerProcess(
+  udid: string,
+  platform: "ios" | "android"
+): Promise<{
   proc: ChildProcess;
   apiUrl: string;
   streamUrl: string;
 }> {
   const { BINARY_PATH, BINARY_DIR } = getPaths();
-  const subcommand = detectPlatform(udid) === "android" ? "android" : "ios";
   return new Promise((resolve, reject) => {
-    const args = [subcommand, "--id", udid];
+    const args = [platform, "--id", udid];
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,
@@ -107,12 +109,13 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, stri
   },
   async factory(_deps, payload) {
     const udid = payload;
+    const platform = await classifyDevice(udid);
     // iOS accessibility automation flag — no-op equivalent on Android so skip
     // the xcrun call entirely there.
-    if (detectPlatform(udid) === "ios") {
+    if (platform === "ios") {
       await ensureAutomationEnabled(udid).catch(() => {});
     }
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(udid);
+    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(udid, platform);
 
     const events = new TypedEventEmitter<ServiceEvents>();
 
