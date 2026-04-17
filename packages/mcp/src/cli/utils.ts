@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
+import { Document, parseDocument, parse as parseYaml } from "yaml";
 
 // ── Package root resolution ───────────────────────────────────────────────────
 // tsc compiles src/cli/utils.ts -> dist/cli/utils.js.
@@ -79,6 +80,45 @@ export function readToml(filePath: string): Record<string, unknown> {
 export function writeToml(filePath: string, data: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, stringifyToml(data) + "\n");
+}
+
+// ── YAML helpers ────────────────────────────────────────────────────────────
+// Two flavors:
+//   readYaml — POJO round-trip, useful for read-only inspection.
+//     Throws on parse errors so callers never silently clobber a
+//     malformed user file.
+//   readYamlDocument/writeYamlDocument — Document API, preserves comments
+//     and formatting on round-trip. Required for hand-edited config files
+//     like ~/.hermes/config.yaml.
+
+export function readYaml(filePath: string): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) return {};
+  const text = fs.readFileSync(filePath, "utf8");
+  const parsed = parseYaml(text);
+  if (parsed === null || parsed === undefined) return {};
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`YAML at ${filePath} is not a mapping`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+export function readYamlDocument(filePath: string): Document {
+  if (!fs.existsSync(filePath)) return new Document({});
+  const text = fs.readFileSync(filePath, "utf8");
+  const doc = parseDocument(text);
+  if (doc.errors.length > 0) {
+    const messages = doc.errors.map((e) => e.message).join("; ");
+    throw new Error(`Failed to parse YAML at ${filePath}: ${messages}`);
+  }
+  return doc;
+}
+
+export function writeYamlDocument(filePath: string, doc: Document): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  // lineWidth: 0 disables hard-wrap so long user strings (e.g. multi-line
+  // quoted personalities in ~/.hermes/config.yaml) stay on the lines they
+  // were on. Default would re-wrap at column 80.
+  fs.writeFileSync(filePath, doc.toString({ lineWidth: 0 }));
 }
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────

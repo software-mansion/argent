@@ -8,7 +8,16 @@ import {
   PERMISSION_RULE,
   CURSOR_ALLOWLIST_PATTERN,
 } from "./constants.js";
-import { readJson, writeJson, dirExists, readToml, writeToml } from "./utils.js";
+import {
+  readJson,
+  writeJson,
+  dirExists,
+  readToml,
+  writeToml,
+  readYamlDocument,
+  writeYamlDocument,
+} from "./utils.js";
+import { isMap } from "yaml";
 
 const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "..", "tool-server.cjs");
 
@@ -604,6 +613,63 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── Hermes adapter ──────────────────────────────────────────────────────────
+// Format (YAML): mcp_servers: { argent: { command, args, env } }
+// Global only: ~/.hermes/config.yaml
+//
+// Uses the yaml Document API instead of POJO round-trip so user comments
+// and formatting in ~/.hermes/config.yaml survive every write. Refuses to
+// touch the file if mcp_servers exists but is not a YAML mapping (sequence
+// or scalar would otherwise be silently clobbered).
+
+const hermesAdapter: McpConfigAdapter = {
+  name: "Hermes",
+
+  detect(): boolean {
+    return dirExists(path.join(homedir(), ".hermes"));
+  },
+
+  projectPath(): string | null {
+    return null;
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".hermes", "config.yaml");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const doc = readYamlDocument(configPath);
+    const existing = doc.get("mcp_servers");
+    if (existing != null && !isMap(existing)) {
+      throw new Error(`mcp_servers in ${configPath} is not a YAML mapping`);
+    }
+    if (existing == null) {
+      // Either absent or explicit null. Drop it so setIn creates a fresh map.
+      doc.delete("mcp_servers");
+    }
+    doc.setIn(["mcp_servers", MCP_SERVER_KEY], {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    });
+    writeYamlDocument(configPath, doc);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const doc = readYamlDocument(configPath);
+    const servers = doc.get("mcp_servers");
+    if (!isMap(servers)) return false;
+    if (!servers.has(MCP_SERVER_KEY)) return false;
+    servers.delete(MCP_SERVER_KEY);
+    if (servers.items.length === 0) {
+      doc.delete("mcp_servers");
+    }
+    writeYamlDocument(configPath, doc);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // MARK: Registry
 
@@ -615,6 +681,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  hermesAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {

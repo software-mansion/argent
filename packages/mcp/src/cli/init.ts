@@ -310,6 +310,16 @@ export async function init(args: string[]): Promise<void> {
         } catch (err) {
           mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
         }
+      } else if (scope !== "global" && adapter.globalPath()) {
+        const fallback = adapter.globalPath()!;
+        try {
+          adapter.write(fallback, mcpEntry);
+          mcpResults.push(
+            `${pc.green("+")} ${adapter.name} ${pc.dim(`(global fallback: ${fallback})`)}`
+          );
+        } catch (err) {
+          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
+        }
       } else {
         mcpResults.push(
           `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config path for this scope)")}`

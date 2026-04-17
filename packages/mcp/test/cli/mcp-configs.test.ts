@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { parse as parseYaml } from "yaml";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
@@ -54,6 +55,10 @@ function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function readYamlFile(filePath: string): Record<string, unknown> {
+  return parseYaml(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+}
+
 beforeEach(() => {
   tmpDir = setupTmpDir();
 });
@@ -76,7 +81,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -86,6 +91,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "Hermes",
     ]);
   });
 });
@@ -516,6 +522,234 @@ describe("Codex adapter", () => {
     expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain('command = "argent"');
+  });
+});
+
+// ── Hermes adapter ──────────────────────────────────────────────────────────
+
+describe("Hermes adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
+
+  it("writes YAML format with mcp_servers key", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    const servers = config.mcp_servers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent.args).toEqual(["mcp"]);
+    expect(argent.env).toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("removes argent entry and drops empty mcp_servers", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    adapter.write(configPath, getMcpEntry());
+
+    expect(adapter.remove(configPath)).toBe(true);
+    const config = readYamlFile(configPath);
+    expect(config).not.toHaveProperty("mcp_servers");
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.yaml"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "mcp_servers: {}\n");
+
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other config and servers when writing", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "model: test\nmcp_servers:\n  other:\n    command: other\n");
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    expect(config.model).toBe("test");
+    const servers = config.mcp_servers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).toHaveProperty("argent");
+  });
+
+  it("projectPath returns null", () => {
+    expect(adapter.projectPath("/foo")).toBeNull();
+  });
+
+  it("globalPath returns path in homedir", () => {
+    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".hermes", "config.yaml"));
+  });
+
+  it("preserves comments on write", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      [
+        "# top-of-file comment",
+        "model:",
+        "  default: claude-opus-4-6 # inline comment",
+        "  provider: anthropic",
+        "# section comment",
+        "agent:",
+        "  max_turns: 90",
+        "",
+      ].join("\n")
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("# top-of-file comment");
+    expect(after).toContain("# inline comment");
+    expect(after).toContain("# section comment");
+    const config = readYamlFile(configPath);
+    expect(config.mcp_servers as Record<string, unknown>).toHaveProperty("argent");
+    expect((config.model as Record<string, unknown>).default).toBe("claude-opus-4-6");
+  });
+
+  it("preserves comments around other keys on remove", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      [
+        "# header",
+        "model:",
+        "  default: claude-opus-4-6",
+        "mcp_servers:",
+        "  argent:",
+        "    command: argent",
+        "    args:",
+        "      - mcp",
+        "    env: {}",
+        "  filesystem:",
+        "    command: npx # keep me",
+        "",
+      ].join("\n")
+    );
+
+    expect(adapter.remove(configPath)).toBe(true);
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("# header");
+    expect(after).toContain("# keep me");
+    const config = readYamlFile(configPath);
+    expect(config.mcp_servers as Record<string, unknown>).toHaveProperty("filesystem");
+    expect(config.mcp_servers as Record<string, unknown>).not.toHaveProperty("argent");
+  });
+
+  it("throws when config.yaml is malformed instead of silently overwriting", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const bogus = "model:\n  default: [unbalanced\nagent: : :\n";
+    fs.writeFileSync(configPath, bogus);
+
+    expect(() => adapter.write(configPath, getMcpEntry())).toThrow(/Failed to parse YAML/);
+    expect(fs.readFileSync(configPath, "utf8")).toBe(bogus);
+  });
+
+  it("throws when mcp_servers is a sequence instead of silently no-op", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "mcp_servers:\n  - foo\n  - bar\n");
+
+    expect(() => adapter.write(configPath, getMcpEntry())).toThrow(/not a YAML mapping/);
+  });
+
+  it("handles mcp_servers explicitly null", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "model: test\nmcp_servers:\n");
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readYamlFile(configPath);
+    expect(config.model).toBe("test");
+    expect(config.mcp_servers as Record<string, unknown>).toHaveProperty("argent");
+  });
+
+  it("write is idempotent", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    adapter.write(configPath, getMcpEntry());
+    const first = fs.readFileSync(configPath, "utf8");
+    adapter.write(configPath, getMcpEntry());
+    const second = fs.readFileSync(configPath, "utf8");
+    expect(second).toBe(first);
+  });
+
+  it("creates ~/.hermes/config.yaml when neither file nor directory exists", () => {
+    const configPath = path.join(tmpDir, ".hermes-fresh", "config.yaml");
+    expect(fs.existsSync(path.dirname(configPath))).toBe(false);
+
+    adapter.write(configPath, getMcpEntry());
+
+    expect(fs.existsSync(configPath)).toBe(true);
+    const config = readYamlFile(configPath);
+    expect(config.mcp_servers as Record<string, unknown>).toHaveProperty("argent");
+  });
+
+  it("does not hard-wrap long user strings (lineWidth disabled)", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const longLine =
+      "You are a kawaii assistant! Use cute expressions and be super enthusiastic about everything! Every response should feel warm and adorable.";
+    fs.writeFileSync(configPath, `agent:\n  personalities:\n    kawaii: "${longLine}"\n`);
+
+    adapter.write(configPath, getMcpEntry());
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain(longLine);
+    // The full long string must remain on a single content line — the yaml
+    // library would wrap at column 80 by default.
+    const kawaiiLine = after.split("\n").find((l) => l.includes("kawaii:"));
+    expect(kawaiiLine).toBeDefined();
+    expect(kawaiiLine!.length).toBeGreaterThan(80);
+  });
+
+  it("write+remove on a realistic seed is semantically lossless", () => {
+    const configPath = path.join(tmpDir, ".hermes", "config.yaml");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const seed = [
+      "# managed by hermes",
+      "model:",
+      "  default: claude-opus-4-6 # selected via hermes model",
+      "  provider: anthropic",
+      "providers: {}",
+      "fallback_providers: []",
+      "toolsets:",
+      "  - hermes-cli",
+      "agent:",
+      "  max_turns: 90",
+      "  personalities:",
+      '    helpful: "You are a helpful assistant."',
+      '    kawaii: "You are a kawaii assistant! Use cute expressions and be super enthusiastic."',
+      "terminal:",
+      "  backend: local",
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, seed);
+    const before = readYamlFile(configPath);
+
+    adapter.write(configPath, getMcpEntry());
+    expect(adapter.remove(configPath)).toBe(true);
+
+    const after = fs.readFileSync(configPath, "utf8");
+    const afterParsed = readYamlFile(configPath);
+    // Semantic check: parsed JS should equal the original parsed JS
+    expect(JSON.stringify(afterParsed)).toBe(JSON.stringify(before));
+    // Every comment line in the seed must still be in the output
+    const seedComments = seed.split("\n").filter((l) => l.includes("#"));
+    for (const c of seedComments) {
+      const stripped = c.trim();
+      expect(after).toContain(stripped);
+    }
   });
 });
 
