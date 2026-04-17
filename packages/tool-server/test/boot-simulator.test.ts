@@ -36,18 +36,30 @@ describe("boot-simulator tool", () => {
 
     const tool = createBootSimulatorTool(registry);
 
-    await expect(tool.execute!({}, { udid: "SIM-1" })).resolves.toEqual({
-      udid: "SIM-1",
+    await expect(
+      tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" })
+    ).resolves.toEqual({
+      udid: "11111111-1111-1111-1111-111111111111",
       booted: true,
     });
 
     expect(mockExecFile.mock.calls.map(([file, args]) => [file, args])).toEqual([
-      ["xcrun", ["simctl", "boot", "SIM-1"]],
-      ["xcrun", ["simctl", "bootstatus", "SIM-1", "-b"]],
-      ["defaults", ["write", "com.apple.iphonesimulator", "CurrentDeviceUDID", "SIM-1"]],
+      ["xcrun", ["simctl", "boot", "11111111-1111-1111-1111-111111111111"]],
+      ["xcrun", ["simctl", "bootstatus", "11111111-1111-1111-1111-111111111111", "-b"]],
+      [
+        "defaults",
+        [
+          "write",
+          "com.apple.iphonesimulator",
+          "CurrentDeviceUDID",
+          "11111111-1111-1111-1111-111111111111",
+        ],
+      ],
       ["open", ["-a", "Simulator.app"]],
     ]);
-    expect(resolveService).toHaveBeenCalledWith("NativeDevtools:SIM-1");
+    expect(resolveService).toHaveBeenCalledWith(
+      "NativeDevtools:11111111-1111-1111-1111-111111111111"
+    );
     expect(resolveService.mock.invocationCallOrder[0]).toBeGreaterThan(
       mockExecFile.mock.invocationCallOrder[1]
     );
@@ -72,15 +84,19 @@ describe("boot-simulator tool", () => {
 
     const tool = createBootSimulatorTool(registry);
 
-    await expect(tool.execute!({}, { udid: "SIM-2" })).resolves.toEqual({
-      udid: "SIM-2",
+    await expect(
+      tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" })
+    ).resolves.toEqual({
+      udid: "22222222-2222-2222-2222-222222222222",
       booted: true,
     });
 
     expect(mockExecFile.mock.calls[1]?.slice(0, 2)).toEqual([
       "xcrun",
-      ["simctl", "bootstatus", "SIM-2", "-b"],
+      ["simctl", "bootstatus", "22222222-2222-2222-2222-222222222222", "-b"],
     ]);
-    expect(resolveService).toHaveBeenCalledWith("NativeDevtools:SIM-2");
+    expect(resolveService).toHaveBeenCalledWith(
+      "NativeDevtools:22222222-2222-2222-2222-222222222222"
+    );
   });
 });

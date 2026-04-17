@@ -25,6 +25,8 @@ export interface WorkspaceSnapshot {
   has_android_dir: boolean;
   ios_workspace: string | null;
   has_podfile: boolean;
+  android_application_id: string | null;
+  android_has_gradle: boolean;
 
   lockfile: "yarn.lock" | "package-lock.json" | "pnpm-lock.yaml" | "bun.lockb" | "bun.lock" | null;
 
@@ -179,6 +181,27 @@ async function findIosWorkspace(iosDir: string): Promise<string | null> {
   if (!entries) return null;
   const ws = entries.find((e) => e.endsWith(".xcworkspace"));
   return ws ?? null;
+}
+
+// ── Android application id detection ────────────────────────────────
+
+/**
+ * Extract `applicationId` from the `:app` module's `build.gradle` or `build.gradle.kts`.
+ * Handles both `applicationId "com.x"` (Groovy) and `applicationId = "com.x"` (Kotlin DSL).
+ * Returns null when the file is missing or no applicationId line is found.
+ */
+async function detectAndroidApplicationId(androidDir: string): Promise<string | null> {
+  const candidates = [
+    join(androidDir, "app", "build.gradle"),
+    join(androidDir, "app", "build.gradle.kts"),
+  ];
+  for (const path of candidates) {
+    const text = await readTextFile(path);
+    if (!text) continue;
+    const match = text.match(/applicationId\s*=?\s*["']([^"']+)["']/);
+    if (match) return match[1]!;
+  }
+  return null;
 }
 
 // ── CI config detection ──────────────────────────────────────────────
@@ -366,11 +389,21 @@ export async function readWorkspaceSnapshot(workspacePath: string): Promise<Work
   ]);
 
   const iosDir = join(workspacePath, "ios");
-  const [iosWorkspace, hasPodfile, makefileText, lintStagedConfig] = await Promise.all([
+  const androidDir = join(workspacePath, "android");
+  const [
+    iosWorkspace,
+    hasPodfile,
+    makefileText,
+    lintStagedConfig,
+    androidApplicationId,
+    androidHasGradle,
+  ] = await Promise.all([
     hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
     exists(join(workspacePath, "ios", "Podfile")),
     readTextFile(join(workspacePath, "Makefile")),
     detectLintStagedConfig(workspacePath, packageJson),
+    hasAndroidDir ? detectAndroidApplicationId(androidDir) : Promise.resolve(null),
+    hasAndroidDir ? exists(join(androidDir, "gradlew")) : Promise.resolve(false),
   ]);
 
   const metroPort = metroConfigRaw ? extractMetroPort(metroConfigRaw) : null;
@@ -390,6 +423,8 @@ export async function readWorkspaceSnapshot(workspacePath: string): Promise<Work
     has_android_dir: hasAndroidDir,
     ios_workspace: iosWorkspace,
     has_podfile: hasPodfile,
+    android_application_id: androidApplicationId,
+    android_has_gradle: androidHasGradle,
     lockfile,
     env_files: envFiles,
     tool_versions: toolVersions,

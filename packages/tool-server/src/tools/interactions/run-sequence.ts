@@ -3,6 +3,8 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Unified tool names — simulator-server dispatches iOS vs Android internally,
+// so every tool below works on both platforms with a consistent shape.
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
@@ -15,7 +17,11 @@ const ALLOWED_TOOLS = new Set([
 ]);
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID (shared across all steps)"),
+  udid: z
+    .string()
+    .describe(
+      "Device id shared across all steps. iOS: simulator UDID (UUID shape). Android: adb serial (e.g. `emulator-5554`)."
+    ),
   steps: z
     .array(
       z.object({
@@ -50,45 +56,27 @@ export function createRunSequenceTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute multiple simulator interaction steps in a single call.
+    description: `Execute multiple interaction steps in a single call, on iOS or Android.
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
-Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
-No screenshot is captured automatically — call screenshot separately after the sequence if needed.
+Returns { completed, total, steps }. Stops on the first error and returns partial results.
+No screenshot is captured automatically — call \`screenshot\` separately after the sequence if needed.
 
-ONLY use this when every step is known in advance. If any step depends on the
-result of a previous one (e.g. tapping a menu item that only appears after
-a prior tap), use individual tool calls instead.
+ONLY use this when every step is known in advance. If any step depends on the result of a previous one
+(e.g. tapping a menu item that only appears after a prior tap), use individual tool calls instead.
 
-Allowed tools and their args (udid is auto-injected, do NOT include it in args):
+Allowed tools and their args (udid is auto-injected — do NOT include it in args):
 
-  gesture-tap:    { x: number, y: number }
-  gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }
-  gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }
-  gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }
-  gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }
-  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }
-  keyboard:       { text?: string, key?: string, delayMs?: number }
-  rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }
-
-Example — scroll down three times:
-  { "udid": "<UDID>", "steps": [
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
-    { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } }
-  ]}
-
-Example — type text and submit:
-  { "udid": "<UDID>", "steps": [
-    { "tool": "keyboard", "args": { "text": "hello world" } },
-    { "tool": "keyboard", "args": { "key": "enter" } }
-  ]}
-
-Stops on the first error and returns partial results.`,
+  gesture-tap:    { x, y }
+  gesture-swipe:  { fromX, fromY, toX, toY, durationMs? }
+  gesture-custom: { events: [...], interpolate? }
+  gesture-pinch:  { centerX, centerY, startDistance, endDistance, angle?, durationMs? }
+  gesture-rotate: { centerX, centerY, radius, startAngle, endAngle, durationMs? }
+  button:         { button: "home"|"back"|... }
+  keyboard:       { text?, key? }
+  rotate:         { orientation: "Portrait"|... }`,
     zodSchema,
-    services: (params) => ({
-      simulatorServer: `SimulatorServer:${params.udid}`,
-    }),
+    services: () => ({}),
     async execute(_services, params) {
       const { udid, steps } = params;
       const results: StepResult[] = [];

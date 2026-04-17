@@ -1,0 +1,157 @@
+import type { DescribeNode } from "../tools/interactions/describe-contract";
+
+interface ParsedXmlNode {
+  tag: string;
+  attrs: Record<string, string>;
+  children: ParsedXmlNode[];
+}
+
+/**
+ * Minimal XML parser tuned for `uiautomator dump` output. The dump is always
+ * well-formed and shallow (attributes only, no CDATA), so a full XML parser would
+ * be overkill and add a dependency.
+ */
+export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
+  const body = xml.replace(/^\s*<\?xml[^?]*\?>\s*/, "");
+  // `s` flag so attribute lists can contain newlines; some Android builds wrap
+  // `uiautomator dump` output at ~1 KB boundaries.
+  const tagRe = /<(\/?)([A-Za-z_][\w.-]*)([^<>]*?)(\/?)>/gs;
+  const stack: ParsedXmlNode[] = [];
+  let root: ParsedXmlNode | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = tagRe.exec(body)) !== null) {
+    const [, closing, tag, rawAttrs, selfClose] = match;
+    if (closing) {
+      stack.pop();
+      continue;
+    }
+    const attrs = parseAttributes(rawAttrs ?? "");
+    const node: ParsedXmlNode = { tag: tag!, attrs, children: [] };
+    const parent = stack[stack.length - 1];
+    if (parent) parent.children.push(node);
+    else root = node;
+    if (!selfClose) stack.push(node);
+  }
+  return root;
+}
+
+function parseAttributes(raw: string): Record<string, string> {
+  const attrs: Record<string, string> = {};
+  const re = /([A-Za-z_][\w.-]*)\s*=\s*"([^"]*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    attrs[m[1]!] = decodeXmlEntities(m[2]!);
+  }
+  return attrs;
+}
+
+function decodeXmlEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+export function parseUiAutomatorBounds(
+  bounds: string
+): { x: number; y: number; w: number; h: number } | null {
+  const m = bounds.match(/\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]/);
+  if (!m) return null;
+  const x1 = parseInt(m[1]!, 10);
+  const y1 = parseInt(m[2]!, 10);
+  const x2 = parseInt(m[3]!, 10);
+  const y2 = parseInt(m[4]!, 10);
+  return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+}
+
+export function deriveUiAutomatorRole(className: string): string {
+  const short = className.split(".").pop() ?? className;
+  const lower = short.toLowerCase();
+  // Order matters: RadioButton and CheckBox both contain "button"/"box" as substrings
+  // of more specific classes, so check the specific cases first.
+  if (lower.includes("radiobutton")) return "RadioButton";
+  if (lower.includes("checkbox")) return "CheckBox";
+  if (lower.includes("button")) return "Button";
+  if (lower.includes("edittext") || lower.includes("textinput")) return "TextField";
+  if (lower.includes("textview") || lower === "text") return "StaticText";
+  if (lower.includes("image")) return "Image";
+  if (lower.includes("switch")) return "Switch";
+  if (lower.includes("scrollview") || lower.includes("recyclerview") || lower.includes("listview"))
+    return "ScrollView";
+  if (lower.includes("webview")) return "WebView";
+  return short || "View";
+}
+
+/**
+ * Convert a parsed `<node>` element into a `DescribeNode` with normalized frame
+ * coordinates. Returns `null` when the node has no bounds AND no useful children.
+ */
+export function convertUiAutomatorNode(
+  n: ParsedXmlNode,
+  screenW: number,
+  screenH: number
+): DescribeNode | null {
+  if (n.tag !== "node") return null;
+
+  const attrs = n.attrs;
+  const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
+  const children: DescribeNode[] = [];
+  for (const c of n.children) {
+    const converted = convertUiAutomatorNode(c, screenW, screenH);
+    if (converted) children.push(converted);
+  }
+
+  if (!bounds) {
+    return children.length === 1 ? children[0]! : null;
+  }
+
+  const frame = {
+    x: screenW > 0 ? Math.max(0, Math.min(1, bounds.x / screenW)) : 0,
+    y: screenH > 0 ? Math.max(0, Math.min(1, bounds.y / screenH)) : 0,
+    width: screenW > 0 ? Math.max(0, Math.min(1, bounds.w / screenW)) : 0,
+    height: screenH > 0 ? Math.max(0, Math.min(1, bounds.h / screenH)) : 0,
+  };
+
+  const node: DescribeNode = {
+    role: deriveUiAutomatorRole(attrs.class ?? ""),
+    frame,
+    children,
+  };
+  const label = attrs["content-desc"] || attrs.text || undefined;
+  if (label) node.label = label;
+  const identifier = attrs["resource-id"] || undefined;
+  if (identifier) node.identifier = identifier;
+  if (attrs.text && label !== attrs.text) node.value = attrs.text;
+
+  return node;
+}
+
+/**
+ * Parse a full `uiautomator dump` output into a DescribeNode tree matching the
+ * iOS describe contract, so the same agent guidance about frames + tap points applies.
+ */
+export function parseUiAutomatorDump(
+  rawOutput: string,
+  screenW: number,
+  screenH: number
+): DescribeNode {
+  let xml = rawOutput;
+  const xmlEnd = xml.lastIndexOf("</hierarchy>");
+  if (xmlEnd !== -1) xml = xml.slice(0, xmlEnd + "</hierarchy>".length);
+  const root = parseUiAutomatorXml(xml);
+  if (!root) {
+    throw new Error("Failed to parse uiautomator dump output");
+  }
+  const topChildren: DescribeNode[] = [];
+  for (const c of root.children) {
+    const converted = convertUiAutomatorNode(c, screenW, screenH);
+    if (converted) topChildren.push(converted);
+  }
+  return {
+    role: "Screen",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: topChildren,
+  };
+}

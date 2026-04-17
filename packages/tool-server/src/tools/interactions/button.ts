@@ -6,7 +6,11 @@ import { sendCommand } from "../../utils/simulator-client";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z
+    .string()
+    .describe(
+      "Device id. iOS: simulator UDID (UUID shape). Android: adb serial (e.g. `emulator-5554`)."
+    ),
   button: z
     .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
     .describe("Hardware button to press"),
@@ -14,11 +18,9 @@ const zodSchema = z.object({
 
 export const buttonTool: ToolDefinition<z.infer<typeof zodSchema>, { pressed: string }> = {
   id: "button",
-  description: `Press a simulator hardware button. Sends Down then Up events automatically.
-Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.
-Use when you need to trigger a hardware button events. 
-Returns { pressed: buttonName }. 
-Fails if the simulator server is not running for the given UDID.`,
+  description: `Press a hardware button on iOS or Android. Sends Down then Up events automatically.
+Supported: home, back, power, volumeUp, volumeDown, appSwitch, actionButton. The simulator-server binary maps these to each platform's native keycode internally.
+Returns { pressed: buttonName }. Fails if the simulator server cannot start.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

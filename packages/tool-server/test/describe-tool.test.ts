@@ -82,7 +82,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" });
     expect(result.source).toBe("ax-service");
     expect(result.tree.role).toBe("AXGroup");
     expect(result.tree.children[0]?.label).toBe("General");
@@ -110,7 +110,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" });
     expect(result.source).toBe("ax-service");
     expect(result.tree.children).toHaveLength(2);
     expect(result.tree.children[0]?.label).toBe("Allow Once");
@@ -127,7 +127,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" });
     expect(result.source).toBe("ax-service");
     expect(result.tree.role).toBe("AXGroup");
     expect(result.tree.children).toHaveLength(0);
@@ -159,7 +159,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.apple.Preferences" });
+    const result = await tool.execute(
+      {},
+      { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.apple.Preferences" }
+    );
     expect(result.source).toBe("native-devtools");
     expect(result.tree.children[0]?.label).toBe("General");
     expect(result.tree.children[0]?.role).toBe("AXButton");
@@ -191,7 +194,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" });
     expect(result.source).toBe("native-devtools");
     expect(result.tree.children[0]?.label).toBe("Hello World");
     expect(result.should_restart).toBeUndefined();
@@ -211,7 +214,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.example.app" });
+    const result = await tool.execute(
+      {},
+      { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.example.app" }
+    );
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(result.tree.children).toHaveLength(0);
@@ -227,7 +233,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" });
     expect(result.source).toBe("ax-service");
     expect(result.tree.children).toHaveLength(0);
     expect(result.should_restart).toBeUndefined();
@@ -237,7 +243,9 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({});
     const tool = createDescribeTool(registry);
 
-    await expect(tool.execute({}, { udid: "SIM-1" })).rejects.toThrow("ax-service not available");
+    await expect(
+      tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" })
+    ).rejects.toThrow("ax-service not available");
   });
 
   it("returns multiple elements with correct roles", async () => {
@@ -267,7 +275,7 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "11111111-1111-1111-1111-111111111111" });
     expect(result.source).toBe("ax-service");
     expect(result.tree.children).toHaveLength(3);
     expect(result.tree.children[0]?.role).toBe("AXTextField");
@@ -292,8 +300,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    await tool.execute({}, { udid: "ABC-12345" });
-    expect(registry.resolveService).toHaveBeenCalledWith("AXService:ABC-12345");
+    await tool.execute({}, { udid: "11111111-2222-3333-4444-555555555555" });
+    expect(registry.resolveService).toHaveBeenCalledWith(
+      "AXService:11111111-2222-3333-4444-555555555555"
+    );
   });
 
   it("returns empty AX result when native queryViewHierarchy returns an error", async () => {
@@ -310,7 +320,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.example.app" });
+    const result = await tool.execute(
+      {},
+      { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.example.app" }
+    );
     expect(result.source).toBe("ax-service");
     expect(result.tree.children).toHaveLength(0);
   });

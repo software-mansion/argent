@@ -9,44 +9,67 @@ import { adaptAXDescribeToDescribeResult } from "./describe-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./describe-native-adapter";
 import { parseNativeDescribeScreenResult } from "../native-devtools/native-describe-contract";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
+import { detectPlatform } from "../../utils/platform-detect";
+import { adbExecOutBinary } from "../../utils/adb";
+import { getAndroidScreenSize } from "../../utils/android-screen";
+import { parseUiAutomatorDump } from "../../utils/uiautomator-parser";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z
+    .string()
+    .describe(
+      "Device id. For iOS: simulator UDID (UUID shape). For Android: adb serial (e.g. `emulator-5554`)."
+    ),
   bundleId: z
     .string()
     .optional()
     .describe(
-      "Optional app bundle ID. Used as a target hint when the AX-service returns no elements " +
-        "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app."
+      "iOS-only: target hint when AX-service returns nothing and the tool falls back to native-devtools inspection. " +
+        "If omitted, falls back to the frontmost connected app. Ignored on Android."
     ),
 });
+
+async function describeAndroid(udid: string): Promise<DescribeResult> {
+  const [size, rawBuf] = await Promise.all([
+    getAndroidScreenSize(udid),
+    adbExecOutBinary(
+      udid,
+      "uiautomator dump /sdcard/window_dump.xml >/dev/null && cat /sdcard/window_dump.xml",
+      { timeoutMs: 20_000 }
+    ),
+  ]);
+  const raw = rawBuf.toString("utf-8");
+  const trimmed = raw.trim();
+  if (/^ERROR:/i.test(trimmed) || (!trimmed.includes("<hierarchy") && /error/i.test(trimmed))) {
+    throw new Error(
+      `uiautomator could not capture the screen: ${trimmed}. ` +
+        `Common causes: device locked / keyguard, DRM or secure overlay, Play Integrity screen. ` +
+        `Unlock the device or take a screenshot as a fallback.`
+    );
+  }
+  const tree = parseUiAutomatorDump(raw, size.width, size.height);
+  return { tree, source: "native-devtools" };
+}
 
 export function createDescribeTool(
   registry: Registry
 ): ToolDefinition<z.infer<typeof zodSchema>, DescribeResult> {
   return {
     id: "describe",
-    description: `Get the iOS accessibility element tree for the current simulator screen.
-Uses the AXRuntime accessibility service to inspect whatever is currently visible — including
-system dialogs, permission prompts, and any foreground app content.
+    description: `Get the UI hierarchy for the current screen on iOS or Android.
 
-When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
-with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
+iOS: accessibility element tree from AXRuntime. Returns dialog elements when a system modal is visible, otherwise the foreground app's accessible tree. Falls back to native-devtools inspection if AX is empty.
+Android: uiautomator dump parsed into the same DescribeNode shape. Uses \`resource-id\` as identifier, \`content-desc\`/\`text\` as label.
 
-Returns a JSON tree of UI elements with roles, labels, values, and frame coordinates in normalized
-[0,1] space (fractions of the screen, not pixels) — the same coordinate space as tap/swipe/gesture
-and simulator-server touch input.
+Both return frame coordinates normalized to [0,1] — same coord space as gesture-tap. Use frame.x + frame.width/2 as tap X, frame.y + frame.height/2 as tap Y.
 
-Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
-
-For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
-use native-describe-screen with an explicit bundleId instead.
-For React Native apps, debugger-component-tree returns React component names with tap coordinates.
-Only supported on iOS simulators.`,
+For React Native apps on either platform, \`debugger-component-tree\` returns richer component data (requires Metro connection; on Android also requires \`adb reverse tcp:8081 tcp:8081\`).`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, _options) {
+      if (detectPlatform(params.udid) === "android") {
+        return describeAndroid(params.udid);
+      }
       const axApi = await registry.resolveService<AXServiceApi>(
         `${AX_SERVICE_NAMESPACE}:${params.udid}`
       );
@@ -57,7 +80,6 @@ Only supported on iOS simulators.`,
         return { tree, source: "ax-service" };
       }
 
-      // AX returned zero elements — attempt native-devtools fallback
       try {
         const nativeApi = await registry.resolveService<NativeDevtoolsApi>(
           `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`
@@ -82,7 +104,6 @@ Only supported on iOS simulators.`,
         const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
         return { tree: nativeTree, source: "native-devtools" };
       } catch {
-        // Native devtools unavailable or no connected app — return the empty AX result
         return { tree, source: "ax-service" };
       }
     },

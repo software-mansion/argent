@@ -8,6 +8,7 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
+import { detectPlatform } from "../utils/platform-detect";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -26,14 +27,25 @@ export interface SimulatorServerApi {
   pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
+/**
+ * Spawn `simulator-server <ios|android> --id <id>`.
+ *
+ * Android mode uses the gRPC EmulatorController to drive the AVD, iOS mode uses
+ * Apple's private simctl APIs. From the tool-server's perspective both expose
+ * the same HTTP + WebSocket + stdin protocol, so every caller is platform-neutral.
+ *
+ * stdin MUST stay open — the server treats EOF on stdin as a shutdown signal.
+ * `stdio: ["pipe", "pipe", "pipe"]` below provides that.
+ */
 function spawnSimulatorServerProcess(udid: string): Promise<{
   proc: ChildProcess;
   apiUrl: string;
   streamUrl: string;
 }> {
   const { BINARY_PATH, BINARY_DIR } = getPaths();
+  const subcommand = detectPlatform(udid) === "android" ? "android" : "ios";
   return new Promise((resolve, reject) => {
-    const args = ["ios", "--id", udid];
+    const args = [subcommand, "--id", udid];
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,
@@ -95,11 +107,11 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, stri
   },
   async factory(_deps, payload) {
     const udid = payload;
-    // Enable accessibility automation before any app is launched so that apps
-    // start with their AX server running. If this is called after apps are already
-    // running (e.g. a pre-booted simulator), those apps won't pick up the flag
-    // until restarted — but new launches will work correctly.
-    await ensureAutomationEnabled(udid).catch(() => {});
+    // iOS accessibility automation flag — no-op equivalent on Android so skip
+    // the xcrun call entirely there.
+    if (detectPlatform(udid) === "ios") {
+      await ensureAutomationEnabled(udid).catch(() => {});
+    }
     const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(udid);
 
     const events = new TypedEventEmitter<ServiceEvents>();
