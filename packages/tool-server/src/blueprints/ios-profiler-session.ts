@@ -1,5 +1,6 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
+import { classifyDevice } from "../utils/platform-detect";
 
 export const IOS_PROFILER_SESSION_NAMESPACE = "IosProfilerSession";
 
@@ -30,6 +31,14 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSession
   },
 
   async factory(_deps, _payload) {
+    // iOS-only (Instruments / xctrace does not drive Android). Reject early
+    // so agents that pass an Android serial get a clear "wrong platform"
+    // error instead of an opaque xctrace failure deeper in.
+    if ((await classifyDevice(_payload)) !== "ios") {
+      throw new Error(
+        `${IOS_PROFILER_SESSION_NAMESPACE} is iOS-only. The target '${_payload}' classifies as Android — ios-profiler-* tools use Instruments/xctrace and have no Android equivalent. Pick an iOS udid from list-devices.`
+      );
+    }
     const state: IosProfilerSessionApi = {
       deviceId: _payload,
       appProcess: null,
