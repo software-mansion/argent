@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tool-server",
-  "version": "0.6.0",
+  "version": "0.5.2",
   "description": "Framework-agnostic tool registry for iOS simulator and Android emulator control",
   "main": "dist/index.js",
   "scripts": {
