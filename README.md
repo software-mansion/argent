@@ -88,7 +88,7 @@ argent init
 
 ## Privacy
 
-Argent does not collect or transmit any user data. 
+Argent does not collect or transmit any user data.
 No telemetry, no analytics, no crash reporting.
 
 - Argent integrates with your agent locally over MCP stdio.
