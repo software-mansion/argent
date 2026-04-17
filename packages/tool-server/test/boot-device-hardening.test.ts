@@ -172,6 +172,74 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
   }, 10_000);
 });
 
+describe("boot-device Android — orphan protection on stage-2 timeout (review feedback R1#1)", () => {
+  /**
+   * Before this fix, spawn(..., {detached: true, stdio: "ignore"}) + unref()
+   * meant that if the adb-register stage timed out (emulator started but
+   * never appeared in `adb devices`), `killEmulatorQuietly(null)` was a
+   * no-op — the detached emulator kept running and the user had to find
+   * and kill the PID by hand. The fix retains the ChildProcess and signals
+   * SIGTERM (with SIGKILL escalation) on any throw before a serial is
+   * resolved.
+   */
+  it("SIGTERMs the detached emulator child when no serial registers within the budget", async () => {
+    const proc = new EventEmitter() as EventEmitter & {
+      unref: () => void;
+      kill: (sig?: string) => boolean;
+      exitCode: number | null;
+      signalCode: string | null;
+    };
+    proc.unref = () => {};
+    proc.exitCode = null;
+    proc.signalCode = null;
+    const killSignals: (string | undefined)[] = [];
+    proc.kill = (sig?: string) => {
+      killSignals.push(sig);
+      return true;
+    };
+    spawnMock.mockReturnValue(proc);
+
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "emulator" && args[0] === "-list-avds") {
+        return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "version") {
+        return { stdout: "Android Debug Bridge\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+      // `adb devices` always returns empty — no emulator ever registers,
+      // forcing the adb-register stage to exhaust its budget.
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: "List of devices attached\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const tool = createBootDeviceTool(registry);
+    await expect(
+      tool.execute!(
+        {},
+        {
+          avdName: "Pixel_7_API_34",
+          // Minimum allowed; the adb-register budget caps at 60s, so in
+          // practice the tool will throw around that mark. We're mocking adb
+          // so each poll returns instantly and the budget burns in ~60s of
+          // real time. The test doesn't wait that long — vitest's default
+          // timeout isn't involved because `adb devices` returns instantly
+          // and the tool's internal sleeps use setTimeout which we fake.
+          bootTimeoutMs: 30_000,
+          noWindow: true,
+        }
+      )
+    ).rejects.toThrow(/did not register within/);
+
+    // The detached child MUST have been signalled — otherwise the emulator is
+    // orphaned. SIGTERM first, with SIGKILL escalation scheduled.
+    expect(killSignals.length).toBeGreaterThan(0);
+    expect(killSignals[0]).toBe("SIGTERM");
+  }, 120_000);
+});
+
 describe("boot-device Android — missing AVD (existing guard)", () => {
   it("throws a useful error when the requested avdName is not installed", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {

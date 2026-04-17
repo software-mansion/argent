@@ -11,9 +11,17 @@ import {
   runAdb,
   waitForBootCompleted,
 } from "../../utils/adb";
+import { warmDeviceCache } from "../../utils/platform-detect";
 
 const execFileAsync = promisify(execFile);
 
+// NOTE on mutual exclusion: `udid` and `avdName` are exactly-one — but zod's
+// `.refine()` returns a ZodEffects that our Registry ToolDefinition type does
+// not accept (it requires a ZodObject so the JSON Schema generator can walk
+// `.shape`). The exactly-one check therefore lives inside `execute` and
+// surfaces with a specific error message on the first call. We restate the
+// constraint in each field's `.describe()` so MCP clients still see it in the
+// generated tool docs even if their JSON-schema inspector ignores the runtime.
 const zodSchema = z.object({
   udid: z
     .string()
@@ -70,6 +78,26 @@ async function killEmulatorQuietly(serial: string | null): Promise<void> {
   }
 }
 
+// Best-effort termination for an emulator that was spawned detached + unref'd
+// but never registered with adb — in that state `adb emu kill` has no serial
+// to target, so we must signal the ChildProcess directly. SIGTERM gives the
+// emulator a chance to flush its snapshot; a follow-up SIGKILL after a short
+// grace window handles the "ignored SIGTERM" case.
+function killDetachedEmulator(child: import("node:child_process").ChildProcess): void {
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // Already gone.
+  }
+  setTimeout(() => {
+    try {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }, 2_000).unref();
+}
+
 async function findSerialByAvdName(avdName: string, deadline: number): Promise<string | null> {
   while (Date.now() < deadline) {
     const devices = await listAndroidDevices().catch(() => []);
@@ -112,6 +140,7 @@ async function bootIos(
     udid,
   ]);
   await execFileAsync("open", ["-a", "Simulator.app"]);
+  warmDeviceCache([{ udid, platform: "ios" }]);
   return { platform: "ios", udid, booted: true };
 }
 
@@ -186,27 +215,42 @@ async function bootAndroid(params: {
   // Stage 2: wait for adb to see the new emulator.
   let serial: string | null = null;
   const adbDeadline = Math.min(overallDeadline, Date.now() + STAGE_BUDGET.adbRegister);
-  while (Date.now() < adbDeadline) {
-    if (earlyExitError) throw earlyExitError;
-    const newSerials = await listNewEmulatorSerials(serialsBefore);
-    if (newSerials.length >= 1) {
-      if (newSerials.length === 1) {
-        serial = newSerials[0]!;
-        break;
+  try {
+    while (Date.now() < adbDeadline) {
+      if (earlyExitError) throw earlyExitError;
+      const newSerials = await listNewEmulatorSerials(serialsBefore);
+      if (newSerials.length >= 1) {
+        if (newSerials.length === 1) {
+          serial = newSerials[0]!;
+          break;
+        }
+        const byAvd = await findSerialByAvdName(params.avdName, Date.now() + 3_000);
+        if (byAvd) {
+          serial = byAvd;
+          break;
+        }
       }
-      const byAvd = await findSerialByAvdName(params.avdName, Date.now() + 3_000);
-      if (byAvd) {
-        serial = byAvd;
-        break;
-      }
+      await new Promise((r) => setTimeout(r, 1_000));
     }
-    await new Promise((r) => setTimeout(r, 1_000));
+  } catch (err) {
+    // Covers earlyExitError thrown from inside the loop — still need to
+    // reap the detached child if it is somehow alive.
+    killDetachedEmulator(child);
+    throw err;
   }
   if (!serial) {
-    if (earlyExitError) throw earlyExitError;
-    await killEmulatorQuietly(null);
+    if (earlyExitError) {
+      killDetachedEmulator(child);
+      throw earlyExitError;
+    }
+    // The emulator binary is running detached but never registered with adb.
+    // `killEmulatorQuietly(null)` is a no-op here (no serial to target), so
+    // we must signal the child process directly — otherwise the emulator is
+    // orphaned and the user has to find + kill the PID by hand.
+    killDetachedEmulator(child);
     throw new Error(
       `Emulator "${params.avdName}" did not register within ${STAGE_BUDGET.adbRegister / 1000}s. ` +
+        `The emulator process has been terminated. ` +
         `Check that the Android SDK is on PATH and that no other emulator is already using the assigned port.`
     );
   }
@@ -261,6 +305,11 @@ async function bootAndroid(params: {
         `Emulator has been terminated. Retry the call.`
     );
   }
+
+  // Warm the classify cache so the interaction tool the caller invokes next
+  // (launch-app / describe / ...) is a cache hit and doesn't re-run the adb
+  // list lookup just to confirm what we already know.
+  warmDeviceCache([{ udid: serial, platform: "android" }]);
 
   return {
     platform: "android",
