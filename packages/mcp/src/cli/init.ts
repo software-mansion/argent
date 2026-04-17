@@ -206,11 +206,22 @@ export async function init(args: string[]): Promise<void> {
   if (nonInteractive) {
     selectedAdapters = detected.length > 0 ? detected : ALL_ADAPTERS;
   } else {
-    const choices = ALL_ADAPTERS.map((a) => ({
-      value: a,
-      label: a.name,
-      hint: detectedNames.includes(a.name) ? "detected" : undefined,
-    }));
+    const choices = ALL_ADAPTERS.map((a) => {
+      const parts: string[] = [];
+      if (detectedNames.includes(a.name)) parts.push("detected");
+      const hasProject = a.projectPath(process.cwd()) != null;
+      const hasGlobal = a.globalPath() != null;
+      if (!hasProject && hasGlobal) {
+        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s global config`)));
+      } else if (hasProject && !hasGlobal) {
+        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s project config`)));
+      }
+      return {
+        value: a,
+        label: a.name,
+        hint: parts.length > 0 ? parts.join(", ") : undefined,
+      };
+    });
 
     p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
 
