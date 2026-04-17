@@ -88,11 +88,12 @@ argent init
 
 ## Privacy
 
-Argent does not collect, transmit, or phone home any user data. No telemetry, no analytics, no crash reporting.
+Argent does not collect or transmit any user data. 
+No telemetry, no analytics, no crash reporting.
 
-- Argent integrates with your agent (Claude Code, Cursor, etc.) locally over MCP stdio.
-- Its internal tool server binds to `127.0.0.1` only and is not reachable from outside your machine.
-- The only outbound network call is an optional version check against the public npm registry (`registry.npmjs.org`), which sends no user data and fails gracefully if blocked.
+- Argent integrates with your agent locally over MCP stdio.
+- Its internal tools are not reachable from outside your machine.
+- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
 
 ## License
 
