@@ -86,6 +86,15 @@ argent init
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
 
+## Privacy
+
+Argent does not collect or transmit any user data.
+No telemetry, no analytics, no crash reporting.
+
+- Argent integrates with your agent locally over MCP stdio.
+- Its internal tools are not reachable from outside your machine.
+- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
+
 ## License
 
 Argent uses a mixed licensing model.
