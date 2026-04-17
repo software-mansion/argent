@@ -90,7 +90,7 @@ argent init
 
 Argent uses a mixed licensing model.
 
-**Source code** is released under the [Apache License 2.0](LICENSE).
+**Source code** is released under the [Apache License 2.0](LICENSE.txt).
 
 **Proprietary binaries** (the `bin/simulator-server` and `bin/ax-service` executables and the `.dylib` files in `native-devtools-ios`) are the intellectual property of Software Mansion S.A. and are licensed solely for use within this project. Decompiling, reverse-engineering, or redistributing them without explicit written permission is prohibited.
 
