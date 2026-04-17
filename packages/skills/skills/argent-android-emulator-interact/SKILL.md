@@ -1,6 +1,6 @@
 ---
 name: argent-android-emulator-interact
-description: Android-specific notes for interacting with the UI. Use alongside `argent-simulator-interact` — the core interaction tools (tap/swipe/type/describe/...) are unified and auto-dispatch by device id.
+description: Android-specific notes for interacting with the UI. Use when driving an Android emulator via the unified interaction tools (tap/swipe/type/describe/...) — pair with `argent-simulator-interact` for the cross-platform details.
 ---
 
 ## Unified tool surface

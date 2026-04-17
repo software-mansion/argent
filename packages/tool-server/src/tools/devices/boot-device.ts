@@ -295,12 +295,10 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
-    description:
-      "Start an iOS simulator or launch an Android emulator and wait until it is ready to accept interactions. " +
-      "Pick the platform by which argument you pass: `udid` for an iOS simulator from `list-devices`, or `avdName` for an Android AVD (a serial is assigned automatically). " +
-      "Use at the start of a session once you have picked a target. " +
-      "Returns a tagged payload: `{ platform: 'ios', udid, booted }` or `{ platform: 'android', serial, avdName, booted, coldBoot }`. " +
-      "Android boots take 2–10 minutes depending on machine and cold/warm state; if any boot stage fails, the tool terminates the emulator it spawned so the next retry starts clean.",
+    description: `Start an iOS simulator or Android emulator and wait until it is ready to accept interactions.
+Use when a target picked from list-devices is still in a shutdown/offline state, or to launch a fresh Android emulator by AVD name. Pass 'udid' for an iOS simulator or 'avdName' for Android (a serial is assigned automatically).
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, coldBoot }. Android boots take 2–10 minutes depending on cold/warm state.
+Fails when the AVD name does not exist, when a boot stage times out, or when xcrun / emulator / adb is missing from PATH; on failure the spawned emulator is terminated so the next retry starts clean.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
