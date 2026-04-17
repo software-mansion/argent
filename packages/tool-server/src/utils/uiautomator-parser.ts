@@ -47,11 +47,26 @@ function parseAttributes(raw: string): Record<string, string> {
 
 function decodeXmlEntities(s: string): string {
   return s
+    .replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => safeFromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => safeFromCodePoint(parseInt(dec, 10)))
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'");
+}
+
+function safeFromCodePoint(n: number): string {
+  // Numeric character references can encode values outside the valid Unicode
+  // range (or surrogate halves). Fall back to an empty string rather than
+  // throwing — the parsed tree is still usable without the broken glyph.
+  if (!Number.isFinite(n) || n < 0 || n > 0x10ffff) return "";
+  if (n >= 0xd800 && n <= 0xdfff) return "";
+  try {
+    return String.fromCodePoint(n);
+  } catch {
+    return "";
+  }
 }
 
 export function parseUiAutomatorBounds(
@@ -87,6 +102,10 @@ export function deriveUiAutomatorRole(className: string): string {
 /**
  * Convert a parsed `<node>` element into a `DescribeNode` with normalized frame
  * coordinates. Returns `null` when the node has no bounds AND no useful children.
+ *
+ * Iterative post-order walk (no recursion) so deeply nested hierarchies — which
+ * are realistic on mis-configured RecyclerViews / stacked overlays — don't blow
+ * the JS call stack. We use a work queue keyed by parsed-node identity.
  */
 export function convertUiAutomatorNode(
   n: ParsedXmlNode,
@@ -95,37 +114,65 @@ export function convertUiAutomatorNode(
 ): DescribeNode | null {
   if (n.tag !== "node") return null;
 
-  const attrs = n.attrs;
-  const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
-  const children: DescribeNode[] = [];
-  for (const c of n.children) {
-    const converted = convertUiAutomatorNode(c, screenW, screenH);
-    if (converted) children.push(converted);
+  // 1. Collect all `<node>` descendants in post-order (children before parent).
+  const postOrder: ParsedXmlNode[] = [];
+  const stack: Array<{ node: ParsedXmlNode; visited: boolean }> = [{ node: n, visited: false }];
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1]!;
+    if (!top.visited) {
+      top.visited = true;
+      // Push children in reverse so they pop in original order.
+      for (let i = top.node.children.length - 1; i >= 0; i--) {
+        const child = top.node.children[i]!;
+        if (child.tag === "node") {
+          stack.push({ node: child, visited: false });
+        }
+      }
+    } else {
+      postOrder.push(top.node);
+      stack.pop();
+    }
   }
 
-  if (!bounds) {
-    return children.length === 1 ? children[0]! : null;
+  // 2. Compute each node's DescribeNode using already-computed children.
+  const converted = new Map<ParsedXmlNode, DescribeNode | null>();
+  for (const parsed of postOrder) {
+    const attrs = parsed.attrs;
+    const bounds = parseUiAutomatorBounds(attrs.bounds ?? "");
+
+    const childNodes: DescribeNode[] = [];
+    for (const c of parsed.children) {
+      if (c.tag !== "node") continue;
+      const cc = converted.get(c);
+      if (cc) childNodes.push(cc);
+    }
+
+    if (!bounds) {
+      // No bounds: collapse to the sole child (pass-through wrapper) or drop.
+      converted.set(parsed, childNodes.length === 1 ? childNodes[0]! : null);
+      continue;
+    }
+
+    const frame = {
+      x: screenW > 0 ? Math.max(0, Math.min(1, bounds.x / screenW)) : 0,
+      y: screenH > 0 ? Math.max(0, Math.min(1, bounds.y / screenH)) : 0,
+      width: screenW > 0 ? Math.max(0, Math.min(1, bounds.w / screenW)) : 0,
+      height: screenH > 0 ? Math.max(0, Math.min(1, bounds.h / screenH)) : 0,
+    };
+    const out: DescribeNode = {
+      role: deriveUiAutomatorRole(attrs.class ?? ""),
+      frame,
+      children: childNodes,
+    };
+    const label = attrs["content-desc"] || attrs.text || undefined;
+    if (label) out.label = label;
+    const identifier = attrs["resource-id"] || undefined;
+    if (identifier) out.identifier = identifier;
+    if (attrs.text && label !== attrs.text) out.value = attrs.text;
+    converted.set(parsed, out);
   }
 
-  const frame = {
-    x: screenW > 0 ? Math.max(0, Math.min(1, bounds.x / screenW)) : 0,
-    y: screenH > 0 ? Math.max(0, Math.min(1, bounds.y / screenH)) : 0,
-    width: screenW > 0 ? Math.max(0, Math.min(1, bounds.w / screenW)) : 0,
-    height: screenH > 0 ? Math.max(0, Math.min(1, bounds.h / screenH)) : 0,
-  };
-
-  const node: DescribeNode = {
-    role: deriveUiAutomatorRole(attrs.class ?? ""),
-    frame,
-    children,
-  };
-  const label = attrs["content-desc"] || attrs.text || undefined;
-  if (label) node.label = label;
-  const identifier = attrs["resource-id"] || undefined;
-  if (identifier) node.identifier = identifier;
-  if (attrs.text && label !== attrs.text) node.value = attrs.text;
-
-  return node;
+  return converted.get(n) ?? null;
 }
 
 /**
