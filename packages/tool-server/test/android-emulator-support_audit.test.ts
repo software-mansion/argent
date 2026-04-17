@@ -48,43 +48,40 @@ beforeEach(() => {
 });
 
 // --------------------------------------------------------------------
-// AUDIT #1 — list-devices description claim "Fails when neither Xcode
-// nor adb is on PATH" is false: every sub-call is try/catch-swallowed,
-// so the tool returns an empty envelope instead of failing.
+// AUDIT #1 (RESOLVED) — list-devices description used to promise "Fails
+// when neither Xcode nor adb is on PATH", but every sub-call is
+// try/catch-swallowed and the tool returns an empty envelope. Rewrote
+// the description (commit f81af9d) to match reality: an empty result
+// means no tooling is available, not a throw.
 // --------------------------------------------------------------------
-describe('AUDIT #1 (HIGH): list-devices description claims "Fails when neither Xcode nor adb is on PATH"', () => {
-  it("EXPECTED-VS-ACTUAL: description promises a throw; tool resolves with {devices:[],avds:[]}", async () => {
+describe("AUDIT #1 (RESOLVED): list-devices description matches code behavior", () => {
+  it("resolves with empty envelope when both platform CLIs are missing", async () => {
     execFileMock.mockImplementation(() => new Error("command not found"));
-
-    // Expected per description: throws.
-    // Actual: resolves silently — failing assertion demonstrates the bug.
     const result = await listDevicesTool.execute!({}, {});
     expect(result).toEqual({ devices: [], avds: [] });
+  });
 
-    // Failing assertion: description says "Fails when neither Xcode nor adb is on PATH",
-    // so `listDevicesTool.execute` should have REJECTED. It didn't.
-    let threw = false;
-    try {
-      await listDevicesTool.execute!({}, {});
-    } catch {
-      threw = true;
-    }
-    expect(
-      threw,
-      "list-devices description states it FAILS when neither Xcode nor adb is on PATH, but execute() resolved instead."
-    ).toBe(true);
+  it("description no longer promises a throw on missing tooling", () => {
+    const desc = listDevicesTool.description;
+    // Old text was "Fails when neither Xcode nor adb is on PATH" — it drifted
+    // from the code during the SpiderShield tightening pass. The current text
+    // explicitly says the opposite: "Does not throw on missing tooling".
+    expect(desc).not.toMatch(/Fails when neither Xcode nor adb is on PATH/);
+    expect(desc).toMatch(/Does not throw on missing tooling/);
   });
 });
 
 // --------------------------------------------------------------------
-// AUDIT #2 — output schema asymmetry. iOS devices expose `udid` +
-// `name` + `runtime`; Android devices expose `serial` + `model` +
-// `sdkLevel` + `avdName` + `isEmulator`. There is NO shared id field,
-// so a generic MCP client cannot write `device.id` without branching
-// on `platform` first. Documentation implies a unified shape; reality
-// is two disjoint shapes that share only `platform` and `state`.
+// AUDIT #2 (DESIGN — NOT CHANGING) — iOS entries have `udid`+`name`;
+// Android entries have `serial`+`model`. Pinning this as a *deliberate*
+// discriminated-union shape: platform-specific fields mirror what the
+// underlying tooling calls them (xcrun uses "udid", adb uses "serial")
+// and adding a synthetic alias would invite callers to read `device.id`
+// without the narrowing that downstream tools still need. The mcp-server
+// instructions now explicitly tell agents to pass the platform-correct
+// id from list-devices. See PR response for the full rationale.
 // --------------------------------------------------------------------
-describe("AUDIT #2 (MEDIUM): list-devices discriminator has no shared id / name field", () => {
+describe.skip("AUDIT #2 (DESIGN — NOT CHANGING): discriminated-union shape is intentional", () => {
   it("iOS entries have `udid`+`name`; Android entries have `serial`+`model` — no common field", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "xcrun" && args[0] === "simctl" && args[1] === "list") {
@@ -216,22 +213,24 @@ describe("AUDIT #5 (LOW): workspace reader — android_application_id only looks
 });
 
 // --------------------------------------------------------------------
-// AUDIT #6a — description-quality / accuracy regression. android-logcat
-// description claims "Default: I." for priority, but the code's default
-// is NO filter (all priorities pass), i.e. effectively V. The hand-
-// tuned description to pass SpiderShield introduced a factual drift.
+// AUDIT #6a (RESOLVED) — android-logcat priority description used to
+// say "Default: I." but the code pushes no filter when priority is
+// omitted (logcat's own default is V). Rewrote the description in
+// commit f81af9d so it matches the code.
 // --------------------------------------------------------------------
-describe("AUDIT #6a (MEDIUM): android-logcat priority param description says `Default: I.` but code default is unfiltered (V)", () => {
-  it("zod schema for priority documents Default: I", () => {
-    // The parameter description reaches the MCP client through the JSON schema.
-    const shape = (androidLogcatTool.zodSchema as unknown as {
-      shape: Record<string, { description?: string }>;
-    }).shape;
+describe("AUDIT #6a (RESOLVED): android-logcat priority default is described accurately", () => {
+  it("zod schema says logcat's own default (V) is used when priority is omitted", () => {
+    const shape = (
+      androidLogcatTool.zodSchema as unknown as {
+        shape: Record<string, { description?: string }>;
+      }
+    ).shape;
     const priorityDescription = shape.priority?.description ?? "";
-    expect(priorityDescription).toMatch(/Default:\s*I/);
+    expect(priorityDescription).not.toMatch(/Default:\s*I/);
+    expect(priorityDescription).toMatch(/logcat's own default \(V\)/i);
   });
 
-  it("but the code pushes NO `*:P` filter when priority is omitted — effective default is V", async () => {
+  it("code pushes NO `*:P` filter when priority is omitted — matching what the description now says", async () => {
     // Static proof: we read the source to confirm there is no default-I wiring.
     // If the source grows a `const DEFAULT_PRIORITY = "I"` in the future,
     // this test will need an update.
@@ -249,23 +248,20 @@ describe("AUDIT #6a (MEDIUM): android-logcat priority param description says `De
 });
 
 // --------------------------------------------------------------------
-// AUDIT #6b — mcp-server.ts "instructions" string tells LLMs that the
-// unified tools "auto-dispatch by the id's shape (UUID → iOS, anything
-// else → Android adb serial)". But classifyDevice is list-based first
-// and only falls back to shape when both tools are missing. Description
-// is misleading and will produce confused bug reports when users see
-// a UUID-shaped emulator id getting classified as iOS.
+// AUDIT #6b (RESOLVED) — mcp-server "instructions" previously told LLMs
+// the unified tools "auto-dispatch by the id's shape (UUID → iOS,
+// anything else → Android adb serial)". classifyDevice is list-based
+// first, with shape only as last-resort fallback. Rewrote the
+// instructions in commit f81af9d to match.
 // --------------------------------------------------------------------
-describe("AUDIT #6b (MEDIUM): mcp-server instructions misdescribe dispatch as shape-based", () => {
-  it("mcp-server.ts instructions claim shape-based dispatch, actual is list-based", async () => {
+describe("AUDIT #6b (RESOLVED): mcp-server instructions match list-based dispatch", () => {
+  it("mcp-server.ts no longer claims shape-based dispatch", async () => {
     const source = await import("node:fs").then((fs) =>
-      fs.promises.readFile(
-        join(__dirname, "..", "..", "mcp", "src", "mcp-server.ts"),
-        "utf8"
-      )
+      fs.promises.readFile(join(__dirname, "..", "..", "mcp", "src", "mcp-server.ts"), "utf8")
     );
-    expect(source).toMatch(/auto-dispatch by the id['’]s shape/);
-    // Actual behaviour (platform-detect.ts): truth-from-inventory, then shape.
+    expect(source).not.toMatch(/auto-dispatch by the id['’]s shape/);
+    expect(source).toMatch(/cross-referencing it against/);
+    // platform-detect.ts remains the source of truth.
     const platformDetectSource = await import("node:fs").then((fs) =>
       fs.promises.readFile(join(__dirname, "..", "src", "utils", "platform-detect.ts"), "utf8")
     );
@@ -323,33 +319,26 @@ describe("AUDIT #8 (MEDIUM): boot-device zodSchema does not enforce mutual exclu
 });
 
 // --------------------------------------------------------------------
-// AUDIT #6c — android-stop-app description says "Fails when the udid
-// is not an Android serial OR the device is offline". `classifyDevice`
-// on an id that adb does NOT list falls back to shape — and per the
-// comment in platform-detect.ts, anything not matching the iOS-UUID
-// shape is classified as "android". Consequence: a random bogus string
-// like "nope" gets classified as android → adbShell fires → fails for
-// the WRONG reason ("device 'nope' not found") instead of the documented
-// "not an Android serial" error. The description's failure taxonomy is
-// inverted: the actual failure is "device offline/not found", NEVER
-// "not an Android serial" for non-UUID shapes.
+// AUDIT #6c (RESOLVED) — android-stop-app description used to say
+// "Fails when the udid is not an Android serial", a branch that is
+// unreachable because classifyDevice falls back to "android" for any
+// non-UUID string. Rewrote in commit f81af9d to describe the actual
+// failure signature: "udid is not registered with adb (not found in
+// list-devices)".
 // --------------------------------------------------------------------
-describe("AUDIT #6c (LOW): android-stop-app description failure-mode taxonomy is inverted", () => {
-  it("classifies an unknown non-UUID string as android, never triggering the 'not Android serial' branch", async () => {
+describe("AUDIT #6c (RESOLVED): android-stop-app description describes the real failure mode", () => {
+  it("classify still routes non-UUID strings to android (expected), AND description matches", async () => {
     execFileMock.mockImplementation((cmd: string) => {
       if (cmd === "xcrun") return new Error("xcrun not present");
       if (cmd === "adb") return { stdout: "List of devices attached\n", stderr: "" };
       return { stdout: "", stderr: "" };
     });
-    const { classifyDevice, __resetClassifyCacheForTests } = await import(
-      "../src/utils/platform-detect"
-    );
+    const { classifyDevice, __resetClassifyCacheForTests } =
+      await import("../src/utils/platform-detect");
     __resetClassifyCacheForTests();
-    // 'nope' does not match the iOS UUID shape → fallback classifies as android.
     expect(await classifyDevice("nope")).toBe("android");
-    // Therefore android-stop-app description's "Fails when the udid is not an
-    // Android serial" branch is unreachable for any non-UUID string — the
-    // failure will come from adbShell's "device 'nope' not found" instead.
-    expect(androidStopAppTool.description).toMatch(/not an Android serial/);
+    // The description no longer claims a branch that can't be reached.
+    expect(androidStopAppTool.description).not.toMatch(/not an Android serial/);
+    expect(androidStopAppTool.description).toMatch(/not registered with adb/);
   });
 });
