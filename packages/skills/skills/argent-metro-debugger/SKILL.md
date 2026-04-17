@@ -15,7 +15,7 @@ Android emulators and physical devices do not resolve the host's `localhost` by 
 adb -s <serial> reverse tcp:8081 tcp:8081
 ```
 
-`<serial>` comes from `android-list-emulators`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
+`<serial>` is the Android `serial` from `list-devices`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
 
 ## 2. Tool Overview
 

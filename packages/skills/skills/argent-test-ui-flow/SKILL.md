@@ -9,10 +9,10 @@ The interaction tool names are identical on iOS and Android — `gesture-tap`, `
 
 Get a `udid` via:
 
-| Platform | Setup skill                     | Find devices with                                                |
-| -------- | ------------------------------- | ---------------------------------------------------------------- |
-| iOS      | `argent-simulator-setup`        | `list-simulators` → `boot-simulator` if none booted              |
-| Android  | `argent-android-emulator-setup` | `android-list-emulators` → `android-boot-emulator` if none ready |
+| Platform | Setup skill                     | Find devices with                                           |
+| -------- | ------------------------------- | ----------------------------------------------------------- |
+| iOS      | `argent-simulator-setup`        | `list-devices` → `boot-device` with `udid` if none booted   |
+| Android  | `argent-android-emulator-setup` | `list-devices` → `boot-device` with `avdName` if none ready |
 
 ## 1. Workflow
 

@@ -18,39 +18,32 @@ Use cases:
   </description>
 
 <platform_dispatch>
-<important>Interaction tools are unified across iOS and Android. Pass the device id as `udid` and the tool-server dispatches based on its shape.</important>
+<important>Interaction tools are unified across iOS and Android. Pass the device id as `udid` and the tool-server selects the right platform automatically.</important>
 
-- **iOS udid**: UUID shape — `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX` (from `list-simulators`). Or iOS 17+ short form `XXXXXXXX-XXXXXXXXXXXXXXXX`.
-- **Android udid**: adb serial (from `android-list-emulators`) — `emulator-5554`, `R5CT12345678`, `192.168.1.7:5555`, etc.
+Get device ids from `list-devices`, which returns iOS simulators and Android devices/emulators tagged with a `platform` discriminator:
 
-Unified tools (pass `udid`): `gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`.
+- **iOS udid**: UUID shape — `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX`. Or iOS 17+ short form `XXXXXXXX-XXXXXXXXXXXXXXXX`.
+- **Android udid**: adb serial — `emulator-5554`, `R5CT12345678`, `192.168.1.7:5555`, etc.
 
-Navigation + gestures (including multi-touch pinch/rotate/custom) route through `simulator-server`, which the binary dispatches to iOS or Android internally. `describe` uses AXRuntime → native-devtools fallback on iOS and `uiautomator dump` on Android; app-lifecycle tools (`launch-app` / `restart-app` / `reinstall-app` / `open-url`) use `xcrun simctl` on iOS and `adb` / `am` / `monkey` on Android.
+Unified tools (pass `udid` from `list-devices`): `gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`.
+
+Cross-platform lifecycle tools: `list-devices` (lists both platforms + available Android AVDs), `boot-device` (pass `udid` for iOS or `avdName` for Android).
 
 Platform-specific tools (no unified counterpart):
 
-- **iOS**: `list-simulators`, `boot-simulator`, `stop-simulator-server`, `stop-all-simulator-servers`, native-devtools suite, iOS Instruments profiler, `paste`.
-- **Android**: `android-list-emulators`, `android-boot-emulator`, `android-stop-app`, `android-logcat`.
+- **iOS**: `stop-simulator-server`, `stop-all-simulator-servers`, native-devtools suite, iOS Instruments profiler, `paste`.
+- **Android**: `android-stop-app`, `android-logcat`.
 
-If the project only has an `android/` directory (no `ios/`), start from `android-list-emulators`; if only iOS, start from `list-simulators`. For hybrid projects, ask the user which platform to target. Never pass an iOS UDID to an Android-only tool or vice versa.
+If the project only has an `android/` directory (no `ios/`), pick an Android target from `list-devices`; if only iOS, pick an iOS target. For hybrid projects, ask the user which platform to target.
 </platform_dispatch>
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
 Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
 
-**iOS:**
-
-- `describe` - native app-level components and safely targetable foreground apps
-- `native-describe-screen` - accessibility screen description via injected native devtools
-- `debugger-component-tree` - react-native specific components
-
-`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point.
-
-**Android:**
-
-- `android-describe-screen` - uiautomator-based UI tree (same shape as iOS `describe`)
-- `debugger-component-tree` - react-native specific components (requires `adb reverse tcp:8081 tcp:8081` so Metro is reachable)
+- `describe` - UI hierarchy with roles, labels, and frame coordinates (works on iOS and Android)
+- `debugger-component-tree` - React Native specific component tree, when a Metro debugger connection is available
+- `native-describe-screen` / `native-user-interactable-view-at-point` / `native-view-at-point` - iOS-only diagnostics once you already have a candidate point
 
 Whenever something changed YOU MUST first call the platform's describe tool, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use a discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
@@ -71,7 +64,7 @@ Before starting to interact with the app, read `argent-simulator-interact` (iOS)
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`, `run-sequence`) return a screenshot automatically. Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` / `open-url` — never tap home-screen / launcher icons.
-- Use `run-sequence` when performing multiple sequential actions where you don't need to observe the screen between steps. Works on both iOS and Android; iOS-only step types (gesture-pinch / gesture-rotate / gesture-custom) throw if the run-sequence udid is Android.
+- Use `run-sequence` when performing multiple sequential actions where you don't need to observe the screen between steps. Works on both iOS and Android.
 - When the session ends or the user says they are done:
   - iOS — call `stop-all-simulator-servers`.
   - Android — shut down the emulator from its own UI or via `adb -s <serial> emu kill` if the user wants it off. Argent does not keep persistent per-emulator state, so no server-side teardown is required.
@@ -96,11 +89,11 @@ procedure and edge-case handling for each workflow.
 
 iOS SIMULATOR SETUP
 Skill: `argent-simulator-setup`
-When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
+When: Beginning a task that involves the iOS simulator, no simulator booted yet, or you need a simulator UDID.
 
 ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
-When: Beginning a task that involves the Android emulator, no emulator running yet, need a serial, or about to install an APK.
+When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
 iOS TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-simulator-interact`

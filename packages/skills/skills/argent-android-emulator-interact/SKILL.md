@@ -29,16 +29,23 @@ Use these tools directly — no `android-*` prefix:
 
 For tool-by-tool usage see `argent-simulator-interact`.
 
+## Device lifecycle (cross-platform)
+
+Use the unified tools — they work for both iOS and Android via the id shape:
+
+| Tool           | Purpose                                                                                                 |
+| -------------- | ------------------------------------------------------------------------------------------------------- |
+| `list-devices` | List iOS simulators + Android devices/emulators with `platform` tags, plus available Android AVDs       |
+| `boot-device`  | iOS: pass `udid` to boot a simulator. Android: pass `avdName` to launch an emulator (cold boot default) |
+
 ## Android-only tools
 
-These have no iOS equivalent and keep their `android-` prefix:
+These have no cross-platform counterpart:
 
-| Tool                     | Purpose                                                                                  |
-| ------------------------ | ---------------------------------------------------------------------------------------- |
-| `android-list-emulators` | List adb devices + available AVDs                                                        |
-| `android-boot-emulator`  | Boot an AVD by name (cold boot by default; 2–5 min; clean failure if it doesn't come up) |
-| `android-stop-app`       | `am force-stop` without relaunching                                                      |
-| `android-logcat`         | Recent log lines. Filter by `bundleId`, `priority` (V/D/I/W/E/F), `tag`                  |
+| Tool               | Purpose                                                                 |
+| ------------------ | ----------------------------------------------------------------------- |
+| `android-stop-app` | Force-stop an app without relaunching                                   |
+| `android-logcat`   | Recent log lines. Filter by `bundleId`, `priority` (V/D/I/W/E/F), `tag` |
 
 ## Platform detection
 
@@ -48,7 +55,7 @@ The tool-server looks at the `udid` string:
 - `XXXXXXXX-XXXXXXXXXXXXXXXX` → iOS 17+ short form
 - Anything else (e.g. `emulator-5554`, `R5CT12345678`) → Android adb serial
 
-Pass iOS UDIDs from `list-simulators` and Android serials from `android-list-emulators`. Do not pass them to the wrong platform — dispatch is automatic.
+Always source device ids from `list-devices` — its output is already tagged with `platform`.
 
 ## Android-specific gotchas
 
