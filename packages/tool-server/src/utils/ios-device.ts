@@ -27,12 +27,7 @@ export async function checkIsSimulator(udid: string): Promise<boolean> {
   const cached = simulatorCache.get(udid);
   if (cached !== undefined) return cached;
 
-  const { stdout } = await execFileAsync("xcrun", [
-    "simctl",
-    "list",
-    "devices",
-    "--json",
-  ]);
+  const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
   const data: SimctlOutput = JSON.parse(stdout);
 
   const allUdids = new Set<string>();
@@ -60,10 +55,9 @@ interface SimctlAppInfo {
  * Returns the CFBundleExecutable for use with `xctrace --attach`.
  */
 export function detectRunningAppOnSimulator(udid: string): string {
-  const launchctlOutput = execSync(
-    `xcrun simctl spawn ${udid} launchctl list`,
-    { encoding: "utf-8" },
-  );
+  const launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+    encoding: "utf-8",
+  });
 
   const runningBundleIds = new Set<string>();
   for (const line of launchctlOutput.split("\n")) {
@@ -75,31 +69,26 @@ export function detectRunningAppOnSimulator(udid: string): string {
 
   if (runningBundleIds.size === 0) {
     throw new Error(
-      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry.",
+      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
     );
   }
 
-  const listAppsOutput = execSync(
-    `xcrun simctl listapps ${udid} | plutil -convert json -o - -`,
-    { encoding: "utf-8" },
-  );
+  const listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+    encoding: "utf-8",
+  });
 
-  const installedApps: Record<string, SimctlAppInfo> =
-    JSON.parse(listAppsOutput);
+  const installedApps: Record<string, SimctlAppInfo> = JSON.parse(listAppsOutput);
 
   const runningUserApps: SimctlAppInfo[] = [];
   for (const [, appInfo] of Object.entries(installedApps)) {
-    if (
-      appInfo.ApplicationType === "User" &&
-      runningBundleIds.has(appInfo.CFBundleIdentifier)
-    ) {
+    if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
       runningUserApps.push(appInfo);
     }
   }
 
   if (runningUserApps.length === 0) {
     throw new Error(
-      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry.",
+      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry."
     );
   }
 
@@ -107,11 +96,11 @@ export function detectRunningAppOnSimulator(udid: string): string {
     const appList = runningUserApps
       .map(
         (a) =>
-          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`,
+          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`
       )
       .join("\n");
     throw new Error(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`,
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`
     );
   }
 
@@ -162,38 +151,27 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
     try {
       await execFileAsync(
         "xcrun",
-        [
-          "devicectl",
-          "device",
-          "info",
-          "apps",
-          "--device",
-          udid,
-          "--json-output",
-          tmpApps,
-        ],
-        { timeout: 15_000 },
+        ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", tmpApps],
+        { timeout: 15_000 }
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("ENOENT") || msg.includes("not found")) {
         throw new Error(
-          "Physical device profiling requires Xcode 15+ (devicectl not found). Update Xcode or use a simulator.",
+          "Physical device profiling requires Xcode 15+ (devicectl not found). Update Xcode or use a simulator."
         );
       }
       throw new Error(
-        `Could not query apps on device. Ensure it is unlocked, connected via USB, and trusted. (${msg})`,
+        `Could not query apps on device. Ensure it is unlocked, connected via USB, and trusted. (${msg})`
       );
     }
 
     const appsData = await readDevicectlJson<DevicectlAppsResult>(tmpApps);
-    const developerApps = appsData.result.apps.filter(
-      (a) => a.builtByDeveloper,
-    );
+    const developerApps = appsData.result.apps.filter((a) => a.builtByDeveloper);
 
     if (developerApps.length === 0) {
       throw new Error(
-        "No developer apps installed on the device. Install and launch your app first, then retry.",
+        "No developer apps installed on the device. Install and launch your app first, then retry."
       );
     }
 
@@ -201,27 +179,17 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
     try {
       await execFileAsync(
         "xcrun",
-        [
-          "devicectl",
-          "device",
-          "info",
-          "processes",
-          "--device",
-          udid,
-          "--json-output",
-          tmpProcs,
-        ],
-        { timeout: 15_000 },
+        ["devicectl", "device", "info", "processes", "--device", udid, "--json-output", tmpProcs],
+        { timeout: 15_000 }
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `Could not query running processes on device. Ensure it is unlocked and connected. (${msg})`,
+        `Could not query running processes on device. Ensure it is unlocked and connected. (${msg})`
       );
     }
 
-    const procsData =
-      await readDevicectlJson<DevicectlProcessesResult>(tmpProcs);
+    const procsData = await readDevicectlJson<DevicectlProcessesResult>(tmpProcs);
     const processes = procsData.result.runningProcesses;
 
     // 3. Cross-reference: find running developer apps
@@ -236,8 +204,7 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
       // Process executable: "file:///private/var/containers/Bundle/Application/<UUID>/<AppName>.app/<Executable>"
       const appUrl = app.url.endsWith("/") ? app.url : `${app.url}/`;
       const matchingProc = processes.find(
-        (p) =>
-          p.executable.startsWith(appUrl) && !p.executable.includes(".appex/"),
+        (p) => p.executable.startsWith(appUrl) && !p.executable.includes(".appex/")
       );
       if (matchingProc) {
         // Extract executable name: last path component of the process URL
@@ -255,7 +222,7 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
 
     if (runningApps.length === 0) {
       throw new Error(
-        "No running developer apps detected on the device. Launch your app first, then retry.",
+        "No running developer apps detected on the device. Launch your app first, then retry."
       );
     }
 
@@ -264,7 +231,7 @@ export async function detectRunningAppOnDevice(udid: string): Promise<string> {
         .map((a) => `  - ${a.executable} (${a.bundleIdentifier}, "${a.name}")`)
         .join("\n");
       throw new Error(
-        `Multiple developer apps are running on the device:\n${appList}\nSpecify \`app_process\` with the executable name of the app you want to profile.`,
+        `Multiple developer apps are running on the device:\n${appList}\nSpecify \`app_process\` with the executable name of the app you want to profile.`
       );
     }
 
@@ -320,11 +287,9 @@ export interface ListPhysicalDevicesResult {
 export async function listPhysicalDevices(): Promise<ListPhysicalDevicesResult> {
   const tmpFile = tmpJsonPath();
   try {
-    await execFileAsync(
-      "xcrun",
-      ["devicectl", "list", "devices", "--json-output", tmpFile],
-      { timeout: 15_000 },
-    );
+    await execFileAsync("xcrun", ["devicectl", "list", "devices", "--json-output", tmpFile], {
+      timeout: 15_000,
+    });
 
     const data = await readDevicectlJson<DevicectlListResult>(tmpFile);
 
@@ -333,10 +298,7 @@ export async function listPhysicalDevices(): Promise<ListPhysicalDevicesResult> 
       .map((d) => ({
         udid: d.hardwareProperties.udid,
         name: d.deviceProperties.name,
-        model:
-          d.hardwareProperties.marketingName ??
-          d.hardwareProperties.productType ??
-          "Unknown",
+        model: d.hardwareProperties.marketingName ?? d.hardwareProperties.productType ?? "Unknown",
         osVersion: d.deviceProperties.osVersionNumber,
         connectionType: d.connectionProperties.transportType,
       }));

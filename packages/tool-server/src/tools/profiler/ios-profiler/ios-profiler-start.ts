@@ -21,7 +21,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator or device. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running).",
+      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator or device. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running)."
     ),
   template_path: z
     .string()

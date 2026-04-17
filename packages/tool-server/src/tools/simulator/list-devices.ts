@@ -24,7 +24,7 @@ const zodSchema = z.object({
     .optional()
     .default(false)
     .describe(
-      "Also scan for physical iOS devices connected via USB or Wi-Fi. Slower (~5s), requires Xcode 15+.",
+      "Also scan for physical iOS devices connected via USB or Wi-Fi. Slower (~5s), requires Xcode 15+."
     ),
 });
 
@@ -49,17 +49,10 @@ export const listDevicesTool: ToolDefinition = {
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    const { include_physical_devices } = params as unknown as z.infer<
-      typeof zodSchema
-    >;
+    const { include_physical_devices } = params as unknown as z.infer<typeof zodSchema>;
 
     // Always list simulators
-    const { stdout } = await execFileAsync("xcrun", [
-      "simctl",
-      "list",
-      "devices",
-      "--json",
-    ]);
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"]);
     const data: SimctlOutput = JSON.parse(stdout);
 
     const devices: Record<string, unknown>[] = [];
@@ -106,8 +99,6 @@ export const listDevicesTool: ToolDefinition = {
       }
     }
 
-    return physicalDevicesError
-      ? { devices, physicalDevicesError }
-      : { devices };
+    return physicalDevicesError ? { devices, physicalDevicesError } : { devices };
   },
 };
