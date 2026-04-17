@@ -45,15 +45,33 @@ function parseAttributes(raw: string): Record<string, string> {
   return attrs;
 }
 
+// Single-pass decoder. Chained per-entity `.replace` calls double-decode:
+// `&amp;lt;` (correct XML encoding of the literal string `&lt;`) becomes `&lt;`
+// after the first pass and then `<` after the second — wrong per XML §4.6.
+// A single regex alternation scans left-to-right and consumes each match
+// once, so a decoded `&` produced by one step never feeds the next step.
 function decodeXmlEntities(s: string): string {
-  return s
-    .replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => safeFromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => safeFromCodePoint(parseInt(dec, 10)))
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'");
+  return s.replace(
+    /&(?:#x([0-9A-Fa-f]+)|#(\d+)|(amp|lt|gt|quot|apos));/g,
+    (match, hex, dec, name) => {
+      if (hex) return safeFromCodePoint(parseInt(hex, 16));
+      if (dec) return safeFromCodePoint(parseInt(dec, 10));
+      switch (name) {
+        case "amp":
+          return "&";
+        case "lt":
+          return "<";
+        case "gt":
+          return ">";
+        case "quot":
+          return '"';
+        case "apos":
+          return "'";
+        default:
+          return match;
+      }
+    }
+  );
 }
 
 function safeFromCodePoint(n: number): string {

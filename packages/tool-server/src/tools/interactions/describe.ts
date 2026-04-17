@@ -34,11 +34,13 @@ async function describeAndroid(udid: string): Promise<DescribeResult> {
   // /data/local/tmp/ which is world-writable on every Android we support.
   const randomSuffix = `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
   const dumpPath = `/data/local/tmp/argent-ui-dump-${randomSuffix}.xml`;
+  // Trailing `; rm -f` (not `&& rm -f`) so the cleanup fires even when `dump`
+  // or `cat` fails — keyguard/MFA flaps used to leak a dump file per attempt.
   const [size, rawBuf] = await Promise.all([
     getAndroidScreenSize(udid),
     adbExecOutBinary(
       udid,
-      `uiautomator dump ${dumpPath} >/dev/null && cat ${dumpPath} && rm -f ${dumpPath}`,
+      `uiautomator dump ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
       { timeoutMs: 20_000 }
     ),
   ]);

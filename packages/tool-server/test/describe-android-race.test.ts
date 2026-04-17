@@ -117,4 +117,37 @@ describe("describe — per-call dump path (review #10)", () => {
     warmDeviceCache([{ udid: serial, platform: "android" }]);
     await tool.execute({}, { udid: serial });
   });
+
+  it("chains cleanup with `;` so rm -f runs even when uiautomator dump fails", async () => {
+    // Regression: the original pipeline used `dump && cat && rm -f`. A
+    // failing dump (keyguard overlay, DRM screen, MFA flap) short-circuited
+    // the && chain and the temp file stayed on /data/local/tmp indefinitely.
+    // Replacing the final `&&` with `;` makes rm unconditional.
+    let captured: string | null = null;
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args.includes("wm size")) {
+        return { stdout: "Physical size: 1000x1000\n", stderr: "" };
+      }
+      if (cmd === "adb" && args.includes("exec-out")) {
+        captured = args[args.length - 1] ?? "";
+        return { stdout: Buffer.from(tinyDump(), "utf-8"), stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const tool = createDescribeTool(registry);
+    const serial = mkSerial();
+    warmDeviceCache([{ udid: serial, platform: "android" }]);
+    await tool.execute({}, { udid: serial });
+
+    expect(captured).not.toBeNull();
+    const shell = captured as unknown as string;
+    // The signature of the fix: the character immediately before `rm -f` must
+    // be `;` (unconditional), not `&&` (short-circuits on cat/dump failure).
+    const rmIdx = shell.indexOf("rm -f");
+    expect(rmIdx).toBeGreaterThan(0);
+    const before = shell.slice(0, rmIdx).trimEnd();
+    expect(before.endsWith(";")).toBe(true);
+    expect(before.endsWith("&&")).toBe(false);
+  });
 });

@@ -62,6 +62,45 @@ describe("uiautomator numeric entities (review #5)", () => {
     const tree = parseUiAutomatorDump(xml, 1000, 1000);
     expect(tree.children[0]!.label).toBe("A & B <c> !");
   });
+
+  it("does NOT double-decode — &amp;lt; stays as literal '&lt;' (XML §4.6)", () => {
+    // Per XML 1.0 §4.6, `&amp;lt;` represents the five literal characters
+    // `&lt;`, not `<`. A chained decoder (numeric refs, then each named ref
+    // as its own .replace pass) feeds the ampersand produced by the first
+    // step into the second step, collapsing `&amp;lt;` → `&lt;` → `<`.
+    // The single-pass alternation scans left-to-right and consumes each
+    // match once, so decoded output never re-feeds the decoder.
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.TextView" bounds="[0,0][100,50]"
+        text="&amp;lt;" content-desc="" resource-id="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    expect(tree.children[0]!.label).toBe("&lt;");
+  });
+
+  it("does NOT double-decode — &#38;lt; (numeric ampersand + 'lt;') also stays literal", () => {
+    // Same bug surface via a numeric reference. `&#38;` decodes to `&` in a
+    // chained implementation, and the second pass then sees `&lt;` and
+    // collapses it to `<`. Single-pass keeps the decoded `&` distinct.
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.TextView" bounds="[0,0][100,50]"
+        text="&#38;lt;" content-desc="" resource-id="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    expect(tree.children[0]!.label).toBe("&lt;");
+  });
+
+  it("does NOT double-decode — &#x26;amp; stays literal '&amp;'", () => {
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.TextView" bounds="[0,0][100,50]"
+        text="&#x26;amp;" content-desc="" resource-id="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    expect(tree.children[0]!.label).toBe("&amp;");
+  });
 });
 
 describe("uiautomator deeply-nested tree (review #6)", () => {

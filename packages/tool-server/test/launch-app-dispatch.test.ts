@@ -99,26 +99,59 @@ describe("launch-app.execute — iOS path (behavior preserved through factory re
   });
 });
 
+// Helper: install a mock that handles the two adb calls the Android path
+// makes — `cmd package resolve-activity --brief` (for the no-activity case)
+// and `am start -W`. Defaults return "Status: ok" so the positive-match in
+// assertAmStartOk passes. Callers can override individual responses.
+function stubAndroidLaunchAdb(
+  opts: {
+    resolveStdout?: string;
+    amStartStdout?: string;
+  } = {}
+) {
+  execFileMock.mockImplementation((cmd: string, args: string[]) => {
+    if (cmd === "adb" && args.includes("shell")) {
+      const shell = args[args.indexOf("shell") + 1] ?? "";
+      if (shell.startsWith("cmd package resolve-activity")) {
+        return {
+          stdout:
+            opts.resolveStdout ??
+            "priority=0 preferredOrder=0 match=0x0 specificIndex=-1\ncom.android.settings/.Settings\n",
+          stderr: "",
+        };
+      }
+      if (shell.startsWith("am start")) {
+        return {
+          stdout: opts.amStartStdout ?? "Starting: Intent { cmp=com.x/.Main }\nStatus: ok\n",
+          stderr: "",
+        };
+      }
+    }
+    return { stdout: "", stderr: "" };
+  });
+}
+
 describe("launch-app.execute — Android path", () => {
-  it("defaults to `monkey` LAUNCHER intent when no activity is provided", async () => {
+  it("resolves the default LAUNCHER activity and waits via `am start -W` when no activity is provided", async () => {
+    // Regression: the previous implementation fired `monkey … LAUNCHER 1` and
+    // returned immediately — describe/tap could race a still-forking app.
+    // Now we resolve the component up-front and use `am start -W` so the tool
+    // only returns once the activity has been drawn.
+    stubAndroidLaunchAdb();
     const tool = createLaunchAppTool(registry);
     await tool.execute!({}, { udid: androidSerial, bundleId: "com.android.settings" });
-    expect(execFileMock).toHaveBeenCalledWith(
-      "adb",
-      [
-        "-s",
-        androidSerial,
-        "shell",
-        "monkey -p com.android.settings -c android.intent.category.LAUNCHER 1",
-      ],
-      expect.any(Object)
-    );
-    // NativeDevtools (iOS-only) must NOT be resolved on the Android path —
-    // its factory would blow up trying to launchctl into a non-existent sim.
+
+    const shells = execFileMock.mock.calls
+      .filter((c: unknown[]) => (c[0] as string) === "adb")
+      .map((c: unknown[]) => (c[1] as string[])[3] ?? "");
+    expect(shells).toContain("cmd package resolve-activity --brief com.android.settings");
+    expect(shells).toContain("am start -W -n com.android.settings/.Settings");
+    // NativeDevtools (iOS-only) must NOT be resolved on the Android path.
     expect(resolveService).not.toHaveBeenCalled();
   });
 
   it("uses `am start -W -n pkg/.Activity` when activity starts with a dot", async () => {
+    stubAndroidLaunchAdb();
     const tool = createLaunchAppTool(registry);
     await tool.execute!(
       {},
@@ -132,6 +165,7 @@ describe("launch-app.execute — Android path", () => {
   });
 
   it("passes pre-qualified `pkg/.Activity` strings through unchanged", async () => {
+    stubAndroidLaunchAdb();
     const tool = createLaunchAppTool(registry);
     await tool.execute!(
       {},
@@ -148,10 +182,32 @@ describe("launch-app.execute — Android path", () => {
     );
   });
 
-  it("throws when am start reports an error (no Activity found)", async () => {
-    execFileMock.mockReturnValue({
-      stdout: "Error: Activity class {com.foo/.Bar} does not exist.",
-      stderr: "",
+  it("succeeds when output contains 'Error' in a class name but also 'Status: ok'", async () => {
+    // The old matcher was /Error|Exception/ with a !/Status: ok/ escape hatch.
+    // That was brittle: a benign `Activity: com.example.ErrorReportingActivity`
+    // line combined with any future removal of the "Status: ok" banner would
+    // spuriously fail. A positive match on Status: ok is both simpler and
+    // correct under `am start -W` semantics.
+    stubAndroidLaunchAdb({
+      amStartStdout:
+        "Starting: Intent { cmp=com.example/.Main }\n" +
+        "Activity: com.example.ErrorReportingActivity (trampoline)\n" +
+        "Status: ok\n" +
+        "LaunchState: COLD\n",
+    });
+    const tool = createLaunchAppTool(registry);
+    const result = await tool.execute!(
+      {},
+      { udid: androidSerial, bundleId: "com.example", activity: ".Main" }
+    );
+    expect(result).toEqual({ launched: true, bundleId: "com.example" });
+  });
+
+  it("rejects when `am start` reports anything other than `Status: ok` (e.g. `Status: null`)", async () => {
+    // `Status: null` means the activity resolved but threw during onCreate.
+    // The old regex did not catch this — silent false-success.
+    stubAndroidLaunchAdb({
+      amStartStdout: "Starting: Intent { cmp=com.foo/.Bar }\nStatus: null\nLaunchState: UNKNOWN\n",
     });
     const tool = createLaunchAppTool(registry);
     await expect(
@@ -159,14 +215,26 @@ describe("launch-app.execute — Android path", () => {
     ).rejects.toThrow(/am start failed/);
   });
 
-  it("throws when monkey can't find a launcher activity", async () => {
-    execFileMock.mockReturnValue({
-      stdout: "** No activities found to run, monkey aborted.",
-      stderr: "",
+  it("throws when am start reports a class-not-found error", async () => {
+    stubAndroidLaunchAdb({
+      amStartStdout: "Error: Activity class {com.foo/.Bar} does not exist.",
     });
     const tool = createLaunchAppTool(registry);
     await expect(
+      tool.execute!({}, { udid: androidSerial, bundleId: "com.foo", activity: ".Bar" })
+    ).rejects.toThrow(/am start failed/);
+  });
+
+  it("throws a helpful error when the package has no launcher activity at all", async () => {
+    // `cmd package resolve-activity --brief` prints nothing parseable if the
+    // package is either not installed or has no android.intent.category.LAUNCHER
+    // activity. Regression: the old monkey path would print "** No activities
+    // found to run, monkey aborted." — we replace that failure mode with a
+    // clearer "install the app first" message.
+    stubAndroidLaunchAdb({ resolveStdout: "No activity found\n" });
+    const tool = createLaunchAppTool(registry);
+    await expect(
       tool.execute!({}, { udid: androidSerial, bundleId: "com.not.installed" })
-    ).rejects.toThrow(/monkey launch failed/);
+    ).rejects.toThrow(/Could not resolve a LAUNCHER activity/);
   });
 });
