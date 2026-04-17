@@ -17,6 +17,7 @@ const ALLOWED_TOOLS = new Set([
 const zodSchema = z.object({
   udid: z
     .string()
+    .min(1)
     .describe(
       "Target device id from `list-devices`, shared across all steps (iOS UDID or Android serial)."
     ),

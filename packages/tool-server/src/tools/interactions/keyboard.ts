@@ -142,9 +142,8 @@ const NAMED_KEYS: Record<string, number> = {
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe(
-      "Device id. iOS: simulator UDID (UUID shape). Android: adb serial (e.g. `emulator-5554`)."
-    ),
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   text: z
     .string()
     .optional()

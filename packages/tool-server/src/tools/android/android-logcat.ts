@@ -1,12 +1,19 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { adbShell, runAdb } from "../../utils/adb";
-import { detectPlatform } from "../../utils/platform-detect";
+import { classifyDevice } from "../../utils/platform-detect";
+
+const BUNDLE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+// logcat tags are typically identifier-like; constrain to the same safe
+// alphabet so a tag can't smuggle shell metachars into the logcat filter spec.
+const TAG_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 const zodSchema = z.object({
-  udid: z.string().describe("Android adb serial (e.g. `emulator-5554`)."),
+  udid: z.string().min(1).describe("Android adb serial (e.g. `emulator-5554`)."),
   bundleId: z
     .string()
+    .min(1)
+    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
     .optional()
     .describe(
       "If provided, only include log lines emitted by this package's process. Resolved via `pidof <pkg>` first."
@@ -22,7 +29,12 @@ const zodSchema = z.object({
     .max(10_000)
     .optional()
     .describe("Max number of most-recent lines to return (default 500)."),
-  tag: z.string().optional().describe("Filter to a single logcat tag."),
+  tag: z
+    .string()
+    .min(1)
+    .regex(TAG_PATTERN, "tag may only contain letters, digits, '.', '_' and '-'")
+    .optional()
+    .describe("Filter to a single logcat tag."),
 });
 
 export const androidLogcatTool: ToolDefinition<
@@ -37,7 +49,11 @@ export const androidLogcatTool: ToolDefinition<
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
-    if (detectPlatform(params.udid) !== "android") {
+    // Defense-in-depth: re-run schema validation so injected bundleId / tag
+    // via flow-run or another non-HTTP caller cannot reach the adb-shell
+    // template or the logcat filter spec.
+    params = zodSchema.parse(params);
+    if ((await classifyDevice(params.udid)) !== "android") {
       throw new Error("android-logcat is Android-only.");
     }
     let pid: string | null = null;
