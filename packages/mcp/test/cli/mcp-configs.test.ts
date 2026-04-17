@@ -76,7 +76,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all seven adapters", () => {
+  it("contains all eight adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -86,6 +86,7 @@ describe("ALL_ADAPTERS", () => {
       "Zed",
       "Gemini",
       "Codex",
+      "JetBrains",
     ]);
   });
 });
@@ -516,6 +517,128 @@ describe("Codex adapter", () => {
     expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
     const content = fs.readFileSync(configPath, "utf8");
     expect(content).toContain('command = "argent"');
+  });
+});
+
+// ── JetBrains adapter ────────────────────────────────────────────────────────
+
+describe("JetBrains adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "JetBrains")!;
+  const originalPlatform = process.platform;
+  const macJbBase = (home: string): string =>
+    path.join(home, "Library", "Application Support", "JetBrains");
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    homedirOverride = undefined;
+  });
+
+  it("writes { mcpServers: { argent: ... } } format", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.command).toBe("argent");
+    expect(argent).not.toHaveProperty("type");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const removed = adapter.remove(configPath);
+    expect(removed).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: {} }));
+
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers when writing", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).toHaveProperty("argent");
+  });
+
+  it("remove preserves sibling servers and keeps the file", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
+    adapter.write(configPath, getMcpEntry());
+
+    expect(adapter.remove(configPath)).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).not.toHaveProperty("argent");
+  });
+
+  it("projectPath returns .idea/mcp.json under project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".idea", "mcp.json"));
+  });
+
+  it("globalPath is always null (project-only adapter)", () => {
+    homedirOverride = tmpDir;
+    fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
+    expect(adapter.globalPath()).toBeNull();
+  });
+
+  it("detect() returns true when local .idea dir exists", () => {
+    const localIdea = path.join(process.cwd(), ".idea");
+    const existed = fs.existsSync(localIdea);
+    if (!existed) fs.mkdirSync(localIdea, { recursive: true });
+    try {
+      expect(adapter.detect()).toBe(true);
+    } finally {
+      if (!existed) fs.rmdirSync(localIdea);
+    }
+  });
+
+  it("detect() returns true on macOS when ~/Library/.../JetBrains has any product dir", () => {
+    homedirOverride = tmpDir;
+    fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
+    expect(adapter.detect()).toBe(true);
+  });
+
+  it("detect() returns false on macOS when the JetBrains base dir has no subdirs", () => {
+    homedirOverride = tmpDir;
+    fs.mkdirSync(macJbBase(tmpDir), { recursive: true });
+    // A stray file must not be treated as an install signal.
+    fs.writeFileSync(path.join(macJbBase(tmpDir), ".DS_Store"), "");
+    expect(adapter.detect()).toBe(false);
+  });
+
+  it("detect() ignores the JetBrains base dir on non-macOS platforms", () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    homedirOverride = tmpDir;
+    fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
+
+    // No local .idea here (tmpDir is not cwd), so detect() must be false.
+    expect(adapter.detect()).toBe(false);
   });
 });
 

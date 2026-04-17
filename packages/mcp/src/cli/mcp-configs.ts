@@ -604,6 +604,58 @@ const codexAdapter: McpConfigAdapter = {
   },
 };
 
+// ── JetBrains adapter ───────────────────────────────────────────────────────
+// Format: { mcpServers: { argent: { command, args, env } } }
+// Project only: .idea/mcp.json — shared by every IntelliJ-platform IDE
+// (IntelliJ, WebStorm, PyCharm, GoLand, Rider, CLion, PhpStorm, RubyMine,
+// DataGrip, RustRover, Aqua, DataSpell, Android Studio). Fleet is not supported.
+
+const jetbrainsAdapter: McpConfigAdapter = {
+  name: "JetBrains",
+
+  detect(): boolean {
+    if (dirExists(path.join(process.cwd(), ".idea"))) return true;
+    if (process.platform !== "darwin") return false;
+    const base = path.join(homedir(), "Library", "Application Support", "JetBrains");
+    if (!dirExists(base)) return false;
+    try {
+      return fs.readdirSync(base, { withFileTypes: true }).some((e) => e.isDirectory());
+    } catch {
+      return false;
+    }
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, ".idea", "mcp.json");
+  },
+
+  globalPath(): string | null {
+    return null;
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcpServers ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      command: entry.command,
+      args: entry.args,
+      env: entry.env,
+    };
+    config.mcpServers = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJsonOrRemove(configPath, config);
+    return true;
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // MARK: Registry
 
@@ -615,6 +667,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   zedAdapter,
   geminiAdapter,
   codexAdapter,
+  jetbrainsAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
