@@ -195,3 +195,35 @@ describe("AUTO_SCREENSHOT_TOOLS and delay map consistency", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// shouldAutoScreenshot — unified tools trigger one screenshot regardless of platform
+// ---------------------------------------------------------------------------
+describe("shouldAutoScreenshot — unified surface", () => {
+  it("returns false for the screenshot tool itself (prevents recursion)", () => {
+    expect(shouldAutoScreenshot("screenshot")).toBe(false);
+    expect(shouldAutoScreenshot("mcp__argent__screenshot")).toBe(false);
+  });
+
+  it("returns true for unified interaction tools", () => {
+    for (const t of [
+      "gesture-tap",
+      "gesture-swipe",
+      "button",
+      "keyboard",
+      "rotate",
+      "launch-app",
+      "restart-app",
+      "open-url",
+      "describe",
+      "run-sequence",
+    ]) {
+      expect(shouldAutoScreenshot(t)).toBe(true);
+    }
+  });
+
+  it("normalizes MCP-prefixed names before looking up the allow-list", () => {
+    expect(shouldAutoScreenshot("mcp__argent__gesture-tap")).toBe(true);
+    expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
+  });
+});
