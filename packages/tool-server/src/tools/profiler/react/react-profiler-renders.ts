@@ -91,6 +91,7 @@ function renderMarkdownTable(entries: RenderEntry[]): string {
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   top_n: z.coerce
     .number()
     .int()
@@ -107,7 +108,7 @@ Use when you want a quick snapshot of render counts without a full profiling ses
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
   services: (params) => ({
-    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}`,
+    profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;

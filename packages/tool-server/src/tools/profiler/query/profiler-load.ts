@@ -37,8 +37,9 @@ const zodSchema = z.object({
     ),
   device_id: z
     .string()
-    .optional()
-    .describe("iOS Simulator UDID — required for load_instruments to populate the iOS session"),
+    .describe(
+      "iOS Simulator UDID (logicalDeviceId). Used to cache the loaded React session under the correct port+device key, and required to resolve the iOS session for load_instruments."
+    ),
 });
 
 async function listSessions(debugDir: string): Promise<string> {
@@ -77,15 +78,27 @@ async function listSessions(debugDir: string): Promise<string> {
 
   if (reactSessions.size > 0) {
     lines.push("### React Profiler Sessions", "");
-    lines.push("| Session ID | Files |");
-    lines.push("|---|---|");
+    lines.push("| Session ID | Runtime | Device | Metro bundle |");
+    lines.push("|---|---|---|---|");
     for (const [sid, files] of [...reactSessions.entries()].sort().reverse()) {
-      const hasCpu = files.some((f) => f.includes("_cpu.json"));
-      const hasCommits = files.some((f) => f.includes("_commits.json"));
-      const parts: string[] = [];
-      if (hasCpu) parts.push("CPU profile");
-      if (hasCommits) parts.push("commits");
-      lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
+      let appName: string | null = null;
+      let deviceName: string | null = null;
+      let projectRoot: string | null = null;
+      const commitsFile = files.find((f) => f.includes("_commits.json"));
+      if (commitsFile) {
+        try {
+          const onDisk = await readCommitTree(path.join(debugDir, commitsFile));
+          if (onDisk.meta) {
+            appName = onDisk.meta.appName ?? null;
+            deviceName = onDisk.meta.deviceName ?? null;
+            projectRoot = onDisk.meta.projectRoot ?? null;
+          }
+        } catch {
+          // older session or corrupted file — fall through to "—" placeholders
+        }
+      }
+      const project = projectRoot ? path.basename(projectRoot) : null;
+      lines.push(`| \`${sid}\` | ${appName ?? "—"} | ${deviceName ?? "—"} | ${project ?? "—"} |`);
     }
     lines.push("");
   }
@@ -119,7 +132,8 @@ async function listSessions(debugDir: string): Promise<string> {
 async function loadReactSession(
   debugDir: string,
   sessionId: string,
-  port: number
+  port: number,
+  deviceId: string
 ): Promise<string> {
   const cpuPath = path.join(debugDir, `react-profiler-${sessionId}_cpu.json`);
   const commitsPath = path.join(debugDir, `react-profiler-${sessionId}_commits.json`);
@@ -160,6 +174,9 @@ async function loadReactSession(
   let anyCompilerOptimized: boolean | null = null;
   let hotCommitIndices: number[] | null = null;
   let totalReactCommits: number | null = null;
+  let appName: string | null = null;
+  let deviceName: string | null = null;
+  let projectRoot: string | null = null;
   let commitCount = 0;
   let sampleInfo = "not available";
 
@@ -172,6 +189,9 @@ async function loadReactSession(
         anyCompilerOptimized = onDisk.meta.anyCompilerOptimized ?? null;
         hotCommitIndices = onDisk.meta.hotCommitIndices ?? null;
         totalReactCommits = onDisk.meta.totalReactCommits ?? null;
+        appName = onDisk.meta.appName ?? null;
+        deviceName = onDisk.meta.deviceName ?? null;
+        projectRoot = onDisk.meta.projectRoot ?? null;
       }
     } catch {
       // non-fatal — file may be corrupted
@@ -201,13 +221,17 @@ async function loadReactSession(
     totalReactCommits,
   };
 
-  cacheProfilerPaths(port, sessionPaths);
+  cacheProfilerPaths(port, sessionPaths, deviceId);
 
   const lines: string[] = [
     `Loaded React profiler session \`${sessionId}\` into port ${port}.`,
     "",
+    `- Runtime: ${appName ?? "unknown"}`,
+    `- Device: ${deviceName ?? "unknown"}`,
+    `- Metro bundle: ${projectRoot ? path.basename(projectRoot) : "unknown"}`,
     `- CPU profile: ${sampleInfo}`,
-    `- Commits: ${commitCount} fiber renders`,
+    `- Commits persisted (hot ±1 margin, ≥16ms): ${commitCount}`,
+    `- Total React commits: ${totalReactCommits ?? "unknown"}`,
     `- Architecture: ${detectedArchitecture ?? "unknown"}`,
     "",
     "Query tools (`profiler-cpu-query`, `profiler-commit-query`) are now ready to use against this data.",
@@ -293,7 +317,7 @@ Fails if the session_id is not found or required XML files are missing from disk
   zodSchema,
   services: (params) => {
     const svcs: Record<string, string> = {};
-    if (params.mode === "load_instruments" && params.device_id) {
+    if (params.mode === "load_instruments") {
       svcs.session = `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`;
     }
     return svcs;
@@ -311,7 +335,7 @@ Fails if the session_id is not found or required XML files are missing from disk
             "load_react mode requires the session_id parameter. Use list mode first."
           );
         }
-        return loadReactSession(debugDir, params.session_id, params.port);
+        return loadReactSession(debugDir, params.session_id, params.port, params.device_id);
       }
 
       case "load_instruments": {
@@ -319,9 +343,6 @@ Fails if the session_id is not found or required XML files are missing from disk
           throw new Error(
             "load_instruments mode requires the session_id parameter. Use list mode first."
           );
-        }
-        if (!params.device_id) {
-          throw new Error("load_instruments mode requires the device_id parameter.");
         }
         const api = services.session as IosProfilerSessionApi;
         return loadInstrumentsSession(debugDir, params.session_id, api);

@@ -20,7 +20,7 @@ export const gestureTapTool: ToolDefinition<
 Sends a Down event followed by an Up event at the same point.
 Use when you need to tap a button, link, or any tappable element on the simulator screen.
 Returns { tapped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.
-Before tapping, determine the correct coordinates by using debugger-component-tree, describe or screenshot tools. More information in simulator-interact skill`,
+Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`simulator-interact\` skill`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

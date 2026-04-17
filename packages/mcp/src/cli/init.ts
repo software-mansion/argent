@@ -23,14 +23,25 @@ import {
 } from "./utils.js";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 
+// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
+// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
+// so `which argent` succeeds even though argent is not permanently installed globally.
+const TEMP_RUNNER_MARKERS = [
+  "_npx",
+  "/dlx-",
+  "\\dlx-",
+  "bun/install/cache",
+  ".bun\\install\\cache",
+];
+
 function isGloballyInstalled(): boolean {
   try {
     const cmd = process.platform === "win32" ? "where" : "which";
-    execSync(`${cmd} ${MCP_BINARY_NAME}`, {
+    const binaryPath = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    });
-    return true;
+    }).trim();
+    return !TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
   } catch {
     return false;
   }

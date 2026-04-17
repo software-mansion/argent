@@ -4,104 +4,102 @@ alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator control.
-When the user's task involves an iOS app, simulator, or React Native project,
-shift to the argent tool-first model described below. The argent tools give you
-methods to control the simulator, profile, interact and test mobile applications.
-Argent MCP tools are the preferred form of interaction with the application.
-</description>
+Argent MCP tools are available in this project for iOS simulator control. Argent MCP tools are the preferred form of interaction with the application.
+Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
+To check current version of MCP server run `argent --version` command.
 
-<argent_use_cases>
+Use cases:
 
 - User mentions iOS simulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in the simulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
 - Running, debugging, or testing a React Native app
 - Profiling performance or diagnosing re-renders in a React Native app
-  </argent_use_cases>
+  </description>
 
 <tapping_rule>
-**HARD RULE: Never derive tap coordinates from a screenshot.**
-BEFORE EVERY TAP, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are `describe` and `debugger-component-tree`. Native discovery tools may also be used when needed: `native-describe-screen` can provide app-scoped accessibility elements and normalized coordinates, while `native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point. Whenever something changed YOU MUST first call `describe`, `debugger-component-tree`, or another appropriate native discovery tool so you do not hallucinate element positions. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+<important>**Never** derive tap coordinates from a screenshot</important>
+Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
 
-`describe` is good for native app-level components and safely targetable foreground apps.
-`component-tree` is good for react-native specific components
+- `describe` - native app-level components and safely targetable foreground apps.
+- `native-describe-screen` - accessibility screen description via injected native devtools
+- `debugger-component-tree` - react-native specific components
 
-If `describe` is not sufficient ALWAYS do a followup of `component-tree` in react-native apps. Do your best to NOT GUESS THE COORDINATES.
+`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point.
 
-If `describe` fails, follow the recovery guidance in `argent-simulator-interact` to choose the correct next action.
+Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+
+If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
+
+If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` to choose the correct next action.
+
+Before starting to interact with the app, read the `argent-simulator-interact` skill first.
 </tapping_rule>
 
 <skill_reading_rule>
-**HARD RULE**: Always read relevant skills for guidance before executing argent-mcp tool using in skill_routing reference.
+<important>Always read relevant skills for guidance before executing argent-mcp tool - read skill_routing reference</important>
 </skill_reading_rule>
 
-<important_rules>
+<general_rules>
 
 - All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
-- IMPORTANT: NEVER tap anything without knowing exact coordinates. DO NOT GUESS WHERE TO TAP. Especially when navigated to another screen after an action you MUST **always** use a discovery tool `describe` or `debugger-component-tree` to get exact coordinates. Reference:
-  - `describe` — native app accessibility tree with normalized coordinates; may require explicit `bundleId`.
-  - `debugger-component-tree` — React Native apps (returns component tree with tap coords)
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
-- If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
-  For example, if you've used `describe` and it was insufficient - then try `component-tree` if in react-native app. Based on which was more successful - use the preferred option in the future.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- iOS system popups (permission dialogs, alerts) — dismiss with `keyboard` `key: "enter"`.
+- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If `describe` or another discovery tool fails, **read the exact error before reacting**. Use the recovery guidance in `argent-simulator-interact` to choose the correct next action instead of treating every failure as a generic permissions problem.
-- ALWAYS use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
-  </important_rules>
+- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
+  </general_rules>
 
 <react_native_detection>
-Project type is determined by the `argent-environment-inspector` subagent (see <subagents>).
+Project type is determined by the `argent-environment-inspector` subagent (see `subagents` section).
 When the subagent result is available, use its `is_react_native` field as the authoritative
 source — do not re-inspect files manually.
 
-If the subagent has not run yet and project type is unknown, run it first before proceeding.
+If the subagent has not run yet and project type is unknown, run it first before proceeding. Always use subagents if available to run `gather-workspace-data` data tool, if possible do not run yourself.
 
 When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
 </react_native_detection>
 
 <skill_routing>
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
-procedure, tool reference, and edge-case handling for each workflow.
+procedure and edge-case handling for each workflow.
 
 SIMULATOR SETUP
-Use skill: `argent-simulator-setup`
+Skill: `argent-simulator-setup`
 When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
-Use skill: `argent-simulator-interact`
+Skill: `argent-simulator-interact`
 When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
-RUNNING / BUILDING / DEBUGGING A REACT NATIVE APP
-Use skill: `argent-react-native-app-workflow`
+RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
+Skill: `argent-react-native-app-workflow`
 When: Project is react-native, starting Metro or running iOS app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
 
-BREAKPOINTS, STEPPING, JS EVALUATION
-Use skill: `argent-metro-debugger`
-When: Setting/removing breakpoints, pausing/stepping through JS, evaluating expressions, inspecting React component tree at source level, finding element placement via `debugger-component-tree`.
+JS EVALUATION, METRO CONNECTION, REACT NATIVE
+Skill: `argent-metro-debugger`
+When: evaluating expressions, inspecting React component tree at source level, finding element placement via `debugger-component-tree`.
 
-END-TO-END UI TESTING
-Use skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
-
-PERFORMANCE OPTIMIZATION
-Use skill: `argent-react-native-optimization`
-When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `argent-react-native-profiler` for measurement.
-
-APP & COMPONENT PROFILING
+REACT APP & COMPONENT PROFILING
 Use skill: `argent-react-native-profiler`
 When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
 
 NATIVE iOS PROFILING
 Use skill: `argent-ios-profiler`
 When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `argent-react-native-profiler`.
+
+PERFORMANCE OPTIMIZATION
+Use skill: `argent-react-native-optimization`
+When: App feels slow, user asks to optimize, reducing bundle size, improving startup time, fixing re-renders, optimizing lists/images/navigation, or any performance-related task. This is the entry-point skill for all performance work — it delegates to `argent-react-native-profiler` for measurement.
+
+END-TO-END UI TESTING
+Skill: `argent-test-ui-flow`
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`
@@ -117,21 +115,7 @@ When:
 - No "Project Environment" section exists in project memory / `MEMORY.md` or you lack information about basic setup workflows
 - Need to determine build commands, startup scripts, metro port, platform support, or QA tooling
   If the subagent already ran this session (result in memory), use that context directly — do NOT re-run.
+Rules:
+  - Run the `argent-environment-inspector` subagent if possible. Never call `gather-workspace-data` yourself - do only if subagent is not available.
+  - The main agent is responsible for persisting the subagent's JSON result to project memory
 </subagents>
-
-<important_usage_caveats>
-WORKSPACE INFORMATION RETRIEVAL
-The `gather-workspace-data` tool provides a structured snapshot used internally by the
-`argent-environment-inspector` subagent. Retrieve workspace information according to this priority:
-
-1. **Project memory / `MEMORY.md` already has a "Project Environment" section** →
-   Use that context directly. Do NOT re-run the subagent or call the tool.
-2. **Subagent delegation is available** →
-   Run the `argent-environment-inspector` subagent. Never call `gather-workspace-data` yourself;
-   the subagent calls it internally and fills in gaps through further inspection.
-3. **Subagent delegation is NOT available** →
-   Call `gather-workspace-data` directly as a first step, then fill in any gaps by
-   manually inspecting project files (package.json scripts, metro config, CI workflows, etc.).
-
-The main agent is responsible for persisting the subagent's JSON result to project memory.
-</important_usage_caveats>

@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Argent! This guide covers everyth
 
 - **macOS** with Xcode installed (required for `xcrun simctl` and iOS simulator support)
 - **Node.js 18+**
-- The `simulator-server` binary in `packages/native-devtools-ios/bin/` (arm64 macOS, installed separately via `npx @swmansion/argent install`)
+- The `simulator-server` and `ax-service` binaries in `packages/native-devtools-ios/bin/` (arm64 macOS, installed separately via `npx @swmansion/argent install`)
 
 ---
 

@@ -23,7 +23,7 @@ You can still edit the .yaml file directly afterwards to remove or reorder steps
   services: () => ({}),
   async execute(_services, _params) {
     const flowName = getActiveFlow();
-    const filePath = await getFlowPath(flowName);
+    const filePath = getFlowPath(flowName);
     const flowFile = await fs.readFile(filePath, "utf8");
     const flow = parseFlow(flowFile);
 

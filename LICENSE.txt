@@ -183,7 +183,8 @@ The following files included in this project are NOT governed by the Apache
 License, Version 2.0 above:
 
   packages/native-devtools-ios/bin/simulator-server
-  packages/native-devtools-ios/dylibs/libInjectionBootstrap.dylib
+  packages/native-devtools-ios/bin/ax-service
+  packages/native-devtools-ios/dylibs/libArgentInjectionBootstrap.dylib
   packages/native-devtools-ios/dylibs/libKeyboardPatch.dylib
   packages/native-devtools-ios/dylibs/libNativeDevtoolsIos.dylib
 

@@ -112,6 +112,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   x: z.coerce.number().describe("Logical X coordinate on device screen"),
   y: z.coerce.number().describe("Logical Y coordinate on device screen"),
   contextLines: z.coerce
@@ -148,6 +149,9 @@ export const debuggerInspectElementTool: ToolDefinition<
       truncated?: boolean;
       hiddenCount?: number;
       hint?: string;
+      deviceName: string;
+      appName: string;
+      logicalDeviceId: string | undefined;
     }
   | { error: string }
 > = {
@@ -167,7 +171,7 @@ Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -269,6 +273,9 @@ Use when you need the source file and line for a component at a tap coordinate. 
             hint: `${hiddenCount} more parent components hidden (framework/navigation wrappers). Pass maxItems=${Math.min(totalKept, params.maxItems + 35)} to see more.`,
           }
         : {}),
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
     };
   },
 };

@@ -1,37 +1,57 @@
-name: Publish to GitHub Packages
+name: Publish to npm
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to publish (e.g. v0.5.2)"
+        required: true
+        type: string
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
-          registry-url: "https://npm.pkg.github.com"
+          registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
+
+      - name: Resolve native binaries tag
+        id: binaries_tag
+        run: |
+          REF="${{ inputs.ref }}"
+          echo "tag=argent-${REF//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Download signed simulator-server binary
+        run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download signed native binaries (dylibs + ax-service)
+        run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: npm ci
 
       - run: npm run build -w @swmansion/argent
 
       - run: test -x packages/mcp/bin/simulator-server
+      - run: test -x packages/mcp/bin/ax-service
       - run: test -f packages/mcp/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/mcp/dylibs/libKeyboardPatch.dylib
-      - run: test -f packages/mcp/dylibs/libInjectionBootstrap.dylib
+      - run: test -f packages/mcp/dylibs/libArgentInjectionBootstrap.dylib
       - run: npm pack --dry-run -w @swmansion/argent
 
-      - run: npm publish -w @swmansion/argent --registry https://npm.pkg.github.com
+      - run: npm publish -w @swmansion/argent
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

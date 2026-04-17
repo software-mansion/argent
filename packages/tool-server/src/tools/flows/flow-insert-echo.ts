@@ -18,7 +18,7 @@ Returns { message, flowFile }. Fails if no active flow recording is in progress.
   services: () => ({}),
   async execute(_services, params) {
     const flowName = getActiveFlow();
-    const filePath = await getFlowPath(flowName);
+    const filePath = getFlowPath(flowName);
 
     const flowFile = await appendStep(filePath, {
       kind: "echo",

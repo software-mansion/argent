@@ -50,25 +50,27 @@ export function toSimulatorNetworkError(
     );
   }
 
+  const recovery =
+    "If the simulator is booted, call stop-simulator-server for that UDID and retry this action — " +
+    "the next simulator tool call (gesture, screenshot, etc.) starts a fresh simulator-server process.";
+
   if (combined.includes("ECONNREFUSED")) {
     return new Error(
       `${toolLabel} failed: cannot connect to simulator-server (connection refused at ${apiUrl}). ` +
-        `The server process may have crashed or was never started. ` +
-        `Call the simulator-server tool to restart it, then retry.`
+        `The native server process may have crashed or not be listening yet. ${recovery}`
     );
   }
 
   if (combined.includes("ECONNRESET") || combined.includes("socket hang up")) {
     return new Error(
       `${toolLabel} failed: connection to simulator-server was reset (${apiUrl}). ` +
-        `The server may have crashed mid-request. ` +
-        `Call the simulator-server tool to restart it, then retry.`
+        `The server may have crashed mid-request. ${recovery}`
     );
   }
 
   return new Error(
     `${toolLabel} failed: network error communicating with simulator-server at ${apiUrl}: ` +
       `${err.message}${causeMsg ? ` (${causeMsg})` : ""}. ` +
-      `Verify the simulator is running and the server is healthy.${suffix}`
+      `Verify the simulator is booted. ${recovery}${suffix}`
   );
 }

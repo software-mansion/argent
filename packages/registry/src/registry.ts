@@ -242,72 +242,32 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
-        this._handleTermination(urn, error);
+        this._teardown(urn, error);
       });
 
       return instance.api as T;
     } catch (error) {
-      this._transition(node, ServiceState.ERROR);
+      const cause = error instanceof Error ? error : new Error(String(error));
+      this._transition(node, ServiceState.ERROR, cause);
       node.initPromise = null;
 
       if (error instanceof ServiceInitializationError) {
         throw error;
       }
-      throw new ServiceInitializationError(
-        urn,
-        error instanceof Error ? error.message : String(error),
-        {
-          cause: error instanceof Error ? error : new Error(String(error)),
-        }
-      );
+      throw new ServiceInitializationError(urn, cause.message, { cause });
     }
   }
 
-  private _transition(node: ServiceNode, to: ServiceState): void {
+  private _transition(node: ServiceNode, to: ServiceState, cause?: Error): void {
     const from = node.state;
     node.state = to;
     this.events.emit("serviceStateChange", node.urn, from, to);
     if (to === ServiceState.ERROR) {
-      this.events.emit(
-        "serviceError",
-        node.urn,
-        new Error(`Service "${node.urn}" entered ERROR state`)
-      );
+      const err = cause
+        ? new Error(`Service "${node.urn}" entered ERROR state: ${cause.message}`, { cause })
+        : new Error(`Service "${node.urn}" entered ERROR state`);
+      this.events.emit("serviceError", node.urn, err);
     }
-  }
-
-  private async _handleTermination(urn: string, error?: Error): Promise<void> {
-    const node = this.services.get(urn);
-    if (!node || node.state === ServiceState.TERMINATING || node.state === ServiceState.IDLE)
-      return;
-
-    this._transition(node, ServiceState.TERMINATING);
-
-    for (const depUrn of [...node.dependents]) {
-      await this._teardown(depUrn, error);
-    }
-
-    if (node.instance) {
-      node.instance.events.removeAllListeners();
-      try {
-        await node.instance.dispose();
-      } catch {
-        /* disposal errors are logged but not thrown */
-      }
-    }
-
-    const { payload } = parseURN(urn);
-    const depUrns = node.blueprint.getDependencies
-      ? Object.values(node.blueprint.getDependencies(payload))
-      : [];
-    for (const depUrn of depUrns) {
-      this.services.get(depUrn)?.dependents.delete(urn);
-    }
-
-    node.instance = null;
-    node.initPromise = null;
-    node.dependents.clear();
-    this._transition(node, error ? ServiceState.ERROR : ServiceState.IDLE);
   }
 
   private async _teardown(urn: string, cause?: Error): Promise<void> {
@@ -341,6 +301,6 @@ export class Registry {
     node.instance = null;
     node.initPromise = null;
     node.dependents.clear();
-    this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE);
+    this._transition(node, cause ? ServiceState.ERROR : ServiceState.IDLE, cause);
   }
 }

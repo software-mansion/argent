@@ -6,7 +6,7 @@
  * Full dev mode — no packing, no global install needed.
  *
  * What it does:
- *   1. Builds native devtools dylibs (libInjectionBootstrap, libNativeDevtoolsIos, libKeyboardPatch)
+ *   1. Builds native devtools dylibs (libArgentInjectionBootstrap, libNativeDevtoolsIos, libKeyboardPatch)
  *   2. Builds MCP TypeScript (tsc only, no esbuild tool-server bundle)
  *   3. Sets up packages/mcp/bin/ and packages/mcp/dist/ for local use
  *   4. Patches supported editor MCP configs to point argent at the local dist

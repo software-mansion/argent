@@ -5,10 +5,14 @@ import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-wri
 
 interface LogRegistryResponse extends LogStats {
   clusters: MessageCluster[];
+  deviceName: string;
+  appName: string;
+  logicalDeviceId: string | undefined;
 }
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
 });
 
 export const debuggerLogRegistryTool: ToolDefinition<
@@ -21,7 +25,7 @@ Returns the log file path, entry counts by level, and message clusters (grouped 
 Use when investigating warnings, errors, or unexpected output — call this first for an overview, then read the returned file for details. Returns empty stats if no log data has been captured yet.`,
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services) {
     const api = services.debugger as JsRuntimeDebuggerApi;
@@ -31,6 +35,9 @@ Use when investigating warnings, errors, or unexpected output — call this firs
     return {
       ...stats,
       clusters,
+      deviceName: api.deviceName,
+      appName: api.appName,
+      logicalDeviceId: api.logicalDeviceId,
     };
   },
 };

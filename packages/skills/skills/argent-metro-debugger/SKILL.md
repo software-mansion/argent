@@ -1,6 +1,6 @@
 ---
 name: argent-metro-debugger
-description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, setting breakpoints, pausing JS execution, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
+description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
 ---
 
 ## 1. Prerequisites
@@ -9,14 +9,16 @@ The debugger requires **Metro dev server running** (default `localhost:8081`) an
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-connect` to connect manually when tools fail to auto-connect.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, a.k.a. `logicalDeviceId`). Always make sure you target the correct app on the correct device.
+
+One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
 ### Connect & diagnostics
 
-| Tool               | Purpose                                                            |
-| ------------------ | ------------------------------------------------------------------ |
-| `debugger-connect` | Connect to Metro CDP. Returns projectRoot, deviceName, connected.  |
-| `debugger-status`  | Like connect + loadedScripts, sourceMapReady. **Use to diagnose.** |
+| Tool               | Purpose                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger/network/profiler call. |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**                                                                                                                                        |
 
 ### Reload & recovery
 
@@ -27,12 +29,12 @@ All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-
 
 ### Inspection & console
 
-| Tool                       | Purpose                                                                                                          |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                           |
-| `debugger-inspect-element` | Inspect at (x, y): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
-| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.          |
-| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                          |
+| Tool                       | Purpose                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-component-tree`  | Full React fiber tree (names, depth, bounding rects, tap coordinates).                                                                                                    |
+| `debugger-inspect-element` | Inspect at (x, y) using **logical pixel coordinates** (not normalized 0-1): component hierarchy with source file:line and code fragment. See `references/source-maps.md`. |
+| `debugger-log-registry`    | Get log summary (counts, clusters, file path). Then use `Grep`/`Read` on the flat log file for details.                                                                   |
+| `debugger-evaluate`        | Run a JS expression in the app runtime.                                                                                                                                   |
 
 ---
 
@@ -49,9 +51,9 @@ Both can point to source files, but `inspect-element` is purpose-built for sourc
 
 ### `includeSkipped` guidance
 
-Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
+Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to `true` only when debugging filter behavior — e.g., an expected component is missing from output, or you need to inspect a very specific branch of the tree (not just an overview).
 
-> **Warning:** Output can be very large. Always combine with `maxNodes` and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without `maxNodes` on large apps.
+> **Warning:** Output can be very large. Always combine with `maxNodes` (component-tree) or `maxItems` (inspect-element) and increase it incrementally (e.g., start at 50, then grow). Do not use `includeSkipped` without a limit on large apps.
 
 ---
 
