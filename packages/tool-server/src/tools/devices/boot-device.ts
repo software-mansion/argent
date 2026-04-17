@@ -1,0 +1,280 @@
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { z } from "zod";
+import type { Registry, ToolDefinition } from "@argent/registry";
+import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import {
+  adbShell,
+  emulatorBinaryName,
+  listAndroidDevices,
+  listAvds,
+  runAdb,
+  waitForBootCompleted,
+} from "../../utils/adb";
+
+const execFileAsync = promisify(execFile);
+
+const zodSchema = z.object({
+  udid: z
+    .string()
+    .optional()
+    .describe(
+      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid` or `avdName`."
+    ),
+  avdName: z
+    .string()
+    .optional()
+    .describe(
+      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid` or `avdName`."
+    ),
+  coldBoot: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android-only: skip the AVD snapshot and cold-boot. Defaults to true for reliability — corrupt snapshots are the leading cause of silent boot hangs. Ignored on iOS."
+    ),
+  noWindow: z
+    .boolean()
+    .optional()
+    .describe(
+      "Android-only: launch the emulator headless (no UI window). Useful for CI. Defaults to false so you can see boot progress. Ignored on iOS."
+    ),
+  bootTimeoutMs: z
+    .number()
+    .int()
+    .min(30_000)
+    .max(900_000)
+    .optional()
+    .describe(
+      "Android-only: overall budget for the full boot sequence. Defaults to 480000 (8 min). Clamped to [30s, 15min]. Ignored on iOS."
+    ),
+});
+
+type BootDeviceParams = z.infer<typeof zodSchema>;
+
+type BootDeviceResult =
+  | { platform: "ios"; udid: string; booted: true }
+  | { platform: "android"; serial: string; avdName: string; booted: true; coldBoot: boolean };
+
+// Each stage has its own sub-budget so a hang in one stage cannot consume the
+// entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
+const STAGE_BUDGET = {
+  adbRegister: 60_000, // adb devices sees the serial for this AVD
+  deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
+  bootCompleted: 300_000, // sys.boot_completed = 1
+} as const;
+
+async function killEmulatorQuietly(serial: string | null): Promise<void> {
+  if (serial) {
+    await runAdb(["-s", serial, "emu", "kill"], { timeoutMs: 5_000 }).catch(() => {});
+  }
+}
+
+async function findSerialByAvdName(avdName: string, deadline: number): Promise<string | null> {
+  while (Date.now() < deadline) {
+    const devices = await listAndroidDevices().catch(() => []);
+    const match = devices.find((d) => d.isEmulator && d.avdName === avdName);
+    if (match) return match.serial;
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  return null;
+}
+
+async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
+  const { stdout } = await runAdb(["devices"]).catch(() => ({ stdout: "", stderr: "" }));
+  const lines = stdout.split("\n");
+  const now: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^(emulator-\d+)\s+/);
+    if (m) now.push(m[1]!);
+  }
+  return now.filter((s) => !before.has(s));
+}
+
+async function bootIos(
+  udid: string,
+  registry: Registry
+): Promise<{ platform: "ios"; udid: string; booted: true }> {
+  await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    // `simctl boot` errors when the device is already booted — treat as success.
+    if (!message.includes("Unable to boot device in current state: Booted")) {
+      throw err;
+    }
+  });
+  // `bootstatus -b` blocks until the simulator is fully ready for env setup.
+  await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+  await registry.resolveService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
+  await execFileAsync("defaults", [
+    "write",
+    "com.apple.iphonesimulator",
+    "CurrentDeviceUDID",
+    udid,
+  ]);
+  await execFileAsync("open", ["-a", "Simulator.app"]);
+  return { platform: "ios", udid, booted: true };
+}
+
+async function bootAndroid(params: {
+  avdName: string;
+  coldBoot: boolean;
+  noWindow: boolean;
+  bootTimeoutMs: number;
+}): Promise<{
+  platform: "android";
+  serial: string;
+  avdName: string;
+  booted: true;
+  coldBoot: boolean;
+}> {
+  const overallDeadline = Date.now() + params.bootTimeoutMs;
+
+  // Stage 0: validate AVD exists
+  const avds = await listAvds();
+  if (avds.length === 0) {
+    throw new Error(
+      "`emulator -list-avds` returned no AVDs. Install the Android Emulator package or create an AVD via Android Studio or `avdmanager create avd`."
+    );
+  }
+  if (!avds.some((a) => a.name === params.avdName)) {
+    throw new Error(
+      `AVD "${params.avdName}" not found. Available: ${avds.map((a) => a.name).join(", ")}.`
+    );
+  }
+
+  const serialsBefore = new Set((await listAndroidDevices().catch(() => [])).map((d) => d.serial));
+
+  // Stage 1: spawn emulator
+  const emulatorArgs = ["-avd", params.avdName];
+  if (params.coldBoot) emulatorArgs.push("-no-snapshot-load");
+  if (params.noWindow) emulatorArgs.push("-no-window");
+
+  const child = spawn(emulatorBinaryName(), emulatorArgs, {
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+
+  let earlyExitError: Error | null = null;
+  child.on("exit", (code) => {
+    if (code !== 0 && code !== null) {
+      earlyExitError = new Error(
+        `emulator binary exited with code ${code} before the device booted. ` +
+          `Common causes: AVD corrupted, Hypervisor unavailable, or disk full. ` +
+          `Try \`emulator -avd ${params.avdName} -verbose\` from a terminal to see the exact error.`
+      );
+    }
+  });
+
+  await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
+
+  // Stage 2: wait for adb to see the new emulator
+  let serial: string | null = null;
+  const adbDeadline = Math.min(overallDeadline, Date.now() + STAGE_BUDGET.adbRegister);
+  while (Date.now() < adbDeadline) {
+    if (earlyExitError) throw earlyExitError;
+    const newSerials = await listNewEmulatorSerials(serialsBefore);
+    if (newSerials.length >= 1) {
+      if (newSerials.length === 1) {
+        serial = newSerials[0]!;
+        break;
+      }
+      const byAvd = await findSerialByAvdName(params.avdName, Date.now() + 3_000);
+      if (byAvd) {
+        serial = byAvd;
+        break;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  if (!serial) {
+    await killEmulatorQuietly(null);
+    throw new Error(
+      `Emulator "${params.avdName}" did not register within ${STAGE_BUDGET.adbRegister / 1000}s. ` +
+        `Check that the Android SDK is on PATH and that no other emulator is already using the assigned port.`
+    );
+  }
+
+  // Stage 3: wait-for-device (tcp socket up)
+  try {
+    await runAdb(["-s", serial, "wait-for-device"], {
+      timeoutMs: Math.min(STAGE_BUDGET.deviceReady, Math.max(1_000, overallDeadline - Date.now())),
+    });
+  } catch (err) {
+    await killEmulatorQuietly(serial);
+    throw new Error(
+      `adb wait-for-device failed for ${serial}: ${
+        err instanceof Error ? err.message : String(err)
+      }. Emulator has been terminated; retry in a moment.`
+    );
+  }
+
+  // Stage 4: sys.boot_completed = 1
+  const bootBudget = Math.max(
+    10_000,
+    Math.min(STAGE_BUDGET.bootCompleted, overallDeadline - Date.now())
+  );
+  try {
+    await waitForBootCompleted(serial, bootBudget);
+  } catch (err) {
+    await killEmulatorQuietly(serial);
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} ` +
+        `Emulator has been terminated so the next boot starts clean. ` +
+        `If this keeps happening, the AVD's snapshot may be corrupt — the tool already cold-boots by default, ` +
+        `but you can also manually wipe user data with \`emulator -avd ${params.avdName} -wipe-data\` from a shell.`
+    );
+  }
+
+  // Stage 5: PackageManagerService sanity probe — protects callers from a
+  // race where boot_completed fires but `am start` would still 500 for 10-30s.
+  try {
+    await adbShell(serial, "pm path android", { timeoutMs: 10_000 });
+  } catch {
+    await killEmulatorQuietly(serial);
+    throw new Error(
+      `PackageManager did not respond on ${serial} after boot_completed. ` +
+        `Emulator has been terminated. Retry the call.`
+    );
+  }
+
+  return {
+    platform: "android",
+    serial,
+    avdName: params.avdName,
+    booted: true,
+    coldBoot: params.coldBoot,
+  };
+}
+
+export function createBootDeviceTool(
+  registry: Registry
+): ToolDefinition<BootDeviceParams, BootDeviceResult> {
+  return {
+    id: "boot-device",
+    description:
+      "Start an iOS simulator or launch an Android emulator and wait until it is ready to accept interactions. " +
+      "Pick the platform by which argument you pass: `udid` for an iOS simulator from `list-devices`, or `avdName` for an Android AVD (a serial is assigned automatically). " +
+      "Use at the start of a session once you have picked a target. " +
+      "Returns a tagged payload: `{ platform: 'ios', udid, booted }` or `{ platform: 'android', serial, avdName, booted, coldBoot }`. " +
+      "Android boots take 2–10 minutes depending on machine and cold/warm state; if any boot stage fails, the tool terminates the emulator it spawned so the next retry starts clean.",
+    zodSchema,
+    services: () => ({}),
+    async execute(_services, params) {
+      const hasUdid = Boolean(params.udid);
+      const hasAvd = Boolean(params.avdName);
+      if (hasUdid === hasAvd) {
+        throw new Error("Provide exactly one of `udid` (iOS) or `avdName` (Android).");
+      }
+      if (hasUdid) {
+        return bootIos(params.udid!, registry);
+      }
+      return bootAndroid({
+        avdName: params.avdName!,
+        coldBoot: params.coldBoot ?? true,
+        noWindow: params.noWindow ?? false,
+        bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
+      });
+    },
+  };
+}

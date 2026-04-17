@@ -1,0 +1,119 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { z } from "zod";
+import type { ToolDefinition } from "@argent/registry";
+import { listAndroidDevices, listAvds } from "../../utils/adb";
+
+const execFileAsync = promisify(execFile);
+
+type IosDevice = {
+  platform: "ios";
+  udid: string;
+  name: string;
+  state: string;
+  runtime: string;
+};
+
+type AndroidDevice = {
+  platform: "android";
+  serial: string;
+  state: string;
+  isEmulator: boolean;
+  model: string | null;
+  avdName: string | null;
+  sdkLevel: number | null;
+};
+
+type ListDevicesResult = {
+  devices: Array<IosDevice | AndroidDevice>;
+  avds: Array<{ name: string }>;
+};
+
+interface SimctlDevice {
+  udid: string;
+  name: string;
+  state: string;
+  deviceTypeIdentifier: string;
+  isAvailable: boolean;
+}
+
+interface SimctlOutput {
+  devices: Record<string, SimctlDevice[]>;
+}
+
+async function listIosSimulators(): Promise<IosDevice[]> {
+  try {
+    const { stdout } = await execFileAsync("xcrun", ["simctl", "list", "devices", "--json"], {
+      timeout: 10_000,
+    });
+    const data: SimctlOutput = JSON.parse(stdout);
+    const out: IosDevice[] = [];
+    for (const [runtimeId, devices] of Object.entries(data.devices)) {
+      if (!runtimeId.includes("iOS")) continue;
+      for (const d of devices) {
+        if (!d.isAvailable) continue;
+        out.push({
+          platform: "ios",
+          udid: d.udid,
+          name: d.name,
+          state: d.state,
+          runtime: runtimeId,
+        });
+      }
+    }
+    return out;
+  } catch {
+    // macOS without Xcode, or non-mac host — no iOS devices to report
+    return [];
+  }
+}
+
+function sortIos(a: IosDevice, b: IosDevice): number {
+  const aBooted = a.state === "Booted" ? 0 : 1;
+  const bBooted = b.state === "Booted" ? 0 : 1;
+  if (aBooted !== bBooted) return aBooted - bBooted;
+  const aIpad = a.name.includes("iPad") ? 1 : 0;
+  const bIpad = b.name.includes("iPad") ? 1 : 0;
+  return aIpad - bIpad;
+}
+
+function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
+  const aReady = a.state === "device" ? 0 : 1;
+  const bReady = b.state === "device" ? 0 : 1;
+  if (aReady !== bReady) return aReady - bReady;
+  const aEmu = a.isEmulator ? 0 : 1;
+  const bEmu = b.isEmulator ? 0 : 1;
+  return aEmu - bEmu;
+}
+
+const zodSchema = z.object({});
+
+export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
+  id: "list-devices",
+  description:
+    "List iOS simulators and Android devices/emulators in one place. " +
+    "Use at the start of a session to pick a target id (`udid` for iOS entries, `serial` for Android) to pass to interaction tools, and to see which targets are already running. " +
+    "Returns { devices, avds } where each device carries a `platform` discriminator (`ios` or `android`), and `avds` lists Android AVDs that can be booted via `boot-device`. " +
+    "Booted/ready devices are listed first. Platforms whose tooling is unavailable (no Xcode on macOS, no adb on PATH) are silently omitted — run the relevant installer if the list is empty.",
+  zodSchema,
+  services: () => ({}),
+  async execute(_services, _params) {
+    const [ios, android, avds] = await Promise.all([
+      listIosSimulators(),
+      listAndroidDevices().catch(() => []),
+      listAvds(),
+    ]);
+    ios.sort(sortIos);
+    const androidTagged: AndroidDevice[] = android.map((d) => ({
+      platform: "android",
+      serial: d.serial,
+      state: d.state,
+      isEmulator: d.isEmulator,
+      model: d.model,
+      avdName: d.avdName,
+      sdkLevel: d.sdkLevel,
+    }));
+    androidTagged.sort(sortAndroid);
+    return { devices: [...ios, ...androidTagged], avds };
+  },
+};

@@ -12,8 +12,8 @@ import { nativeUserInteractableViewAtPointTool } from "../tools/native-devtools/
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
-import { listSimulatorsTool } from "../tools/simulator/list-simulators";
-import { createBootSimulatorTool } from "../tools/simulator/boot-simulator";
+import { listDevicesTool } from "../tools/devices/list-devices";
+import { createBootDeviceTool } from "../tools/devices/boot-device";
 import { launchAppTool } from "../tools/simulator/launch-app";
 import { restartAppTool } from "../tools/simulator/restart-app";
 import { reinstallAppTool } from "../tools/simulator/reinstall-app";
@@ -66,8 +66,6 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
-import { androidListEmulatorsTool } from "../tools/android/android-list-emulators";
-import { androidBootEmulatorTool } from "../tools/android/android-boot-emulator";
 import { androidStopAppTool } from "../tools/android/android-stop-app";
 import { androidLogcatTool } from "../tools/android/android-logcat";
 
@@ -82,8 +80,8 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
-  registry.registerTool(listSimulatorsTool);
-  registry.registerTool(createBootSimulatorTool(registry));
+  registry.registerTool(listDevicesTool);
+  registry.registerTool(createBootDeviceTool(registry));
   registry.registerTool(launchAppTool);
   registry.registerTool(restartAppTool);
   registry.registerTool(reinstallAppTool);
@@ -149,11 +147,9 @@ export function createRegistry(): Registry {
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
 
-  // Android-only tools. Tools that exist on both platforms are exposed under
-  // their unified names above (screenshot, gesture-tap, describe, launch-app,
-  // etc.) and dispatch internally on udid shape; see utils/platform-detect.ts.
-  registry.registerTool(androidListEmulatorsTool);
-  registry.registerTool(androidBootEmulatorTool);
+  // Android-only tools. Cross-platform tools live under unified names (list-devices,
+  // boot-device, screenshot, gesture-tap, describe, launch-app, ...) and dispatch
+  // on the id shape; see utils/platform-detect.ts.
   registry.registerTool(androidStopAppTool);
   registry.registerTool(androidLogcatTool);
 
