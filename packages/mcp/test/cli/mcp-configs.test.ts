@@ -586,10 +586,7 @@ describe("JetBrains adapter", () => {
   it("remove preserves sibling servers and keeps the file", () => {
     const configPath = path.join(tmpDir, ".idea", "mcp.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({ mcpServers: { other: { command: "other" } } })
-    );
+    fs.writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }));
     adapter.write(configPath, getMcpEntry());
 
     expect(adapter.remove(configPath)).toBe(true);
