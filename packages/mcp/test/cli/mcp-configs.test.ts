@@ -524,6 +524,18 @@ describe("Codex adapter", () => {
 
 describe("JetBrains adapter", () => {
   const adapter = ALL_ADAPTERS.find((a) => a.name === "JetBrains")!;
+  const originalPlatform = process.platform;
+  const macJbBase = (home: string): string =>
+    path.join(home, "Library", "Application Support", "JetBrains");
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    homedirOverride = undefined;
+  });
 
   it("writes { mcpServers: { argent: ... } } format", () => {
     const configPath = path.join(tmpDir, ".idea", "mcp.json");
@@ -545,10 +557,7 @@ describe("JetBrains adapter", () => {
 
     const removed = adapter.remove(configPath);
     expect(removed).toBe(true);
-
-    const config = readJsonFile(configPath);
-    const servers = config.mcpServers as Record<string, unknown>;
-    expect(servers).not.toHaveProperty("argent");
+    expect(fs.existsSync(configPath)).toBe(false);
   });
 
   it("returns false when removing from non-existent file", () => {
@@ -576,6 +585,23 @@ describe("JetBrains adapter", () => {
     expect(servers).toHaveProperty("argent");
   });
 
+  it("remove preserves sibling servers and keeps the file", () => {
+    const configPath = path.join(tmpDir, ".idea", "mcp.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcpServers: { other: { command: "other" } } })
+    );
+    adapter.write(configPath, getMcpEntry());
+
+    expect(adapter.remove(configPath)).toBe(true);
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcpServers as Record<string, unknown>;
+    expect(servers).toHaveProperty("other");
+    expect(servers).not.toHaveProperty("argent");
+  });
+
   it("projectPath returns .idea/mcp.json under project root", () => {
     expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".idea", "mcp.json"));
   });
@@ -591,53 +617,62 @@ describe("JetBrains adapter", () => {
     }
   });
 
-  it("detect() returns true when JetBrains global config dir exists", () => {
+  it("detect() returns true when a JetBrains product dir exists under ~/Library", () => {
     homedirOverride = tmpDir;
-    const jbBase =
-      process.platform === "darwin"
-        ? path.join(tmpDir, "Library", "Application Support", "JetBrains")
-        : path.join(tmpDir, ".config", "JetBrains");
-    const productDir = path.join(jbBase, "WebStorm2025.1");
-    fs.mkdirSync(productDir, { recursive: true });
-
-    try {
-      expect(adapter.detect()).toBe(true);
-    } finally {
-      homedirOverride = undefined;
-    }
+    fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
+    expect(adapter.detect()).toBe(true);
   });
 
-  it("globalPath returns mcp.json inside the most recent product dir", () => {
+  it("globalPath picks the newest version across products (numeric sort)", () => {
     homedirOverride = tmpDir;
-    const jbBase =
-      process.platform === "darwin"
-        ? path.join(tmpDir, "Library", "Application Support", "JetBrains")
-        : path.join(tmpDir, ".config", "JetBrains");
+    const base = macJbBase(tmpDir);
+    // 2025.2 > 2025.10 lexicographically, but 2025.10 > 2025.2 numerically.
+    fs.mkdirSync(path.join(base, "WebStorm2025.2"), { recursive: true });
+    fs.mkdirSync(path.join(base, "WebStorm2025.10"), { recursive: true });
+    fs.mkdirSync(path.join(base, "IntelliJIdea2024.3"), { recursive: true });
 
-    // Create two product dirs — globalPath should pick the last sorted one
-    fs.mkdirSync(path.join(jbBase, "WebStorm2024.3"), { recursive: true });
-    fs.mkdirSync(path.join(jbBase, "WebStorm2025.1"), { recursive: true });
+    expect(adapter.globalPath()).toBe(
+      path.join(base, "WebStorm2025.10", "options", "mcp.json")
+    );
+  });
 
-    try {
-      expect(adapter.globalPath()).toBe(
-        path.join(jbBase, "WebStorm2025.1", "options", "mcp.json")
-      );
-    } finally {
-      homedirOverride = undefined;
-    }
+  it("globalPath is not fooled by prefix collisions (PyCharm vs PyCharmCE)", () => {
+    homedirOverride = tmpDir;
+    const base = macJbBase(tmpDir);
+    fs.mkdirSync(path.join(base, "PyCharmCE2025.1"), { recursive: true });
+    fs.mkdirSync(path.join(base, "PyCharm2024.3"), { recursive: true });
+
+    // PyCharmCE2025.1 must be treated as PyCharmCE (not PyCharm with a CE2025.1
+    // version), and must win by numeric version.
+    expect(adapter.globalPath()).toBe(
+      path.join(base, "PyCharmCE2025.1", "options", "mcp.json")
+    );
+  });
+
+  it("globalPath ignores directories without a numeric version suffix", () => {
+    homedirOverride = tmpDir;
+    const base = macJbBase(tmpDir);
+    // Fleet on disk looks like "Fleet" (no version suffix) — must not match.
+    fs.mkdirSync(path.join(base, "Fleet"), { recursive: true });
+    // Also an unrelated dir that happens to share a prefix.
+    fs.mkdirSync(path.join(base, "PyCharmCustomPlugin"), { recursive: true });
+
+    expect(adapter.globalPath()).toBeNull();
   });
 
   it("globalPath returns null when no JetBrains config dirs exist", () => {
     homedirOverride = tmpDir;
-    try {
-      expect(adapter.globalPath()).toBeNull();
-    } finally {
-      homedirOverride = undefined;
-    }
+    expect(adapter.globalPath()).toBeNull();
   });
 
-  afterEach(() => {
-    homedirOverride = undefined;
+  it("detect() ignores the JetBrains dir on non-macOS platforms", () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    homedirOverride = tmpDir;
+    fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
+
+    // No local .idea here (tmpDir is not cwd), so detect() must be false.
+    expect(adapter.detect()).toBe(false);
+    expect(adapter.globalPath()).toBeNull();
   });
 });
 

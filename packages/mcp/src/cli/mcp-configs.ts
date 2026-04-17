@@ -606,8 +606,8 @@ const codexAdapter: McpConfigAdapter = {
 
 // ── JetBrains adapter ───────────────────────────────────────────────────────
 // Format: { mcpServers: { argent: { command, args, env } } }
-// Project: .idea/mcp.json   Global: ~/Library/Application Support/JetBrains/<product>/options/mcp.json (macOS)
-//                                    ~/.config/JetBrains/<product>/options/mcp.json (Linux)
+// Project: .idea/mcp.json
+// Global (macOS only): ~/Library/Application Support/JetBrains/<product><version>/options/mcp.json
 
 /** JetBrains product directory prefixes (each has a version suffix like "2025.1"). */
 const JETBRAINS_PRODUCTS = [
@@ -628,37 +628,57 @@ const JETBRAINS_PRODUCTS = [
   "AndroidStudio",
 ];
 
-/**
- * Return the JetBrains base config directory for the current platform.
- * macOS: ~/Library/Application Support/JetBrains
- * Linux: ~/.config/JetBrains
- */
-function jetbrainsBaseDir(): string {
-  if (process.platform === "darwin") {
-    return path.join(homedir(), "Library", "Application Support", "JetBrains");
-  }
-  // Linux (and fallback)
-  return path.join(homedir(), ".config", "JetBrains");
+interface JetbrainsProductDir {
+  path: string;
+  version: number[];
+}
+
+function jetbrainsBaseDir(): string | null {
+  if (process.platform !== "darwin") return null;
+  return path.join(homedir(), "Library", "Application Support", "JetBrains");
 }
 
 /**
- * Find all existing JetBrains product config directories that contain an
- * `options` subdirectory (the standard location for settings like mcp.json).
- * Returns paths sorted by name (newest version last for a given product).
+ * A product directory name is a known product prefix followed immediately by
+ * a version number (e.g. "IntelliJIdea2025.1"). The digit requirement prevents
+ * collisions like "PyCharm" matching "PyCharmCE2025.1" or missing "2025.10".
  */
-function findJetbrainsConfigDirs(): string[] {
+function matchProductDir(name: string): JetbrainsProductDir | null {
+  for (const prefix of JETBRAINS_PRODUCTS) {
+    if (name.length <= prefix.length) continue;
+    if (!name.startsWith(prefix)) continue;
+    const next = name.charCodeAt(prefix.length);
+    if (next < 48 || next > 57) continue; // next char must be a digit
+    const version = name
+      .slice(prefix.length)
+      .split(".")
+      .map((s) => parseInt(s, 10));
+    return { path: name, version };
+  }
+  return null;
+}
+
+function compareVersions(a: number[], b: number[]): number {
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function findJetbrainsProductDirs(): JetbrainsProductDir[] {
   const base = jetbrainsBaseDir();
-  if (!dirExists(base)) return [];
+  if (!base || !dirExists(base)) return [];
   try {
-    const entries = fs.readdirSync(base, { withFileTypes: true });
-    return entries
-      .filter(
-        (e) =>
-          e.isDirectory() &&
-          JETBRAINS_PRODUCTS.some((p) => e.name.startsWith(p))
-      )
-      .map((e) => path.join(base, e.name))
-      .sort();
+    const result: JetbrainsProductDir[] = [];
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const match = matchProductDir(entry.name);
+      if (!match) continue;
+      result.push({ path: path.join(base, entry.name), version: match.version });
+    }
+    return result;
   } catch {
     return [];
   }
@@ -668,10 +688,8 @@ const jetbrainsAdapter: McpConfigAdapter = {
   name: "JetBrains",
 
   detect(): boolean {
-    // Detect via global config directories or a local .idea directory
     return (
-      findJetbrainsConfigDirs().length > 0 ||
-      dirExists(path.join(process.cwd(), ".idea"))
+      findJetbrainsProductDirs().length > 0 || dirExists(path.join(process.cwd(), ".idea"))
     );
   },
 
@@ -680,11 +698,10 @@ const jetbrainsAdapter: McpConfigAdapter = {
   },
 
   globalPath(): string | null {
-    // Return the mcp.json path inside the most recent (last sorted) product dir.
-    // When no product dirs exist, return null.
-    const dirs = findJetbrainsConfigDirs();
+    const dirs = findJetbrainsProductDirs();
     if (dirs.length === 0) return null;
-    return path.join(dirs[dirs.length - 1], "options", "mcp.json");
+    const newest = dirs.reduce((a, b) => (compareVersions(a.version, b.version) >= 0 ? a : b));
+    return path.join(newest.path, "options", "mcp.json");
   },
 
   write(configPath: string, entry: McpServerEntry): void {
@@ -705,7 +722,7 @@ const jetbrainsAdapter: McpConfigAdapter = {
     const servers = config.mcpServers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
     delete servers[MCP_SERVER_KEY];
-    writeJson(configPath, config);
+    writeJsonOrRemove(configPath, config);
     return true;
   },
 };
