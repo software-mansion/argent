@@ -45,9 +45,9 @@ export const androidLogcatTool: ToolDefinition<
 > = {
   id: "android-logcat",
   description: `Read recent logcat output from an Android device as a one-shot dump (not a live stream).
-Use when investigating a native crash, a React Native red-box, or any runtime log from a specific package. Filters by package (resolved via pidof), priority (V/D/I/W/E/F), and optional tag.
+Use when investigating a native crash, a React Native red-box, or any runtime log from a specific package. Filters by package (resolved to the app's PID so only that process's lines are returned), priority (V/D/I/W/E/F), and optional tag.
 Returns { lines, count } with at most the most recent 'lines' entries (default 500).
-Fails when the udid is not an Android serial or the device is offline; returns an empty payload when the filtered bundleId is not currently running.`,
+Fails when the udid is not in list-devices or the device is offline; returns an empty payload when the filtered bundleId is not currently running.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {

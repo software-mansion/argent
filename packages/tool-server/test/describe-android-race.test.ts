@@ -72,8 +72,11 @@ describe("describe — per-call dump path (review #10)", () => {
     const serial = mkSerial();
     warmDeviceCache([{ udid: serial, platform: "android" }]);
 
-    await tool.execute({}, { udid: serial });
-    await tool.execute({}, { udid: serial });
+    // Promise.all — run truly concurrently. Sequential awaits hide the shared-
+    // path regression the per-call randomization was meant to prevent: with
+    // sequential calls the first dump completes before the second starts, so
+    // even a constant-path implementation would pass.
+    await Promise.all([tool.execute({}, { udid: serial }), tool.execute({}, { udid: serial })]);
 
     expect(shellCommands).toHaveLength(2);
 

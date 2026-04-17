@@ -339,6 +339,6 @@ describe("AUDIT #6c (RESOLVED): android-stop-app description describes the real 
     expect(await classifyDevice("nope")).toBe("android");
     // The description no longer claims a branch that can't be reached.
     expect(androidStopAppTool.description).not.toMatch(/not an Android serial/);
-    expect(androidStopAppTool.description).toMatch(/not registered with adb/);
+    expect(androidStopAppTool.description).toMatch(/not in list-devices/);
   });
 });
