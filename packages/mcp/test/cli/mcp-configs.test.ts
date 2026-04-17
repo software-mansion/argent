@@ -539,9 +539,7 @@ describe("JetBrains adapter", () => {
 
   it("writes { mcpServers: { argent: ... } } format", () => {
     const configPath = path.join(tmpDir, ".idea", "mcp.json");
-    const entry = getMcpEntry();
-
-    adapter.write(configPath, entry);
+    adapter.write(configPath, getMcpEntry());
 
     const config = readJsonFile(configPath);
     const servers = config.mcpServers as Record<string, unknown>;
@@ -606,6 +604,12 @@ describe("JetBrains adapter", () => {
     expect(adapter.projectPath("/foo")).toBe(path.join("/foo", ".idea", "mcp.json"));
   });
 
+  it("globalPath is always null (project-only adapter)", () => {
+    homedirOverride = tmpDir;
+    fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
+    expect(adapter.globalPath()).toBeNull();
+  });
+
   it("detect() returns true when local .idea dir exists", () => {
     const localIdea = path.join(process.cwd(), ".idea");
     const existed = fs.existsSync(localIdea);
@@ -617,62 +621,27 @@ describe("JetBrains adapter", () => {
     }
   });
 
-  it("detect() returns true when a JetBrains product dir exists under ~/Library", () => {
+  it("detect() returns true on macOS when ~/Library/.../JetBrains has any product dir", () => {
     homedirOverride = tmpDir;
     fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
     expect(adapter.detect()).toBe(true);
   });
 
-  it("globalPath picks the newest version across products (numeric sort)", () => {
+  it("detect() returns false on macOS when the JetBrains base dir has no subdirs", () => {
     homedirOverride = tmpDir;
-    const base = macJbBase(tmpDir);
-    // 2025.2 > 2025.10 lexicographically, but 2025.10 > 2025.2 numerically.
-    fs.mkdirSync(path.join(base, "WebStorm2025.2"), { recursive: true });
-    fs.mkdirSync(path.join(base, "WebStorm2025.10"), { recursive: true });
-    fs.mkdirSync(path.join(base, "IntelliJIdea2024.3"), { recursive: true });
-
-    expect(adapter.globalPath()).toBe(
-      path.join(base, "WebStorm2025.10", "options", "mcp.json")
-    );
+    fs.mkdirSync(macJbBase(tmpDir), { recursive: true });
+    // A stray file must not be treated as an install signal.
+    fs.writeFileSync(path.join(macJbBase(tmpDir), ".DS_Store"), "");
+    expect(adapter.detect()).toBe(false);
   });
 
-  it("globalPath is not fooled by prefix collisions (PyCharm vs PyCharmCE)", () => {
-    homedirOverride = tmpDir;
-    const base = macJbBase(tmpDir);
-    fs.mkdirSync(path.join(base, "PyCharmCE2025.1"), { recursive: true });
-    fs.mkdirSync(path.join(base, "PyCharm2024.3"), { recursive: true });
-
-    // PyCharmCE2025.1 must be treated as PyCharmCE (not PyCharm with a CE2025.1
-    // version), and must win by numeric version.
-    expect(adapter.globalPath()).toBe(
-      path.join(base, "PyCharmCE2025.1", "options", "mcp.json")
-    );
-  });
-
-  it("globalPath ignores directories without a numeric version suffix", () => {
-    homedirOverride = tmpDir;
-    const base = macJbBase(tmpDir);
-    // Fleet on disk looks like "Fleet" (no version suffix) — must not match.
-    fs.mkdirSync(path.join(base, "Fleet"), { recursive: true });
-    // Also an unrelated dir that happens to share a prefix.
-    fs.mkdirSync(path.join(base, "PyCharmCustomPlugin"), { recursive: true });
-
-    expect(adapter.globalPath()).toBeNull();
-  });
-
-  it("globalPath returns null when no JetBrains config dirs exist", () => {
-    homedirOverride = tmpDir;
-    expect(adapter.globalPath()).toBeNull();
-  });
-
-  it("detect() ignores the JetBrains dir on non-macOS platforms", () => {
+  it("detect() ignores the JetBrains base dir on non-macOS platforms", () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     homedirOverride = tmpDir;
     fs.mkdirSync(path.join(macJbBase(tmpDir), "WebStorm2025.1"), { recursive: true });
 
     // No local .idea here (tmpDir is not cwd), so detect() must be false.
     expect(adapter.detect()).toBe(false);
-    expect(adapter.globalPath()).toBeNull();
   });
 });
 

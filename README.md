@@ -85,7 +85,7 @@ argent init
 | Zed         | `.zed/settings.json`                                          |
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
-| JetBrains   | `.idea/mcp.json` (project) or `~/Library/Application Support/JetBrains/<product>/options/mcp.json` (global, macOS) |
+| JetBrains   | `.idea/mcp.json`                                              |
 
 ## Privacy
 

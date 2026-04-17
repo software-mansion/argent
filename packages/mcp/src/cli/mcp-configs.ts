@@ -606,91 +606,23 @@ const codexAdapter: McpConfigAdapter = {
 
 // ── JetBrains adapter ───────────────────────────────────────────────────────
 // Format: { mcpServers: { argent: { command, args, env } } }
-// Project: .idea/mcp.json
-// Global (macOS only): ~/Library/Application Support/JetBrains/<product><version>/options/mcp.json
-
-/** JetBrains product directory prefixes (each has a version suffix like "2025.1"). */
-const JETBRAINS_PRODUCTS = [
-  "IntelliJIdea",
-  "WebStorm",
-  "PyCharm",
-  "PyCharmCE",
-  "GoLand",
-  "Rider",
-  "CLion",
-  "PhpStorm",
-  "RubyMine",
-  "DataGrip",
-  "RustRover",
-  "Aqua",
-  "DataSpell",
-  "Fleet",
-  "AndroidStudio",
-];
-
-interface JetbrainsProductDir {
-  path: string;
-  version: number[];
-}
-
-function jetbrainsBaseDir(): string | null {
-  if (process.platform !== "darwin") return null;
-  return path.join(homedir(), "Library", "Application Support", "JetBrains");
-}
-
-/**
- * A product directory name is a known product prefix followed immediately by
- * a version number (e.g. "IntelliJIdea2025.1"). The digit requirement prevents
- * collisions like "PyCharm" matching "PyCharmCE2025.1" or missing "2025.10".
- */
-function matchProductDir(name: string): JetbrainsProductDir | null {
-  for (const prefix of JETBRAINS_PRODUCTS) {
-    if (name.length <= prefix.length) continue;
-    if (!name.startsWith(prefix)) continue;
-    const next = name.charCodeAt(prefix.length);
-    if (next < 48 || next > 57) continue; // next char must be a digit
-    const version = name
-      .slice(prefix.length)
-      .split(".")
-      .map((s) => parseInt(s, 10));
-    return { path: name, version };
-  }
-  return null;
-}
-
-function compareVersions(a: number[], b: number[]): number {
-  const len = Math.max(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    const diff = (a[i] ?? 0) - (b[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
-function findJetbrainsProductDirs(): JetbrainsProductDir[] {
-  const base = jetbrainsBaseDir();
-  if (!base || !dirExists(base)) return [];
-  try {
-    const result: JetbrainsProductDir[] = [];
-    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const match = matchProductDir(entry.name);
-      if (!match) continue;
-      result.push({ path: path.join(base, entry.name), version: match.version });
-    }
-    return result;
-  } catch {
-    return [];
-  }
-}
+// Project only: .idea/mcp.json — shared by every IntelliJ-platform IDE
+// (IntelliJ, WebStorm, PyCharm, GoLand, Rider, CLion, PhpStorm, RubyMine,
+// DataGrip, RustRover, Aqua, DataSpell, Android Studio). Fleet is not supported.
 
 const jetbrainsAdapter: McpConfigAdapter = {
   name: "JetBrains",
 
   detect(): boolean {
-    return (
-      findJetbrainsProductDirs().length > 0 || dirExists(path.join(process.cwd(), ".idea"))
-    );
+    if (dirExists(path.join(process.cwd(), ".idea"))) return true;
+    if (process.platform !== "darwin") return false;
+    const base = path.join(homedir(), "Library", "Application Support", "JetBrains");
+    if (!dirExists(base)) return false;
+    try {
+      return fs.readdirSync(base, { withFileTypes: true }).some((e) => e.isDirectory());
+    } catch {
+      return false;
+    }
   },
 
   projectPath(root: string): string | null {
@@ -698,10 +630,7 @@ const jetbrainsAdapter: McpConfigAdapter = {
   },
 
   globalPath(): string | null {
-    const dirs = findJetbrainsProductDirs();
-    if (dirs.length === 0) return null;
-    const newest = dirs.reduce((a, b) => (compareVersions(a.version, b.version) >= 0 ? a : b));
-    return path.join(newest.path, "options", "mcp.json");
+    return null;
   },
 
   write(configPath: string, entry: McpServerEntry): void {
