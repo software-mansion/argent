@@ -118,12 +118,12 @@ export async function startMcpServer(): Promise<void> {
   }
 
   const server = new Server(
-    { name: "argent", version: "0.5.2" },
+    { name: "argent", version: "0.6.0" },
     {
       capabilities: { tools: {} },
       instructions:
         "Argent — iOS Simulator + Android Emulator control for interacting, testing, profiling and debugging mobile apps. " +
-        "Use `list-devices` to pick a target and `boot-device` to start it. Interaction tools (`gesture-tap`, `gesture-swipe`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`) accept a `udid` and auto-dispatch by the id's shape (UUID → iOS, anything else → Android adb serial). " +
+        "Use `list-devices` to pick a target and `boot-device` to start it. Interaction tools (`gesture-tap`, `gesture-swipe`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`) accept a `udid` and auto-dispatch by cross-referencing it against `xcrun simctl list` and `adb devices` — pass the id reported by `list-devices` and the tools resolve the platform for you. " +
         "Android-specific extras: `android-stop-app`, `android-logcat`. iOS-specific extras: `stop-simulator-server`, `stop-all-simulator-servers`, native-devtools suite, iOS Instruments profiler. " +
         "Always use `describe` / `debugger-component-tree` / `screenshot` before tapping — never guess coordinates. " +
         "On session end: call `stop-all-simulator-servers` for iOS and kill the Android emulator via its UI or `adb -s <serial> emu kill`. " +

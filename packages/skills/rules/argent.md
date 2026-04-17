@@ -80,7 +80,7 @@ source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding. Always use subagents if available to run `gather-workspace-data` data tool, if possible do not run yourself.
 
-When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery — if the responses are large or unhelpful, fall back to `describe` (iOS) or `android-describe-screen` (Android).
+When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery — if the responses are large or unhelpful, fall back to `describe` (auto-dispatches to iOS AX-service or Android uiautomator by device id).
 </react_native_detection>
 
 <skill_routing>

@@ -21,7 +21,9 @@ const zodSchema = z.object({
   priority: z
     .enum(["V", "D", "I", "W", "E", "F"])
     .optional()
-    .describe("Minimum log priority. V=verbose D=debug I=info W=warn E=error F=fatal. Default: I."),
+    .describe(
+      "Minimum log priority. V=verbose D=debug I=info W=warn E=error F=fatal. If omitted, logcat's own default (V) is used."
+    ),
   lines: z
     .number()
     .int()
