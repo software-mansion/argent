@@ -90,13 +90,35 @@ export function parseAdbDevices(stdout: string): Array<{ serial: string; state: 
 }
 
 /**
- * List all Android devices + emulators known to adb.
- * `adb devices` alone returns just serial+state; this helper enriches each entry
- * with model + AVD name + SDK level via targeted getprop calls.
+ * Light-weight listing used by `classifyDevice` and anywhere else that only
+ * needs to know which serials exist. Skips the per-device getprop round-trips
+ * so a cold classify is one `adb devices` call, not 1 + 3N shell-outs.
+ */
+export async function listAndroidSerials(): Promise<Array<{ serial: string; state: string }>> {
+  const { stdout } = await runAdb(["devices"]);
+  return parseAdbDevices(stdout);
+}
+
+/**
+ * Resolve the AVD name of a running emulator. The property moved from
+ * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` in emulator release 30
+ * (Android 11+); we probe the newer one first and fall back to the legacy
+ * name so both old and new images work.
+ */
+async function readAvdName(serial: string): Promise<string | null> {
+  const modern = await adbShell(serial, "getprop ro.boot.qemu.avd_name").catch(() => "");
+  if (modern.trim()) return modern.trim();
+  const legacy = await adbShell(serial, "getprop ro.kernel.qemu.avd_name").catch(() => "");
+  return legacy.trim() || null;
+}
+
+/**
+ * List all Android devices + emulators known to adb, enriched with model,
+ * AVD name, and SDK level via `getprop`. Use `listAndroidSerials` when you
+ * only need the state-scoped serial list — it avoids the extra round-trips.
  */
 export async function listAndroidDevices(): Promise<AndroidDevice[]> {
-  const { stdout } = await runAdb(["devices"]);
-  const basic = parseAdbDevices(stdout);
+  const basic = await listAndroidSerials();
 
   const enriched = await Promise.all(
     basic.map(async (d): Promise<AndroidDevice> => {
@@ -113,8 +135,7 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
       const [model, sdk, avd] = await Promise.all([
         adbShell(d.serial, "getprop ro.product.model").catch(() => ""),
         adbShell(d.serial, "getprop ro.build.version.sdk").catch(() => ""),
-        // Emulator-only; returns empty on physical devices
-        adbShell(d.serial, "getprop ro.kernel.qemu.avd_name").catch(() => ""),
+        readAvdName(d.serial),
       ]);
       const sdkLevel = parseInt(sdk.trim(), 10);
       return {
@@ -122,7 +143,7 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
         state: d.state,
         isEmulator: d.serial.startsWith("emulator-"),
         model: model.trim() || null,
-        avdName: avd.trim() || null,
+        avdName: avd,
         sdkLevel: Number.isFinite(sdkLevel) ? sdkLevel : null,
       };
     })
@@ -135,9 +156,17 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
  * daemon connection; `sys.boot_completed=1` is the Android-canonical "fully booted"
  * signal that package manager + activity manager are ready to receive commands.
  */
-export async function waitForBootCompleted(serial: string, timeoutMs = 120_000): Promise<void> {
+export async function waitForBootCompleted(
+  serial: string,
+  timeoutMs = 120_000,
+  options: { shouldAbort?: () => Error | null } = {}
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // Surface emulator-crash errors immediately rather than blocking for the
+    // full boot budget after the underlying process is already dead.
+    const abortError = options.shouldAbort?.();
+    if (abortError) throw abortError;
     try {
       const out = await adbShell(serial, "getprop sys.boot_completed", { timeoutMs: 3_000 });
       if (out.trim() === "1") return;
@@ -153,6 +182,14 @@ export interface AvdInfo {
   name: string;
 }
 
+// AVD names created by `avdmanager create avd` / Android Studio are limited
+// to letters, digits, `.`, `_`, and `-` (no whitespace, no path separators).
+// The emulator binary also prints diagnostics like `INFO    | ...` and
+// `HAX is working and emulator runs in fast virt mode.` on the same stream;
+// matching valid-AVD-shape accepts real names while rejecting those lines
+// even if they happen to start with INFO or HAX.
+const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 /** List available AVDs via `emulator -list-avds`. Returns [] if emulator binary is unavailable. */
 export async function listAvds(): Promise<AvdInfo[]> {
   try {
@@ -160,7 +197,7 @@ export async function listAvds(): Promise<AvdInfo[]> {
     return stdout
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => l && !l.startsWith("INFO") && !l.startsWith("HAX"))
+      .filter((l) => l && AVD_NAME_PATTERN.test(l))
       .map((name) => ({ name }));
   } catch {
     return [];

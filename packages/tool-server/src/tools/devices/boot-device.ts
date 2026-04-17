@@ -129,7 +129,7 @@ async function bootAndroid(params: {
 }> {
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
-  // Stage 0: validate AVD exists
+  // Stage 0: validate AVD exists.
   const avds = await listAvds();
   if (avds.length === 0) {
     throw new Error(
@@ -142,9 +142,26 @@ async function bootAndroid(params: {
     );
   }
 
+  // Stage 0b: verify adb is on PATH *before* spawning the emulator, so we
+  // don't orphan a detached emulator process just to later throw "adb missing".
+  try {
+    await runAdb(["version"], { timeoutMs: 5_000 });
+  } catch (err) {
+    throw new Error(
+      `\`adb\` is not available on PATH (${
+        err instanceof Error ? err.message : String(err)
+      }). Install Android SDK Platform Tools before booting an emulator.`
+    );
+  }
+
+  // Ensure the adb daemon is running BEFORE we snapshot the serial list.
+  // If the daemon was down, `adb devices` returns [] — without this the
+  // snapshot is empty and every currently-connected emulator later looks
+  // "new", so the tool could hand back an unrelated emulator as "booted".
+  await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
   const serialsBefore = new Set((await listAndroidDevices().catch(() => [])).map((d) => d.serial));
 
-  // Stage 1: spawn emulator
+  // Stage 1: spawn emulator.
   const emulatorArgs = ["-avd", params.avdName];
   if (params.coldBoot) emulatorArgs.push("-no-snapshot-load");
   if (params.noWindow) emulatorArgs.push("-no-window");
@@ -166,9 +183,7 @@ async function bootAndroid(params: {
     }
   });
 
-  await runAdb(["start-server"], { timeoutMs: 10_000 }).catch(() => {});
-
-  // Stage 2: wait for adb to see the new emulator
+  // Stage 2: wait for adb to see the new emulator.
   let serial: string | null = null;
   const adbDeadline = Math.min(overallDeadline, Date.now() + STAGE_BUDGET.adbRegister);
   while (Date.now() < adbDeadline) {
@@ -188,6 +203,7 @@ async function bootAndroid(params: {
     await new Promise((r) => setTimeout(r, 1_000));
   }
   if (!serial) {
+    if (earlyExitError) throw earlyExitError;
     await killEmulatorQuietly(null);
     throw new Error(
       `Emulator "${params.avdName}" did not register within ${STAGE_BUDGET.adbRegister / 1000}s. ` +
@@ -195,27 +211,35 @@ async function bootAndroid(params: {
     );
   }
 
-  // Stage 3: wait-for-device (tcp socket up)
+  // Stage 3: wait-for-device (tcp socket up). Race against earlyExitError so
+  // an emulator crash here is surfaced immediately instead of blocking for
+  // the full 180 s budget and then throwing a generic timeout.
   try {
-    await runAdb(["-s", serial, "wait-for-device"], {
-      timeoutMs: Math.min(STAGE_BUDGET.deviceReady, Math.max(1_000, overallDeadline - Date.now())),
-    });
+    await Promise.race([
+      runAdb(["-s", serial, "wait-for-device"], {
+        timeoutMs: Math.min(
+          STAGE_BUDGET.deviceReady,
+          Math.max(1_000, overallDeadline - Date.now())
+        ),
+      }),
+      waitForEarlyExit(() => earlyExitError),
+    ]);
   } catch (err) {
     await killEmulatorQuietly(serial);
-    throw new Error(
-      `adb wait-for-device failed for ${serial}: ${
-        err instanceof Error ? err.message : String(err)
-      }. Emulator has been terminated; retry in a moment.`
-    );
+    throw err instanceof Error
+      ? err
+      : new Error(`adb wait-for-device failed for ${serial}: ${String(err)}.`);
   }
 
-  // Stage 4: sys.boot_completed = 1
+  // Stage 4: sys.boot_completed = 1.
   const bootBudget = Math.max(
     10_000,
     Math.min(STAGE_BUDGET.bootCompleted, overallDeadline - Date.now())
   );
   try {
-    await waitForBootCompleted(serial, bootBudget);
+    await waitForBootCompleted(serial, bootBudget, {
+      shouldAbort: () => earlyExitError,
+    });
   } catch (err) {
     await killEmulatorQuietly(serial);
     throw new Error(
@@ -245,6 +269,25 @@ async function bootAndroid(params: {
     booted: true,
     coldBoot: params.coldBoot,
   };
+}
+
+/**
+ * Poll an exit-state getter and reject as soon as it returns non-null.
+ * Used to race against a blocking adb call so a detached-emulator crash
+ * surfaces as its specific error instead of a generic adb timeout.
+ */
+function waitForEarlyExit(getExit: () => Error | null): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const tick = () => {
+      const err = getExit();
+      if (err) {
+        reject(err);
+        return;
+      }
+      setTimeout(tick, 500);
+    };
+    setTimeout(tick, 500);
+  });
 }
 
 export function createBootDeviceTool(
