@@ -149,7 +149,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Text to type character by character via USB HID keycodes through simulator-server. Handles uppercase and common punctuation. Use when paste is unreliable."
+      "Text to type character by character. Handles uppercase and common punctuation. Use when paste is unreliable or unsupported by the focused field."
     ),
   key: z
     .string()
@@ -165,13 +165,11 @@ export const keyboardTool: ToolDefinition<
   { typed: string; keys: number }
 > = {
   id: "keyboard",
-  description: `Type text or press special keys on iOS or Android using keyboard events.
-Uses USB HID keycodes routed through simulator-server; the binary maps them to each platform's native key events internally.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
-Returns { typed: string, keys: number }. Fails on unsupported key names or if the simulator server cannot start.
-- text: types a string character by character (supports uppercase, digits, common punctuation)
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
-Provide text, key, or both.`,
+  description: `Type text or press a named key on the focused input.
+Use when you need to enter text or trigger a named key such as enter, escape, or an arrow.
+- text: types a string character by character (supports uppercase, digits, common punctuation).
+- key: presses one named key (enter, escape, backspace, tab, space, arrow-up/down/left/right, f1–f12).
+Provide text, key, or both. Returns { typed, keys }. Fails on unsupported key names.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

@@ -15,17 +15,12 @@ import { getAndroidScreenSize } from "../../utils/android-screen";
 import { parseUiAutomatorDump } from "../../utils/uiautomator-parser";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Device id. For iOS: simulator UDID (UUID shape). For Android: adb serial (e.g. `emulator-5554`)."
-    ),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
     .optional()
     .describe(
-      "iOS-only: target hint when AX-service returns nothing and the tool falls back to native-devtools inspection. " +
-        "If omitted, falls back to the frontmost connected app. Ignored on Android."
+      "iOS-only: target hint for the fallback app-level inspection when the top-level describe returns nothing. If omitted, the frontmost connected app is used. Ignored on Android."
     ),
 });
 
@@ -56,14 +51,11 @@ export function createDescribeTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, DescribeResult> {
   return {
     id: "describe",
-    description: `Get the UI hierarchy for the current screen on iOS or Android.
-
-iOS: accessibility element tree from AXRuntime. Returns dialog elements when a system modal is visible, otherwise the foreground app's accessible tree. Falls back to native-devtools inspection if AX is empty.
-Android: uiautomator dump parsed into the same DescribeNode shape. Uses \`resource-id\` as identifier, \`content-desc\`/\`text\` as label.
-
-Both return frame coordinates normalized to [0,1] — same coord space as gesture-tap. Use frame.x + frame.width/2 as tap X, frame.y + frame.height/2 as tap Y.
-
-For React Native apps on either platform, \`debugger-component-tree\` returns richer component data (requires Metro connection; on Android also requires \`adb reverse tcp:8081 tcp:8081\`).`,
+    description: `Get the current screen's UI hierarchy as a tree of elements with roles, labels, identifiers, values, and frame coordinates.
+Returns dialog elements when a system modal is visible, otherwise the foreground app's elements.
+Frame coordinates are normalized to [0,1] — same space as gesture-tap. Use frame.x + frame.width/2 as tap X, frame.y + frame.height/2 as tap Y.
+For React Native apps, prefer \`debugger-component-tree\` when a Metro debugger connection is available — it returns richer component-level data.
+Call before every tap — never guess coordinates from a screenshot.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, _options) {

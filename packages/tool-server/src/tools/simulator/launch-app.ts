@@ -10,22 +10,17 @@ import { adbShell } from "../../utils/adb";
 const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Device id. For iOS: simulator UDID (UUID shape). For Android: adb serial (e.g. `emulator-5554`)."
-    ),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
     .describe(
-      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name (e.g. com.android.settings) — the `applicationId` from build.gradle."
+      "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings)."
     ),
   activity: z
     .string()
     .optional()
     .describe(
-      "Android-only: optional fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). " +
-        "If omitted on Android, the default launcher activity is used via `monkey`. Ignored on iOS."
+      "Android-only: fully-qualified Activity name (e.g. `.MainActivity` or `com.example/com.example.MainActivity`). If omitted on Android, the app's default launcher activity is used. Ignored on iOS."
     ),
 });
 
@@ -34,12 +29,9 @@ export const launchAppTool: ToolDefinition<
   { launched: boolean; bundleId: string }
 > = {
   id: "launch-app",
-  description: `Open an app by bundle id (iOS) or package name (Android). Prefer this over tapping home-screen / launcher icons.
-
-iOS: uses \`xcrun simctl launch\`; prepares native-devtools launch injection before the app starts.
-Android: uses \`am start -n <pkg>/<activity>\` when \`activity\` is provided, otherwise sends a LAUNCHER intent via \`monkey\`.
-
-Returns { launched, bundleId }. Fails if the app is not installed on the device.
+  description: `Open an app by its bundle id (iOS) or package name (Android).
+Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection on iOS before the app starts.
+Returns { launched, bundleId }. Fails if the app is not installed on the target device.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.camera, com.apple.Photos, com.apple.mobilemail, com.apple.mobilenotes, com.apple.MobileAddressBook
 Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,

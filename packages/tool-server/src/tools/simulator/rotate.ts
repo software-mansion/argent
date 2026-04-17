@@ -4,11 +4,7 @@ import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 import { sendCommand } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Device id. iOS: simulator UDID (UUID shape). Android: adb serial (e.g. `emulator-5554`)."
-    ),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   orientation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .describe("Target orientation"),
@@ -16,7 +12,9 @@ const zodSchema = z.object({
 
 export const rotateTool: ToolDefinition<z.infer<typeof zodSchema>, { orientation: string }> = {
   id: "rotate",
-  description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown. Works on iOS and Android via simulator-server. Re-run \`describe\` afterwards — frame coordinates change. Returns { orientation }. Fails if the simulator server cannot start.`,
+  description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
+Use to test layout in a different orientation. Re-run \`describe\` afterwards — frame coordinates change with the orientation.
+Returns { orientation }. Fails if the target device is not booted.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

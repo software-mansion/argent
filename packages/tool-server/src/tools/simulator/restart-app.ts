@@ -10,11 +10,7 @@ import { adbShell } from "../../utils/adb";
 const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Device id. For iOS: simulator UDID (UUID shape). For Android: adb serial (e.g. `emulator-5554`)."
-    ),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z.string().describe("App identifier. iOS: bundle id. Android: package name."),
 });
 
@@ -23,10 +19,9 @@ export const restartAppTool: ToolDefinition<
   { restarted: boolean; bundleId: string }
 > = {
   id: "restart-app",
-  description: `Restart an app by terminating then relaunching it.
-iOS: \`xcrun simctl terminate\` + launch; refreshes native-devtools injection.
-Android: \`am force-stop\` + \`monkey\` launcher intent.
-Use when you need a clean in-memory state without a full reinstall. Returns { restarted, bundleId }. Fails if the app is not installed.`,
+  description: `Terminate then relaunch an app by bundle id / package name.
+Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection on iOS before the relaunch.
+Returns { restarted, bundleId }. Fails if the app is not installed.`,
   zodSchema,
   services: (params): Record<string, ServiceRef> =>
     detectPlatform(params.udid) === "ios"

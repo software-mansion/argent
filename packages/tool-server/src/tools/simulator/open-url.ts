@@ -8,15 +8,11 @@ import { adbShell } from "../../utils/adb";
 const execFileAsync = promisify(execFile);
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe(
-      "Device id. For iOS: simulator UDID (UUID shape). For Android: adb serial (e.g. `emulator-5554`)."
-    ),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   url: z
     .string()
     .describe(
-      "URL or scheme to open (e.g. https://example.com, messages://, tel://555, geo:37.0,-122.0)."
+      "URL or scheme to open (e.g. https://example.com, messages://, tel:555, geo:37.0,-122.0)."
     ),
 });
 
@@ -25,10 +21,9 @@ export const openUrlTool: ToolDefinition<
   { opened: boolean; url: string }
 > = {
   id: "open-url",
-  description: `Open a URL or URL scheme on iOS or Android.
-iOS: \`xcrun simctl openurl\`.
-Android: \`am start -a android.intent.action.VIEW -d <url>\`.
-Common schemes work on both: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android: geo:, plus any app-specific deep link.
+  description: `Open a URL or URL scheme on the device.
+Use to navigate to a web page or deep-link into an app.
+Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings://, maps://. Android also: geo:, plus any app-specific deep link.
 Returns { opened, url }. Fails if no app is registered to handle the URI.`,
   zodSchema,
   services: () => ({}),

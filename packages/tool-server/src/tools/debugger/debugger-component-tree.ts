@@ -519,7 +519,7 @@ Only shows on-screen components with unique positions — off-screen (scrolled) 
 full-screen transparent wrappers, and implementation-detail components are pruned.
 
 Each visible component is listed with its name, text content, and normalized
-tap coordinates in [0,1] space (fractions of the screen, not pixels—same space as tap/swipe/gesture and simulator-server touch).
+tap coordinates in [0,1] space (fractions of the screen, not pixels — same space as tap/swipe/gesture).
 
 This is the preferred element discovery tool for React Native apps. More information in react-native-app-workflow skill.
 

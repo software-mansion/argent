@@ -83,8 +83,8 @@ describe("shouldAutoScreenshot", () => {
   });
 
   it("returns false for excluded tools", () => {
-    expect(shouldAutoScreenshot("list-simulators")).toBe(false);
-    expect(shouldAutoScreenshot("boot-simulator")).toBe(false);
+    expect(shouldAutoScreenshot("list-devices")).toBe(false);
+    expect(shouldAutoScreenshot("boot-device")).toBe(false);
     expect(shouldAutoScreenshot("simulator-server")).toBe(false);
     expect(shouldAutoScreenshot("activate-sso")).toBe(false);
   });
