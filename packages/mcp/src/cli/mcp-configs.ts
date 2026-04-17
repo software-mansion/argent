@@ -14,8 +14,8 @@ import {
   dirExists,
   readToml,
   writeToml,
-  readYamlDocument,
-  writeYamlDocument,
+  readYaml,
+  writeYaml,
 } from "./utils.js";
 import { isMap } from "yaml";
 
@@ -638,7 +638,7 @@ const hermesAdapter: McpConfigAdapter = {
   },
 
   write(configPath: string, entry: McpServerEntry): void {
-    const doc = readYamlDocument(configPath);
+    const doc = readYaml(configPath);
     const existing = doc.get("mcp_servers");
     if (existing != null && !isMap(existing)) {
       throw new Error(`mcp_servers in ${configPath} is not a YAML mapping`);
@@ -652,12 +652,12 @@ const hermesAdapter: McpConfigAdapter = {
       args: entry.args,
       env: entry.env,
     });
-    writeYamlDocument(configPath, doc);
+    writeYaml(configPath, doc);
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const doc = readYamlDocument(configPath);
+    const doc = readYaml(configPath);
     const servers = doc.get("mcp_servers");
     if (!isMap(servers)) return false;
     if (!servers.has(MCP_SERVER_KEY)) return false;
@@ -665,7 +665,7 @@ const hermesAdapter: McpConfigAdapter = {
     if (servers.items.length === 0) {
       doc.delete("mcp_servers");
     }
-    writeYamlDocument(configPath, doc);
+    writeYaml(configPath, doc);
     return true;
   },
 };
