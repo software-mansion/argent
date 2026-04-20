@@ -40,6 +40,7 @@ import {
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
+  isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
   resolveProjectRoot,
@@ -299,6 +300,41 @@ describe("bundled paths", () => {
 
   it("AGENTS_DIR is a string ending with agents", () => {
     expect(AGENTS_DIR).toMatch(/agents$/);
+  });
+});
+
+// ── isNewerVersion ───────────────────────────────────────────────────────────
+
+describe("isNewerVersion", () => {
+  it("returns true when candidate is a higher patch", () => {
+    expect(isNewerVersion("0.5.3", "0.5.2")).toBe(true);
+  });
+
+  it("returns true when candidate is a higher minor", () => {
+    expect(isNewerVersion("0.6.0", "0.5.9")).toBe(true);
+  });
+
+  it("returns true when candidate is a higher major", () => {
+    expect(isNewerVersion("1.0.0", "0.9.9")).toBe(true);
+  });
+
+  it("returns false when versions are equal", () => {
+    expect(isNewerVersion("0.5.3", "0.5.3")).toBe(false);
+  });
+
+  it("returns false when candidate is older — the bug fix", () => {
+    // Before the fix init.ts used `latest !== version`, which prompted a
+    // "downgrade" when running a local prerelease newer than npm's latest.
+    expect(isNewerVersion("0.5.2", "0.5.3")).toBe(false);
+  });
+
+  it("treats a prerelease as older than the matching release", () => {
+    expect(isNewerVersion("0.5.3-alpha.1", "0.5.3")).toBe(false);
+    expect(isNewerVersion("0.5.3", "0.5.3-alpha.1")).toBe(true);
+  });
+
+  it("still allows upgrades from a prerelease to a newer release", () => {
+    expect(isNewerVersion("0.5.4", "0.5.4-beta.0")).toBe(true);
   });
 });
 
