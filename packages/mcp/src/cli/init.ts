@@ -16,6 +16,7 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
   detectPackageManager,
@@ -159,7 +160,7 @@ export async function init(args: string[]): Promise<void> {
     }
     spinner.stop(pc.dim("Version check complete."));
 
-    if (latest && latest !== version) {
+    if (latest && isNewerVersion(latest, version)) {
       if (!nonInteractive) {
         const updateChoice = await p.select({
           message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,

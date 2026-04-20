@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
 import { execSync } from "node:child_process";
+import semver from "semver";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { Document, parseDocument } from "yaml";
@@ -161,6 +162,14 @@ export function getLatestVersion(): string {
     timeout: PROBE_TIMEOUT_MS,
   });
   return result.trim();
+}
+
+// Returns true only when `candidate` is a strictly newer semver than
+// `current`. Unparseable versions never report as newer, so a local
+// prerelease build with a non-semver tag does not trigger a downgrade prompt.
+export function isNewerVersion(candidate: string, current: string): boolean {
+  if (!semver.valid(candidate) || !semver.valid(current)) return false;
+  return semver.gt(candidate, current);
 }
 
 export function isSkillsCliAvailable(): boolean {
