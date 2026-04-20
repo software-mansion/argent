@@ -118,7 +118,7 @@ export async function startMcpServer(): Promise<void> {
   }
 
   const server = new Server(
-    { name: "argent", version: "0.5.2" },
+    { name: "argent", version: "0.5.3" },
     {
       capabilities: { tools: {} },
       instructions:
