@@ -4,7 +4,11 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Target device id (logicalDeviceId from debugger-connect, equivalent to udid from list-devices)."
+    ),
 });
 
 export const debuggerStatusTool: ToolDefinition<

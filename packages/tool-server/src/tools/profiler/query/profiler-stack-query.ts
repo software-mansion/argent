@@ -11,7 +11,11 @@ import {
 } from "../../../utils/ios-profiler/pipeline/02-aggregate";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z
+    .string()
+    .describe(
+      "Target device id (udid from list-devices / logicalDeviceId from debugger-connect). Currently iOS-only — reads native-profiler (xctrace) data; the Android native-profiler backend is not implemented yet."
+    ),
   mode: z
     .enum(["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"])
     .describe(

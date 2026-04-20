@@ -22,7 +22,11 @@ const timeWindowSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Target device id (logicalDeviceId from debugger-connect, equivalent to udid from list-devices). React-profiler data is cached per device, so this must match the id used at react-profiler-start."
+    ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
     .describe(

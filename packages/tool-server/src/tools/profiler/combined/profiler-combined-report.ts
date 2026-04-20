@@ -20,7 +20,11 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z
+    .string()
+    .describe(
+      "Target device id (udid from list-devices / logicalDeviceId from debugger-connect). Currently iOS-only — combines native-profiler (xctrace) with react-profiler data; the Android native-profiler backend is not implemented yet."
+    ),
 });
 
 interface HangCommitCorrelation {
