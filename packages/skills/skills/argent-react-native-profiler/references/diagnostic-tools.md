@@ -89,6 +89,6 @@ Call `profiler-load`. Modes:
 
 - `list` — show all saved profiling sessions (React + iOS) in `/tmp/argent-profiler-cwd/`.
 - `load_react` — reload a React profiler session by `session_id` + `device_id`. Populates the `port:device_id`-keyed in-memory cache for `profiler-cpu-query` and `profiler-commit-query` (which must be called with the same `device_id` afterward).
-- `load_instruments` — re-parse iOS Instruments XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
+- `load_native` — re-parse native profiler XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
 
 Use this to revisit an earlier profiling session without re-profiling. Each `react-profiler-analyze` run saves raw data with a unique timestamp.

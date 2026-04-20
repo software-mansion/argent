@@ -128,7 +128,7 @@ If you profiled multiple scenarios and need to revisit earlier data:
 
 1. Call `profiler-load` mode=`list` to see all saved sessions with timestamps (the list now also shows Runtime / Device / Metro bundle columns to help identify the right session).
 2. Call `profiler-load` mode=`load_react` session_id=`<timestamp>` device_id=`<UDID>` to reload React data. `device_id` scopes the reload into the `port:device_id` cache slot.
-3. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to reload iOS data.
+3. Call `profiler-load` mode=`load_native` session_id=`<timestamp>` device_id=`<UDID>` to reload native profiler data.
 4. Query tools now operate on the reloaded session data — **pass the same `device_id` you loaded with**, otherwise they will miss the cache.
 
 This is useful for before/after comparisons: profile, fix, re-profile, then reload the original session to compare metrics side by side.

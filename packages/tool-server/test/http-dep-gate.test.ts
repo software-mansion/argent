@@ -122,4 +122,29 @@ describe("http dependency gate", () => {
     expect(err.message).toBe("install Xcode");
     expect(err.missing).toEqual(["xcrun"]);
   });
+
+  it("still returns 424 when the DependencyMissingError is buried two levels deep in the cause chain", async () => {
+    // The registry wraps execute() errors in ToolExecutionError with `cause`.
+    // If a future middleware adds a second wrap (or something else does), a
+    // naive one-level `.cause` check regresses 424 → 500. Walk the chain.
+    stubProbe([]);
+    const registry = new Registry();
+    registry.registerTool({
+      id: "double-wrap",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        const inner = new DependencyMissingError(["adb"], "install adb please");
+        const middle = new Error("outer wrap") as Error & { cause?: unknown };
+        middle.cause = inner;
+        const outer = new Error("tool failed") as Error & { cause?: unknown };
+        outer.cause = middle;
+        throw outer;
+      },
+    });
+    const { app } = createHttpApp(registry);
+    const res = await request(app).post("/tools/double-wrap").send({});
+    expect(res.status).toBe(424);
+    expect(res.body.error).toBe("install adb please");
+  });
 });

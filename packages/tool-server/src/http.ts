@@ -9,6 +9,16 @@ import { buildUpdateNote } from "./update-utils";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
+function findDependencyMissing(err: unknown): DependencyMissingError | null {
+  let current: unknown = err;
+  // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    if (current instanceof DependencyMissingError) return current;
+    current = current.cause;
+  }
+  return null;
+}
+
 // ── HTTP app ────────────────────────────────────────────────────────
 
 export interface HttpAppOptions {
@@ -146,11 +156,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // A DependencyMissingError thrown from inside a cross-platform tool's
         // execute (i.e. post-`classifyDevice` `ensureDep` call) is the same
         // missing-host-binary condition as the pre-flight check, so surface
-        // the same 424 status and pretty message.
-        const cause = err instanceof Error ? err.cause : undefined;
-        if (err instanceof DependencyMissingError || cause instanceof DependencyMissingError) {
-          const depErr =
-            err instanceof DependencyMissingError ? err : (cause as DependencyMissingError);
+        // the same 424 status and pretty message. Walk the full cause chain
+        // so a double-wrap (registry ToolExecutionError → future middleware)
+        // still maps to 424 instead of silently regressing to a generic 500.
+        const depErr = findDependencyMissing(err);
+        if (depErr) {
           res.status(424).json({ error: depErr.message });
           return;
         }
