@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as dns from "node:dns";
 import { execSync } from "node:child_process";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -152,11 +153,44 @@ export function getInstalledVersion(): string | null {
   }
 }
 
+const PROBE_TIMEOUT_MS = 3_000;
+
 export function getLatestVersion(): string {
   const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
     encoding: "utf8",
+    timeout: PROBE_TIMEOUT_MS,
   });
   return result.trim();
+}
+
+export function isSkillsCliAvailable(): boolean {
+  try {
+    execSync("npx --no-install skills --version", {
+      stdio: ["ignore", "ignore", "ignore"],
+      timeout: PROBE_TIMEOUT_MS,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+  let host: string;
+  try {
+    host = new URL(NPM_REGISTRY).hostname;
+  } catch {
+    return false;
+  }
+
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref();
+    dns.lookup(host, (err) => {
+      clearTimeout(timer);
+      resolve(!err);
+    });
+  });
 }
 
 // ── Package manager detection ─────────────────────────────────────────────────

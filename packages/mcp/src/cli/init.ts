@@ -16,6 +16,8 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  isOnline,
+  isSkillsCliAvailable,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
@@ -419,7 +421,20 @@ export async function init(args: string[]): Promise<void> {
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
 
-  if (nonInteractive) {
+  const online = await isOnline();
+  const offlineWithCache = !online && isSkillsCliAvailable();
+  const skillsCliReady = online || offlineWithCache;
+
+  if (!skillsCliReady) {
+    p.log.warn(
+      pc.yellow("You appear to be offline. ") +
+        "Automatic skills installation requires a network connection."
+    );
+  }
+
+  if (!skillsCliReady) {
+    skillsMethod = "manual";
+  } else if (nonInteractive) {
     skillsMethod = "default";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
@@ -483,7 +498,9 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(skillsArgs.join(" "))}`);
+    const npxArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
+
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -492,7 +509,7 @@ export async function init(args: string[]): Promise<void> {
 
     try {
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(skillsArgs, skillsMethod === "interactive", skillsCwd);
+      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
