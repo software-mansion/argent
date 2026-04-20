@@ -45,10 +45,10 @@ import { reactProfilerComponentSourceTool } from "../tools/profiler/react/react-
 import { reactProfilerCpuSummaryTool } from "../tools/profiler/react/react-profiler-cpu-summary";
 import { reactProfilerRendersTool } from "../tools/profiler/react/react-profiler-renders";
 import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profiler-fiber-tree";
-import { iosInstrumentsStartTool } from "../tools/profiler/ios-profiler/ios-profiler-start";
-import { iosInstrumentsStopTool } from "../tools/profiler/ios-profiler/ios-profiler-stop";
-import { iosInstrumentsAnalyzeTool } from "../tools/profiler/ios-profiler/ios-profiler-analyze";
-import { iosInstrumentsSessionBlueprint } from "../blueprints/ios-profiler-session";
+import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
+import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
+import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
+import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
@@ -76,7 +76,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
-  registry.registerBlueprint(iosInstrumentsSessionBlueprint);
+  registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
@@ -113,9 +113,9 @@ export function createRegistry(): Registry {
   registry.registerTool(reactProfilerCpuSummaryTool);
   registry.registerTool(reactProfilerRendersTool);
   registry.registerTool(reactProfilerFiberTreeTool);
-  registry.registerTool(iosInstrumentsStartTool);
-  registry.registerTool(iosInstrumentsStopTool);
-  registry.registerTool(iosInstrumentsAnalyzeTool);
+  registry.registerTool(nativeProfilerStartTool);
+  registry.registerTool(nativeProfilerStopTool);
+  registry.registerTool(nativeProfilerAnalyzeTool);
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);

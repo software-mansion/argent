@@ -1,23 +1,30 @@
 ---
-name: argent-ios-profiler
-description: Native iOS profiling for CPU hotspots, UI hangs, and memory leaks via xctrace. Use when diagnosing native-level performance issues on iOS simulators or devices.
+name: argent-native-profiler
+description: Native profiling for CPU hotspots, UI hangs, and memory leaks. Currently iOS-only (xctrace-backed); Android support (Perfetto/simpleperf) is on the roadmap. Use when diagnosing native-level performance issues.
 ---
 
 ## 1. Tool Overview
 
-| Tool                   | Purpose                                                                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `ios-profiler-start`   | Start xctrace recording on a booted simulator or device. Captures CPU, hangs, and leaks. Optional: `app_process`, `template_path`. |
-| `ios-profiler-stop`    | Stop xctrace, export trace data to XML files (timestamped, persist on disk).                                                       |
-| `ios-profiler-analyze` | Parse exported XML and return structured bottleneck payload (CPU hotspots, UI hangs, leaks).                                       |
-| `profiler-stack-query` | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.                                             |
-| `profiler-load`        | List and reload previous trace sessions from disk for re-investigation.                                                            |
+| Tool                      | Purpose                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `native-profiler-start`   | Start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks. Optional: `app_process`, `template_path`. |
+| `native-profiler-stop`    | Stop the profiler and export trace data to XML files (timestamped, persist on disk).                                           |
+| `native-profiler-analyze` | Parse exported trace data and return structured bottleneck payload (CPU hotspots, UI hangs, leaks).                            |
+| `profiler-stack-query`    | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.                                         |
+| `profiler-load`           | List and reload previous trace sessions from disk for re-investigation.                                                        |
 
 ---
 
-## 2. Investigation Patterns
+## 2. Platform Support
 
-After `ios-profiler-analyze` surfaces findings, use `profiler-stack-query` to drill into root causes:
+- **iOS**: Fully supported. Backend: Xcode Instruments via `xctrace` on a booted simulator or connected device. Requires Xcode command-line tools on PATH.
+- **Android**: Not yet implemented. An Android backend (Perfetto or simpleperf via `adb`) is planned; today `native-profiler-start` rejects Android serials with a clear "iOS-only for now" error.
+
+---
+
+## 3. Investigation Patterns
+
+After `native-profiler-analyze` surfaces findings, use `profiler-stack-query` to drill into root causes:
 
 - **Hang detected** → `profiler-stack-query` mode=`hang_stacks` for full native call chains → mode=`function_callers` for the suspected function → read native source.
 - **CPU hotspot** → `profiler-stack-query` mode=`thread_breakdown` for per-thread distribution → mode=`function_callers` for the dominant function.
@@ -27,20 +34,20 @@ After presenting findings, ask the user whether to investigate further, implemen
 
 **Tip:** For reproducible before/after comparisons, record the interaction sequence as a flow using the `argent-create-flow` skill before the first profiling run. Replay with `flow-execute` on subsequent runs to eliminate interaction variance.
 
-> **Note:** The `argent-react-native-profiler` instructs to start iOS profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
+> **Note:** The `argent-react-native-profiler` instructs to start native profiling automatically alongside React profiling. This skill's workflow and investigation patterns apply in both cases.
 
 ---
 
-## 3. Workflow
+## 4. Workflow
 
 **Complete all steps in order — do not break mid-flow.**
 
 ### Step 0: Ensure the target app is running
 
-The `ios-profiler-start` tool **auto-detects** the running app on the simulator.
+The `native-profiler-start` tool **auto-detects** the running app on the device.
 You do not need to derive `app_process` manually — just make sure the app is launched.
 
-1. If the app is already running on the simulator, skip to Step 1 (do not pass `app_process`).
+1. If the app is already running on the device, skip to Step 1 (do not pass `app_process`).
 2. If the app is not running, use `launch-app` with the correct bundle ID first.
 3. Only pass `app_process` explicitly if the tool reports multiple running user apps and you need to disambiguate.
 
@@ -48,16 +55,16 @@ You do not need to derive `app_process` manually — just make sure the app is l
 
 ### Step 1: Start recording
 
-Call `ios-profiler-start` with `device_id` (simulator UDID). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
+Call `native-profiler-start` with `device_id` (iOS UDID; Android not yet supported). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `argent-simulator-interact` skill).
 
 ### Step 2: Stop and export
 
-Call `ios-profiler-stop` with `device_id`. This sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML. Check `exportDiagnostics` in the response for any export warnings.
+Call `native-profiler-stop` with `device_id`. On iOS this sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML. Check `exportDiagnostics` in the response for any export warnings.
 
 ### Step 3: Analyze
 
-Call `ios-profiler-analyze` with `device_id`. Returns a markdown report with bottlenecks categorized as CPU hotspots, UI hangs, or memory leaks, sorted by severity.
+Call `native-profiler-analyze` with `device_id`. Returns a markdown report with bottlenecks categorized as CPU hotspots, UI hangs, or memory leaks, sorted by severity.
 
 ### Step 4: Present findings and ask about next steps
 
@@ -72,12 +79,12 @@ Use `profiler-stack-query` to investigate specific findings. See §3 Investigati
 To revisit a previous trace:
 
 1. Call `profiler-load` mode=`list` to see available sessions.
-2. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to re-parse the XML files.
+2. Call `profiler-load` mode=`load_native` session_id=`<timestamp>` device_id=`<UDID>` to re-parse the XML files.
 3. Use `profiler-stack-query` to investigate the reloaded data.
 
 ---
 
-## 4. Understanding Results
+## 5. Understanding Results
 
 Bottlenecks are categorized by severity:
 
@@ -92,12 +99,10 @@ Each bottleneck type indicates a different class of problem:
 
 ---
 
-## 5. Important Caveats
+## 6. Important Caveats
 
 - **Simulator vs device**: Simulator profiling reflects host Mac performance, not real device hardware. Use device profiling for accurate CPU timings and memory behavior.
-- **xctrace availability**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`.
+- **xctrace availability (iOS)**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`. If `xcrun` is missing on PATH, the tool returns a pretty install-hint error before the recording starts.
 - **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead — not app work. Discount those entries when evaluating findings.
 - **Run-to-run variance**: Small fluctuations in CPU percentages between runs are normal. Treat only consistent directional changes (across 2+ runs or >15% delta) as actionable signal.
 - **Live data variability**: If the app fetches live API data, different responses between runs change rendering workload independently of code changes. Note when data-dependent screens show variance.
-
----

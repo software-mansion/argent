@@ -83,7 +83,7 @@ if (fs.existsSync(DYLIBS_SRC)) {
   console.warn(`⚠ Native devtools dylibs not found at ${DYLIBS_SRC} — skipping copy`);
 }
 
-// Copy Argent.tracetemplate so ios-profiler-start can find it at runtime.
+// Copy Argent.tracetemplate so native-profiler-start can find it at runtime.
 const TRACE_TEMPLATE_SRC = path.resolve(
   WORKSPACE_ROOT,
   "packages/tool-server/src/utils/ios-profiler/Argent.tracetemplate"

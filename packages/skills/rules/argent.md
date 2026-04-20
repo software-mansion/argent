@@ -115,9 +115,9 @@ REACT APP & COMPONENT PROFILING
 Use skill: `argent-react-native-profiler`
 When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
 
-NATIVE iOS PROFILING
-Use skill: `argent-ios-profiler`
-When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `argent-react-native-profiler`.
+NATIVE PROFILING
+Use skill: `argent-native-profiler`
+When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS today via Instruments/xctrace; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
 
 PERFORMANCE OPTIMIZATION
 Use skill: `argent-react-native-optimization`

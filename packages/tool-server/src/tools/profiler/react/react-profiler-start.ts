@@ -161,7 +161,7 @@ export function createReactProfilerStartTool(registry: Registry): ToolDefinition
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Sets up the ReactProfilerSession (auto-connects to Metro if not already connected), then starts CPU sampling and injects the React fiber commit-capture hook.
-Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
+Before calling this, ask the user if they also want native profiling (native-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
 Use when you need to measure React render performance or JS CPU hotspots in the running app.
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success.

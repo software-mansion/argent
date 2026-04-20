@@ -45,7 +45,7 @@ See [references/semantic-checklist.md](references/semantic-checklist.md) for ful
 
 1. Load `react-native-profiler` skill, start dual profiling
 2. Exercise key user flows (navigate screens the user specified, or all major flows)
-3. Analyze with `react-profiler-analyze` + `ios-profiler-analyze` + `profiler-combined-report`
+3. Analyze with `react-profiler-analyze` + `native-profiler-analyze` + `profiler-combined-report`
 4. Cross-reference profiling results with Phase 1–2 findings
 5. Fix highest-impact issues. Re-profile after architectural changes; batch mechanical fixes. If a recorded flow breaks after a fix (e.g., UI layout changed), follow `create-flow` skill to repair the flow rather than silently discarding it.
 

@@ -18,9 +18,10 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// The iOS-profiler and native-devtools blueprints both open real OS resources
-// (sockets, processes) if we let them reach past the gate. Stub the heavy bits
-// so the only behavior under test is the iOS/Android classification throw.
+// The native-profiler and native-devtools blueprints both open real OS
+// resources (sockets, processes) if we let them reach past the gate. Stub the
+// heavy bits so the only behavior under test is the iOS/Android classification
+// throw.
 vi.mock("@argent/native-devtools-ios", () => ({
   bootstrapDylibPath: () => "/fake/bootstrap.dylib",
   simulatorServerBinaryPath: () => "/fake/sim-server",
@@ -28,7 +29,7 @@ vi.mock("@argent/native-devtools-ios", () => ({
 }));
 
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
-import { iosInstrumentsSessionBlueprint } from "../src/blueprints/ios-profiler-session";
+import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
 import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
 
 beforeEach(() => {
@@ -37,10 +38,11 @@ beforeEach(() => {
 
 describe("iOS-only blueprints reject Android targets up-front", () => {
   // Agents see both iOS and Android targets in list-devices. Feeding an Android
-  // serial to a tool backed by an iOS-only blueprint (native-* / ios-profiler-*)
-  // used to resolve the service, fail deep in launchctl / xctrace / socket
-  // connect, and surface as an opaque error. These gates turn that into a
-  // clear "iOS-only, pick an iOS udid" message at the blueprint boundary.
+  // serial to a tool backed by an iOS-only blueprint (native-devtools,
+  // native-profiler-session) used to resolve the service, fail deep in
+  // launchctl / xctrace / socket connect, and surface as an opaque error.
+  // These gates turn that into a clear "iOS-only, pick an iOS udid" message
+  // at the blueprint boundary.
 
   it("native-devtools blueprint rejects an Android serial with a targeted error", async () => {
     warmDeviceCache([{ udid: "emulator-5554", platform: "android" }]);
@@ -49,10 +51,10 @@ describe("iOS-only blueprints reject Android targets up-front", () => {
     );
   });
 
-  it("ios-profiler-session blueprint rejects an Android serial with a targeted error", async () => {
+  it("native-profiler-session blueprint rejects an Android serial with a targeted error", async () => {
     warmDeviceCache([{ udid: "emulator-5556", platform: "android" }]);
-    await expect(iosInstrumentsSessionBlueprint.factory({}, "emulator-5556")).rejects.toThrow(
-      /IosProfilerSession is iOS-only.*Android/
+    await expect(nativeProfilerSessionBlueprint.factory({}, "emulator-5556")).rejects.toThrow(
+      /NativeProfilerSession currently supports iOS only.*Android/
     );
   });
 

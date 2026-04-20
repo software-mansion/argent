@@ -2,16 +2,21 @@ import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@a
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { classifyDevice } from "../utils/platform-detect";
 
-export const IOS_PROFILER_SESSION_NAMESPACE = "IosProfilerSession";
+// The tools that consume this session are cross-platform in name
+// (`native-profiler-*`), but today the only backend is xctrace on iOS. When
+// Perfetto / simpleperf land, this namespace keeps the same URN shape —
+// `NativeProfilerSession:<deviceId>` — and the factory branches on
+// classifyDevice to build either the iOS or Android backend.
+export const NATIVE_PROFILER_SESSION_NAMESPACE = "NativeProfilerSession";
 
-export interface IosProfilerParsedData {
+export interface NativeProfilerParsedData {
   cpuSamples: CpuSample[];
   uiHangs: UiHang[];
   cpuHotspots: CpuHotspot[];
   memoryLeaks: MemoryLeak[];
 }
 
-export interface IosProfilerSessionApi {
+export interface NativeProfilerSessionApi {
   deviceId: string;
   appProcess: string | null;
   xctracePid: number | null;
@@ -19,27 +24,29 @@ export interface IosProfilerSessionApi {
   exportedFiles: Record<string, string | null> | null;
   profilingActive: boolean;
   wallClockStartMs: number | null;
-  parsedData: IosProfilerParsedData | null;
+  parsedData: NativeProfilerParsedData | null;
   recordingTimeout: NodeJS.Timeout | null;
 }
 
-export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSessionApi, string> = {
-  namespace: IOS_PROFILER_SESSION_NAMESPACE,
+export const nativeProfilerSessionBlueprint: ServiceBlueprint<NativeProfilerSessionApi, string> = {
+  namespace: NATIVE_PROFILER_SESSION_NAMESPACE,
 
   getURN(deviceId: string) {
-    return `${IOS_PROFILER_SESSION_NAMESPACE}:${deviceId}`;
+    return `${NATIVE_PROFILER_SESSION_NAMESPACE}:${deviceId}`;
   },
 
   async factory(_deps, _payload) {
-    // iOS-only (Instruments / xctrace does not drive Android). Reject early
-    // so agents that pass an Android serial get a clear "wrong platform"
-    // error instead of an opaque xctrace failure deeper in.
+    // Android backend (Perfetto / simpleperf) is not implemented yet; reject
+    // early so an Android serial gets a clear "not yet" message instead of an
+    // opaque xctrace failure deeper in.
     if ((await classifyDevice(_payload)) !== "ios") {
       throw new Error(
-        `${IOS_PROFILER_SESSION_NAMESPACE} is iOS-only. The target '${_payload}' classifies as Android — ios-profiler-* tools use Instruments/xctrace and have no Android equivalent. Pick an iOS udid from list-devices.`
+        `${NATIVE_PROFILER_SESSION_NAMESPACE} currently supports iOS only (xctrace-backed). ` +
+          `The target '${_payload}' classifies as Android — Android profiling (Perfetto/simpleperf) is on the roadmap. ` +
+          `Pick an iOS udid from list-devices for now.`
       );
     }
-    const state: IosProfilerSessionApi = {
+    const state: NativeProfilerSessionApi = {
       deviceId: _payload,
       appProcess: null,
       xctracePid: null,

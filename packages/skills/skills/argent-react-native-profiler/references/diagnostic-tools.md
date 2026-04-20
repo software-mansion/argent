@@ -64,7 +64,7 @@ Call `profiler-commit-query`. Modes:
 { "device_id": "<UDID>", "mode": "hang_stacks", "hang_index": 0 }
 ```
 
-Call `profiler-stack-query` after `ios-profiler-analyze`. Modes:
+Call `profiler-stack-query` after `native-profiler-analyze`. Modes:
 
 - `hang_stacks` — full CPU context during a specific hang.
 - `function_callers` — who calls a specific native `function_name`.
