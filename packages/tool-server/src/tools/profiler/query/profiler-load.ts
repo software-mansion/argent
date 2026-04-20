@@ -62,10 +62,7 @@ async function listSessions(debugDir: string): Promise<string> {
       continue;
     }
 
-    // Accept both the current `native-profiler-` prefix and the legacy
-    // `ios-profiler-` prefix so sessions captured before the rename remain
-    // listable and loadable. `loadNativeSession` mirrors the same fallback.
-    const nativeMatch = entry.match(/^(?:native|ios)-profiler-(\d{8}-?\d{6})/);
+    const nativeMatch = entry.match(/^native-profiler-(\d{8}-?\d{6})/);
     if (nativeMatch) {
       const sid = nativeMatch[1];
       if (!nativeSessions.has(sid)) nativeSessions.set(sid, []);
@@ -248,34 +245,42 @@ async function loadNativeSession(
   sessionId: string,
   api: NativeProfilerSessionApi
 ): Promise<string> {
-  // Find exported XML files for this session. Prefer the current
-  // `native-profiler-` prefix and fall back to the legacy `ios-profiler-`
-  // prefix so traces captured before the rename remain loadable — agents
-  // won't be forced to re-capture to investigate a past run.
-  const resolveXml = async (suffix: string): Promise<string | null> => {
-    for (const prefix of ["native-profiler", "ios-profiler"]) {
-      const candidate = path.join(debugDir, `${prefix}-${sessionId}${suffix}`);
-      try {
-        await fs.access(candidate);
-        return candidate;
-      } catch {
-        /* try next prefix */
-      }
-    }
-    return null;
-  };
+  // Find exported XML files for this session
+  const cpuXml = path.join(debugDir, `native-profiler-${sessionId}_raw_cpu.xml`);
+  const hangsXml = path.join(debugDir, `native-profiler-${sessionId}_raw_hangs.xml`);
+  const leaksXml = path.join(debugDir, `native-profiler-${sessionId}_raw_leaks.xml`);
 
   const files: Record<string, string | null> = {
-    cpu: await resolveXml("_raw_cpu.xml"),
-    hangs: await resolveXml("_raw_hangs.xml"),
-    leaks: await resolveXml("_raw_leaks.xml"),
+    cpu: null,
+    hangs: null,
+    leaks: null,
   };
+
+  try {
+    await fs.access(cpuXml);
+    files.cpu = cpuXml;
+  } catch {
+    /* file doesn't exist */
+  }
+
+  try {
+    await fs.access(hangsXml);
+    files.hangs = hangsXml;
+  } catch {
+    /* file doesn't exist */
+  }
+
+  try {
+    await fs.access(leaksXml);
+    files.leaks = leaksXml;
+  } catch {
+    /* file doesn't exist */
+  }
 
   if (!files.cpu && !files.hangs && !files.leaks) {
     throw new Error(
       `No native profiler XML files found for session "${sessionId}". ` +
-        `Expected files matching native-profiler-${sessionId}_raw_*.xml ` +
-        `(or legacy ios-profiler-${sessionId}_raw_*.xml) in ${debugDir}`
+        `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`
     );
   }
 
