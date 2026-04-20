@@ -5,13 +5,13 @@ description: Native profiling for CPU hotspots, UI hangs, and memory leaks. Curr
 
 ## 1. Tool Overview
 
-| Tool                      | Purpose                                                                                                                        |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Tool                      | Purpose                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `native-profiler-start`   | Start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks. Optional: `app_process`, `template_path`. |
-| `native-profiler-stop`    | Stop the profiler and export trace data to XML files (timestamped, persist on disk).                                           |
-| `native-profiler-analyze` | Parse exported trace data and return structured bottleneck payload (CPU hotspots, UI hangs, leaks).                            |
-| `profiler-stack-query`    | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.                                         |
-| `profiler-load`           | List and reload previous trace sessions from disk for re-investigation.                                                        |
+| `native-profiler-stop`    | Stop the profiler and export trace data to XML files (timestamped, persist on disk).                                            |
+| `native-profiler-analyze` | Parse exported trace data and return structured bottleneck payload (CPU hotspots, UI hangs, leaks).                             |
+| `profiler-stack-query`    | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.                                          |
+| `profiler-load`           | List and reload previous trace sessions from disk for re-investigation.                                                         |
 
 ---
 

@@ -65,9 +65,7 @@ async function isAvailable(dep: ToolDependency): Promise<boolean> {
  */
 export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void> {
   if (deps.length === 0) return;
-  const results = await Promise.all(
-    deps.map(async (d) => [d, await isAvailable(d)] as const)
-  );
+  const results = await Promise.all(deps.map(async (d) => [d, await isAvailable(d)] as const));
   const missing = results.filter(([, ok]) => !ok).map(([d]) => d);
   if (missing.length === 0) return;
   const message = missing.map((d) => INSTALL_HINTS[d]).join(" ");

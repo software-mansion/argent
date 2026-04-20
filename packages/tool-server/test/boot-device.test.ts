@@ -22,10 +22,7 @@ vi.mock("node:child_process", async () => {
 });
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
-import {
-  __primeDepCacheForTests,
-  __resetDepCacheForTests,
-} from "../src/utils/check-deps";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 describe("boot-device — iOS path (previously boot-simulator)", () => {
   beforeEach(() => {

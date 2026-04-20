@@ -149,7 +149,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // the same 424 status and pretty message.
         const cause = err instanceof Error ? err.cause : undefined;
         if (err instanceof DependencyMissingError || cause instanceof DependencyMissingError) {
-          const depErr = err instanceof DependencyMissingError ? err : (cause as DependencyMissingError);
+          const depErr =
+            err instanceof DependencyMissingError ? err : (cause as DependencyMissingError);
           res.status(424).json({ error: depErr.message });
           return;
         }

@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/interactions/describe";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { __resetClassifyCacheForTests } from "../src/utils/platform-detect";
 
 function makeAXServiceApi(response: AXDescribeResponse): AXServiceApi {
   return {
@@ -66,6 +68,18 @@ function makeMockRegistry(options: {
 }
 
 describe("describe tool", () => {
+  beforeEach(() => {
+    // `describe` is cross-platform: after classifyDevice it calls
+    // ensureDep('xcrun' | 'adb'). The tests here pass raw iOS-shape udids
+    // that don't appear in any simctl inventory, so classifyDevice falls
+    // through to the shape check — on Linux CI without xcrun/adb that would
+    // then fail the dep gate before the actual describe logic runs. Prime
+    // both caches so neither side probes PATH or shells out.
+    __resetClassifyCacheForTests();
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
   it("returns elements from ax-service daemon", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,

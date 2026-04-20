@@ -34,7 +34,9 @@ Fails if no active native-profiler-start session exists for the given device_id.
     const api = services.session as NativeProfilerSessionApi;
 
     if (!api.profilingActive || !api.xctracePid || !api.traceFile) {
-      throw new Error("No active native profiling session found. Call native-profiler-start first.");
+      throw new Error(
+        "No active native profiling session found. Call native-profiler-start first."
+      );
     }
 
     if (api.recordingTimeout) {
