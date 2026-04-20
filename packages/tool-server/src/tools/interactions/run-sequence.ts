@@ -55,6 +55,7 @@ export function createRunSequenceTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, RunSequenceResult> {
   return {
     id: "run-sequence",
+    requires: ["xcrun"],
     description: `Execute multiple interaction steps in a single call.
 Use when you need sequential actions and do NOT need to observe the screen between them (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps }. Stops on the first error and returns partial results.

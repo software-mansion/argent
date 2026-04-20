@@ -46,6 +46,7 @@ const zodSchema = z.object({
 
 export const gestureCustomTool: ToolDefinition<z.infer<typeof zodSchema>, { events: number }> = {
   id: "gesture-custom",
+  requires: ["xcrun"],
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.

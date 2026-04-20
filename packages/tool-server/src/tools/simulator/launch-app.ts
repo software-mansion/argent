@@ -5,6 +5,7 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { classifyDevice } from "../../utils/platform-detect";
+import { ensureDep } from "../../utils/check-deps";
 import { adbShell } from "../../utils/adb";
 
 const execFileAsync = promisify(execFile);
@@ -100,6 +101,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       // reach the adb-shell template below.
       params = zodSchema.parse(params);
       if ((await classifyDevice(params.udid)) === "android") {
+        await ensureDep("adb");
         // Resolve a concrete pkg/Activity component for every code path so we
         // can always use `am start -W`, which blocks until the activity is
         // drawn. The previous `monkey … LAUNCHER 1` fallback returned as soon
@@ -121,6 +123,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
         assertAmStartOk(out);
         return { launched: true, bundleId: params.bundleId };
       }
+      await ensureDep("xcrun");
       const api = await registry.resolveService<NativeDevtoolsApi>(
         `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`
       );

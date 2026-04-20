@@ -19,6 +19,7 @@ export const androidStopAppTool: ToolDefinition<
   { stopped: boolean; bundleId: string }
 > = {
   id: "android-stop-app",
+  requires: ["adb"],
   description: `Stop a running Android app without relaunching it — force-stops the process and its background services.
 Use when wiping runtime state, preparing a clean relaunch, or dismissing a backgrounded process. Android-only: for iOS, call restart-app instead (which terminates + relaunches in one step).
 Returns { stopped, bundleId } with 'stopped' always true on success — Android does not distinguish "stopped a running app" from "was already not running".

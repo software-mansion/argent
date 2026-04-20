@@ -10,6 +10,7 @@ import { adaptNativeDescribeToDescribeResult } from "./describe-native-adapter";
 import { parseNativeDescribeScreenResult } from "../native-devtools/native-describe-contract";
 import { resolveNativeTargetApp } from "../../utils/native-target-app";
 import { classifyDevice } from "../../utils/platform-detect";
+import { ensureDep } from "../../utils/check-deps";
 import { adbExecOutBinary } from "../../utils/adb";
 import { getAndroidScreenSize } from "../../utils/android-screen";
 import { parseUiAutomatorDump } from "../../utils/uiautomator-parser";
@@ -71,8 +72,10 @@ Call before every tap — never guess coordinates from a screenshot.`,
     services: () => ({}),
     async execute(_services, params, _options) {
       if ((await classifyDevice(params.udid)) === "android") {
+        await ensureDep("adb");
         return describeAndroid(params.udid);
       }
+      await ensureDep("xcrun");
       const axApi = await registry.resolveService<AXServiceApi>(
         `${AX_SERVICE_NAMESPACE}:${params.udid}`
       );

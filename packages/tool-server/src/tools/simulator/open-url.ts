@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { classifyDevice } from "../../utils/platform-detect";
+import { ensureDep } from "../../utils/check-deps";
 import { adbShell } from "../../utils/adb";
 
 const execFileAsync = promisify(execFile);
@@ -32,6 +33,7 @@ Returns { opened, url }. Fails if no app is registered to handle the URI.`,
   services: () => ({}),
   async execute(_services, params) {
     if ((await classifyDevice(params.udid)) === "android") {
+      await ensureDep("adb");
       const quoted = `'${params.url.replace(/'/g, "'\\''")}'`;
       const out = await adbShell(
         params.udid,
@@ -43,6 +45,7 @@ Returns { opened, url }. Fails if no app is registered to handle the URI.`,
       }
       return { opened: true, url: params.url };
     }
+    await ensureDep("xcrun");
     await execFileAsync("xcrun", ["simctl", "openurl", params.udid, params.url]);
     return { opened: true, url: params.url };
   },

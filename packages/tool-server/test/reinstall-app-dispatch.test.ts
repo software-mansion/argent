@@ -23,6 +23,7 @@ vi.mock("node:child_process", async () => {
 
 import { reinstallAppTool } from "../src/tools/simulator/reinstall-app";
 import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 const iosUdid = "11111111-2222-3333-4444-555555555555";
 const androidSerial = "emulator-5554";
@@ -37,6 +38,10 @@ beforeEach(() => {
     { udid: iosUdid, platform: "ios" },
     { udid: androidSerial, platform: "android" },
   ]);
+  // Also pre-populate the dep cache so `ensureDep('xcrun')` / `ensureDep('adb')`
+  // inside execute don't add an extra `command -v <dep>` call to execFileMock.
+  __resetDepCacheForTests();
+  __primeDepCacheForTests(["xcrun", "adb"]);
 });
 
 describe("reinstall-app — iOS path (unchanged semantics)", () => {

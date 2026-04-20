@@ -23,6 +23,7 @@ vi.mock("node:child_process", async () => {
 
 import { createRestartAppTool } from "../src/tools/simulator/restart-app";
 import { __resetClassifyCacheForTests, warmDeviceCache } from "../src/utils/platform-detect";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 const iosUdid = "11111111-2222-3333-4444-555555555555";
 const androidSerial = "emulator-5554";
@@ -39,6 +40,8 @@ beforeEach(() => {
     { udid: iosUdid, platform: "ios" },
     { udid: androidSerial, platform: "android" },
   ]);
+  __resetDepCacheForTests();
+  __primeDepCacheForTests(["xcrun", "adb"]);
 });
 
 describe("restart-app.services — no pre-declared services (factory form)", () => {

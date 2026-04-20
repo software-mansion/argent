@@ -164,6 +164,7 @@ export const keyboardTool: ToolDefinition<
   { typed: string; keys: number }
 > = {
   id: "keyboard",
+  requires: ["xcrun"],
   description: `Type text or press a named key on the focused input.
 Use when you need to enter text or trigger a named key such as enter, escape, or an arrow.
 - text: types a string character by character (supports uppercase, digits, common punctuation).

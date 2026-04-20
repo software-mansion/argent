@@ -44,6 +44,7 @@ export const androidLogcatTool: ToolDefinition<
   { lines: string[]; count: number }
 > = {
   id: "android-logcat",
+  requires: ["adb"],
   description: `Read recent logcat output from an Android device as a one-shot dump (not a live stream).
 Use when investigating a native crash, a React Native red-box, or any runtime log from a specific package. Filters by package (resolved to the app's PID so only that process's lines are returned), priority (V/D/I/W/E/F), and optional tag.
 Returns { lines, count } with at most the most recent 'lines' entries (default 500).

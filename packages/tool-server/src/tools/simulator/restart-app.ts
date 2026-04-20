@@ -5,6 +5,7 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { classifyDevice } from "../../utils/platform-detect";
+import { ensureDep } from "../../utils/check-deps";
 import { adbShell } from "../../utils/adb";
 
 const execFileAsync = promisify(execFile);
@@ -41,6 +42,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       params = zodSchema.parse(params);
       const { udid, bundleId } = params;
       if ((await classifyDevice(udid)) === "android") {
+        await ensureDep("adb");
         await adbShell(udid, `am force-stop ${bundleId}`, { timeoutMs: 15_000 });
         const out = await adbShell(
           udid,
@@ -52,6 +54,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
         }
         return { restarted: true, bundleId };
       }
+      await ensureDep("xcrun");
       const api = await registry.resolveService<NativeDevtoolsApi>(
         `${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`
       );

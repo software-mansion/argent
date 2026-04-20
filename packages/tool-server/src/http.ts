@@ -2,6 +2,7 @@ import express, { Request, Response } from "express";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
+import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
@@ -100,6 +101,23 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         parsedData = parseResult.data;
       }
 
+      // Pre-flight host-binary check: a tool declaring `requires: ['xcrun']`
+      // or similar is unambiguously single-platform, so we can probe PATH
+      // before touching the registry / side-effectful services. Cross-platform
+      // tools leave `requires` unset and do a post-classify `ensureDep` call
+      // inside their execute() instead.
+      if (def.requires && def.requires.length > 0) {
+        try {
+          await ensureDeps(def.requires);
+        } catch (err) {
+          if (err instanceof DependencyMissingError) {
+            res.status(424).json({ error: err.message });
+            return;
+          }
+          throw err;
+        }
+      }
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -123,6 +141,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       } catch (err: unknown) {
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });
+          return;
+        }
+        // A DependencyMissingError thrown from inside a cross-platform tool's
+        // execute (i.e. post-`classifyDevice` `ensureDep` call) is the same
+        // missing-host-binary condition as the pre-flight check, so surface
+        // the same 424 status and pretty message.
+        const cause = err instanceof Error ? err.cause : undefined;
+        if (err instanceof DependencyMissingError || cause instanceof DependencyMissingError) {
+          const depErr = err instanceof DependencyMissingError ? err : (cause as DependencyMissingError);
+          res.status(424).json({ error: depErr.message });
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });

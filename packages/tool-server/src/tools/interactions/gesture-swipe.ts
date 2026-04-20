@@ -25,6 +25,7 @@ export const gestureSwipeTool: ToolDefinition<
   { swiped: boolean; timestampMs: number }
 > = {
   id: "gesture-swipe",
+  requires: ["xcrun"],
   description: `Smooth swipe between two normalized points (0.0–1.0 fractions of screen width/height, not pixels).
 Use to scroll a list, dismiss a modal, or navigate between pages.
 Swipe up (fromY > toY) scrolls content down; swipe down (fromY < toY) scrolls content up.

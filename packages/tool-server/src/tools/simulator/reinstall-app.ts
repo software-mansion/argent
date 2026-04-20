@@ -4,6 +4,7 @@ import { resolve as resolvePath } from "node:path";
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { classifyDevice } from "../../utils/platform-detect";
+import { ensureDep } from "../../utils/check-deps";
 import { runAdb } from "../../utils/adb";
 
 const execFileAsync = promisify(execFile);
@@ -47,6 +48,7 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
     if ((await classifyDevice(udid)) === "android") {
+      await ensureDep("adb");
       const args = ["-s", udid, "install", "-r"];
       if (params.allowDowngrade) args.push("-d");
       if (params.grantPermissions) args.push("-g");
@@ -58,6 +60,7 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
       }
       return { reinstalled: true, bundleId };
     }
+    await ensureDep("xcrun");
     try {
       await execFileAsync("xcrun", ["simctl", "uninstall", udid, bundleId]);
     } catch {

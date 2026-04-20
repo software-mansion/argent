@@ -37,6 +37,7 @@ export const gestureRotateTool: ToolDefinition<
   { rotated: boolean; timestampMs: number }
 > = {
   id: "gesture-rotate",
+  requires: ["xcrun"],
   description: `Two-finger rotation: fingers placed opposite each other at a fixed radius from center, swept from startAngle to endAngle degrees.
 All positions and radius are normalized 0.0–1.0 (fractions of the screen, not pixels).
 endAngle > startAngle = clockwise. Typical 90° clockwise turn: radius 0.15, startAngle 0, endAngle 90.

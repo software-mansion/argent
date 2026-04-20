@@ -15,6 +15,7 @@ const zodSchema = z.object({
 
 export const rotateTool: ToolDefinition<z.infer<typeof zodSchema>, { orientation: string }> = {
   id: "rotate",
+  requires: ["xcrun"],
   description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
 Use to test layout in a different orientation. Re-run \`describe\` afterwards — frame coordinates change with the orientation.
 Returns { orientation }. Fails if the target device is not booted.`,

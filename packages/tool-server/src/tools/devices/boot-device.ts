@@ -12,6 +12,7 @@ import {
   waitForBootCompleted,
 } from "../../utils/adb";
 import { warmDeviceCache } from "../../utils/platform-detect";
+import { ensureDep } from "../../utils/check-deps";
 
 const execFileAsync = promisify(execFile);
 
@@ -123,6 +124,7 @@ async function bootIos(
   udid: string,
   registry: Registry
 ): Promise<{ platform: "ios"; udid: string; booted: true }> {
+  await ensureDep("xcrun");
   await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
     // `simctl boot` errors when the device is already booted — treat as success.
@@ -156,6 +158,7 @@ async function bootAndroid(params: {
   booted: true;
   coldBoot: boolean;
 }> {
+  await ensureDep("adb");
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
   // Stage 0: validate AVD exists.

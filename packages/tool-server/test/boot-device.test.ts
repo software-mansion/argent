@@ -22,10 +22,18 @@ vi.mock("node:child_process", async () => {
 });
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
+import {
+  __primeDepCacheForTests,
+  __resetDepCacheForTests,
+} from "../src/utils/check-deps";
 
 describe("boot-device — iOS path (previously boot-simulator)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Pre-warm the dep cache so `ensureDep('xcrun')` doesn't probe PATH and
+    // add an extra first `command -v xcrun` call to mockExecFile.
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
     mockExecFile.mockImplementation((...args: unknown[]) => {
       getCallback(args)(null, "", "");
       return {} as never;

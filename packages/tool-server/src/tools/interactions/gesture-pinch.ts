@@ -47,6 +47,7 @@ export const gesturePinchTool: ToolDefinition<
   { pinched: boolean; timestampMs: number }
 > = {
   id: "gesture-pinch",
+  requires: ["xcrun"],
   description: `Two-finger pinch-to-zoom at a center point. All positions and distances are normalized 0.0–1.0 (fractions of the screen, not pixels).
 startDistance > endDistance = pinch in (zoom out); startDistance < endDistance = pinch out (zoom in).
 Typical zoom-in: startDistance 0.2, endDistance 0.6 at screen center.

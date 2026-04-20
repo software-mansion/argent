@@ -17,6 +17,7 @@ const zodSchema = z.object({
 
 export const buttonTool: ToolDefinition<z.infer<typeof zodSchema>, { pressed: string }> = {
   id: "button",
+  requires: ["xcrun"],
   description: `Press a hardware button. Sends Down then Up automatically.
 Supported: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.
 Use when you need to trigger a hardware-button event (e.g. Android back, iOS home, volume).

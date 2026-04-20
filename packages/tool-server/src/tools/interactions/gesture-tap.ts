@@ -19,6 +19,7 @@ export const gestureTapTool: ToolDefinition<
   { tapped: boolean; timestampMs: number }
 > = {
   id: "gesture-tap",
+  requires: ["xcrun"],
   description: `Tap the screen at normalized coordinates. x and y are fractions of screen width/height in 0.0–1.0 (not pixels).
 Use for any tappable element (buttons, links, cells). Sends a Down followed by an Up at the same point.
 Before tapping, determine coordinates with a discovery tool (\`describe\`, \`debugger-component-tree\`, or \`native-describe-screen\`) — never eyeball them from a screenshot.

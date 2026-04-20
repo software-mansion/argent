@@ -6,6 +6,7 @@ export type {
   ServiceBlueprint,
   ServiceNode,
   ToolDefinition,
+  ToolDependency,
   ToolRecord,
   RegistryEvents,
   URN,

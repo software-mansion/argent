@@ -56,6 +56,7 @@ type Result =
 
 export const nativeViewAtPointTool: ToolDefinition<Params, Result> = {
   id: "native-view-at-point",
+  requires: ["xcrun"],
   description: `Inspect the deepest visible UIView at a raw native window point.
 
 Unlike native-user-interactable-view-at-point, this ignores userInteractionEnabled,

@@ -27,6 +27,7 @@ export const screenshotTool: ToolDefinition<
   { url: string; path: string }
 > = {
   id: "screenshot",
+  requires: ["xcrun"],
   description: `Capture a screenshot of the current device screen. Returns { url, path } and the MCP adapter renders it as a visible image.
 Use for a baseline before an interaction or to inspect the current screen after a delay. Fails if the target device is not booted or the screenshot request times out.`,
   zodSchema,
