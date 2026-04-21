@@ -40,6 +40,9 @@ import {
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
+  getGlobalSkillLockPath,
+  getProjectSkillLockPath,
+  hasSkillsInLock,
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
@@ -367,6 +370,72 @@ describe("listBundledSkills", () => {
       fs.writeFileSync(path.join(skillsDir, name, "SKILL.md"), "");
     }
     expect(listBundledSkills(skillsDir)).toEqual(["alpha", "mike", "zulu"]);
+  });
+});
+
+// ── skills lock helpers ──────────────────────────────────────────────────────
+
+describe("getProjectSkillLockPath", () => {
+  it("resolves to skills-lock.json under the provided cwd", () => {
+    expect(getProjectSkillLockPath("/some/project")).toBe("/some/project/skills-lock.json");
+  });
+});
+
+describe("getGlobalSkillLockPath", () => {
+  const originalXdg = process.env.XDG_STATE_HOME;
+
+  afterEach(() => {
+    if (originalXdg === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = originalXdg;
+  });
+
+  it("falls back to ~/.agents/.skill-lock.json when XDG_STATE_HOME is unset", () => {
+    delete process.env.XDG_STATE_HOME;
+    expect(getGlobalSkillLockPath()).toBe(path.join(os.homedir(), ".agents", ".skill-lock.json"));
+  });
+
+  it("uses $XDG_STATE_HOME/skills/.skill-lock.json when set", () => {
+    process.env.XDG_STATE_HOME = "/tmp/xdg";
+    expect(getGlobalSkillLockPath()).toBe("/tmp/xdg/skills/.skill-lock.json");
+  });
+});
+
+describe("hasSkillsInLock", () => {
+  it("returns false when the lock file does not exist", () => {
+    expect(hasSkillsInLock(path.join(tmpDir, "missing.json"), ["argent-x"])).toBe(false);
+  });
+
+  it("returns false for a malformed JSON lock", () => {
+    const lockPath = path.join(tmpDir, "bad.json");
+    fs.writeFileSync(lockPath, "not json");
+    expect(hasSkillsInLock(lockPath, ["argent-x"])).toBe(false);
+  });
+
+  it("returns false when none of the tracked skills match", () => {
+    const lockPath = path.join(tmpDir, "lock.json");
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({ version: 1, skills: { "other-skill": {} } })
+    );
+    expect(hasSkillsInLock(lockPath, ["argent-create-flow"])).toBe(false);
+  });
+
+  it("returns true when at least one tracked skill matches", () => {
+    const lockPath = path.join(tmpDir, "lock.json");
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        skills: { "argent-create-flow": {}, "other-skill": {} },
+      })
+    );
+    expect(hasSkillsInLock(lockPath, ["argent-create-flow", "argent-metro-debugger"])).toBe(true);
+  });
+
+  it("returns false for a lock file without a skills object", () => {
+    const lockPath = path.join(tmpDir, "empty.json");
+    fs.writeFileSync(lockPath, JSON.stringify({ version: 1 }));
+    expect(hasSkillsInLock(lockPath, ["argent-create-flow"])).toBe(false);
   });
 });
 

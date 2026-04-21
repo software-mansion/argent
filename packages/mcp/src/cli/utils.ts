@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
+import * as os from "node:os";
 import { execSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
@@ -36,9 +37,9 @@ export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
 
 // Returns the names of the skills that ship with this argent install — each
-// subdirectory of SKILLS_DIR that contains a SKILL.md. Used to scope
-// `npx skills update` so we only touch argent-owned skills, leaving the
-// user's unrelated skills alone.
+// subdirectory of SKILLS_DIR that contains a SKILL.md. Used to detect which
+// skills on the user's machine are argent-owned so we don't touch anything
+// else during update.
 export function listBundledSkills(skillsDir: string = SKILLS_DIR): string[] {
   try {
     return fs
@@ -49,6 +50,35 @@ export function listBundledSkills(skillsDir: string = SKILLS_DIR): string[] {
       .sort();
   } catch {
     return [];
+  }
+}
+
+// Locations of the skills-CLI lock files. These paths mirror the skills CLI
+// (v1.5.x) so we can detect which scopes already track argent skills and only
+// re-sync those. Project lock lives next to the user's working tree, global
+// lock under XDG_STATE_HOME or ~/.agents/.
+export function getProjectSkillLockPath(cwd: string = process.cwd()): string {
+  return path.join(cwd, "skills-lock.json");
+}
+
+export function getGlobalSkillLockPath(): string {
+  const xdgStateHome = process.env.XDG_STATE_HOME;
+  if (xdgStateHome) return path.join(xdgStateHome, "skills", ".skill-lock.json");
+  return path.join(os.homedir(), ".agents", ".skill-lock.json");
+}
+
+// Returns true when the lock at `lockPath` tracks at least one of `skillNames`.
+// Used to decide whether an `argent update` should resync a given scope —
+// we only touch a scope that already has argent skills installed, so the
+// update never creates new `skills-lock.json` files in random directories.
+export function hasSkillsInLock(lockPath: string, skillNames: readonly string[]): boolean {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const lock = JSON.parse(raw) as { skills?: Record<string, unknown> };
+    const tracked = lock.skills ?? {};
+    return skillNames.some((name) => name in tracked);
+  } catch {
+    return false;
   }
 }
 

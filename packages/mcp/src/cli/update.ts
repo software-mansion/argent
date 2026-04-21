@@ -10,6 +10,10 @@ import {
   globalInstallCommand,
   formatShellCommand,
   listBundledSkills,
+  getProjectSkillLockPath,
+  getGlobalSkillLockPath,
+  hasSkillsInLock,
+  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
 } from "./utils.js";
@@ -134,23 +138,44 @@ export async function update(args: string[]): Promise<void> {
 
   // Refresh argent-owned skills. Unconditional (like rules & agents above):
   // stale skills reference old tool names / flows and can silently break
-  // behavior after an argent upgrade. We pass explicit skill names so
-  // unrelated skills the user installed themselves are left untouched, and
-  // re-sync both scopes because we don't know which one init picked.
+  // behavior after an argent upgrade.
+  //
+  // We use `skills add` rather than `skills update` because argent ships
+  // skills with sourceType="local" inside the npm package, and the skills
+  // CLI's `update` command skips every local-sourced entry. `skills add`
+  // hashes the source on disk and reinstalls anything that changed, which is
+  // exactly what we want after `npm i -g @swmansion/argent@new`.
+  //
+  // To avoid creating a skills-lock.json in whatever directory the user
+  // happened to be in, we only touch a scope that already tracks at least
+  // one argent-owned skill.
   const argentSkills = listBundledSkills();
   if (argentSkills.length > 0) {
     const skillResults: string[] = [];
-    for (const scope of ["-p", "-g"] as const) {
+    const scopes: Array<{ label: string; args: string[]; lockPath: string }> = [
+      {
+        label: "project",
+        args: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y"],
+        lockPath: getProjectSkillLockPath(projectRoot),
+      },
+      {
+        label: "global",
+        args: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y", "-g"],
+        lockPath: getGlobalSkillLockPath(),
+      },
+    ];
+
+    for (const scope of scopes) {
+      if (!hasSkillsInLock(scope.lockPath, argentSkills)) continue;
       try {
-        execFileSync("npx", ["skills", "update", scope, ...argentSkills], {
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        skillResults.push(`${pc.green("+")} ${scope === "-g" ? "global" : "project"} scope`);
-      } catch {
-        // Scope has no tracked argent skills (e.g. user only installed
-        // globally, or vice versa). Non-fatal — silently skip.
+        execFileSync("npx", scope.args, { stdio: ["ignore", "pipe", "pipe"] });
+        skillResults.push(`${pc.green("+")} ${scope.label} scope`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
+        skillResults.push(`${pc.red("x")} ${scope.label} scope ${pc.dim(`(${msg})`)}`);
       }
     }
+
     if (skillResults.length > 0) {
       p.note(skillResults.join("\n"), "Skills Updated");
     }
