@@ -3,6 +3,7 @@ import pc from "picocolors";
 import { execFileSync } from "node:child_process";
 import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
+  extractFlag,
   getInstalledVersion,
   getLatestVersion,
   isNewerVersion,
@@ -18,6 +19,10 @@ import { killToolServer } from "../launcher.js";
 
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  // Undocumented dev flag — install from a local tarball/path instead of the
+  // registry, then run the same refresh+prune as a normal update. Used to
+  // smoke-test a locally-packed argent end-to-end before publishing.
+  const fromTar = extractFlag(args, "--from");
 
   p.intro(pc.bgCyan(pc.black(" argent update ")));
 
@@ -28,43 +33,14 @@ export async function update(args: string[]): Promise<void> {
   }
 
   const spinner = p.spinner();
-  spinner.start("Checking for updates...");
 
-  let latest: string;
-  try {
-    latest = getLatestVersion();
-  } catch (err) {
-    spinner.stop(pc.red("Could not reach registry."));
-    p.log.error(`Failed to check registry: ${err}`);
-    process.exit(1);
-  }
-
-  spinner.stop("Version check complete.");
-
-  p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
-  p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
-
-  if (isNewerVersion(latest, installed)) {
-    p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
+  if (fromTar) {
+    p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
+    p.log.info(`Installing from ${pc.cyan(fromTar)} ${pc.dim("(--from override — skipping registry check)")}`);
 
     const pm = detectPackageManager();
-    const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+    const cmd = globalInstallCommand(pm, fromTar);
     const cmdStr = formatShellCommand(cmd);
-
-    if (!nonInteractive) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const proceed = await p.confirm({
-        message: `Update to v${latest}?`,
-        initialValue: true,
-      });
-
-      if (p.isCancel(proceed) || !proceed) {
-        p.cancel("Update cancelled.");
-        process.exit(0);
-      }
-    }
-
     p.log.info(`Running: ${pc.dim(cmdStr)}`);
 
     await killToolServer();
@@ -75,11 +51,63 @@ export async function update(args: string[]): Promise<void> {
         env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
       });
     } catch (err) {
-      p.log.error(`Update failed: ${err}`);
+      p.log.error(`Install from tarball failed: ${err}`);
       process.exit(1);
     }
   } else {
-    p.log.success("Already on the latest version.");
+    spinner.start("Checking for updates...");
+
+    let latest: string;
+    try {
+      latest = getLatestVersion();
+    } catch (err) {
+      spinner.stop(pc.red("Could not reach registry."));
+      p.log.error(`Failed to check registry: ${err}`);
+      process.exit(1);
+    }
+
+    spinner.stop("Version check complete.");
+
+    p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
+    p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
+
+    if (isNewerVersion(latest, installed)) {
+      p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
+
+      const pm = detectPackageManager();
+      const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+      const cmdStr = formatShellCommand(cmd);
+
+      if (!nonInteractive) {
+        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+
+        const proceed = await p.confirm({
+          message: `Update to v${latest}?`,
+          initialValue: true,
+        });
+
+        if (p.isCancel(proceed) || !proceed) {
+          p.cancel("Update cancelled.");
+          process.exit(0);
+        }
+      }
+
+      p.log.info(`Running: ${pc.dim(cmdStr)}`);
+
+      await killToolServer();
+
+      try {
+        execFileSync(cmd.bin, cmd.args, {
+          stdio: "inherit",
+          env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
+        });
+      } catch (err) {
+        p.log.error(`Update failed: ${err}`);
+        process.exit(1);
+      }
+    } else {
+      p.log.success("Already on the latest version.");
+    }
   }
 
   // Refresh configuration

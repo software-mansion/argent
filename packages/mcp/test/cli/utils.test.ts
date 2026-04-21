@@ -37,6 +37,7 @@ import {
   copyDir,
   dirExists,
   detectPackageManager,
+  extractFlag,
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
@@ -272,6 +273,26 @@ describe("globalUninstallCommand", () => {
       bin: "bun",
       args: ["remove", "-g", "pkg"],
     });
+  });
+});
+
+// ── extractFlag ──────────────────────────────────────────────────────────────
+
+describe("extractFlag", () => {
+  it("returns the value that follows the flag", () => {
+    expect(extractFlag(["update", "--from", "./pkg.tgz"], "--from")).toBe("./pkg.tgz");
+  });
+
+  it("returns null when the flag is absent", () => {
+    expect(extractFlag(["update", "--yes"], "--from")).toBeNull();
+  });
+
+  it("returns null when the flag has no value (last arg)", () => {
+    expect(extractFlag(["update", "--from"], "--from")).toBeNull();
+  });
+
+  it("picks the first occurrence when the flag is repeated", () => {
+    expect(extractFlag(["--from", "a", "--from", "b"], "--from")).toBe("a");
   });
 });
 
