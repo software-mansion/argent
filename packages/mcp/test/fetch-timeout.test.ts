@@ -101,8 +101,7 @@ describe("fetch timeout in fetchWithReconnect", () => {
 
     expect(threw).toBe(true);
     // 5 attempts × 100ms timeout + ~75ms backoff ≈ 575ms.
-    // Must finish well under the timeout — the assertion guards against
-    // regressions where a hanging POST is not aborted at all.
+    // Must finish well under 5s (the old infinite-hang behavior).
     expect(elapsed).toBeLessThan(5_000);
   }, 10_000);
 
