@@ -56,6 +56,8 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
+  sessionId: string | null;          // mirrors __ARGENT_PROFILER_OWNER__.sessionId when we own; null otherwise
+  ownerToolServerPid: number | null; // process.pid when this tool-server owns; null otherwise
   disposeSession: () => void;
 }
 
@@ -106,6 +108,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       hotCommitIndices: null,
       totalReactCommits: null,
       profileStartWallMs: null,
+      sessionId: null,
+      ownerToolServerPid: null,
       disposeSession: () => events.emit("terminated"),
     };
 

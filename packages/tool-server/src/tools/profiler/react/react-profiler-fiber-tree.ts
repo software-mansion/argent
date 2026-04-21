@@ -5,6 +5,7 @@ import {
   FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
+import { HEARTBEAT_SCRIPT } from "./react-profiler-session-owner";
 
 const HOOK_NOT_PRESENT_ERRORS = new Set([
   "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
@@ -113,6 +114,12 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
+
+    // Bump owner heartbeat only when this tool-server owns the active session.
+    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    }
+
     const script = buildFiberTreeScript(params.max_depth, params.filter ?? "");
 
     type FiberEvalResult = {

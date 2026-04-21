@@ -5,6 +5,7 @@ import {
   FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
+import { HEARTBEAT_SCRIPT } from "./react-profiler-session-owner";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -113,6 +114,10 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
+
+    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    }
 
     type EvalResult = {
       result?: { value?: string };
