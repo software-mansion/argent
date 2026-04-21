@@ -566,17 +566,19 @@ export async function init(args: string[]): Promise<void> {
 
   p.note(summaryLines.join("\n"), "Summary");
 
-  p.outro(
+  p.note(
     [
-      pc.bgGreen(pc.black(" Argent is ready! ")),
+      pc.bold(pc.green("Argent is ready!")),
       "",
       `${pc.bold("Get started")} by asking your assistant:`,
       "",
       `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
       "",
       pc.dim("It will walk you through all capabilities available."),
-    ].join("\n")
+    ].join("\n"),
+    pc.bgGreen(pc.black(" Get Started "))
   );
+  p.outro("");
 }
 
 export function printBanner(): void {
