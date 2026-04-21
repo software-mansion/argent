@@ -578,7 +578,7 @@ export async function init(args: string[]): Promise<void> {
     ].join("\n"),
     pc.bgGreen(pc.black(" Get Started "))
   );
-  p.outro("");
+  p.outro("Done.");
 }
 
 export function printBanner(): void {
