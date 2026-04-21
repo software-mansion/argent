@@ -17,7 +17,7 @@ import {
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
-} from "./react-profiler-session-owner";
+} from "../../../utils/react-profiler/session-ownership";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),

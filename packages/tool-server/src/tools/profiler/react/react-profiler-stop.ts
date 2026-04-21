@@ -16,7 +16,7 @@ import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/deb
 import {
   mergeProfilingData,
   type ProfilingDataBackend,
-} from "./react-profiler-session-owner";
+} from "../../../utils/react-profiler/session-ownership";
 import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
