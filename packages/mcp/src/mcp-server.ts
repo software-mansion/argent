@@ -122,11 +122,9 @@ export async function startMcpServer(): Promise<void> {
     {
       capabilities: { tools: {} },
       instructions:
-        "Argent — iOS Simulator + Android Emulator control for interacting, testing, profiling and debugging mobile apps. " +
-        "Use `list-devices` to pick a target and `boot-device` to start it. Interaction tools (`gesture-tap`, `gesture-swipe`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`) accept a `udid` and auto-dispatch by cross-referencing it against `xcrun simctl list` and `adb devices` — pass the id reported by `list-devices` and the tools resolve the platform for you. " +
-        "Android-specific extras: `android-stop-app`, `android-logcat`. iOS-specific extras: `stop-simulator-server`, `stop-all-simulator-servers`, native-devtools suite, iOS Instruments profiler. " +
-        "Always use `describe` / `debugger-component-tree` / `screenshot` before tapping — never guess coordinates. " +
-        "On session end: call `stop-all-simulator-servers` for iOS and kill the Android emulator via its UI or `adb -s <serial> emu kill`. " +
+        "Argent — iOS Simulator and Android Emulator control for interacting, testing, profiling and debugging mobile applications. " +
+        "Always use discovery tools (describe / debugger-component-tree / screenshot) before tapping — never guess coordinates. " +
+        "On session end: call stop-all-simulator-servers and perform any necessary cleanup. " +
         "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
     }
   );
