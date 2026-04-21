@@ -3,15 +3,13 @@ name: argent-native-profiler
 description: Native profiling for CPU hotspots, UI hangs, and memory leaks. Currently iOS-only (xctrace-backed); Android support (Perfetto/simpleperf) is on the roadmap. Use when diagnosing native-level performance issues.
 ---
 
-## 1. Tool Overview
+## 1. Tools
 
-| Tool                      | Purpose                                                                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `native-profiler-start`   | Start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks. Optional: `app_process`, `template_path`. |
-| `native-profiler-stop`    | Stop the profiler and export trace data to XML files (timestamped, persist on disk).                                            |
-| `native-profiler-analyze` | Parse exported trace data and return structured bottleneck payload (CPU hotspots, UI hangs, leaks).                             |
-| `profiler-stack-query`    | Drill into parsed data: hang stacks, function callers, thread breakdown, leak details.                                          |
-| `profiler-load`           | List and reload previous trace sessions from disk for re-investigation.                                                         |
+- `native-profiler-start` — start profiling on a booted device. iOS: xctrace recording for CPU, hangs, and leaks.
+- `native-profiler-stop` — stop the profiler and export trace data to timestamped XML files.
+- `native-profiler-analyze` — parse exported trace data and return a structured bottleneck payload.
+- `profiler-stack-query` — drill into parsed data: hang stacks, function callers, thread breakdown, leak details.
+- `profiler-load` — list and reload previous trace sessions from disk for re-investigation.
 
 ---
 
