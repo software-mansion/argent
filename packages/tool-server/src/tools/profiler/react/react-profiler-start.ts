@@ -7,91 +7,17 @@ import {
   clearCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
-import { NATIVE_PROFILER_SCRIPT } from "./react-profiler-native-script";
+import {
+  REACT_NATIVE_PROFILER_SETUP_SCRIPT,
+  READ_STATE_SCRIPT,
+  buildStartScript,
+  STOP_FOR_TAKEOVER_SCRIPT,
+} from "../../../utils/react-profiler/scripts";
 import {
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "./react-profiler-session-owner";
-
-const READ_STATE_SCRIPT = `
-(function __argent_readState() {
-  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!h) return JSON.stringify({ hookExists: false });
-  var ri = null;
-  if (h.rendererInterfaces && typeof h.rendererInterfaces.forEach === 'function') {
-    h.rendererInterfaces.forEach(function(r){ if (!ri) ri = r; });
-  }
-  if (!ri) return JSON.stringify({ hookExists: true, rendererInterfaceFound: false });
-
-  return JSON.stringify({
-    hookExists: true,
-    rendererInterfaceFound: true,
-    isRunning: ri.__argent_isProfiling__ === true,
-    owner: globalThis.__ARGENT_PROFILER_OWNER__ || null,
-    nowEpochMs: Date.now(),
-  });
-})()
-`;
-
-function buildStartScript(ownerJson: string): string {
-  return `
-(function __argent_doStart() {
-  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!h || !h.rendererInterfaces) return JSON.stringify({ ok: false, reason: 'no-hook' });
-  var ri = null;
-  h.rendererInterfaces.forEach(function(r){ if (!ri) ri = r; });
-  if (!ri) return JSON.stringify({ ok: false, reason: 'no-renderer-interface' });
-
-  try { ri.flushInitialOperations(); } catch (_e) {}
-  try {
-    ri.startProfiling(true);
-  } catch (err) {
-    return JSON.stringify({ ok: false, reason: 'startProfiling-threw', message: String(err && err.message || err) });
-  }
-
-  var owner = ${ownerJson};
-  owner.startedAtEpochMs = (typeof ri.__argent_startedAtEpochMs__ === 'number')
-    ? ri.__argent_startedAtEpochMs__
-    : Date.now();
-  owner.lastHeartbeatEpochMs = owner.startedAtEpochMs;
-
-  var commitCountAtStart = 0;
-  try {
-    var pd = ri.getProfilingData();
-    if (pd && pd.dataForRoots) {
-      for (var i = 0; i < pd.dataForRoots.length; i++) {
-        commitCountAtStart += (pd.dataForRoots[i].commitData || []).length;
-      }
-    }
-  } catch (_e) {}
-  owner.commitCountAtStart = commitCountAtStart;
-
-  globalThis.__ARGENT_PROFILER_OWNER__ = owner;
-
-  return JSON.stringify({
-    ok: true,
-    startedAtEpochMs: owner.startedAtEpochMs,
-    isProfilingFlagSet: ri.__argent_isProfiling__ === true,
-    ownerInstalled: !!globalThis.__ARGENT_PROFILER_OWNER__,
-  });
-})()
-`;
-}
-
-const STOP_FOR_TAKEOVER_SCRIPT = `
-(function __argent_stopForTakeover() {
-  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!h || !h.rendererInterfaces) return 'no-hook';
-  var ri = null;
-  h.rendererInterfaces.forEach(function(r){ if (!ri) ri = r; });
-  if (!ri) return 'no-ri';
-  try { ri.stopProfiling(); } catch (_e) {}
-  // stop wrapper clears __ARGENT_PROFILER_OWNER__; belt-and-braces:
-  globalThis.__ARGENT_PROFILER_OWNER__ = null;
-  return 'ok';
-})()
-`;
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -196,7 +122,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       const cdp = api.cdp;
 
       // Inject the native-profiler instrumentation (idempotent).
-      await cdp.evaluate(NATIVE_PROFILER_SCRIPT);
+      await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
       // Snapshot backend state so we can decide whether to start, take over, or refuse.
       const stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;

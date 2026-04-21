@@ -5,7 +5,7 @@ import {
   FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT } from "./react-profiler-session-owner";
+import { HEARTBEAT_SCRIPT } from "../../../utils/react-profiler/scripts";
 
 const HOOK_NOT_PRESENT_ERRORS = new Set([
   "no __REACT_DEVTOOLS_GLOBAL_HOOK__",

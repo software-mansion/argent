@@ -17,129 +17,15 @@ import {
   mergeProfilingData,
   type ProfilingDataBackend,
 } from "./react-profiler-session-owner";
+import {
+  STOP_AND_READ_SCRIPT,
+  RESOLVE_FIBER_META_SCRIPT,
+} from "../../../utils/react-profiler/scripts";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
 });
-
-const STOP_AND_READ_SCRIPT = `
-(function __argent_stopAndRead() {
-  if (typeof globalThis.__argent_profilerHeartbeat === 'function') {
-    try { globalThis.__argent_profilerHeartbeat(); } catch (_e) {}
-  }
-
-  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!h || !h.rendererInterfaces) {
-    return JSON.stringify({ live: null, prev: globalThis.__ARGENT_PREV_PROFILE__ || null, displayNameById: {} });
-  }
-  var ri = null;
-  h.rendererInterfaces.forEach(function(r){ if (!ri) ri = r; });
-  if (!ri) {
-    return JSON.stringify({ live: null, prev: globalThis.__ARGENT_PREV_PROFILE__ || null, displayNameById: {} });
-  }
-
-  try { ri.stopProfiling(); } catch (_e) {}
-
-  var live = null;
-  try { live = ri.getProfilingData(); } catch (_e) { /* pristine — treat as empty */ }
-
-  var prev = globalThis.__ARGENT_PREV_PROFILE__ || null;
-
-  var idSet = Object.create(null);
-  function collectIds(pd) {
-    if (!pd || !pd.dataForRoots) return;
-    for (var i = 0; i < pd.dataForRoots.length; i++) {
-      var cd = pd.dataForRoots[i].commitData || [];
-      for (var j = 0; j < cd.length; j++) {
-        var fa = cd[j].fiberActualDurations || [];
-        for (var k = 0; k < fa.length; k++) if (fa[k]) idSet[fa[k][0]] = true;
-        var cds = cd[j].changeDescriptions || [];
-        for (var k2 = 0; k2 < cds.length; k2++) if (cds[k2]) idSet[cds[k2][0]] = true;
-      }
-    }
-  }
-  collectIds(live);
-  collectIds(prev);
-
-  var displayNameById = {};
-  var ids = Object.keys(idSet);
-  for (var i = 0; i < ids.length; i++) {
-    var id = ids[i];
-    try {
-      var n = ri.getDisplayNameForElementID(Number(id));
-      displayNameById[id] = (typeof n === 'string' && n.length > 0) ? n : null;
-    } catch (_e) {
-      displayNameById[id] = null;
-    }
-  }
-
-  return JSON.stringify({ live: live, prev: prev, displayNameById: displayNameById });
-})()
-`;
-
-const RESOLVE_FIBER_META_SCRIPT = `
-(function __argent_resolveFiberMeta() {
-  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!h) return JSON.stringify({});
-  var roots = h.__argent_roots__ || h._fiberRoots || h.fiberRoots;
-  if (!roots) return JSON.stringify({});
-
-  function getName(fiber) {
-    if (!fiber || !fiber.type) return null;
-    if (typeof fiber.type === 'string') return null;
-    return fiber.type.displayName || fiber.type.name || null;
-  }
-
-  function getParentName(fiber) {
-    var r = fiber.return;
-    while (r) {
-      var pn = getName(r);
-      if (pn) return pn;
-      r = r.return;
-    }
-    return null;
-  }
-
-  var out = {};
-  function walk(fiber) {
-    if (!fiber) return;
-    try {
-      var name = getName(fiber);
-      if (name && !(name in out)) {
-        var hookTypes = (fiber._debugHookTypes && fiber._debugHookTypes.length > 0) ? fiber._debugHookTypes : null;
-        var isCompilerOptimized = false;
-        try {
-          if (fiber.updateQueue && fiber.updateQueue.memoCache != null) isCompilerOptimized = true;
-          if (!isCompilerOptimized && fiber.alternate && fiber.alternate.updateQueue && fiber.alternate.updateQueue.memoCache != null) isCompilerOptimized = true;
-        } catch (_e) {}
-        if (!isCompilerOptimized && fiber._debugHookTypes) {
-          for (var i = 0; i < fiber._debugHookTypes.length; i++) {
-            var ht = fiber._debugHookTypes[i];
-            if (ht === 'useMemoCache' || ht === 'MemoCache' || ht === 'unstable_useMemoCache') {
-              isCompilerOptimized = true;
-              break;
-            }
-          }
-        }
-        out[name] = {
-          hookTypes: hookTypes,
-          isCompilerOptimized: isCompilerOptimized,
-          parentName: getParentName(fiber)
-        };
-      }
-    } catch (_e) {}
-    if (fiber.child) walk(fiber.child);
-    if (fiber.sibling) walk(fiber.sibling);
-  }
-
-  var iter = roots.values ? roots.values() : Object.values(roots);
-  for (var root of iter) {
-    if (root && root.current) walk(root.current);
-  }
-  return JSON.stringify(out);
-})()
-`;
 
 interface StopReadResult {
   live: ProfilingDataBackend | null;

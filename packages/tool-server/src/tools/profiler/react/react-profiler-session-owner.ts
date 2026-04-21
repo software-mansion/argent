@@ -107,18 +107,6 @@ export interface StalenessResult {
  *   `staleThresholdMs`. Takeover is safe without `force`.
  * - Otherwise the caller must pass `{ force: true }` to reclaim.
  */
-/**
- * Evaluate-safe JS snippet that bumps `__ARGENT_PROFILER_OWNER__.lastHeartbeatEpochMs`.
- * The helper itself is installed by `NATIVE_PROFILER_SCRIPT` — this snippet just
- * calls it if present. Safe to evaluate even when the helper is not yet installed.
- */
-export const HEARTBEAT_SCRIPT = `
-(function(){
-  if (typeof globalThis.__argent_profilerHeartbeat === 'function') {
-    try { globalThis.__argent_profilerHeartbeat(); } catch (_e) {}
-  }
-})()
-`;
 
 export function classifyStaleness({
   owner,
