@@ -143,7 +143,7 @@ Delegates React commit capture to the in-app React DevTools backend (ri.startPro
 If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session.
 Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, session_id, hermes_version, detected_architecture, native_profiler } on success, or the already_running payload described above.
+Returns { started_at, startedAtEpochMs, session_id, hermes_version, detected_architecture } on success, or the already_running payload described above.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     services: () => ({}),
@@ -299,6 +299,13 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         );
       }
 
+      if (startResult.isProfilingFlagSet !== true || startResult.ownerInstalled !== true) {
+        await cdp.send("Profiler.stop").catch(ignore);
+        throw new Error(
+          `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`
+        );
+      }
+
       const startedAtEpochMs = startResult.startedAtEpochMs ?? Date.now();
 
       clearCachedProfilerPaths(api.port, api.deviceId);
@@ -317,12 +324,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         session_id: sessionId,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
-        native_profiler: {
-          hookExists: true,
-          rendererInterfaceFound: true,
-          isProfilingFlagSet: startResult.isProfilingFlagSet === true,
-          ownerInstalled: startResult.ownerInstalled === true,
-        },
       };
     },
   };
