@@ -32,7 +32,7 @@ Call `debugger-log-registry`. Returns a summary with entry counts by level, mess
 
 These require a completed profiling session (`react-profiler-stop` + `react-profiler-analyze`).
 
-## CPU query (replaces react-profiler-cpu-summary)
+## CPU query
 
 ```json
 { "port": 8081, "device_id": "<UDID>", "mode": "top_functions", "top_n": 15 }
