@@ -105,7 +105,9 @@ const zodSchema = z.object({
   record_change_descriptions: z
     .boolean()
     .default(true)
-    .describe("Pass to ri.startProfiling — records per-commit props/state/hooks change descriptions."),
+    .describe(
+      "Pass to ri.startProfiling — records per-commit props/state/hooks change descriptions."
+    ),
   force: z
     .boolean()
     .default(false)
@@ -238,7 +240,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
             how_to_reclaim:
-              "A profiling session is already active. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field — if it looks stale (lastHeartbeatEpochMs is old) or has no owner, takeover is safe.",
+              "A profiling session is already active. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field — if it looks stale (lastHeartbeatEpochMs is old) or has no owner, takeover is safe. Ask the user, whether you should simply continue with ongoing profiling session or reinitialise it with new react-profiler-start. Inform about possible cause of already running or stale session. Inform about caveats of continuing profiling the old session.",
           };
         }
 
@@ -260,9 +262,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         startedAtEpochMs: 0,
         lastHeartbeatEpochMs: 0,
         toolServerPid: process.pid,
-        toolServerStartedAtEpochMs: Math.floor(
-          Date.now() - process.uptime() * 1000
-        ),
+        toolServerStartedAtEpochMs: Math.floor(Date.now() - process.uptime() * 1000),
         toolName: "react-profiler-start",
         startArgs: {
           recordChangeDescriptions: params.record_change_descriptions,
@@ -274,9 +274,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       await cdp.send("Profiler.enable").catch(ignore);
       await cdp.send("Profiler.start", { interval: params.sample_interval_us });
 
-      const startJson = (await cdp.evaluate(
-        buildStartScript(JSON.stringify(ownerPayload))
-      )) as string | undefined;
+      const startJson = (await cdp.evaluate(buildStartScript(JSON.stringify(ownerPayload)))) as
+        | string
+        | undefined;
       if (!startJson) {
         throw new Error("Failed to start React profiler (no value returned from runtime).");
       }
