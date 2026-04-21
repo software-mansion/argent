@@ -67,18 +67,22 @@ export function getGlobalSkillLockPath(): string {
   return path.join(os.homedir(), ".agents", ".skill-lock.json");
 }
 
-// Returns true when the lock at `lockPath` tracks at least one of `skillNames`.
-// Used to decide whether an `argent update` should resync a given scope —
-// we only touch a scope that already has argent skills installed, so the
-// update never creates new `skills-lock.json` files in random directories.
-export function hasSkillsInLock(lockPath: string, skillNames: readonly string[]): boolean {
+// Prefix that identifies every skill argent ships. Used to locate argent-
+// owned entries in the skills CLI lock files (including ones that were
+// removed from the bundled set and need to be pruned).
+export const ARGENT_SKILL_PREFIX = "argent-";
+
+// Returns names in the lock that argent owns (i.e. start with the argent
+// prefix). Argent reserves this namespace, so everything under it is
+// considered ours and is kept in sync with the bundled SKILLS_DIR.
+export function listArgentSkillsInLock(lockPath: string): string[] {
   try {
     const raw = fs.readFileSync(lockPath, "utf8");
     const lock = JSON.parse(raw) as { skills?: Record<string, unknown> };
     const tracked = lock.skills ?? {};
-    return skillNames.some((name) => name in tracked);
+    return Object.keys(tracked).filter((name) => name.startsWith(ARGENT_SKILL_PREFIX)).sort();
   } catch {
-    return false;
+    return [];
   }
 }
 

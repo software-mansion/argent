@@ -42,7 +42,7 @@ import {
   formatShellCommand,
   getGlobalSkillLockPath,
   getProjectSkillLockPath,
-  hasSkillsInLock,
+  listArgentSkillsInLock,
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
@@ -400,42 +400,51 @@ describe("getGlobalSkillLockPath", () => {
   });
 });
 
-describe("hasSkillsInLock", () => {
-  it("returns false when the lock file does not exist", () => {
-    expect(hasSkillsInLock(path.join(tmpDir, "missing.json"), ["argent-x"])).toBe(false);
+describe("listArgentSkillsInLock", () => {
+  it("returns an empty list when the lock file does not exist", () => {
+    expect(listArgentSkillsInLock(path.join(tmpDir, "missing.json"))).toEqual([]);
   });
 
-  it("returns false for a malformed JSON lock", () => {
+  it("returns an empty list for a malformed JSON lock", () => {
     const lockPath = path.join(tmpDir, "bad.json");
     fs.writeFileSync(lockPath, "not json");
-    expect(hasSkillsInLock(lockPath, ["argent-x"])).toBe(false);
+    expect(listArgentSkillsInLock(lockPath)).toEqual([]);
   });
 
-  it("returns false when none of the tracked skills match", () => {
-    const lockPath = path.join(tmpDir, "lock.json");
-    fs.writeFileSync(
-      lockPath,
-      JSON.stringify({ version: 1, skills: { "other-skill": {} } })
-    );
-    expect(hasSkillsInLock(lockPath, ["argent-create-flow"])).toBe(false);
-  });
-
-  it("returns true when at least one tracked skill matches", () => {
+  it("returns only skills whose name starts with argent-", () => {
     const lockPath = path.join(tmpDir, "lock.json");
     fs.writeFileSync(
       lockPath,
       JSON.stringify({
         version: 1,
-        skills: { "argent-create-flow": {}, "other-skill": {} },
+        skills: {
+          "argent-create-flow": {},
+          "argent-old-workflow": {}, // still in lock even if no longer bundled
+          "some-other-skill": {},
+          "vercel-labs/agent-skills": {},
+        },
       })
     );
-    expect(hasSkillsInLock(lockPath, ["argent-create-flow", "argent-metro-debugger"])).toBe(true);
+    // Result is sorted so callers can rely on a stable order.
+    expect(listArgentSkillsInLock(lockPath)).toEqual([
+      "argent-create-flow",
+      "argent-old-workflow",
+    ]);
   });
 
-  it("returns false for a lock file without a skills object", () => {
+  it("returns an empty list when the lock has no skills object", () => {
     const lockPath = path.join(tmpDir, "empty.json");
     fs.writeFileSync(lockPath, JSON.stringify({ version: 1 }));
-    expect(hasSkillsInLock(lockPath, ["argent-create-flow"])).toBe(false);
+    expect(listArgentSkillsInLock(lockPath)).toEqual([]);
+  });
+
+  it("returns an empty list when no argent-prefixed entry is tracked", () => {
+    const lockPath = path.join(tmpDir, "lock.json");
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({ version: 1, skills: { "other-skill": {} } })
+    );
+    expect(listArgentSkillsInLock(lockPath)).toEqual([]);
   });
 });
 

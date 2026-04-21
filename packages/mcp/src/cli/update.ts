@@ -10,9 +10,9 @@ import {
   globalInstallCommand,
   formatShellCommand,
   listBundledSkills,
+  listArgentSkillsInLock,
   getProjectSkillLockPath,
   getGlobalSkillLockPath,
-  hasSkillsInLock,
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
@@ -146,39 +146,72 @@ export async function update(args: string[]): Promise<void> {
   // hashes the source on disk and reinstalls anything that changed, which is
   // exactly what we want after `npm i -g @swmansion/argent@new`.
   //
-  // To avoid creating a skills-lock.json in whatever directory the user
+  // A skill that was shipped in a previous argent version but is no longer
+  // in SKILLS_DIR is not touched by `skills add` — it would remain in the
+  // lock file and keep loading in the agent. So we also run `skills remove`
+  // for any argent-prefixed entry in the lock that isn't in the current
+  // bundled set.
+  //
+  // To avoid creating a `skills-lock.json` in whatever directory the user
   // happened to be in, we only touch a scope that already tracks at least
   // one argent-owned skill.
-  const argentSkills = listBundledSkills();
-  if (argentSkills.length > 0) {
-    const skillResults: string[] = [];
-    const scopes: Array<{ label: string; args: string[]; lockPath: string }> = [
-      {
-        label: "project",
-        args: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y"],
-        lockPath: getProjectSkillLockPath(projectRoot),
-      },
-      {
-        label: "global",
-        args: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y", "-g"],
-        lockPath: getGlobalSkillLockPath(),
-      },
-    ];
+  const bundledSkills = new Set(listBundledSkills());
+  const scopes: Array<{
+    label: string;
+    lockPath: string;
+    addArgs: string[];
+    removeArgs: string[];
+  }> = [
+    {
+      label: "project",
+      lockPath: getProjectSkillLockPath(projectRoot),
+      addArgs: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y"],
+      removeArgs: ["skills", "remove", "-y"],
+    },
+    {
+      label: "global",
+      lockPath: getGlobalSkillLockPath(),
+      addArgs: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y", "-g"],
+      removeArgs: ["skills", "remove", "-y", "-g"],
+    },
+  ];
 
-    for (const scope of scopes) {
-      if (!hasSkillsInLock(scope.lockPath, argentSkills)) continue;
+  const skillResults: string[] = [];
+
+  for (const scope of scopes) {
+    const tracked = listArgentSkillsInLock(scope.lockPath);
+    if (tracked.length === 0) continue;
+
+    const orphaned = tracked.filter((name) => !bundledSkills.has(name));
+    const parts: string[] = [];
+
+    if (bundledSkills.size > 0) {
       try {
-        execFileSync("npx", scope.args, { stdio: ["ignore", "pipe", "pipe"] });
-        skillResults.push(`${pc.green("+")} ${scope.label} scope`);
+        execFileSync("npx", scope.addArgs, { stdio: ["ignore", "pipe", "pipe"] });
+        parts.push(`synced ${bundledSkills.size}`);
       } catch (err) {
         const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
-        skillResults.push(`${pc.red("x")} ${scope.label} scope ${pc.dim(`(${msg})`)}`);
+        parts.push(`${pc.red("sync failed")} ${pc.dim(`(${msg})`)}`);
       }
     }
 
-    if (skillResults.length > 0) {
-      p.note(skillResults.join("\n"), "Skills Updated");
+    if (orphaned.length > 0) {
+      try {
+        execFileSync("npx", [...scope.removeArgs, ...orphaned], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        parts.push(`pruned ${orphaned.length} (${orphaned.join(", ")})`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
+        parts.push(`${pc.red("prune failed")} ${pc.dim(`(${msg})`)}`);
+      }
     }
+
+    skillResults.push(`${pc.green("+")} ${scope.label}: ${parts.join(", ")}`);
+  }
+
+  if (skillResults.length > 0) {
+    p.note(skillResults.join("\n"), "Skills Updated");
   }
 
   p.outro(pc.green("Update complete."));
