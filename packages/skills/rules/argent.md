@@ -1,5 +1,5 @@
 ---
-description: Argent Mobile App Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling iOS simulator and Android emulator apps
+description: Argent iOS Simulator and Android Emulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
 alwaysApply: true
 ---
 
@@ -14,44 +14,26 @@ Use cases:
 - The app user is working with is a mobile application which can be run in a simulator/emulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
 - Running, debugging, or testing a React Native app (iOS or Android)
-- Profiling performance or diagnosing re-renders in a React Native app (iOS profiler tooling is iOS-only; React profiler works on either platform)
+- Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
   </description>
-
-<platform_dispatch>
-<important>Interaction tools are unified across iOS and Android. Pass the device id as `udid` and the tool-server selects the right platform automatically.</important>
-
-Get device ids from `list-devices`, which returns iOS simulators and Android devices/emulators tagged with a `platform` discriminator:
-
-- **iOS udid**: UUID shape — `XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX`. Or iOS 17+ short form `XXXXXXXX-XXXXXXXXXXXXXXXX`.
-- **Android udid**: adb serial — `emulator-5554`, `R5CT12345678`, `192.168.1.7:5555`, etc.
-
-Unified tools (pass `udid` from `list-devices`): `gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `screenshot`, `describe`, `launch-app`, `restart-app`, `reinstall-app`, `open-url`, `run-sequence`.
-
-Cross-platform lifecycle tools: `list-devices` (lists both platforms + available Android AVDs), `boot-device` (pass `udid` for iOS or `avdName` for Android).
-
-Platform-specific tools (no unified counterpart):
-
-- **iOS**: `stop-simulator-server`, `stop-all-simulator-servers`, native-devtools suite, iOS Instruments profiler, `paste`.
-- **Android**: `android-stop-app`, `android-logcat`.
-
-If the project only has an `android/` directory (no `ios/`), pick an Android target from `list-devices`; if only iOS, pick an iOS target. For hybrid projects, ask the user which platform to target.
-</platform_dispatch>
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
 Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
 
-- `describe` - UI hierarchy with roles, labels, and frame coordinates (works on iOS and Android)
-- `debugger-component-tree` - React Native specific component tree, when a Metro debugger connection is available
-- `native-describe-screen` / `native-user-interactable-view-at-point` / `native-view-at-point` - iOS-only diagnostics once you already have a candidate point
+- `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
+- `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
+- `debugger-component-tree` - react-native specific components
 
-Whenever something changed YOU MUST first call the platform's describe tool, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use a discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
+`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
+
+Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 
-If the describe tool fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android).
+If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android) to choose the correct next action.
 
-Before starting to interact with the app, read `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android).
+Before starting to interact with the app, read the `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android) skill first.
 </tapping_rule>
 
 <skill_reading_rule>
@@ -60,17 +42,17 @@ Before starting to interact with the app, read `argent-simulator-interact` (iOS)
 
 <general_rules>
 
-- All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`, raw `adb` for tap/swipe/screenshot, `curl` to simulator ports, or the simulator-server binary directly.
+- All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
+  raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
-- Interaction tools (`gesture-tap`, `gesture-swipe`, `button`, `keyboard`, `rotate`, `launch-app`, `restart-app`, `open-url`, `describe`, `run-sequence`) return a screenshot automatically. Call `screenshot` separately only for a baseline before any action or after a delay.
-- Always open apps with `launch-app` / `open-url` — never tap home-screen / launcher icons.
-- Use `run-sequence` when performing multiple sequential actions where you don't need to observe the screen between steps. Works on both iOS and Android.
-- When the session ends or the user says they are done:
-  - iOS — call `stop-all-simulator-servers`.
-  - Android — shut down the emulator from its own UI or via `adb -s <serial> emu kill` if the user wants it off. Argent does not keep persistent per-emulator state, so no server-side teardown is required.
-  - If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and an action can be done using `xcrun` / raw `adb` / other commands, use the command. Examples: simulator lock/shake, `adb emu rotate`, `adb reverse tcp:8081 tcp:8081` for Android Metro reachability.
-- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. Six consecutive screenshot calls with no adequate delay between them will cause context bloat.
+- Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
+  Call `screenshot` separately only for a baseline before any action or after a delay.
+- Always open apps with `launch-app` or `open-url` — never tap home screen icons.
+- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
+- When the session ends or the user says they are done: call `stop-all-simulator-servers` for iOS targets.
+  If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
+- When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
 <react_native_detection>
@@ -80,7 +62,7 @@ source — do not re-inspect files manually.
 
 If the subagent has not run yet and project type is unknown, run it first before proceeding. Always use subagents if available to run `gather-workspace-data` data tool, if possible do not run yourself.
 
-When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery — if the responses are large or unhelpful, fall back to `describe` (auto-dispatches to iOS AX-service or Android uiautomator by device id).
+When `is_react_native` is true: load `argent-react-native-app-workflow` skill. Use `debugger-component-tree` for element discovery - if the responses are large or unhelpful, try `describe`.
 </react_native_detection>
 
 <skill_routing>
@@ -89,7 +71,7 @@ procedure and edge-case handling for each workflow.
 
 iOS SIMULATOR SETUP
 Skill: `argent-simulator-setup`
-When: Beginning a task that involves the iOS simulator, no simulator booted yet, or you need a simulator UDID.
+When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
 
 ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
@@ -105,7 +87,7 @@ When: Performing touch interactions on Android, typing, pressing hardware button
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
-When: Project is react-native, starting Metro or running the iOS / Android app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app. Includes `./gradlew` and `adb reverse` guidance for the Android path.
+When: Project is react-native, starting Metro or running the iOS or Android app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
 
 JS EVALUATION, METRO CONNECTION, REACT NATIVE
 Skill: `argent-metro-debugger`
@@ -117,7 +99,7 @@ When: To measure performance of specific components, to find app-wide bottleneck
 
 NATIVE PROFILING
 Use skill: `argent-native-profiler`
-When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS today via Instruments/xctrace; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
+When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS only today; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
 
 PERFORMANCE OPTIMIZATION
 Use skill: `argent-react-native-optimization`
