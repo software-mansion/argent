@@ -22,6 +22,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  resolveProjectRoot,
   type ShellCommand,
 } from "./utils.js";
 import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
@@ -194,7 +195,9 @@ export async function init(args: string[]): Promise<void> {
             // is the only point in init where we can surface orphans
             // (skills removed from a previous argent version) before
             // Step 2's single-scope `skills add`.
-            const skillSummary = formatSkillRefreshSummary(refreshArgentSkills(process.cwd()));
+            const skillSummary = formatSkillRefreshSummary(
+              refreshArgentSkills(resolveProjectRoot(process.cwd()))
+            );
             if (skillSummary) {
               p.note(skillSummary, "Skills Updated");
             }
@@ -314,7 +317,7 @@ export async function init(args: string[]): Promise<void> {
     }
   }
 
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot(process.cwd());
   const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
   const mcpEntry = getMcpEntry();

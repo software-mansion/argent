@@ -9,6 +9,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  resolveProjectRoot,
   RULES_DIR,
   AGENTS_DIR,
 } from "./utils.js";
@@ -85,7 +86,7 @@ export async function update(args: string[]): Promise<void> {
   // Refresh configuration
   spinner.start("Refreshing workspace configuration...");
 
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot(process.cwd());
   const detected = detectAdapters();
   const mcpEntry = getMcpEntry();
   const results: string[] = [];
