@@ -670,6 +670,89 @@ const hermesAdapter: McpConfigAdapter = {
   },
 };
 
+// ── opencode adapter ────────────────────────────────────────────────────────
+// MARK: opencode
+// Format: { mcp: { argent: { type: "local", command: [cmd, ...args], enabled,
+//   environment } }, tools: { "argent*": true } }
+// Project: <root>/opencode.json   Global: ~/.config/opencode/opencode.json
+//
+// Unlike every other adapter, opencode's config file is optional — a fresh
+// install typically has no opencode.json at all and the CLI runs with
+// defaults. So we cannot rely on the config directory existing to detect
+// opencode; instead we probe for the `opencode` binary on PATH.
+
+const OPENCODE_BINARY = "opencode";
+const OPENCODE_ALLOWLIST_PATTERN = "argent*";
+
+function hasOpenCodeBinary(): boolean {
+  try {
+    const cmd = process.platform === "win32" ? "where" : "which";
+    execFileSync(cmd, [OPENCODE_BINARY], { stdio: ["ignore", "ignore", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const openCodeAdapter: McpConfigAdapter = {
+  name: "opencode",
+
+  detect(): boolean {
+    return hasOpenCodeBinary();
+  },
+
+  projectPath(root: string): string | null {
+    return path.join(root, "opencode.json");
+  },
+
+  globalPath(): string | null {
+    return path.join(homedir(), ".config", "opencode", "opencode.json");
+  },
+
+  write(configPath: string, entry: McpServerEntry): void {
+    const config = readJson(configPath);
+    const servers = (config.mcp ?? {}) as Record<string, unknown>;
+    servers[MCP_SERVER_KEY] = {
+      type: "local",
+      command: [entry.command, ...entry.args],
+      enabled: true,
+      environment: entry.env,
+    };
+    config.mcp = servers;
+    writeJson(configPath, config);
+  },
+
+  remove(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcp as Record<string, unknown> | undefined;
+    if (!servers?.[MCP_SERVER_KEY]) return false;
+    delete servers[MCP_SERVER_KEY];
+    writeJsonOrRemove(configPath, config);
+    return true;
+  },
+
+  addAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath) return;
+    const config = readJson(configPath);
+    const tools = (config.tools ?? {}) as Record<string, unknown>;
+    tools[OPENCODE_ALLOWLIST_PATTERN] = true;
+    config.tools = tools;
+    writeJson(configPath, config);
+  },
+
+  removeAllowlist(root: string, scope: "local" | "global"): void {
+    const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
+    if (!configPath || !fs.existsSync(configPath)) return;
+    const config = readJson(configPath);
+    const tools = config.tools as Record<string, unknown> | undefined;
+    if (!tools || !(OPENCODE_ALLOWLIST_PATTERN in tools)) return;
+    delete tools[OPENCODE_ALLOWLIST_PATTERN];
+    writeJsonOrRemove(configPath, config);
+  },
+};
+
 // ── Registry ──────────────────────────────────────────────────────────────────
 // MARK: Registry
 
@@ -682,6 +765,7 @@ export const ALL_ADAPTERS: McpConfigAdapter[] = [
   geminiAdapter,
   codexAdapter,
   hermesAdapter,
+  openCodeAdapter,
 ];
 
 export function detectAdapters(): McpConfigAdapter[] {
@@ -836,6 +920,18 @@ export function getManagedContentTargets(
         const configPath = scope === "global" ? adapter.globalPath() : adapter.projectPath(root);
         if (!configPath) break;
         addManagedTarget(targets.codexConfigTargets, adapter.name, configPath, root);
+        break;
+      }
+      case "opencode": {
+        // opencode's config lives at the project root (opencode.json), but
+        // its skills/agents live under .opencode/. Globally both live under
+        // ~/.config/opencode/.
+        const base =
+          scope === "global"
+            ? path.join(homedir(), ".config", "opencode")
+            : path.join(root, ".opencode");
+        addManagedTarget(targets.skillTargets, adapter.name, path.join(base, "skills"), root);
+        addManagedTarget(targets.agentTargets, adapter.name, path.join(base, "agents"), root);
         break;
       }
     }

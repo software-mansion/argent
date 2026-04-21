@@ -85,6 +85,7 @@ argent init
 | Zed         | `.zed/settings.json`                                          |
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
+| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
 
 ## Privacy
 

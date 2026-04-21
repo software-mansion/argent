@@ -81,7 +81,7 @@ describe("getMcpEntry", () => {
 // ── Adapter registry ──────────────────────────────────────────────────────────
 
 describe("ALL_ADAPTERS", () => {
-  it("contains all eight adapters", () => {
+  it("contains all nine adapters", () => {
     const names = ALL_ADAPTERS.map((a) => a.name);
     expect(names).toEqual([
       "Cursor",
@@ -92,6 +92,7 @@ describe("ALL_ADAPTERS", () => {
       "Gemini",
       "Codex",
       "Hermes",
+      "opencode",
     ]);
   });
 });
@@ -753,6 +754,128 @@ describe("Hermes adapter", () => {
   });
 });
 
+// ── opencode adapter ────────────────────────────────────────────────────────
+
+describe("opencode adapter", () => {
+  const adapter = ALL_ADAPTERS.find((a) => a.name === "opencode")!;
+
+  it("writes { mcp: { argent: { type: 'local', command: [...] } } }", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcp as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    const argent = servers.argent as Record<string, unknown>;
+    expect(argent.type).toBe("local");
+    expect(argent.command).toEqual(["argent", "mcp"]);
+    expect(argent.enabled).toBe(true);
+    expect(argent.environment).toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("removes argent entry and returns true", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(configPath, getMcpEntry());
+
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it("returns false when removing from non-existent file", () => {
+    expect(adapter.remove(path.join(tmpDir, "nope.json"))).toBe(false);
+  });
+
+  it("returns false when removing from file without argent entry", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    fs.writeFileSync(configPath, JSON.stringify({ mcp: {} }));
+    expect(adapter.remove(configPath)).toBe(false);
+  });
+
+  it("preserves other servers and unrelated settings when writing", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        mcp: { "other-tool": { type: "local", command: ["npx", "other"] } },
+        theme: "dark",
+      })
+    );
+
+    adapter.write(configPath, getMcpEntry());
+
+    const config = readJsonFile(configPath);
+    const servers = config.mcp as Record<string, unknown>;
+    expect(servers).toHaveProperty("other-tool");
+    expect(servers).toHaveProperty("argent");
+    expect(config.theme).toBe("dark");
+  });
+
+  it("projectPath returns opencode.json at project root", () => {
+    expect(adapter.projectPath("/foo")).toBe(path.join("/foo", "opencode.json"));
+  });
+
+  it("globalPath returns ~/.config/opencode/opencode.json", () => {
+    expect(adapter.globalPath()).toBe(
+      path.join(os.homedir(), ".config", "opencode", "opencode.json")
+    );
+  });
+
+  it("addAllowlist sets 'argent*' wildcard in tools (local)", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const tools = config.tools as Record<string, unknown>;
+    expect(tools["argent*"]).toBe(true);
+  });
+
+  it("addAllowlist sets 'argent*' wildcard in tools (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const configPath = path.join(homedirOverride, ".config", "opencode", "opencode.json");
+    adapter.write(configPath, getMcpEntry());
+
+    adapter.addAllowlist!(tmpDir, "global");
+
+    const config = readJsonFile(configPath);
+    const tools = config.tools as Record<string, unknown>;
+    expect(tools["argent*"]).toBe(true);
+  });
+
+  it("removeAllowlist deletes the 'argent*' entry", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    adapter.write(configPath, getMcpEntry());
+    adapter.addAllowlist!(tmpDir, "local");
+
+    adapter.removeAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const tools = config.tools as Record<string, unknown> | undefined;
+    expect(tools?.["argent*"]).toBeUndefined();
+  });
+
+  it("removeAllowlist is a no-op when file does not exist", () => {
+    expect(() => adapter.removeAllowlist!(tmpDir, "local")).not.toThrow();
+  });
+
+  it("preserves other tools entries when adding allowlist", () => {
+    const configPath = path.join(tmpDir, "opencode.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ mcp: {}, tools: { "other-mcp*": true, write: "ask" } })
+    );
+
+    adapter.addAllowlist!(tmpDir, "local");
+
+    const config = readJsonFile(configPath);
+    const tools = config.tools as Record<string, unknown>;
+    expect(tools["other-mcp*"]).toBe(true);
+    expect(tools.write).toBe("ask");
+    expect(tools["argent*"]).toBe(true);
+  });
+});
+
 // ── Claude permissions ────────────────────────────────────────────────────────
 
 describe("addClaudePermission / removeClaudePermission", () => {
@@ -834,6 +957,28 @@ describe("getManagedContentTargets", () => {
     );
     expect(targets.codexConfigTargets.map((t) => t.label)).toEqual(["~/.codex/config.toml"]);
     expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["~/skills-lock.json"]);
+  });
+
+  it("routes opencode skills/agents under .opencode (local)", () => {
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "opencode");
+    const targets = getManagedContentTargets(adapters, tmpDir, "local");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining([".opencode/skills"])
+    );
+    expect(targets.agentTargets.map((t) => t.label)).toEqual([".opencode/agents"]);
+    expect(targets.ruleTargets).toEqual([]);
+  });
+
+  it("routes opencode skills/agents under ~/.config/opencode (global)", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const adapters = ALL_ADAPTERS.filter((a) => a.name === "opencode");
+    const targets = getManagedContentTargets(adapters, tmpDir, "global");
+
+    expect(targets.skillTargets.map((t) => t.label)).toEqual(
+      expect.arrayContaining(["~/.config/opencode/skills"])
+    );
+    expect(targets.agentTargets.map((t) => t.label)).toEqual(["~/.config/opencode/agents"]);
   });
 });
 
