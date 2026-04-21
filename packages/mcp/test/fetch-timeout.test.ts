@@ -38,15 +38,12 @@ function startHangingServer(): Promise<{ port: number; close: () => Promise<void
   });
 }
 
-// Minimal replica of fetchWithReconnect from mcp-server.ts — same retry
-// logic, same AbortController timeout wrapping.
-// backoffBaseMs is parameterized so tests can shrink the inter-retry sleep
-// (production uses 250ms → ~3.75s cumulative; tests pass a tiny value).
+// TODO: Instead of replicating, the real function should be imported
+// Minimal replica of fetchWithReconnect from mcp-server.ts
 async function fetchWithReconnect(
   getUrl: () => string,
   init?: RequestInit,
-  timeoutMs = 30_000,
-  backoffBaseMs = 250
+  timeoutMs = 30_000
 ): Promise<Response> {
   const MAX_RETRIES = 4;
   let lastError: unknown;
@@ -67,7 +64,8 @@ async function fetchWithReconnect(
       clearTimeout(timer);
       lastError = err;
       if (attempt === MAX_RETRIES) break;
-      await new Promise((r) => setTimeout(r, backoffBaseMs * Math.pow(2, attempt)));
+      // exponential backoff kept tiny (5ms) for the tests
+      await new Promise((r) => setTimeout(r, 5 * Math.pow(2, attempt)));
     }
   }
   throw lastError;
@@ -89,8 +87,7 @@ describe("fetch timeout in fetchWithReconnect", () => {
       await fetchWithReconnect(
         () => `${url}/tools/hang`,
         { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
-        100, // 100ms timeout per attempt for fast test
-        5 // 5ms backoff base → 5/10/20/40ms sleeps ≈ 75ms total
+        100 // 100ms timeout per attempt for fast test
       );
     } catch {
       threw = true;
