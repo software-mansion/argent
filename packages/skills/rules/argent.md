@@ -77,13 +77,9 @@ ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
-iOS TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
+TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-simulator-interact`
-When: Performing touch interactions on iOS, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
-
-ANDROID TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
-Skill: `argent-android-emulator-interact`
-When: Performing touch interactions on Android, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, reading logcat, or taking standalone screenshots.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots. Interaction tools are unified across iOS and Android — pair with `argent-android-emulator-interact` when driving an Android target for the platform-specific gotchas (Metro reverse, grantPermissions, locked-screen describe, logcat).
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
