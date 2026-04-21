@@ -94,18 +94,15 @@ export interface StalenessInput {
 
 export interface StalenessResult {
   stale: boolean;
-  orphaned: boolean;
   ageSeconds: number | null;
-  secondsSinceLastHeartbeat: number | null;
   canReclaimWithoutForce: boolean;
 }
 
 /**
- * Classify an active profiling session as fresh / stale / orphaned.
+ * Classify an active profiling session as fresh / stale / reclaimable.
  *
- * - `orphaned = true` when the backend says profiling is active but no owner
- *   metadata is installed (previous tool-server died mid-session, or the
- *   session was started by a foreign DevTools client). Takeover is safe.
+ * - No owner metadata → takeover is safe (previous tool-server died mid-session,
+ *   or the session was started by a foreign DevTools client).
  * - `stale = true` when the owner's `lastHeartbeatEpochMs` is older than
  *   `staleThresholdMs`. Takeover is safe without `force`.
  * - Otherwise the caller must pass `{ force: true }` to reclaim.
@@ -131,9 +128,7 @@ export function classifyStaleness({
   if (!owner) {
     return {
       stale: false,
-      orphaned: true,
       ageSeconds: null,
-      secondsSinceLastHeartbeat: null,
       canReclaimWithoutForce: true,
     };
   }
@@ -144,9 +139,7 @@ export function classifyStaleness({
 
   return {
     stale,
-    orphaned: false,
     ageSeconds: Math.max(0, ageMs) / 1000,
-    secondsSinceLastHeartbeat: Math.max(0, heartbeatAgeMs) / 1000,
     canReclaimWithoutForce: stale,
   };
 }

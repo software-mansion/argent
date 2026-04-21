@@ -24,42 +24,11 @@ const READ_STATE_SCRIPT = `
   }
   if (!ri) return JSON.stringify({ hookExists: true, rendererInterfaceFound: false });
 
-  var backendCommitCount = null;
-  var maxBackendTimestampMs = null;
-  try {
-    var pd = ri.getProfilingData();
-    if (pd && pd.dataForRoots) {
-      var count = 0, maxT = 0;
-      for (var i = 0; i < pd.dataForRoots.length; i++) {
-        var cd = pd.dataForRoots[i].commitData || [];
-        count += cd.length;
-        for (var j = 0; j < cd.length; j++) {
-          var t = cd[j].timestamp;
-          if (typeof t === 'number' && t > maxT) maxT = t;
-        }
-      }
-      backendCommitCount = count;
-      maxBackendTimestampMs = count > 0 ? maxT : null;
-    }
-  } catch (_e) { /* pristine state — never started in this Hermes lifetime */ }
-
-  var extras = 0;
-  try {
-    var ls = h.listeners && h.listeners['react-devtools'];
-    if (Array.isArray(ls)) extras = Math.max(0, ls.length - 2);
-  } catch (_e) {}
-
   return JSON.stringify({
     hookExists: true,
     rendererInterfaceFound: true,
     isRunning: ri.__argent_isProfiling__ === true,
-    isProfilingFlagPresent: typeof ri.__argent_isProfiling__ === 'boolean',
-    startWrapped: ri.__argent_startWrapped__ === true,
-    startedAtEpochMs: (typeof ri.__argent_startedAtEpochMs__ === 'number') ? ri.__argent_startedAtEpochMs__ : null,
     owner: globalThis.__ARGENT_PROFILER_OWNER__ || null,
-    backendCommitCount: backendCommitCount,
-    maxBackendTimestampMs: maxBackendTimestampMs,
-    extraDevtoolsClients: extras,
     nowEpochMs: Date.now(),
   });
 })()
@@ -152,13 +121,7 @@ type ReadStateResult =
       hookExists: true;
       rendererInterfaceFound: true;
       isRunning: boolean;
-      isProfilingFlagPresent: boolean;
-      startWrapped: boolean;
-      startedAtEpochMs: number | null;
       owner: ProfilerSessionOwner | null;
-      backendCommitCount: number | null;
-      maxBackendTimestampMs: number | null;
-      extraDevtoolsClients: number;
       nowEpochMs: number;
     };
 
@@ -177,10 +140,10 @@ export function createReactProfilerStartTool(
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling) rather than a per-commit JS wrapper — prerequisite for profiling large apps without freezing the JS thread.
-If another tool-server already owns the session, returns { already_running: true, owner, stale, orphaned, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session.
+If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session.
 Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Returns { started_at, startedAtEpochMs, session_id, hermes_version, detected_architecture, native_profiler, concurrent_devtools_clients } on success, or the already_running payload described above.
+Returns { started_at, startedAtEpochMs, session_id, hermes_version, detected_architecture, native_profiler } on success, or the already_running payload described above.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     services: () => ({}),
@@ -268,27 +231,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
         const canTakeOverSilently = staleness.canReclaimWithoutForce || params.force === true;
         if (!canTakeOverSilently) {
-          const derivedLastCommitEpochMs =
-            owner && state.maxBackendTimestampMs !== null
-              ? owner.startedAtEpochMs + state.maxBackendTimestampMs
-              : null;
           return {
             already_running: true,
             session_id: owner?.sessionId ?? null,
             owner,
             age_seconds: staleness.ageSeconds,
-            seconds_since_last_heartbeat: staleness.secondsSinceLastHeartbeat,
-            seconds_since_last_commit:
-              derivedLastCommitEpochMs !== null
-                ? (state.nowEpochMs - derivedLastCommitEpochMs) / 1000
-                : null,
-            backend_commit_count: state.backendCommitCount,
-            derived_last_commit_epoch_ms: derivedLastCommitEpochMs,
-            concurrent_devtools_clients: state.extraDevtoolsClients,
             stale: staleness.stale,
-            orphaned: staleness.orphaned,
             how_to_reclaim:
-              "A profiling session is already active. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field — if it looks stale (lastHeartbeatEpochMs is old) or orphaned (no owner field), takeover is safe.",
+              "A profiling session is already active. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field — if it looks stale (lastHeartbeatEpochMs is old) or has no owner, takeover is safe.",
           };
         }
 
@@ -367,7 +317,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         session_id: sessionId,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
-        concurrent_devtools_clients: state.extraDevtoolsClients,
         native_profiler: {
           hookExists: true,
           rendererInterfaceFound: true,
