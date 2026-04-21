@@ -1,16 +1,19 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { execSync, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
   getInstalledVersion,
   getLatestVersion,
+  isNewerVersion,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  resolveProjectRoot,
   RULES_DIR,
   AGENTS_DIR,
 } from "./utils.js";
+import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "../launcher.js";
 
@@ -42,7 +45,7 @@ export async function update(args: string[]): Promise<void> {
   p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
   p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
 
-  if (installed !== latest) {
+  if (isNewerVersion(latest, installed)) {
     p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
 
     const pm = detectPackageManager();
@@ -83,7 +86,7 @@ export async function update(args: string[]): Promise<void> {
   // Refresh configuration
   spinner.start("Refreshing workspace configuration...");
 
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot(process.cwd());
   const detected = detectAdapters();
   const mcpEntry = getMcpEntry();
   const results: string[] = [];
@@ -130,22 +133,9 @@ export async function update(args: string[]): Promise<void> {
     p.note(ruleResults.join("\n"), "Rules & Agents Updated");
   }
 
-  // Skills check prompt
-  if (!nonInteractive) {
-    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-    const checkSkills = await p.confirm({
-      message: "Check if skills have updates? — runs npx skills check",
-      initialValue: true,
-    });
-
-    if (!p.isCancel(checkSkills) && checkSkills) {
-      try {
-        execSync("npx skills check", { stdio: "inherit" });
-      } catch {
-        p.log.warn("Could not run skills check.");
-      }
-    }
+  const skillSummary = formatSkillRefreshSummary(refreshArgentSkills(projectRoot));
+  if (skillSummary) {
+    p.note(skillSummary, "Skills Updated");
   }
 
   p.outro(pc.green("Update complete."));
