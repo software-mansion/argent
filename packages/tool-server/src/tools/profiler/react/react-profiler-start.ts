@@ -102,12 +102,6 @@ const zodSchema = z.object({
     .positive()
     .default(100)
     .describe("CPU sampling interval in microseconds (default 100)"),
-  record_change_descriptions: z
-    .boolean()
-    .default(true)
-    .describe(
-      "Pass to ri.startProfiling — records per-commit props/state/hooks change descriptions."
-    ),
   force: z
     .boolean()
     .default(false)
@@ -265,7 +259,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         toolServerStartedAtEpochMs: Math.floor(Date.now() - process.uptime() * 1000),
         toolName: "react-profiler-start",
         startArgs: {
-          recordChangeDescriptions: params.record_change_descriptions,
           sampleIntervalUs: params.sample_interval_us,
         },
         commitCountAtStart: 0,
