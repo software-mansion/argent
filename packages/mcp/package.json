@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
   "repository": {
@@ -43,10 +43,13 @@
     "@clack/prompts": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "picocolors": "^1.1.1",
-    "smol-toml": "^1.6.1"
+    "semver": "^7.7.4",
+    "smol-toml": "^1.6.1",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/semver": "^7.7.1",
     "esbuild": "^0.27.3",
     "typescript": "^5.5.0",
     "vitest": "^4.0.18"

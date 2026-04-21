@@ -16,6 +16,9 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  isNewerVersion,
+  isOnline,
+  isSkillsCliAvailable,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
@@ -157,7 +160,7 @@ export async function init(args: string[]): Promise<void> {
     }
     spinner.stop(pc.dim("Version check complete."));
 
-    if (latest && latest !== version) {
+    if (latest && isNewerVersion(latest, version)) {
       if (!nonInteractive) {
         const updateChoice = await p.select({
           message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
@@ -206,11 +209,22 @@ export async function init(args: string[]): Promise<void> {
   if (nonInteractive) {
     selectedAdapters = detected.length > 0 ? detected : ALL_ADAPTERS;
   } else {
-    const choices = ALL_ADAPTERS.map((a) => ({
-      value: a,
-      label: a.name,
-      hint: detectedNames.includes(a.name) ? "detected" : undefined,
-    }));
+    const choices = ALL_ADAPTERS.map((a) => {
+      const parts: string[] = [];
+      if (detectedNames.includes(a.name)) parts.push("detected");
+      const hasProject = a.projectPath(process.cwd()) != null;
+      const hasGlobal = a.globalPath() != null;
+      if (!hasProject && hasGlobal) {
+        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s global config`)));
+      } else if (hasProject && !hasGlobal) {
+        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s project config`)));
+      }
+      return {
+        value: a,
+        label: a.name,
+        hint: parts.length > 0 ? parts.join(", ") : undefined,
+      };
+    });
 
     p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
 
@@ -310,6 +324,16 @@ export async function init(args: string[]): Promise<void> {
         } catch (err) {
           mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
         }
+      } else if (scope !== "global" && adapter.globalPath()) {
+        const fallback = adapter.globalPath()!;
+        try {
+          adapter.write(fallback, mcpEntry);
+          mcpResults.push(
+            `${pc.green("+")} ${adapter.name} ${pc.dim(`(global fallback: ${fallback})`)}`
+          );
+        } catch (err) {
+          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
+        }
       } else {
         mcpResults.push(
           `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config path for this scope)")}`
@@ -398,7 +422,20 @@ export async function init(args: string[]): Promise<void> {
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
 
-  if (nonInteractive) {
+  const online = await isOnline();
+  const offlineWithCache = !online && isSkillsCliAvailable();
+  const skillsCliReady = online || offlineWithCache;
+
+  if (!skillsCliReady) {
+    p.log.warn(
+      pc.yellow("You appear to be offline. ") +
+        "Automatic skills installation requires a network connection."
+    );
+  }
+
+  if (!skillsCliReady) {
+    skillsMethod = "manual";
+  } else if (nonInteractive) {
     skillsMethod = "default";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
@@ -462,7 +499,9 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(skillsArgs.join(" "))}`);
+    const npxArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
+
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -471,7 +510,7 @@ export async function init(args: string[]): Promise<void> {
 
     try {
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(skillsArgs, skillsMethod === "interactive", skillsCwd);
+      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
