@@ -264,15 +264,6 @@ export interface ShellCommand {
   args: string[];
 }
 
-// Extracts the value that follows a named flag in an argv-style array.
-// Returns null if the flag is absent or comes as the last element (no value
-// to pair with it). Used by both init and update to parse `--from <path>`.
-export function extractFlag(args: readonly string[], flag: string): string | null {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return null;
-  return args[idx + 1]!;
-}
-
 export function formatShellCommand(cmd: ShellCommand): string {
   const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
   return parts.join(" ");

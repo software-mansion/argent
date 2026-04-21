@@ -14,7 +14,6 @@ import {
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
-  extractFlag,
   getInstalledVersion,
   getLatestVersion,
   isNewerVersion,
@@ -72,6 +71,12 @@ function runShellCommand(cmd: ShellCommand): Promise<void> {
 
     child.on("error", reject);
   });
+}
+
+function extractFlag(args: string[], flag: string): string | null {
+  const idx = args.indexOf(flag);
+  if (idx === -1 || idx + 1 >= args.length) return null;
+  return args[idx + 1]!;
 }
 
 export async function init(args: string[]): Promise<void> {
