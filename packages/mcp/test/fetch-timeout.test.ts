@@ -77,7 +77,7 @@ describe("fetch timeout in fetchWithReconnect", () => {
     const url = `http://127.0.0.1:${fake.port}`;
 
     // GET /tools should succeed immediately.
-    const listRes = await fetchWithReconnect(() => `${url}/tools`, undefined, 1000, 5);
+    const listRes = await fetchWithReconnect(() => `${url}/tools`, undefined, 1000);
     expect(listRes.ok).toBe(true);
 
     // POST /tools/hang should time out and eventually throw.
