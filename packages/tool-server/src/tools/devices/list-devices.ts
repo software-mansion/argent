@@ -44,9 +44,9 @@ const zodSchema = z.object({});
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
   description: `List iOS simulators and Android devices/emulators in one place.
-Use when picking a target id at the start of a session ('udid' for iOS entries, 'serial' for Android) or checking which targets are already running before calling interaction tools.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios' or 'android'), and 'avds' lists Android AVDs that can be booted via boot-device. Booted/ready devices are listed first.
-Does not throw on missing tooling: platforms whose developer tools are unavailable are silently omitted, so an empty result usually means the platform SDK is not installed. Fails with an error only when the underlying process cannot be spawned at all.`,
+Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android) to pass to interaction tools, and to see which targets are already running.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios' or 'android'), and 'avds' lists Android AVDs that can be booted via boot-device.
+Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select or Android platform-tools is not installed.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {

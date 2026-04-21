@@ -20,10 +20,8 @@ export const androidStopAppTool: ToolDefinition<
 > = {
   id: "android-stop-app",
   requires: ["adb"],
-  description: `Stop a running Android app without relaunching it — force-stops the process and its background services.
-Use when wiping runtime state, preparing a clean relaunch, or dismissing a backgrounded process. Android-only: for iOS, call restart-app instead (which terminates + relaunches in one step).
-Returns { stopped, bundleId } with 'stopped' always true on success — Android does not distinguish "stopped a running app" from "was already not running".
-Fails when the udid is not in list-devices (unknown device) or the device is offline; does not error if the target package is installed but idle.`,
+  description: `Force-stop an Android app without relaunching it. Android-only — no iOS equivalent (use 'restart-app' for iOS).
+Returns { stopped, bundleId }. Does not error if the app was not running.`,
   zodSchema,
   services: () => ({}),
   async execute(_services, params) {
