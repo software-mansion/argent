@@ -5,7 +5,7 @@ import {
   FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT } from "./react-profiler-session-owner";
+import { HEARTBEAT_SCRIPT } from "../../../utils/react-profiler/scripts";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
