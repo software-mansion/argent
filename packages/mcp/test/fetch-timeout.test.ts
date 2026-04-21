@@ -40,10 +40,13 @@ function startHangingServer(): Promise<{ port: number; close: () => Promise<void
 
 // Minimal replica of fetchWithReconnect from mcp-server.ts — same retry
 // logic, same AbortController timeout wrapping.
+// backoffBaseMs is parameterized so tests can shrink the inter-retry sleep
+// (production uses 250ms → ~3.75s cumulative; tests pass a tiny value).
 async function fetchWithReconnect(
   getUrl: () => string,
   init?: RequestInit,
-  timeoutMs = 30_000
+  timeoutMs = 30_000,
+  backoffBaseMs = 250
 ): Promise<Response> {
   const MAX_RETRIES = 4;
   let lastError: unknown;
@@ -64,7 +67,7 @@ async function fetchWithReconnect(
       clearTimeout(timer);
       lastError = err;
       if (attempt === MAX_RETRIES) break;
-      await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
+      await new Promise((r) => setTimeout(r, backoffBaseMs * Math.pow(2, attempt)));
     }
   }
   throw lastError;
@@ -76,7 +79,7 @@ describe("fetch timeout in fetchWithReconnect", () => {
     const url = `http://127.0.0.1:${fake.port}`;
 
     // GET /tools should succeed immediately.
-    const listRes = await fetchWithReconnect(() => `${url}/tools`, undefined, 1000);
+    const listRes = await fetchWithReconnect(() => `${url}/tools`, undefined, 1000, 5);
     expect(listRes.ok).toBe(true);
 
     // POST /tools/hang should time out and eventually throw.
@@ -86,7 +89,8 @@ describe("fetch timeout in fetchWithReconnect", () => {
       await fetchWithReconnect(
         () => `${url}/tools/hang`,
         { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
-        500 // 500ms timeout per attempt for fast test
+        100, // 100ms timeout per attempt for fast test
+        5 // 5ms backoff base → 5/10/20/40ms sleeps ≈ 75ms total
       );
     } catch {
       threw = true;
@@ -96,10 +100,11 @@ describe("fetch timeout in fetchWithReconnect", () => {
     await fake.close();
 
     expect(threw).toBe(true);
-    // 5 attempts × 500ms timeout + ~3.75s backoff ≈ 6.25s.
-    // Must finish well under 30s (the old infinite-hang behavior).
-    expect(elapsed).toBeLessThan(15_000);
-  }, 20_000);
+    // 5 attempts × 100ms timeout + ~75ms backoff ≈ 575ms.
+    // Must finish well under the timeout — the assertion guards against
+    // regressions where a hanging POST is not aborted at all.
+    expect(elapsed).toBeLessThan(5_000);
+  }, 10_000);
 
   it("succeeds immediately when the server responds within the timeout", async () => {
     const server = http.createServer((_req, res) => {
