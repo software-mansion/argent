@@ -42,10 +42,7 @@ import { refreshArgentSkills, formatSkillRefreshSummary } from "../../src/cli/sk
 let tmpDir: string;
 const originalXdg = process.env.XDG_STATE_HOME;
 
-function writeLock(
-  lockPath: string,
-  skills: Record<string, Record<string, unknown>>
-): void {
+function writeLock(lockPath: string, skills: Record<string, Record<string, unknown>>): void {
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   fs.writeFileSync(lockPath, JSON.stringify({ version: 1, skills }));
 }

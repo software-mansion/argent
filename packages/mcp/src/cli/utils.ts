@@ -80,7 +80,9 @@ export function listArgentSkillsInLock(lockPath: string): string[] {
     const raw = fs.readFileSync(lockPath, "utf8");
     const lock = JSON.parse(raw) as { skills?: Record<string, unknown> };
     const tracked = lock.skills ?? {};
-    return Object.keys(tracked).filter((name) => name.startsWith(ARGENT_SKILL_PREFIX)).sort();
+    return Object.keys(tracked)
+      .filter((name) => name.startsWith(ARGENT_SKILL_PREFIX))
+      .sort();
   } catch {
     return [];
   }

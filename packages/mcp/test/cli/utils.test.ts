@@ -426,10 +426,7 @@ describe("listArgentSkillsInLock", () => {
       })
     );
     // Result is sorted so callers can rely on a stable order.
-    expect(listArgentSkillsInLock(lockPath)).toEqual([
-      "argent-create-flow",
-      "argent-old-workflow",
-    ]);
+    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-flow", "argent-old-workflow"]);
   });
 
   it("returns an empty list when the lock has no skills object", () => {
@@ -440,10 +437,7 @@ describe("listArgentSkillsInLock", () => {
 
   it("returns an empty list when no argent-prefixed entry is tracked", () => {
     const lockPath = path.join(tmpDir, "lock.json");
-    fs.writeFileSync(
-      lockPath,
-      JSON.stringify({ version: 1, skills: { "other-skill": {} } })
-    );
+    fs.writeFileSync(lockPath, JSON.stringify({ version: 1, skills: { "other-skill": {} } }));
     expect(listArgentSkillsInLock(lockPath)).toEqual([]);
   });
 });
