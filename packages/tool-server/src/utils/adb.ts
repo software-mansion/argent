@@ -30,7 +30,7 @@ export async function runAdb(
  * (screencap PNG bytes, uiautomator dump, etc.) where utf-8 decoding corrupts
  * the stream.
  */
-export async function runAdbBinary(
+async function runAdbBinary(
   args: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<Buffer> {
@@ -204,7 +204,5 @@ export async function listAvds(): Promise<AvdInfo[]> {
   }
 }
 
-/** Resolve the `emulator` binary path so we can spawn it detached. */
-export function emulatorBinaryName(): string {
-  return "emulator";
-}
+/** Name of the Android `emulator` binary we spawn when booting an AVD. Relies on `$PATH`. */
+export const EMULATOR_BINARY = "emulator";

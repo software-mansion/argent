@@ -5,7 +5,7 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import {
   adbShell,
-  emulatorBinaryName,
+  EMULATOR_BINARY,
   listAndroidDevices,
   listAvds,
   runAdb,
@@ -198,7 +198,7 @@ async function bootAndroid(params: {
   if (params.coldBoot) emulatorArgs.push("-no-snapshot-load");
   if (params.noWindow) emulatorArgs.push("-no-window");
 
-  const child = spawn(emulatorBinaryName(), emulatorArgs, {
+  const child = spawn(EMULATOR_BINARY, emulatorArgs, {
     detached: true,
     stdio: "ignore",
   });
