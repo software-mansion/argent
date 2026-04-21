@@ -125,48 +125,6 @@ describe("refreshArgentSkills", () => {
     expect(removeArgs).toContain("argent-super-workflow");
   });
 
-  it("cleans the project lock after prune (works around skills CLI leaving stale entries)", () => {
-    // The skills CLI's `skills remove` (for project scope) deletes on-disk
-    // directories but leaves `skills-lock.json` unchanged. `refreshArgentSkills`
-    // must drop the entry itself so subsequent updates don't keep re-pruning
-    // the same orphan.
-    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
-    const lockPath = path.join(tmpDir, "skills-lock.json");
-    writeLock(lockPath, {
-      "argent-create-flow": { sourceType: "local" },
-      "argent-super-workflow": { sourceType: "local" },
-    });
-
-    refreshArgentSkills(tmpDir);
-
-    const afterLock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-    expect(Object.keys(afterLock.skills)).toEqual(["argent-create-flow"]);
-  });
-
-  it("leaves the lock untouched when prune fails (no desync between lock and disk)", () => {
-    listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
-    const lockPath = path.join(tmpDir, "skills-lock.json");
-    writeLock(lockPath, {
-      "argent-create-flow": {},
-      "argent-super-workflow": {},
-    });
-
-    execFileSyncMock.mockImplementation((_bin: string, args: string[]) => {
-      if (args.includes("remove")) throw new Error("permission denied");
-      return Buffer.from("");
-    });
-
-    refreshArgentSkills(tmpDir);
-
-    // Remove failed, so the orphan stays in the lock — otherwise the lock
-    // would claim something is uninstalled while its files are still on disk.
-    const afterLock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
-    expect(Object.keys(afterLock.skills).sort()).toEqual([
-      "argent-create-flow",
-      "argent-super-workflow",
-    ]);
-  });
-
   it("does not touch non-argent skills even if they sit in the same lock", () => {
     listBundledSkillsMock.mockReturnValue(["argent-create-flow"]);
     writeLock(path.join(tmpDir, "skills-lock.json"), {

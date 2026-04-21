@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import {
@@ -28,30 +27,6 @@ interface ScopeSpec {
   lockPath: string;
   addArgs: string[];
   removeArgs: string[];
-}
-
-// Work around a bug in the skills CLI: `skills remove` for project scope
-// deletes the canonical directory and per-agent symlinks, but leaves the
-// project `skills-lock.json` entry behind. Without this cleanup a pruned
-// orphan would keep showing up in every subsequent `argent update` run,
-// since we detect argent-owned skills by reading the lock file.
-function removeSkillsFromLockFile(lockPath: string, names: readonly string[]): void {
-  try {
-    const raw = fs.readFileSync(lockPath, "utf8");
-    const lock = JSON.parse(raw) as { skills?: Record<string, unknown> };
-    if (!lock.skills) return;
-    let changed = false;
-    for (const name of names) {
-      if (name in lock.skills) {
-        delete lock.skills[name];
-        changed = true;
-      }
-    }
-    if (changed) fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
-  } catch {
-    // Non-fatal: lock file missing/malformed. The skills were already
-    // removed from disk, so we just leave the lock alone and move on.
-  }
 }
 
 function getScopeSpecs(projectRoot: string): ScopeSpec[] {
@@ -113,7 +88,6 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
         execFileSync("npx", [...spec.removeArgs, ...orphaned], {
           stdio: ["ignore", "pipe", "pipe"],
         });
-        removeSkillsFromLockFile(spec.lockPath, orphaned);
         result.pruned = orphaned;
       } catch (err) {
         result.pruneError = err instanceof Error ? err.message.split("\n")[0] : String(err);
