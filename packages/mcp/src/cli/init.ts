@@ -568,16 +568,16 @@ export async function init(args: string[]): Promise<void> {
 
   p.note(
     [
-      `${pc.bold("Ready to start?")} Ask your assistant:`,
+      pc.bold(pc.green("Argent is ready!")),
+      "",
+      `${pc.bold("Get started")} by asking your assistant:`,
       "",
       `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
       "",
       pc.dim("It will walk you through all capabilities available."),
     ].join("\n"),
-    pc.bold(pc.cyan("Get Started"))
+    pc.bgGreen(pc.black(" Get Started "))
   );
-
-  p.outro(pc.green("Argent is ready!"));
 }
 
 export function printBanner(): void {
