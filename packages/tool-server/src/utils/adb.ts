@@ -203,3 +203,90 @@ export async function listAvds(): Promise<AvdInfo[]> {
 
 /** Name of the Android `emulator` binary we spawn when booting an AVD. Relies on `$PATH`. */
 export const EMULATOR_BINARY = "emulator";
+
+/**
+ * Result of probing a named snapshot with `emulator -check-snapshot-loadable`.
+ *
+ * `loadable === true` is necessary but NOT sufficient for a successful hot
+ * boot: the probe validates metadata (snapshot.pb, compatible.pb, hardware.ini)
+ * and renderer compatibility, but not the integrity of ram.bin. A `ram.bin`
+ * corrupted by a partial save or a host OOM still returns `Loadable` here and
+ * later crashes the QEMU child with `std::bad_alloc`. Pair this probe with
+ * `-force-snapshot-load` in the boot spawn and a tight deadline to catch the
+ * residual failure cases loudly instead of letting them silently fall back to
+ * a full cold boot.
+ */
+export interface SnapshotProbeResult {
+  loadable: boolean;
+  reason: string | null;
+}
+
+export async function checkSnapshotLoadable(
+  avdName: string,
+  snapshotName = "default_boot",
+  options: { timeoutMs?: number } = {}
+): Promise<SnapshotProbeResult> {
+  try {
+    const { stdout } = await execFileAsync(
+      EMULATOR_BINARY,
+      ["-avd", avdName, "-check-snapshot-loadable", snapshotName],
+      { timeout: options.timeoutMs ?? 10_000, maxBuffer: 4 * 1024 * 1024 }
+    );
+    const tail = stdout.split("\n").slice(-6).join("\n");
+    // The emulator emits an informational "WARNING | change of renderer
+    // detected." whenever `hardware.ini` and `emu-launch-params.txt` disagree
+    // (e.g. `hw.gpu.mode=auto` in config.ini vs the resolved `swangle_indirect`
+    // recorded on save). It is noise, not a failure signal — actual
+    // incompatibility surfaces as a populated `Reason:` with no `Loadable`
+    // line (e.g. "snapshot was created with gfxstream=1, but this emulator has
+    // gfxstream=0"). The final `Loadable` line is the emulator's authoritative
+    // verdict; trust it.
+    if (/(^|\n)\s*Loadable\s*(\n|$)/.test(tail)) return { loadable: true, reason: null };
+    const reasonMatch = tail.match(/Reason:\s*(.+)/);
+    return { loadable: false, reason: reasonMatch?.[1]?.trim() ?? "unknown" };
+  } catch (err) {
+    return {
+      loadable: false,
+      reason: err instanceof Error ? err.message.slice(0, 200) : "probe failed",
+    };
+  }
+}
+
+/**
+ * True iff a `default_boot` snapshot directory exists on disk for this AVD.
+ * Cheap filesystem check — the emulator's own `-snapshot-list` requires
+ * spawning the emulator once, which is precisely the hang we are trying to
+ * avoid up-front.
+ */
+export async function hasDefaultBootSnapshot(avdName: string): Promise<boolean> {
+  const { stat } = await import("node:fs/promises");
+  const home = process.env.HOME ?? "";
+  const candidates = [
+    `${home}/.android/avd/${avdName}.avd/snapshots/default_boot`,
+    `${process.env.ANDROID_AVD_HOME ?? ""}/${avdName}.avd/snapshots/default_boot`,
+  ].filter((p) => p && p.startsWith("/"));
+  for (const path of candidates) {
+    try {
+      // `snapshot.pb` alone is not enough to call the snapshot "present":
+      // an OOM-killed emulator can leave the tiny metadata file on disk while
+      // `ram.bin` is missing, zero-length, or truncated. The -check-snapshot-
+      // loadable probe reads only metadata and happily reports "Loadable" in
+      // that state, so the hot-boot attempt spawns, then hangs or crashes on
+      // a bad RAM restore. Verifying ram.bin is present and non-empty, and
+      // that its mtime is within a minute of snapshot.pb's (a save writes
+      // both in one batch), cheaply filters the partial-save class before we
+      // ever spawn the emulator.
+      const [metaStat, ramStat] = await Promise.all([
+        stat(`${path}/snapshot.pb`),
+        stat(`${path}/ram.bin`),
+      ]);
+      if (ramStat.size === 0) continue;
+      const mtimeSkewMs = Math.abs(metaStat.mtimeMs - ramStat.mtimeMs);
+      if (mtimeSkewMs > 60_000) continue;
+      return true;
+    } catch {
+      // keep looking
+    }
+  }
+  return false;
+}

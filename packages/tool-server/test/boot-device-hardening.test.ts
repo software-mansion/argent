@@ -183,61 +183,57 @@ describe("boot-device Android — orphan protection on stage-2 timeout (review f
    * resolved.
    */
   it("SIGTERMs the detached emulator child when no serial registers within the budget", async () => {
-    const proc = new EventEmitter() as EventEmitter & {
-      unref: () => void;
-      kill: (sig?: string) => boolean;
-      exitCode: number | null;
-      signalCode: string | null;
-    };
-    proc.unref = () => {};
-    proc.exitCode = null;
-    proc.signalCode = null;
-    const killSignals: (string | undefined)[] = [];
-    proc.kill = (sig?: string) => {
-      killSignals.push(sig);
-      return true;
-    };
-    spawnMock.mockReturnValue(proc);
+    vi.useFakeTimers();
+    try {
+      const proc = new EventEmitter() as EventEmitter & {
+        unref: () => void;
+        kill: (sig?: string) => boolean;
+        exitCode: number | null;
+        signalCode: string | null;
+      };
+      proc.unref = () => {};
+      proc.exitCode = null;
+      proc.signalCode = null;
+      const killSignals: (string | undefined)[] = [];
+      proc.kill = (sig?: string) => {
+        killSignals.push(sig);
+        return true;
+      };
+      spawnMock.mockReturnValue(proc);
 
-    execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "emulator" && args[0] === "-list-avds") {
-        return { stdout: "Pixel_7_API_34\n", stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "version") {
-        return { stdout: "Android Debug Bridge\n", stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
-      // `adb devices` always returns empty — no emulator ever registers,
-      // forcing the adb-register stage to exhaust its budget.
-      if (cmd === "adb" && args[0] === "devices") {
-        return { stdout: "List of devices attached\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
-
-    const tool = createBootDeviceTool(registry);
-    await expect(
-      tool.execute!(
-        {},
-        {
-          avdName: "Pixel_7_API_34",
-          // Minimum allowed; the adb-register budget caps at 60s, so in
-          // practice the tool will throw around that mark. We're mocking adb
-          // so each poll returns instantly and the budget burns in ~60s of
-          // real time. The test doesn't wait that long — vitest's default
-          // timeout isn't involved because `adb devices` returns instantly
-          // and the tool's internal sleeps use setTimeout which we fake.
-          bootTimeoutMs: 30_000,
-          noWindow: true,
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "emulator" && args[0] === "-list-avds") {
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
         }
-      )
-    ).rejects.toThrow(/did not register within/);
+        if (cmd === "adb" && args[0] === "version") {
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        // `adb devices` always returns empty — no emulator ever registers,
+        // forcing the adb-register stage to exhaust its budget.
+        if (cmd === "adb" && args[0] === "devices") {
+          return { stdout: "List of devices attached\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    // The detached child MUST have been signalled — otherwise the emulator is
-    // orphaned. SIGTERM first, with SIGKILL escalation scheduled.
-    expect(killSignals.length).toBeGreaterThan(0);
-    expect(killSignals[0]).toBe("SIGTERM");
-  }, 120_000);
+      const tool = createBootDeviceTool(registry);
+      // bootTimeoutMs floor is 30_000 (zod). Burn that in fake time so the
+      // test completes in milliseconds of real time.
+      const promise = tool.execute!(
+        {},
+        { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
+      );
+      promise.catch(() => {});
+      await vi.advanceTimersByTimeAsync(31_000);
+
+      await expect(promise).rejects.toThrow(/did not register within/);
+      // The detached child MUST have been signalled — SIGTERM fire-and-forget.
+      expect(killSignals[0]).toBe("SIGTERM");
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 5_000);
 });
 
 describe("boot-device Android — missing AVD (existing guard)", () => {
