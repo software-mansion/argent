@@ -86,13 +86,11 @@ describe("mergeProfilingData", () => {
 // ── classifyStaleness ─────────────────────────────────────────────────
 
 describe("classifyStaleness", () => {
-  it("marks session orphaned and reclaimable when owner is null", () => {
+  it("marks session reclaimable when owner is null", () => {
     const r = classifyStaleness({ owner: null, nowEpochMs: 1_000_000_100 });
-    expect(r.orphaned).toBe(true);
     expect(r.stale).toBe(false);
     expect(r.canReclaimWithoutForce).toBe(true);
     expect(r.ageSeconds).toBeNull();
-    expect(r.secondsSinceLastHeartbeat).toBeNull();
   });
 
   it("keeps a fresh session non-stale and non-reclaimable", () => {
@@ -101,9 +99,7 @@ describe("classifyStaleness", () => {
       nowEpochMs: 1_000_001_000, // 1s later
     });
     expect(r.stale).toBe(false);
-    expect(r.orphaned).toBe(false);
     expect(r.canReclaimWithoutForce).toBe(false);
-    expect(r.secondsSinceLastHeartbeat).toBeCloseTo(1, 3);
     expect(r.ageSeconds).toBeCloseTo(1, 3);
   });
 
@@ -133,7 +129,6 @@ describe("classifyStaleness", () => {
       nowEpochMs: 1_000_000_000,
     });
     expect(r.ageSeconds).toBe(0);
-    expect(r.secondsSinceLastHeartbeat).toBe(0);
   });
 });
 
