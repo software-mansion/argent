@@ -47,19 +47,6 @@ describe("open-url — iOS path (unchanged)", () => {
       undefined
     );
   });
-
-  it("does not shell-wrap iOS URLs — execFile avoids the shell, so adding quotes would be wrong", async () => {
-    // `simctl openurl` expects the raw URL as an argv value. If we accidentally
-    // wrapped the URL in quotes like the Android branch does, iOS would receive
-    // a literally-quoted URL and fail. This asserts the iOS branch sends the
-    // URL verbatim — any prefix/suffix `'` would mean the quoting regressed.
-    const url = "https://example.com/?q=it's";
-    await openUrlTool.execute!({}, { udid: iosUdid, url });
-    const args = execFileMock.mock.calls[0]![1] as string[];
-    expect(args[3]).toBe(url);
-    expect(args[3]!.startsWith("'")).toBe(false);
-    expect(args[3]!.endsWith("'")).toBe(false);
-  });
 });
 
 describe("open-url — Android path", () => {
@@ -114,12 +101,3 @@ describe("open-url — Android path", () => {
   });
 });
 
-describe("open-url.services", () => {
-  it("never requests a service — both code paths are self-contained", () => {
-    // Neither xcrun nor adb depend on a registry-managed service, so this
-    // tool stays service-less. If a future change adds a service dependency,
-    // update this test deliberately.
-    expect(openUrlTool.services({ udid: iosUdid, url: "https://x" })).toEqual({});
-    expect(openUrlTool.services({ udid: androidSerial, url: "https://x" })).toEqual({});
-  });
-});

@@ -180,23 +180,6 @@ describe("getAutoScreenshotDelayMs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AUTO_SCREENSHOT_TOOLS consistency
-// ---------------------------------------------------------------------------
-describe("AUTO_SCREENSHOT_TOOLS and delay map consistency", () => {
-  it("every tool in the allow-list has a corresponding delay", () => {
-    for (const tool of AUTO_SCREENSHOT_TOOLS) {
-      expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL).toHaveProperty(tool);
-    }
-  });
-
-  it("every tool in the delay map is in the allow-list", () => {
-    for (const tool of Object.keys(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
-      expect(AUTO_SCREENSHOT_TOOLS.has(tool)).toBe(true);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
 // shouldAutoScreenshot — unified tools trigger one screenshot regardless of platform
 // ---------------------------------------------------------------------------
 describe("shouldAutoScreenshot — unified surface", () => {

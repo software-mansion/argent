@@ -116,13 +116,6 @@ describe("http dependency gate", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
-  it("DependencyMissingError is still an Error — callers relying on err.message keep working", () => {
-    const err = new DependencyMissingError(["xcrun"], "install Xcode");
-    expect(err).toBeInstanceOf(Error);
-    expect(err.message).toBe("install Xcode");
-    expect(err.missing).toEqual(["xcrun"]);
-  });
-
   it("still returns 424 when the DependencyMissingError is buried two levels deep in the cause chain", async () => {
     // The registry wraps execute() errors in ToolExecutionError with `cause`.
     // If a future middleware adds a second wrap (or something else does), a

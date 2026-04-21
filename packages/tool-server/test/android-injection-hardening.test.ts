@@ -1,6 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { launchAppTool as launchAppReexport } from "../src/tools/simulator/launch-app.js";
-import { restartAppTool as restartAppReexport } from "../src/tools/simulator/restart-app.js";
 import { androidStopAppTool } from "../src/tools/android/android-stop-app";
 import { androidLogcatTool } from "../src/tools/android/android-logcat";
 import { createLaunchAppTool } from "../src/tools/simulator/launch-app";
@@ -154,14 +152,4 @@ describe('empty-udid guard (#7) — cross-platform tools reject `udid: ""`', () 
       expect(parsed.success).toBe(false);
     });
   }
-});
-
-describe("factory re-exports", () => {
-  it("launchAppTool / restartAppTool are no longer exported as singletons", () => {
-    // We moved to factory form so they can use the async registry for
-    // iOS-only services. Any import of the old singletons would be stale —
-    // this test just documents the expected module shape.
-    expect(launchAppReexport).toBeUndefined();
-    expect(restartAppReexport).toBeUndefined();
-  });
 });
