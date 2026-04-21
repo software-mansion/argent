@@ -100,4 +100,3 @@ describe("open-url — Android path", () => {
     ).rejects.toThrow(/open-url failed/);
   });
 });
-

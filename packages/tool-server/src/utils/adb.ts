@@ -30,10 +30,7 @@ export async function runAdb(
  * (screencap PNG bytes, uiautomator dump, etc.) where utf-8 decoding corrupts
  * the stream.
  */
-async function runAdbBinary(
-  args: string[],
-  options: { timeoutMs?: number } = {}
-): Promise<Buffer> {
+async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const { stdout } = await execFileAsync("adb", args, {
     timeout: options.timeoutMs ?? 30_000,
     maxBuffer: 64 * 1024 * 1024,
