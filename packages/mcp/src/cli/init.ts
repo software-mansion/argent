@@ -567,8 +567,14 @@ export async function init(args: string[]): Promise<void> {
   p.note(summaryLines.join("\n"), "Summary");
 
   p.note(
-    `Ask your assistant ${pc.cyan(`"What can Argent do?"`)} — it will walk\nyou through all capabilities available.`,
-    "Get Started"
+    [
+      `${pc.bold("Ready to start?")} Ask your assistant:`,
+      "",
+      `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
+      "",
+      pc.dim("It will walk you through all capabilities available."),
+    ].join("\n"),
+    pc.bold(pc.cyan("Get Started"))
   );
 
   p.outro(pc.green("Argent is ready!"));
