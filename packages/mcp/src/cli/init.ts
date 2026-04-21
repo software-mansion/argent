@@ -24,6 +24,7 @@ import {
   formatShellCommand,
   type ShellCommand,
 } from "./utils.js";
+import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 
 // Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
@@ -187,6 +188,16 @@ export async function init(args: string[]): Promise<void> {
             await runShellCommand(cmd);
             updateSpinner.stop(pc.green(`Updated to v${latest}.`));
             version = getInstalledVersion() ?? version;
+
+            // The user just bumped to a newer argent. Re-sync and prune
+            // argent skills in every scope that already tracks them — this
+            // is the only point in init where we can surface orphans
+            // (skills removed from a previous argent version) before
+            // Step 2's single-scope `skills add`.
+            const skillSummary = formatSkillRefreshSummary(refreshArgentSkills(process.cwd()));
+            if (skillSummary) {
+              p.note(skillSummary, "Skills Updated");
+            }
           } catch (err) {
             updateSpinner.stop(pc.red("Update failed."));
             p.log.error(`${err}`);
