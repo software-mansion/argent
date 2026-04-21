@@ -1,6 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { execSync, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
   getInstalledVersion,
@@ -9,6 +9,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  listBundledSkills,
   RULES_DIR,
   AGENTS_DIR,
 } from "./utils.js";
@@ -131,27 +132,27 @@ export async function update(args: string[]): Promise<void> {
     p.note(ruleResults.join("\n"), "Rules & Agents Updated");
   }
 
-  // Skills update
-  let shouldUpdateSkills = nonInteractive;
-
-  if (!nonInteractive) {
-    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-    const choice = await p.confirm({
-      message: "Update skills to latest versions? — runs npx skills update -y",
-      initialValue: true,
-    });
-
-    shouldUpdateSkills = !p.isCancel(choice) && choice === true;
-  }
-
-  if (shouldUpdateSkills) {
-    p.log.info(`Running: ${pc.dim("npx skills update -y")}`);
-    try {
-      execSync("npx skills update -y", { stdio: "inherit" });
-      p.log.success("Skills updated.");
-    } catch {
-      p.log.warn("Skills update failed. Run manually: npx skills update");
+  // Refresh argent-owned skills. Unconditional (like rules & agents above):
+  // stale skills reference old tool names / flows and can silently break
+  // behavior after an argent upgrade. We pass explicit skill names so
+  // unrelated skills the user installed themselves are left untouched, and
+  // re-sync both scopes because we don't know which one init picked.
+  const argentSkills = listBundledSkills();
+  if (argentSkills.length > 0) {
+    const skillResults: string[] = [];
+    for (const scope of ["-p", "-g"] as const) {
+      try {
+        execFileSync("npx", ["skills", "update", scope, ...argentSkills], {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        skillResults.push(`${pc.green("+")} ${scope === "-g" ? "global" : "project"} scope`);
+      } catch {
+        // Scope has no tracked argent skills (e.g. user only installed
+        // globally, or vice versa). Non-fatal — silently skip.
+      }
+    }
+    if (skillResults.length > 0) {
+      p.note(skillResults.join("\n"), "Skills Updated");
     }
   }
 

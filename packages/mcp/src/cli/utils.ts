@@ -35,6 +35,23 @@ export const SKILLS_DIR = resolveBundledDir("skills");
 export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
 
+// Returns the names of the skills that ship with this argent install — each
+// subdirectory of SKILLS_DIR that contains a SKILL.md. Used to scope
+// `npx skills update` so we only touch argent-owned skills, leaving the
+// user's unrelated skills alone.
+export function listBundledSkills(skillsDir: string = SKILLS_DIR): string[] {
+  try {
+    return fs
+      .readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((name) => fs.existsSync(path.join(skillsDir, name, "SKILL.md")))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 const PROJECT_ROOT_MARKERS = [
   ".mcp.json",
   ".claude",

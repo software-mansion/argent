@@ -43,6 +43,7 @@ import {
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
+  listBundledSkills,
   resolveProjectRoot,
   SKILLS_DIR,
   RULES_DIR,
@@ -335,6 +336,37 @@ describe("isNewerVersion", () => {
 
   it("still allows upgrades from a prerelease to a newer release", () => {
     expect(isNewerVersion("0.5.4", "0.5.4-beta.0")).toBe(true);
+  });
+});
+
+// ── listBundledSkills ────────────────────────────────────────────────────────
+
+describe("listBundledSkills", () => {
+  it("returns an empty list for a non-existent directory", () => {
+    expect(listBundledSkills(path.join(tmpDir, "does-not-exist"))).toEqual([]);
+  });
+
+  it("returns only subdirectories that contain a SKILL.md", () => {
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(path.join(skillsDir, "argent-alpha"), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, "argent-alpha", "SKILL.md"), "# alpha");
+    fs.mkdirSync(path.join(skillsDir, "argent-beta"), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, "argent-beta", "SKILL.md"), "# beta");
+    // An orphan directory without SKILL.md must be excluded — it is not a skill.
+    fs.mkdirSync(path.join(skillsDir, "not-a-skill"), { recursive: true });
+    // Stray files at the top level must also be excluded.
+    fs.writeFileSync(path.join(skillsDir, "README.md"), "");
+
+    expect(listBundledSkills(skillsDir)).toEqual(["argent-alpha", "argent-beta"]);
+  });
+
+  it("returns results in a stable sorted order", () => {
+    const skillsDir = path.join(tmpDir, "skills");
+    for (const name of ["zulu", "alpha", "mike"]) {
+      fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, name, "SKILL.md"), "");
+    }
+    expect(listBundledSkills(skillsDir)).toEqual(["alpha", "mike", "zulu"]);
   });
 });
 
