@@ -6,10 +6,7 @@ import { sendCommand } from "../../utils/simulator-client";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().min(1).describe("Simulator UDID"),
   fromX: z.number().describe("Start x: normalized 0.0–1.0 (not pixels; same as tap)"),
   fromY: z.number().describe("Start y: normalized 0.0–1.0 (not pixels; same as tap)"),
   toX: z.number().describe("End x: normalized 0.0–1.0 (not pixels; same as tap)"),
@@ -26,10 +23,11 @@ export const gestureSwipeTool: ToolDefinition<
 > = {
   id: "gesture-swipe",
   requires: ["xcrun"],
-  description: `Smooth swipe between two normalized points (0.0–1.0 fractions of screen width/height, not pixels).
-Use to scroll a list, dismiss a modal, or navigate between pages.
-Swipe up (fromY > toY) scrolls content down; swipe down (fromY < toY) scrolls content up.
-Returns { swiped, timestampMs }. Fails if the target device is not booted.`,
+  description: `Execute a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
+Generates interpolated Move events for a natural feel (~60fps).
+Swipe up (fromY > toY) to scroll content down.
+Swipe down (fromY < toY) to scroll content up.
+Use when you need to scroll a list, dismiss a modal, or navigate between pages. Returns { swiped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

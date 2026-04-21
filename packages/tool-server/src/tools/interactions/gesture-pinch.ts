@@ -4,10 +4,7 @@ import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 import { sleep, sendTouchEvent } from "../../utils/gesture-utils";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().min(1).describe("Simulator UDID"),
   centerX: z
     .number()
     .describe(
@@ -48,11 +45,11 @@ export const gesturePinchTool: ToolDefinition<
 > = {
   id: "gesture-pinch",
   requires: ["xcrun"],
-  description: `Two-finger pinch-to-zoom at a center point. All positions and distances are normalized 0.0–1.0 (fractions of the screen, not pixels).
-startDistance > endDistance = pinch in (zoom out); startDistance < endDistance = pinch out (zoom in).
-Typical zoom-in: startDistance 0.2, endDistance 0.6 at screen center.
-\`angle\` controls the axis in degrees (0 = horizontal, 90 = vertical).
-Use to zoom a map, image, or zoomable view. Returns { pinched, timestampMs }. Fails if the target device is not booted.`,
+  description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
+startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
+Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
+Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical).
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

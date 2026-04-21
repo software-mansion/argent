@@ -140,15 +140,12 @@ const NAMED_KEYS: Record<string, number> = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().min(1).describe("Simulator UDID"),
   text: z
     .string()
     .optional()
     .describe(
-      "Text to type character by character. Handles uppercase and common punctuation. Use when paste is unreliable or unsupported by the focused field."
+      "Text to type character by character. Handles uppercase and common punctuation. Use when paste is unreliable."
     ),
   key: z
     .string()
@@ -165,11 +162,12 @@ export const keyboardTool: ToolDefinition<
 > = {
   id: "keyboard",
   requires: ["xcrun"],
-  description: `Type text or press a named key on the focused input.
-Use when you need to enter text or trigger a named key such as enter, escape, or an arrow.
-- text: types a string character by character (supports uppercase, digits, common punctuation).
-- key: presses one named key (enter, escape, backspace, tab, space, arrow-up/down/left/right, f1–f12).
-Provide text, key, or both. Returns { typed, keys }. Fails on unsupported key names.`,
+  description: `Type text or press special keys on the simulator using keyboard events.
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
+Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator server is not running.
+- text: types a string character by character (supports uppercase, digits, common punctuation)
+- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
+Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,

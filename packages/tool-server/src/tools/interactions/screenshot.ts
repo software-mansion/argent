@@ -4,10 +4,7 @@ import type { SimulatorServerApi } from "../../blueprints/simulator-server";
 import { httpScreenshot } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().min(1).describe("Simulator UDID"),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
@@ -28,8 +25,9 @@ export const screenshotTool: ToolDefinition<
 > = {
   id: "screenshot",
   requires: ["xcrun"],
-  description: `Capture a screenshot of the current device screen. Returns { url, path } and the MCP adapter renders it as a visible image.
-Use for a baseline before an interaction or to inspect the current screen after a delay. Fails if the target device is not booted or the screenshot request times out.`,
+  description: `Capture a screenshot of the simulator screen. Returns { url, path } and the MCP adapter renders it as a visible image.
+Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
+Fails if the simulator server is not running or the screenshot request times out.`,
   zodSchema,
   outputHint: "image",
   services: (params) => ({

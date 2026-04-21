@@ -16,15 +16,14 @@ import { getAndroidScreenSize } from "../../utils/android-screen";
 import { parseUiAutomatorDump } from "../../utils/uiautomator-parser";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().min(1).describe("Simulator UDID or Android serial"),
   bundleId: z
     .string()
     .optional()
     .describe(
-      "iOS-only: target hint for the fallback app-level inspection when the top-level describe returns nothing. If omitted, the frontmost connected app is used. Ignored on Android."
+      "Optional app bundle ID. Used as a target hint when the AX-service returns no elements " +
+        "and the describe tool falls back to native-devtools inspection. " +
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android."
     ),
 });
 
@@ -63,11 +62,22 @@ export function createDescribeTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, DescribeResult> {
   return {
     id: "describe",
-    description: `Get the current screen's UI hierarchy as a tree of elements with roles, labels, identifiers, values, and frame coordinates.
-Returns dialog elements when a system modal is visible, otherwise the foreground app's elements.
-Frame coordinates are normalized to [0,1] — same space as gesture-tap. Use frame.x + frame.width/2 as tap X, frame.y + frame.height/2 as tap Y.
-For React Native apps, prefer \`debugger-component-tree\` when a Metro debugger connection is available — it returns richer component-level data.
-Call before every tap — never guess coordinates from a screenshot.`,
+    description: `Get the accessibility element tree for the current screen.
+On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
+system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
+
+When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
+with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
+
+Returns a JSON tree of UI elements with roles, labels, values, and frame coordinates in normalized
+[0,1] space (fractions of the screen, not pixels) — the same coordinate space as tap/swipe/gesture
+and simulator-server touch input.
+
+Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
+
+For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
+use native-describe-screen with an explicit bundleId instead (iOS only).
+For React Native apps, debugger-component-tree returns React component names with tap coordinates.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params, _options) {
@@ -86,6 +96,7 @@ Call before every tap — never guess coordinates from a screenshot.`,
         return { tree, source: "ax-service" };
       }
 
+      // AX returned zero elements — attempt native-devtools fallback
       try {
         const nativeApi = await registry.resolveService<NativeDevtoolsApi>(
           `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`
@@ -110,6 +121,7 @@ Call before every tap — never guess coordinates from a screenshot.`,
         const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
         return { tree: nativeTree, source: "native-devtools" };
       } catch {
+        // Native devtools unavailable or no connected app — return the empty AX result
         return { tree, source: "ax-service" };
       }
     },
