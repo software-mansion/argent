@@ -5,6 +5,7 @@ import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.j
 import {
   getInstalledVersion,
   getLatestVersion,
+  isNewerVersion,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
@@ -42,7 +43,7 @@ export async function update(args: string[]): Promise<void> {
   p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
   p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
 
-  if (installed !== latest) {
+  if (isNewerVersion(latest, installed)) {
     p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
 
     const pm = detectPackageManager();
@@ -130,21 +131,27 @@ export async function update(args: string[]): Promise<void> {
     p.note(ruleResults.join("\n"), "Rules & Agents Updated");
   }
 
-  // Skills check prompt
+  // Skills update
+  let shouldUpdateSkills = nonInteractive;
+
   if (!nonInteractive) {
     p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
-    const checkSkills = await p.confirm({
-      message: "Check if skills have updates? — runs npx skills check",
+    const choice = await p.confirm({
+      message: "Update skills to latest versions? — runs npx skills update -y",
       initialValue: true,
     });
 
-    if (!p.isCancel(checkSkills) && checkSkills) {
-      try {
-        execSync("npx skills check", { stdio: "inherit" });
-      } catch {
-        p.log.warn("Could not run skills check.");
-      }
+    shouldUpdateSkills = !p.isCancel(choice) && choice === true;
+  }
+
+  if (shouldUpdateSkills) {
+    p.log.info(`Running: ${pc.dim("npx skills update -y")}`);
+    try {
+      execSync("npx skills update -y", { stdio: "inherit" });
+      p.log.success("Skills updated.");
+    } catch {
+      p.log.warn("Skills update failed. Run manually: npx skills update");
     }
   }
 
