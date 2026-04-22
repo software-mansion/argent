@@ -76,5 +76,8 @@ export interface RawProfilingInput {
     allClear?: boolean; // true if all commits were below 16ms floor
     maxCommitMs?: number; // max commit heat when allClear=true
     totalReactCommits?: number; // total unique commit batches (for accurate all-clear display)
+    // Per-commit tuples [commitIndex, droppedFiberCount, droppedActualDurationMs] for
+    // fibers the stop-time name resolver could not identify (transient/unmounted components).
+    unattributedByCommit?: Array<[number, number, number]>;
   };
 }

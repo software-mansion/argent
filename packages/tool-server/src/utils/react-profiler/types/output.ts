@@ -40,6 +40,11 @@ export interface HotCommitSummary {
   components: HotCommitComponentEntry[]; // grouped by name, sorted by selfDurationMs DESC (capped at 15)
   totalComponentCount: number; // total before cap (for "... and N more" display)
   cpuHotspots?: CpuCommitHotspot[]; // top JS functions by self-time during this commit's time window
+  // ms of actualDuration from fibers whose display name could not be resolved at stop time
+  // (transient components unmounted before react-profiler-stop ran). When non-zero, the
+  // per-component breakdown is incomplete — this is the size of the hole.
+  unattributedMs?: number;
+  unattributedFiberCount?: number;
 }
 
 export interface ComponentFinding {

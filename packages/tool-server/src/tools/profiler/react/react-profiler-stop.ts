@@ -40,6 +40,9 @@ function normalizeChangeDescription(raw: unknown): DevToolsChangeDescription | n
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const props = Array.isArray(r.props) ? (r.props as string[]) : null;
+  // `null` is the expected value for function components — the DevTools backend only
+  // emits boolean `state` for class components. For Forget()/hooks components state
+  // changes surface through `hooks[]` + useState/useReducer hookType detection instead.
   const state = typeof r.state === "boolean" ? (r.state as boolean) : null;
   const hooks = Array.isArray(r.hooks) ? (r.hooks as number[]) : null;
   const context = typeof r.context === "boolean" ? (r.context as boolean) : null;
@@ -52,13 +55,24 @@ function normalizeChangeDescription(raw: unknown): DevToolsChangeDescription | n
  * Flatten `ProfilingDataBackend` into the `DevToolsFiberCommit[]` shape the
  * downstream pipeline expects. `commitIndex` is assigned flatly across roots
  * so the map-key grouping in `buildHotCommitSummaries` works correctly.
+ *
+ * `unattributedByCommit` records fibers with a real `actualDuration` whose
+ * display name could not be resolved (typically transient components that
+ * unmounted before `STOP_AND_READ_SCRIPT` ran). These would otherwise be
+ * silently dropped; surfacing the count + summed ms lets the report warn when
+ * a commit's breakdown is incomplete. Tuple shape: `[commitIndex, fiberCount, ms]`.
  */
 export function flattenProfilingData(
   merged: ProfilingDataBackend,
   displayNameById: Record<string, string | null>,
   fiberMeta: FiberMetaMap
-): { commits: DevToolsFiberCommit[]; totalCommits: number } {
+): {
+  commits: DevToolsFiberCommit[];
+  totalCommits: number;
+  unattributedByCommit: Array<[number, number, number]>;
+} {
   const commits: DevToolsFiberCommit[] = [];
+  const unattributedByCommit: Array<[number, number, number]> = [];
   let flatCommitIndex = 0;
 
   for (const root of merged.dataForRoots) {
@@ -78,9 +92,16 @@ export function flattenProfilingData(
 
       const commitDuration = typeof c.duration === "number" ? c.duration : 0;
 
+      let droppedCount = 0;
+      let droppedMs = 0;
+
       for (const [fiberID, actualDuration] of actualMap) {
         const componentName = displayNameById[String(fiberID)] ?? null;
-        if (!componentName) continue; // skip host / unnamed fibers
+        if (!componentName) {
+          droppedCount++;
+          droppedMs += actualDuration;
+          continue;
+        }
         const selfDuration = selfMap.get(fiberID) ?? 0;
         const cd = normalizeChangeDescription(cdMap.get(fiberID));
         const meta: FiberMetaEntry | undefined = fiberMeta[componentName];
@@ -100,11 +121,19 @@ export function flattenProfilingData(
         });
       }
 
+      if (droppedCount > 0) {
+        unattributedByCommit.push([
+          flatCommitIndex,
+          droppedCount,
+          Math.round(droppedMs * 100) / 100,
+        ]);
+      }
+
       flatCommitIndex++;
     }
   }
 
-  return { commits, totalCommits: flatCommitIndex };
+  return { commits, totalCommits: flatCommitIndex, unattributedByCommit };
 }
 
 export function createReactProfilerStopTool(
@@ -117,6 +146,7 @@ Reads commit data from the in-app React DevTools backend.
 Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
 Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices, session_id } summarizing the session.
+When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count } — these quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
     services: () => ({}),
@@ -193,11 +223,11 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         }
       }
 
-      const { commits: allCommits, totalCommits } = flattenProfilingData(
-        merged,
-        stopRead.displayNameById,
-        fiberMeta
-      );
+      const {
+        commits: allCommits,
+        totalCommits,
+        unattributedByCommit,
+      } = flattenProfilingData(merged, stopRead.displayNameById, fiberMeta);
 
       const commitHeat = new Map<number, number>();
       let anyCompilerOptimized = false;
@@ -257,6 +287,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
             port: api.port,
             appName: api.appName,
             deviceName: api.deviceName,
+            unattributedByCommit: unattributedByCommit.length > 0 ? unattributedByCommit : null,
           },
         }
       );
@@ -300,6 +331,17 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         } else if (hotCount < totalCommits) {
           response["selection_note"] =
             `${hotCount} of ${totalCommits} commits at ≥16ms absolute floor`;
+        }
+        if (unattributedByCommit.length > 0) {
+          let totalMs = 0;
+          let totalFibers = 0;
+          for (const [, count, ms] of unattributedByCommit) {
+            totalFibers += count;
+            totalMs += ms;
+          }
+          response["unattributed_ms"] = Math.round(totalMs * 100) / 100;
+          response["unattributed_fiber_count"] = totalFibers;
+          response["unattributed_commit_count"] = unattributedByCommit.length;
         }
       }
 
