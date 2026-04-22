@@ -56,6 +56,8 @@ Use when you need sequential actions and do NOT need to observe the screen betwe
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
 No screenshot is captured automatically — call screenshot separately after the sequence if needed.
 
+For when to batch vs use separate calls with discovery between steps, see the argent-simulator-interact skill (Action Sequencing / run-sequence).
+
 ONLY use this when every step is known in advance. If any step depends on the
 result of a previous one (e.g. tapping a menu item that only appears after
 a prior tap), use individual tool calls instead.

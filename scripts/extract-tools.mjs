@@ -43,8 +43,9 @@ function extractFromFile(filePath) {
     const id = idMatch[1];
     const afterId = src.slice(idMatch.index);
 
-    // Look for description within the next 2000 chars (handles multi-line)
-    const descWindow = afterId.slice(0, 2000);
+    // Look for description within the next N chars (handles multi-line; some tools
+    // have long descriptions before the closing backtick, e.g. run-sequence)
+    const descWindow = afterId.slice(0, 3000);
 
     // Template literal description
     let descMatch = descWindow.match(/\bdescription:\s*`([\s\S]*?)`/);

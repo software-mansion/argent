@@ -37,14 +37,7 @@ After presenting findings, ask the user whether to investigate further, implemen
 
 ### Step 0: Ensure the target app is running
 
-The `ios-profiler-start` tool **auto-detects** the running app on the simulator.
-You do not need to derive `app_process` manually — just make sure the app is launched.
-
-1. If the app is already running on the simulator, skip to Step 1 (do not pass `app_process`).
-2. If the app is not running, use `launch-app` with the correct bundle ID first.
-3. Only pass `app_process` explicitly if the tool reports multiple running user apps and you need to disambiguate.
-
-> **Note**: If multiple build flavors are installed (dev, staging, prod), the tool will detect whichever one is currently running. If both are running, it will ask you to specify.
+Launch the app on the simulator if it is not already foregrounded (`launch-app` as needed). **`ios-profiler-start` auto-detects** the running app; omit `app_process` unless the tool fails with multiple running user apps and you must pick a `CFBundleExecutable`. See the **`ios-profiler-start` tool description** and `app_process` field for behavior when several flavors or apps are running.
 
 ### Step 1: Start recording
 
