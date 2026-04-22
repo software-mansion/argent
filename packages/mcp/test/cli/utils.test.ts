@@ -40,9 +40,13 @@ import {
   globalInstallCommand,
   globalUninstallCommand,
   formatShellCommand,
+  getGlobalSkillLockPath,
+  getProjectSkillLockPath,
+  listArgentSkillsInLock,
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
+  listBundledSkills,
   resolveProjectRoot,
   SKILLS_DIR,
   RULES_DIR,
@@ -335,6 +339,106 @@ describe("isNewerVersion", () => {
 
   it("still allows upgrades from a prerelease to a newer release", () => {
     expect(isNewerVersion("0.5.4", "0.5.4-beta.0")).toBe(true);
+  });
+});
+
+// ── listBundledSkills ────────────────────────────────────────────────────────
+
+describe("listBundledSkills", () => {
+  it("returns an empty list for a non-existent directory", () => {
+    expect(listBundledSkills(path.join(tmpDir, "does-not-exist"))).toEqual([]);
+  });
+
+  it("returns only subdirectories that contain a SKILL.md", () => {
+    const skillsDir = path.join(tmpDir, "skills");
+    fs.mkdirSync(path.join(skillsDir, "argent-alpha"), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, "argent-alpha", "SKILL.md"), "# alpha");
+    fs.mkdirSync(path.join(skillsDir, "argent-beta"), { recursive: true });
+    fs.writeFileSync(path.join(skillsDir, "argent-beta", "SKILL.md"), "# beta");
+    // An orphan directory without SKILL.md must be excluded — it is not a skill.
+    fs.mkdirSync(path.join(skillsDir, "not-a-skill"), { recursive: true });
+    // Stray files at the top level must also be excluded.
+    fs.writeFileSync(path.join(skillsDir, "README.md"), "");
+
+    expect(listBundledSkills(skillsDir)).toEqual(["argent-alpha", "argent-beta"]);
+  });
+
+  it("returns results in a stable sorted order", () => {
+    const skillsDir = path.join(tmpDir, "skills");
+    for (const name of ["zulu", "alpha", "mike"]) {
+      fs.mkdirSync(path.join(skillsDir, name), { recursive: true });
+      fs.writeFileSync(path.join(skillsDir, name, "SKILL.md"), "");
+    }
+    expect(listBundledSkills(skillsDir)).toEqual(["alpha", "mike", "zulu"]);
+  });
+});
+
+// ── skills lock helpers ──────────────────────────────────────────────────────
+
+describe("getProjectSkillLockPath", () => {
+  it("resolves to skills-lock.json under the provided cwd", () => {
+    expect(getProjectSkillLockPath("/some/project")).toBe("/some/project/skills-lock.json");
+  });
+});
+
+describe("getGlobalSkillLockPath", () => {
+  const originalXdg = process.env.XDG_STATE_HOME;
+
+  afterEach(() => {
+    if (originalXdg === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = originalXdg;
+  });
+
+  it("falls back to ~/.agents/.skill-lock.json when XDG_STATE_HOME is unset", () => {
+    delete process.env.XDG_STATE_HOME;
+    expect(getGlobalSkillLockPath()).toBe(path.join(os.homedir(), ".agents", ".skill-lock.json"));
+  });
+
+  it("uses $XDG_STATE_HOME/skills/.skill-lock.json when set", () => {
+    process.env.XDG_STATE_HOME = "/tmp/xdg";
+    expect(getGlobalSkillLockPath()).toBe("/tmp/xdg/skills/.skill-lock.json");
+  });
+});
+
+describe("listArgentSkillsInLock", () => {
+  it("returns an empty list when the lock file does not exist", () => {
+    expect(listArgentSkillsInLock(path.join(tmpDir, "missing.json"))).toEqual([]);
+  });
+
+  it("returns an empty list for a malformed JSON lock", () => {
+    const lockPath = path.join(tmpDir, "bad.json");
+    fs.writeFileSync(lockPath, "not json");
+    expect(listArgentSkillsInLock(lockPath)).toEqual([]);
+  });
+
+  it("returns only skills whose name starts with argent-", () => {
+    const lockPath = path.join(tmpDir, "lock.json");
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({
+        version: 1,
+        skills: {
+          "argent-create-flow": {},
+          "argent-old-workflow": {}, // still in lock even if no longer bundled
+          "some-other-skill": {},
+          "vercel-labs/agent-skills": {},
+        },
+      })
+    );
+    // Result is sorted so callers can rely on a stable order.
+    expect(listArgentSkillsInLock(lockPath)).toEqual(["argent-create-flow", "argent-old-workflow"]);
+  });
+
+  it("returns an empty list when the lock has no skills object", () => {
+    const lockPath = path.join(tmpDir, "empty.json");
+    fs.writeFileSync(lockPath, JSON.stringify({ version: 1 }));
+    expect(listArgentSkillsInLock(lockPath)).toEqual([]);
+  });
+
+  it("returns an empty list when no argent-prefixed entry is tracked", () => {
+    const lockPath = path.join(tmpDir, "lock.json");
+    fs.writeFileSync(lockPath, JSON.stringify({ version: 1, skills: { "other-skill": {} } }));
+    expect(listArgentSkillsInLock(lockPath)).toEqual([]);
   });
 });
 
