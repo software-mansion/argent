@@ -17,8 +17,7 @@ export interface ProfilerSessionOwner {
 }
 
 /**
- * The `ProfilingDataBackend` shape returned by `ri.getProfilingData()` —
- * we only model the bits we actually touch on the merge path.
+ * The `ProfilingDataBackend` shape returned by `ri.getProfilingData()`.
  */
 export interface BackendCommitData {
   timestamp: number; // ms since the `startProfiling` call (verified P1)
@@ -41,47 +40,6 @@ export interface ProfilingDataBackend {
   dataForRoots: BackendRootData[];
   rendererID?: number;
   timelineData?: unknown;
-}
-
-/**
- * Merge live backend data with a snapshot rescued by the Strategy-A wrapper.
- *
- * Precedence: live > PREV. Live is the currently-returned `getProfilingData()`
- * result; PREV is `globalThis.__ARGENT_PREV_PROFILE__`, captured before any
- * wipe-causing `startProfiling` call.
- *
- * "Prefer live" means: if a rootID appears in both, the live roots wins
- * verbatim. Roots that exist only in PREV are appended. This matches the
- * expected recovery semantic — a live buffer always reflects *our* current
- * session; PREV is only a fallback for concurrent-wipe scenarios.
- */
-export function mergeProfilingData(
-  live: ProfilingDataBackend | null,
-  prev: ProfilingDataBackend | null
-): ProfilingDataBackend {
-  const roots: BackendRootData[] = [];
-  const seen = new Set<number>();
-
-  if (live?.dataForRoots) {
-    for (const r of live.dataForRoots) {
-      roots.push(r);
-      seen.add(r.rootID);
-    }
-  }
-  if (prev?.dataForRoots) {
-    for (const r of prev.dataForRoots) {
-      if (!seen.has(r.rootID)) {
-        roots.push(r);
-        seen.add(r.rootID);
-      }
-    }
-  }
-
-  return {
-    dataForRoots: roots,
-    rendererID: live?.rendererID ?? prev?.rendererID,
-    timelineData: live?.timelineData ?? prev?.timelineData,
-  };
 }
 
 export const DEFAULT_STALE_THRESHOLD_MS = 5 * 60_000;

@@ -61,7 +61,7 @@ export function createReactProfilerStartTool(
   return {
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
-Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling) rather than a per-commit JS wrapper — prerequisite for profiling large apps without freezing the JS thread.
+Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling).
 If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session.
 Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
