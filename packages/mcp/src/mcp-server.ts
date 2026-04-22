@@ -20,15 +20,23 @@ export async function fetchWithReconnect(
     init?: RequestInit;
     expBackoffBase?: number;
     maxRetries?: number;
+    fetchTimeoutMs?: number;
   }
 ): Promise<Response> {
-  const { expBackoffBase = 250, maxRetries = 4, init } = config ?? {};
+  const {
+    expBackoffBase = 250,
+    maxRetries = 4,
+    fetchTimeoutMs = 30_000,
+    init,
+  } = config ?? {};
 
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
     try {
-      return await fetch(getUrl(), init);
+      return await fetch(getUrl(), { ...init, signal: controller.signal });
     } catch (err) {
       lastError = err;
       if (attempt === maxRetries) break;
@@ -38,6 +46,8 @@ export async function fetchWithReconnect(
       }
       // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
       await new Promise((r) => setTimeout(r, expBackoffBase * Math.pow(2, attempt)));
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastError;

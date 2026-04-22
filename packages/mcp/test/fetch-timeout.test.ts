@@ -13,9 +13,6 @@ import { fetchWithReconnect } from "../src/mcp-server";
 async function mockSuccessfulReconnect() {
   return new Promise<void>((res) => res());
 }
-async function mockFailingReconnect() {
-  return new Promise<void>((_, rej) => rej());
-}
 
 function startHangingServer(): Promise<{ port: number; close: () => Promise<void> }> {
   return new Promise((resolve) => {
@@ -62,6 +59,7 @@ describe("fetch timeout in fetchWithReconnect", () => {
       await fetchWithReconnect(() => `${url}/tools/hang`, mockSuccessfulReconnect, {
         init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
         expBackoffBase: 5,
+        fetchTimeoutMs: 100,
       });
     } catch {
       threw = true;
