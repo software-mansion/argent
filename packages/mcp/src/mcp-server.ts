@@ -23,12 +23,7 @@ export async function fetchWithReconnect(
     fetchTimeoutMs?: number;
   }
 ): Promise<Response> {
-  const {
-    expBackoffBase = 250,
-    maxRetries = 4,
-    fetchTimeoutMs = 30_000,
-    init,
-  } = config ?? {};
+  const { expBackoffBase = 250, maxRetries = 4, fetchTimeoutMs = 30_000, init } = config ?? {};
 
   let lastError: unknown;
 
