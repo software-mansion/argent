@@ -16,21 +16,37 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  isNewerVersion,
+  isOnline,
+  isSkillsCliAvailable,
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  resolveProjectRoot,
   type ShellCommand,
 } from "./utils.js";
+import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
+
+// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
+// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
+// so `which argent` succeeds even though argent is not permanently installed globally.
+const TEMP_RUNNER_MARKERS = [
+  "_npx",
+  "/dlx-",
+  "\\dlx-",
+  "bun/install/cache",
+  ".bun\\install\\cache",
+];
 
 function isGloballyInstalled(): boolean {
   try {
     const cmd = process.platform === "win32" ? "where" : "which";
-    execSync(`${cmd} ${MCP_BINARY_NAME}`, {
+    const binaryPath = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    });
-    return true;
+    }).trim();
+    return !TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
   } catch {
     return false;
   }
@@ -146,7 +162,7 @@ export async function init(args: string[]): Promise<void> {
     }
     spinner.stop(pc.dim("Version check complete."));
 
-    if (latest && latest !== version) {
+    if (latest && isNewerVersion(latest, version)) {
       if (!nonInteractive) {
         const updateChoice = await p.select({
           message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
@@ -173,6 +189,18 @@ export async function init(args: string[]): Promise<void> {
             await runShellCommand(cmd);
             updateSpinner.stop(pc.green(`Updated to v${latest}.`));
             version = getInstalledVersion() ?? version;
+
+            // The user just bumped to a newer argent. Re-sync and prune
+            // argent skills in every scope that already tracks them — this
+            // is the only point in init where we can surface orphans
+            // (skills removed from a previous argent version) before
+            // Step 2's single-scope `skills add`.
+            const skillSummary = formatSkillRefreshSummary(
+              refreshArgentSkills(resolveProjectRoot(process.cwd()))
+            );
+            if (skillSummary) {
+              p.note(skillSummary, "Skills Updated");
+            }
           } catch (err) {
             updateSpinner.stop(pc.red("Update failed."));
             p.log.error(`${err}`);
@@ -195,11 +223,22 @@ export async function init(args: string[]): Promise<void> {
   if (nonInteractive) {
     selectedAdapters = detected.length > 0 ? detected : ALL_ADAPTERS;
   } else {
-    const choices = ALL_ADAPTERS.map((a) => ({
-      value: a,
-      label: a.name,
-      hint: detectedNames.includes(a.name) ? "detected" : undefined,
-    }));
+    const choices = ALL_ADAPTERS.map((a) => {
+      const parts: string[] = [];
+      if (detectedNames.includes(a.name)) parts.push("detected");
+      const hasProject = a.projectPath(process.cwd()) != null;
+      const hasGlobal = a.globalPath() != null;
+      if (!hasProject && hasGlobal) {
+        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s global config`)));
+      } else if (hasProject && !hasGlobal) {
+        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s project config`)));
+      }
+      return {
+        value: a,
+        label: a.name,
+        hint: parts.length > 0 ? parts.join(", ") : undefined,
+      };
+    });
 
     p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
 
@@ -278,7 +317,7 @@ export async function init(args: string[]): Promise<void> {
     }
   }
 
-  const projectRoot = process.cwd();
+  const projectRoot = resolveProjectRoot(process.cwd());
   const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
   const mcpEntry = getMcpEntry();
@@ -295,6 +334,16 @@ export async function init(args: string[]): Promise<void> {
           adapter.write(fallback, mcpEntry);
           mcpResults.push(
             `${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`
+          );
+        } catch (err) {
+          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
+        }
+      } else if (scope !== "global" && adapter.globalPath()) {
+        const fallback = adapter.globalPath()!;
+        try {
+          adapter.write(fallback, mcpEntry);
+          mcpResults.push(
+            `${pc.green("+")} ${adapter.name} ${pc.dim(`(global fallback: ${fallback})`)}`
           );
         } catch (err) {
           mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
@@ -387,7 +436,20 @@ export async function init(args: string[]): Promise<void> {
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
 
-  if (nonInteractive) {
+  const online = await isOnline();
+  const offlineWithCache = !online && isSkillsCliAvailable();
+  const skillsCliReady = online || offlineWithCache;
+
+  if (!skillsCliReady) {
+    p.log.warn(
+      pc.yellow("You appear to be offline. ") +
+        "Automatic skills installation requires a network connection."
+    );
+  }
+
+  if (!skillsCliReady) {
+    skillsMethod = "manual";
+  } else if (nonInteractive) {
     skillsMethod = "default";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
@@ -451,7 +513,9 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(skillsArgs.join(" "))}`);
+    const npxArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
+
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
@@ -460,7 +524,7 @@ export async function init(args: string[]): Promise<void> {
 
     try {
       const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(skillsArgs, skillsMethod === "interactive", skillsCwd);
+      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
@@ -501,7 +565,20 @@ export async function init(args: string[]): Promise<void> {
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
-  p.outro(pc.green("Argent is ready!"));
+
+  p.note(
+    [
+      pc.bold(pc.green("Argent is ready!")),
+      "",
+      `${pc.bold("Get started")} by asking your assistant:`,
+      "",
+      `   ${pc.bold(pc.cyan(`"What can Argent do?"`))}`,
+      "",
+      pc.dim("It will walk you through all capabilities available."),
+    ].join("\n"),
+    pc.bgGreen(pc.black(" Get Started "))
+  );
+  p.outro("Done.");
 }
 
 export function printBanner(): void {

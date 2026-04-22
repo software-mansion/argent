@@ -1,14 +1,16 @@
 <br/>
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_white_mode.png">
-    <img alt="banner" src="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png" width="80%">
-  </picture>
+  <a href="https://argent.swmansion.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png">
+      <source media="(prefers-color-scheme: light)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_white_mode.png">
+      <img alt="banner" src="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png" width="80%">
+    </picture>
+  </a>
 </p>
 <br/>
 
-**Argent** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
+**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent init
@@ -84,11 +86,20 @@ argent init
 | Gemini CLI  | `.gemini/settings.json`                                       |
 | Codex CLI   | `.codex/config.yaml`                                          |
 
+## Privacy
+
+Argent does not collect or transmit any user data.
+No telemetry, no analytics, no crash reporting.
+
+- Argent integrates with your agent locally over MCP stdio.
+- Its internal tools are not reachable from outside your machine.
+- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
+
 ## License
 
 Argent uses a mixed licensing model.
 
-**Source code** is released under the [Apache License 2.0](LICENSE).
+**Source code** is released under the [Apache License 2.0](LICENSE.txt).
 
 **Proprietary binaries** (the `bin/simulator-server` and `bin/ax-service` executables and the `.dylib` files in `native-devtools-ios`) are the intellectual property of Software Mansion S.A. and are licensed solely for use within this project. Decompiling, reverse-engineering, or redistributing them without explicit written permission is prohibited.
 

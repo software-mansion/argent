@@ -346,14 +346,14 @@ describe("NetworkInspector integration (mock server)", () => {
     wsConnectionCount = 0;
 
     // Resolve the network inspector, which should trigger JsRuntimeDebugger first
-    await registry.resolveService(`NetworkInspector:${mockPort}`);
+    await registry.resolveService(`NetworkInspector:${mockPort}:mock-device`);
 
     // Only ONE WebSocket connection should have been opened
     expect(wsConnectionCount).toBe(1);
 
     // Verify both services are running
-    expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}`)).toBe("RUNNING");
-    expect(registry.getServiceState(`NetworkInspector:${mockPort}`)).toBe("RUNNING");
+    expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}:mock-device`)).toBe("RUNNING");
+    expect(registry.getServiceState(`NetworkInspector:${mockPort}:mock-device`)).toBe("RUNNING");
   });
 
   it("view-network-logs returns paginated network entries", async () => {
@@ -431,15 +431,15 @@ describe("NetworkInspector integration (mock server)", () => {
 
   it("still only 1 WS connection when JsRuntimeDebugger is resolved before NetworkInspector", async () => {
     // Dispose everything first so we can start fresh
-    await registry.disposeService(`JsRuntimeDebugger:${mockPort}`).catch(() => {});
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:mock-device`).catch(() => {});
     wsConnectionCount = 0;
 
     // Explicitly resolve JsRuntimeDebugger first
-    await registry.resolveService(`JsRuntimeDebugger:${mockPort}`);
+    await registry.resolveService(`JsRuntimeDebugger:${mockPort}:mock-device`);
     expect(wsConnectionCount).toBe(1);
 
     // Now resolve NetworkInspector — should NOT open a second connection
-    await registry.resolveService(`NetworkInspector:${mockPort}`);
+    await registry.resolveService(`NetworkInspector:${mockPort}:mock-device`);
     expect(wsConnectionCount).toBe(1);
   });
 
@@ -557,9 +557,9 @@ describe("NetworkInspector integration (mock server)", () => {
 
   it("NetworkInspector cascades teardown when JsRuntimeDebugger is disposed", async () => {
     // Dispose JsRuntimeDebugger — NetworkInspector should also be torn down
-    await registry.disposeService(`JsRuntimeDebugger:${mockPort}`);
+    await registry.disposeService(`JsRuntimeDebugger:${mockPort}:mock-device`);
 
-    expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}`)).toBe("IDLE");
-    expect(registry.getServiceState(`NetworkInspector:${mockPort}`)).toBe("IDLE");
+    expect(registry.getServiceState(`JsRuntimeDebugger:${mockPort}:mock-device`)).toBe("IDLE");
+    expect(registry.getServiceState(`NetworkInspector:${mockPort}:mock-device`)).toBe("IDLE");
   });
 });

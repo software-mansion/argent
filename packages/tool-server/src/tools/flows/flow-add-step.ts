@@ -25,7 +25,7 @@ export function createFlowAddStepTool(
     services: () => ({}),
     async execute(_services, params) {
       const flowName = getActiveFlow();
-      const filePath = await getFlowPath(flowName);
+      const filePath = getFlowPath(flowName);
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
       const toolResult = await registry.invokeTool(params.command, args);

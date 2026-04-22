@@ -9,14 +9,16 @@ The debugger requires **Metro dev server running** (default `localhost:8081`) an
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) and auto-connect to Metro. Use `debugger-connect` to connect manually when tools fail to auto-connect. Always make sure that you provide metro-port of correct application on right device.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, a.k.a. `logicalDeviceId`). Always make sure you target the correct app on the correct device.
+
+One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
 ### Connect & diagnostics
 
-| Tool               | Purpose                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, isNewDebugger, connected. |
-| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**     |
+| Tool               | Purpose                                                                                                                                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger/network/profiler call. |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**                                                                                                                                        |
 
 ### Reload & recovery
 

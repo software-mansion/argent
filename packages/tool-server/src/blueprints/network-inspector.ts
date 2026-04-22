@@ -13,12 +13,13 @@ export interface NetworkInspectorApi {
 export const networkInspectorBlueprint: ServiceBlueprint<NetworkInspectorApi, string> = {
   namespace: NETWORK_INSPECTOR_NAMESPACE,
 
-  getURN(port: string) {
-    return `${NETWORK_INSPECTOR_NAMESPACE}:${port}`;
+  // payload is "port:deviceId"
+  getURN(payload: string) {
+    return `${NETWORK_INSPECTOR_NAMESPACE}:${payload}`;
   },
 
-  getDependencies(port: string) {
-    return { debugger: `JsRuntimeDebugger:${port}` };
+  getDependencies(payload: string) {
+    return { debugger: `JsRuntimeDebugger:${payload}` };
   },
 
   async factory(deps, _payload) {

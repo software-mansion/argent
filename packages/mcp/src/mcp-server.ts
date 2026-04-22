@@ -44,12 +44,24 @@ export async function startMcpServer(): Promise<void> {
   }
 
   async function fetchWithReconnect(getUrl: () => string, init?: RequestInit): Promise<Response> {
-    try {
-      return await fetch(getUrl(), init);
-    } catch {
-      await reconnect();
-      return fetch(getUrl(), init);
+    const MAX_RETRIES = 4;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await fetch(getUrl(), init);
+      } catch (err) {
+        lastError = err;
+        if (attempt === MAX_RETRIES) break;
+        if (attempt === 0) {
+          // First failure: trigger reconnect (spawns new server if dead)
+          await reconnect();
+        }
+        // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
+        await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
+      }
     }
+    throw lastError;
   }
 
   const LOG_FILE = process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
@@ -100,7 +112,7 @@ export async function startMcpServer(): Promise<void> {
   }
 
   const server = new Server(
-    { name: "argent", version: "0.1.0" },
+    { name: "argent", version: "0.5.3" },
     {
       capabilities: { tools: {} },
       instructions:
@@ -112,13 +124,20 @@ export async function startMcpServer(): Promise<void> {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = await fetchTools();
-    await spyLog({
-      ts: new Date().toISOString(),
-      event: "list_tools",
-      count: tools.length,
-    });
-    return { tools: tools.map(toMcpTool) };
+    try {
+      const tools = await fetchTools();
+      await spyLog({
+        ts: new Date().toISOString(),
+        event: "list_tools",
+        count: tools.length,
+      });
+      return { tools: tools.map(toMcpTool) };
+    } catch (err) {
+      process.stderr.write(
+        `[argent] Failed to list tools: ${err instanceof Error ? err.message : err}\n`
+      );
+      return { tools: [] };
+    }
   });
 
   server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
@@ -204,6 +223,27 @@ export async function startMcpServer(): Promise<void> {
   });
 
   await server.connect(new StdioServerTransport());
+
+  // Proactive health monitoring — restart tool server if it dies between requests
+  if (!process.env.ARGENT_TOOLS_URL) {
+    const HEALTH_INTERVAL_MS = 30_000;
+    const healthInterval = setInterval(async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3_000);
+        try {
+          const res = await fetch(`${TOOLS_URL}/tools`, { signal: controller.signal });
+          if (!res.ok) throw new Error(`health check returned ${res.status}`);
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch {
+        process.stderr.write("[argent] Health check failed — reconnecting tool server\n");
+        reconnect().catch(() => {});
+      }
+    }, HEALTH_INTERVAL_MS);
+    healthInterval.unref();
+  }
 
   if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
     process.stdin.on("close", () => {

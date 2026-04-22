@@ -55,6 +55,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   });
 
   app.get("/tools", (_req: Request, res: Response) => {
+    idleTimer.touch();
     const snapshot = registry.getSnapshot();
     const tools = snapshot.tools.map((id) => {
       const def = registry.getTool(id);

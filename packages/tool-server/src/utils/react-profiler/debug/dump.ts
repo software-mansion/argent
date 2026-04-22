@@ -74,6 +74,11 @@ export interface CommitTreeOnDisk {
     hotCommitIndices?: number[] | null;
     totalReactCommits?: number | null;
     profileStartWallMs?: number | null;
+    projectRoot?: string | null;
+    deviceId?: string | null;
+    port?: number | null;
+    appName?: string | null;
+    deviceName?: string | null;
   };
 }
 

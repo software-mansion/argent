@@ -485,6 +485,7 @@ export function buildTextTree(
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
+  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
   onScreenOnly: z
     .boolean()
     .default(true)
@@ -534,7 +535,7 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
   searchHint: "react native component tree discovery tap coordinates",
   zodSchema,
   services: (params) => ({
-    debugger: `JsRuntimeDebugger:${params.port}`,
+    debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
   async execute(services, params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
