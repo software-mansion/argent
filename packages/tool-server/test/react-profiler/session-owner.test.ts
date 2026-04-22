@@ -6,6 +6,8 @@ import {
   type ProfilingDataBackend,
 } from "../../src/utils/react-profiler/session-ownership";
 import { flattenProfilingData } from "../../src/tools/profiler/react/react-profiler-stop";
+import { buildHotCommitSummaries } from "../../src/utils/react-profiler/pipeline/00-hot-commits";
+import type { DevToolsFiberCommit } from "../../src/utils/react-profiler/types/input";
 
 function owner(overrides: Partial<ProfilerSessionOwner> = {}): ProfilerSessionOwner {
   return {
@@ -184,5 +186,132 @@ describe("flattenProfilingData", () => {
       expect(c.parentName).toBeNull();
       expect(c.isCompilerOptimized).toBe(false);
     }
+  });
+
+  it("returns no unattributed entries when all fibers resolve", () => {
+    const { unattributedByCommit } = flattenProfilingData(pd(), displayNameById, fiberMeta);
+    expect(unattributedByCommit).toEqual([]);
+  });
+
+  it("records per-commit dropped fiber count and summed ms when names are unresolved", () => {
+    // Only 101 is named; 102 (commit 0) and 201 (commit 2) are transient/unmounted.
+    const partialNames = { "101": "Button" };
+    const { commits, unattributedByCommit } = flattenProfilingData(pd(), partialNames, fiberMeta);
+
+    // Named fibers survive.
+    expect(commits.every((c) => c.componentName === "Button")).toBe(true);
+
+    // Commit 0 lost fiber 102 (3ms); commit 2 lost fiber 201 (8ms). Commit 1 had no drops.
+    expect(unattributedByCommit).toEqual([
+      [0, 1, 3],
+      [2, 1, 8],
+    ]);
+  });
+
+  it("sums multiple dropped fibers within the same commit", () => {
+    // Make commit 0 drop both its fibers by passing empty name map.
+    const { unattributedByCommit } = flattenProfilingData(pd(), {}, fiberMeta);
+
+    // Commit 0: 101 (5ms) + 102 (3ms) = 8ms across 2 fibers.
+    expect(unattributedByCommit[0]).toEqual([0, 2, 8]);
+    // Commit 1: just 101 (2ms).
+    expect(unattributedByCommit[1]).toEqual([1, 1, 2]);
+    // Commit 2: just 201 (8ms).
+    expect(unattributedByCommit[2]).toEqual([2, 1, 8]);
+  });
+
+  it("rounds unattributed ms to 2 decimals", () => {
+    const data: ProfilingDataBackend = {
+      dataForRoots: [
+        {
+          rootID: 1,
+          commitData: [
+            {
+              timestamp: 0,
+              duration: 10,
+              fiberActualDurations: [
+                [1, 1.23456],
+                [2, 2.34567],
+              ],
+              fiberSelfDurations: [],
+              changeDescriptions: [],
+            },
+          ],
+        },
+      ],
+      rendererID: 1,
+    };
+    const { unattributedByCommit } = flattenProfilingData(data, {}, {});
+    // 1.23456 + 2.34567 = 3.58023 → rounds to 3.58
+    expect(unattributedByCommit).toEqual([[0, 2, 3.58]]);
+  });
+});
+
+// ── buildHotCommitSummaries (unattributed threading) ──────────────────
+
+describe("buildHotCommitSummaries (unattributed threading)", () => {
+  function commit(commitIndex: number, commitDuration: number): DevToolsFiberCommit {
+    return {
+      commitIndex,
+      timestamp: commitIndex * 10,
+      componentName: "Button",
+      actualDuration: commitDuration,
+      selfDuration: commitDuration,
+      commitDuration,
+      didRender: true,
+      changeDescription: {
+        props: ["onPress"],
+        state: null,
+        hooks: null,
+        context: null,
+        didHooksChange: false,
+        isFirstMount: false,
+      },
+      hookTypes: null,
+      parentName: null,
+      isCompilerOptimized: false,
+    };
+  }
+
+  it("omits unattributed fields when no tuples are provided", () => {
+    const summaries = buildHotCommitSummaries([commit(0, 20)], [0]);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.unattributedMs).toBeUndefined();
+    expect(summaries[0]!.unattributedFiberCount).toBeUndefined();
+  });
+
+  it("attaches unattributedMs and unattributedFiberCount to the matching commit", () => {
+    const summaries = buildHotCommitSummaries(
+      [commit(0, 20), commit(1, 30)],
+      [0, 1],
+      [
+        [0, 3, 12.5],
+        [1, 1, 4],
+      ]
+    );
+    const byIndex = new Map(summaries.map((s) => [s.commitIndex, s]));
+    expect(byIndex.get(0)?.unattributedMs).toBe(12.5);
+    expect(byIndex.get(0)?.unattributedFiberCount).toBe(3);
+    expect(byIndex.get(1)?.unattributedMs).toBe(4);
+    expect(byIndex.get(1)?.unattributedFiberCount).toBe(1);
+  });
+
+  it("only attaches unattributed fields on the commit that recorded drops", () => {
+    const summaries = buildHotCommitSummaries(
+      [commit(0, 20), commit(1, 30)],
+      [0, 1],
+      [[0, 2, 7]]
+    );
+    const byIndex = new Map(summaries.map((s) => [s.commitIndex, s]));
+    expect(byIndex.get(0)?.unattributedMs).toBe(7);
+    expect(byIndex.get(0)?.unattributedFiberCount).toBe(2);
+    expect(byIndex.get(1)?.unattributedMs).toBeUndefined();
+    expect(byIndex.get(1)?.unattributedFiberCount).toBeUndefined();
+  });
+
+  it("omits fields for a tuple with zero fiber count (defensive)", () => {
+    const summaries = buildHotCommitSummaries([commit(0, 20)], [0], [[0, 0, 0]]);
+    expect(summaries[0]!.unattributedMs).toBeUndefined();
+    expect(summaries[0]!.unattributedFiberCount).toBeUndefined();
   });
 });

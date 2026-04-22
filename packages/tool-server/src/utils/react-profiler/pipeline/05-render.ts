@@ -329,6 +329,17 @@ function renderCommit(
     lines.push(`- _... and ${remaining} more_`);
   }
 
+  // Unattributed duration: fibers that rendered in this commit but unmounted
+  // before react-profiler-stop ran, so their display names could not be resolved.
+  // The breakdown above is missing this much work — not silent, just not named.
+  if (summary.unattributedMs !== undefined && summary.unattributedMs >= 1) {
+    const fiberCount = summary.unattributedFiberCount ?? 0;
+    const fiberLabel = fiberCount === 1 ? "fiber" : "fibers";
+    lines.push(
+      `- _⚠️ ${summary.unattributedMs}ms unattributed — ${fiberCount} ${fiberLabel} unmounted before stop (likely transient: modal/tooltip/animation)_`
+    );
+  }
+
   // CPU hotspots during this commit (from Hermes CPU profile correlation)
   if (summary.cpuHotspots && summary.cpuHotspots.length > 0) {
     lines.push("");

@@ -16,11 +16,19 @@ const MAX_COMPONENT_ENTRIES = 15; // cap cascade display; store total count sepa
 
 export function buildHotCommitSummaries(
   commits: DevToolsFiberCommit[],
-  hotCommitIndices: number[]
+  hotCommitIndices: number[],
+  unattributedByCommit?: Array<[number, number, number]>
 ): HotCommitSummary[] {
   if (commits.length === 0) return [];
 
   const hotSet = new Set(hotCommitIndices);
+
+  const unattributedMap = new Map<number, { count: number; ms: number }>();
+  if (unattributedByCommit) {
+    for (const [commitIndex, count, ms] of unattributedByCommit) {
+      unattributedMap.set(commitIndex, { count, ms });
+    }
+  }
 
   // Group commits by commitIndex (includes both hot and margin entries)
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
@@ -179,6 +187,8 @@ export function buildHotCommitSummaries(
       }
     }
 
+    const unattributed = unattributedMap.get(commitIndex);
+
     summaries.push({
       commitIndex,
       timestampMs,
@@ -193,6 +203,10 @@ export function buildHotCommitSummaries(
         rootCauseChangedHookNames.length > 0 && { rootCauseChangedHookNames }),
       components: componentEntries,
       totalComponentCount,
+      ...(unattributed && unattributed.count > 0 && {
+        unattributedMs: unattributed.ms,
+        unattributedFiberCount: unattributed.count,
+      }),
     });
   }
 
