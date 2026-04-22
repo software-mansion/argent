@@ -9,9 +9,8 @@
 /**
  * One-time setup script injected at the start of every profiling session.
  * Monkey-patches each `rendererInterface` to track `isProfiling` state,
- * capture `startedAtEpochMs`, snapshot prior profiling data before it is
- * wiped by a new `startProfiling` call, and expose a heartbeat helper used
- * to keep the session owner record fresh.
+ * capture `startedAtEpochMs`, and expose a heartbeat helper used to keep the
+ * session owner record fresh.
  *
  * Idempotent — guarded by `ri.__argent_startWrapped__` so re-injecting across
  * tool invocations does not produce cascading wrappers.
@@ -46,14 +45,6 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
       // Silent no-op when already recording — matches native semantics and
       // preserves the live buffer against accidental re-entry.
       if (ri.__argent_isProfiling__ === true) return;
-
-      // Snapshot any prior buffer before native start wipes it.
-      try {
-        var prev = ri.getProfilingData();
-        if (prev && prev.dataForRoots && prev.dataForRoots.length > 0) {
-          globalThis.__ARGENT_PREV_PROFILE__ = prev;
-        }
-      } catch (_e) { /* pristine state — nothing to save */ }
 
       var startedAtEpochMs = Date.now();
       ri.__argent_startedAtEpochMs__ = startedAtEpochMs;
@@ -210,10 +201,9 @@ export const STOP_FOR_TAKEOVER_SCRIPT = `
 
 /**
  * Stops the backend profiler, then collects the live `getProfilingData()`
- * buffer and the previously-snapshotted `__ARGENT_PREV_PROFILE__` in a single
- * round-trip. Also resolves every referenced fiber ID to a display name via
- * `getDisplayNameForElementID` so the caller does not need a second eval.
- * Returns `{ live, prev, displayNameById }` as a JSON string.
+ * buffer in a single round-trip. Also resolves every referenced fiber ID to a
+ * display name via `getDisplayNameForElementID` so the caller does not need a
+ * second eval. Returns `{ live, displayNameById }` as a JSON string.
  */
 export const STOP_AND_READ_SCRIPT = `
 (function __argent_stopAndRead() {
@@ -223,20 +213,18 @@ export const STOP_AND_READ_SCRIPT = `
 
   var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!h || !h.rendererInterfaces) {
-    return JSON.stringify({ live: null, prev: globalThis.__ARGENT_PREV_PROFILE__ || null, displayNameById: {} });
+    return JSON.stringify({ live: null, displayNameById: {} });
   }
   var ri = null;
   h.rendererInterfaces.forEach(function(r){ if (!ri) ri = r; });
   if (!ri) {
-    return JSON.stringify({ live: null, prev: globalThis.__ARGENT_PREV_PROFILE__ || null, displayNameById: {} });
+    return JSON.stringify({ live: null, displayNameById: {} });
   }
 
   try { ri.stopProfiling(); } catch (_e) {}
 
   var live = null;
   try { live = ri.getProfilingData(); } catch (_e) { /* pristine — treat as empty */ }
-
-  var prev = globalThis.__ARGENT_PREV_PROFILE__ || null;
 
   var idSet = Object.create(null);
   function collectIds(pd) {
@@ -252,7 +240,6 @@ export const STOP_AND_READ_SCRIPT = `
     }
   }
   collectIds(live);
-  collectIds(prev);
 
   var displayNameById = {};
   var ids = Object.keys(idSet);
@@ -266,7 +253,7 @@ export const STOP_AND_READ_SCRIPT = `
     }
   }
 
-  return JSON.stringify({ live: live, prev: prev, displayNameById: displayNameById });
+  return JSON.stringify({ live: live, displayNameById: displayNameById });
 })()
 `;
 

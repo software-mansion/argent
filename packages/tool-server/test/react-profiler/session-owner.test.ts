@@ -1,11 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
-  mergeProfilingData,
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
   type ProfilingDataBackend,
-} from "../../src/tools/profiler/react/react-profiler-session-owner";
+} from "../../src/utils/react-profiler/session-ownership";
 import { flattenProfilingData } from "../../src/tools/profiler/react/react-profiler-stop";
 
 function owner(overrides: Partial<ProfilerSessionOwner> = {}): ProfilerSessionOwner {
@@ -21,67 +20,6 @@ function owner(overrides: Partial<ProfilerSessionOwner> = {}): ProfilerSessionOw
     ...overrides,
   };
 }
-
-function backend(roots: Array<{ rootID: number; commits: number }>): ProfilingDataBackend {
-  return {
-    dataForRoots: roots.map((r) => ({
-      rootID: r.rootID,
-      commitData: Array.from({ length: r.commits }, (_, i) => ({
-        timestamp: i * 10,
-        duration: 5,
-        fiberActualDurations: [],
-        fiberSelfDurations: [],
-        changeDescriptions: [],
-      })),
-    })),
-    rendererID: 1,
-  };
-}
-
-// ── mergeProfilingData ────────────────────────────────────────────────
-
-describe("mergeProfilingData", () => {
-  it("returns live verbatim when prev is null", () => {
-    const live = backend([{ rootID: 1, commits: 3 }]);
-    const out = mergeProfilingData(live, null);
-    expect(out.dataForRoots).toHaveLength(1);
-    expect(out.dataForRoots[0]!.commitData).toHaveLength(3);
-  });
-
-  it("returns prev verbatim when live is null", () => {
-    const prev = backend([{ rootID: 42, commits: 2 }]);
-    const out = mergeProfilingData(null, prev);
-    expect(out.dataForRoots).toHaveLength(1);
-    expect(out.dataForRoots[0]!.rootID).toBe(42);
-  });
-
-  it("prefers live over prev when rootIDs overlap", () => {
-    const live = backend([{ rootID: 1, commits: 3 }]);
-    const prev = backend([{ rootID: 1, commits: 99 }]);
-    const out = mergeProfilingData(live, prev);
-    expect(out.dataForRoots).toHaveLength(1);
-    expect(out.dataForRoots[0]!.commitData).toHaveLength(3); // live wins
-  });
-
-  it("appends prev roots that are not in live", () => {
-    const live = backend([{ rootID: 1, commits: 3 }]);
-    const prev = backend([
-      { rootID: 1, commits: 99 }, // dropped: overlaps with live
-      { rootID: 2, commits: 5 }, // kept
-    ]);
-    const out = mergeProfilingData(live, prev);
-    expect(out.dataForRoots).toHaveLength(2);
-    expect(out.dataForRoots[0]!.rootID).toBe(1);
-    expect(out.dataForRoots[0]!.commitData).toHaveLength(3);
-    expect(out.dataForRoots[1]!.rootID).toBe(2);
-    expect(out.dataForRoots[1]!.commitData).toHaveLength(5);
-  });
-
-  it("returns an empty dataForRoots when both inputs are null", () => {
-    const out = mergeProfilingData(null, null);
-    expect(out.dataForRoots).toEqual([]);
-  });
-});
 
 // ── classifyStaleness ─────────────────────────────────────────────────
 

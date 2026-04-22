@@ -13,10 +13,7 @@ import type {
   DevToolsChangeDescription,
 } from "../../../utils/react-profiler/types/input";
 import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
-import {
-  mergeProfilingData,
-  type ProfilingDataBackend,
-} from "../../../utils/react-profiler/session-ownership";
+import type { ProfilingDataBackend } from "../../../utils/react-profiler/session-ownership";
 import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
@@ -29,7 +26,6 @@ const zodSchema = z.object({
 
 interface StopReadResult {
   live: ProfilingDataBackend | null;
-  prev: ProfilingDataBackend | null;
   displayNameById: Record<string, string | null>;
 }
 
@@ -117,7 +113,7 @@ export function createReactProfilerStopTool(
   return {
     id: "react-profiler-stop",
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.
-Reads commit data from the in-app React DevTools backend (ri.getProfilingData) — no per-commit JS work runs during capture. Wipe-protected via __ARGENT_PREV_PROFILE__.
+Reads commit data from the in-app React DevTools backend.
 Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
 Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices, session_id } summarizing the session.
@@ -157,7 +153,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
       }
       const profile = cpuResult.profile;
 
-      // Single evaluate: stop the backend profiler, read live + prev buffers, and
+      // Single evaluate: stop the backend profiler, read the live buffer, and
       // resolve every referenced fiberID to a displayName in one round-trip.
       const stopReadStr = (await cdp.send("Runtime.evaluate", {
         expression: STOP_AND_READ_SCRIPT,
@@ -175,11 +171,7 @@ Fails if no active profiling session exists or the CDP connection was lost durin
       }
       const stopRead = JSON.parse(stopReadRaw) as StopReadResult;
 
-      // live > PREV: if both cover the same rootID, live wins and PREV is
-      // dropped — so if we're here after a takeover of an abandoned session,
-      // a PREV snapshot for the same rootID (which included the abandoned
-      // commits) will be discarded in favour of our own new session.
-      const merged = mergeProfilingData(stopRead.live, stopRead.prev);
+      const merged: ProfilingDataBackend = stopRead.live ?? { dataForRoots: [] };
       const backendCommitCount = merged.dataForRoots.reduce(
         (a, r) => a + (r.commitData?.length ?? 0),
         0
