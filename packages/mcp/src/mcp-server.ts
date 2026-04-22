@@ -13,6 +13,36 @@ import {
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
 
+export async function fetchWithReconnect(
+  getUrl: () => string,
+  reconnect: () => Promise<void>,
+  config?: {
+    init?: RequestInit;
+    expBackoffBase?: number;
+    maxRetries?: number;
+  }
+): Promise<Response> {
+  const { expBackoffBase = 250, maxRetries = 4, init } = config ?? {};
+
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fetch(getUrl(), init);
+    } catch (err) {
+      lastError = err;
+      if (attempt === maxRetries) break;
+      if (attempt === 0) {
+        // First failure: trigger reconnect (spawns new server if dead)
+        await reconnect();
+      }
+      // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
+      await new Promise((r) => setTimeout(r, expBackoffBase * Math.pow(2, attempt)));
+    }
+  }
+  throw lastError;
+}
+
 export async function startMcpServer(): Promise<void> {
   let TOOLS_URL: string;
   if (process.env.ARGENT_TOOLS_URL) {
@@ -42,27 +72,6 @@ export async function startMcpServer(): Promise<void> {
     return reconnectPromise;
   }
 
-  async function fetchWithReconnect(getUrl: () => string, init?: RequestInit): Promise<Response> {
-    const MAX_RETRIES = 4;
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        return await fetch(getUrl(), init);
-      } catch (err) {
-        lastError = err;
-        if (attempt === MAX_RETRIES) break;
-        if (attempt === 0) {
-          // First failure: trigger reconnect (spawns new server if dead)
-          await reconnect();
-        }
-        // Exponential backoff: 250ms, 500ms, 1s, 2s (~3.75s total + reconnect time)
-        await new Promise((r) => setTimeout(r, 250 * Math.pow(2, attempt)));
-      }
-    }
-    throw lastError;
-  }
-
   const LOG_FILE = process.env.ARGENT_MCP_LOG ?? `${homedir()}/.argent/mcp-calls.log`;
   let logDirReady = false;
 
@@ -86,7 +95,7 @@ export async function startMcpServer(): Promise<void> {
   };
 
   async function fetchTools(): Promise<ToolMeta[]> {
-    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`);
+    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`, reconnect);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
@@ -104,10 +113,12 @@ export async function startMcpServer(): Promise<void> {
   ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
-    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(args ?? {}),
+    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(args ?? {}),
+      },
     });
 
     const json = (await res.json()) as ToolAPIResponse;

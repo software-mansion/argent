@@ -8,6 +8,14 @@
 
 import { describe, it, expect } from "vitest";
 import http from "node:http";
+import { fetchWithReconnect } from "../src/mcp-server";
+
+async function mockSuccessfulReconnect() {
+  return new Promise<void>((res) => res());
+}
+async function mockFailingReconnect() {
+  return new Promise<void>((_, rej) => rej());
+}
 
 function startHangingServer(): Promise<{ port: number; close: () => Promise<void> }> {
   return new Promise((resolve) => {
@@ -38,57 +46,23 @@ function startHangingServer(): Promise<{ port: number; close: () => Promise<void
   });
 }
 
-// TODO: Instead of replicating, the real function should be imported
-// Minimal replica of fetchWithReconnect from mcp-server.ts
-async function fetchWithReconnect(
-  getUrl: () => string,
-  init?: RequestInit,
-  timeoutMs = 30_000
-): Promise<Response> {
-  const MAX_RETRIES = 4;
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    if (init?.signal) {
-      (init.signal as AbortSignal).addEventListener("abort", () => controller.abort(), {
-        once: true,
-      });
-    }
-    try {
-      const res = await fetch(getUrl(), { ...init, signal: controller.signal });
-      clearTimeout(timer);
-      return res;
-    } catch (err) {
-      clearTimeout(timer);
-      lastError = err;
-      if (attempt === MAX_RETRIES) break;
-      // exponential backoff kept tiny (5ms) for the tests
-      await new Promise((r) => setTimeout(r, 5 * Math.pow(2, attempt)));
-    }
-  }
-  throw lastError;
-}
-
 describe("fetch timeout in fetchWithReconnect", () => {
   it("throws after retries when POST never responds (does not hang)", async () => {
     const fake = await startHangingServer();
     const url = `http://127.0.0.1:${fake.port}`;
 
     // GET /tools should succeed immediately.
-    const listRes = await fetchWithReconnect(() => `${url}/tools`, undefined, 1000);
+    const listRes = await fetchWithReconnect(() => `${url}/tools`, mockSuccessfulReconnect);
     expect(listRes.ok).toBe(true);
 
     // POST /tools/hang should time out and eventually throw.
     let threw = false;
     const t0 = Date.now();
     try {
-      await fetchWithReconnect(
-        () => `${url}/tools/hang`,
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
-        100 // 100ms timeout per attempt for fast test
-      );
+      await fetchWithReconnect(() => `${url}/tools/hang`, mockSuccessfulReconnect, {
+        init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+        expBackoffBase: 5,
+      });
     } catch {
       threw = true;
     }
@@ -107,11 +81,15 @@ describe("fetch timeout in fetchWithReconnect", () => {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
+
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : 0;
 
-    const res = await fetchWithReconnect(() => `http://127.0.0.1:${port}/test`, undefined, 5000);
+    const res = await fetchWithReconnect(
+      () => `http://127.0.0.1:${port}/test`,
+      mockSuccessfulReconnect
+    );
     expect(res.ok).toBe(true);
 
     server.close();
