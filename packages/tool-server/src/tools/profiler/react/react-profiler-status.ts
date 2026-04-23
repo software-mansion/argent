@@ -13,12 +13,6 @@ import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
-  session_id: z
-    .string()
-    .optional()
-    .describe(
-      "Optional — the session_id returned by react-profiler-start. Pass it so status can verify the currently-running session is still yours."
-    ),
 });
 
 type ReadStateResult =
@@ -49,7 +43,7 @@ export function createReactProfilerStatusTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-status",
-    description: `Check the state of the React profiler session without side effects. Use after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Returns { session_status, is_running, current_owner, … }. Pass session_id from react-profiler-start to verify the currently-running session is still yours.`,
+    description: `Check the state of the React profiler session without side effects. Use after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Ownership is verified server-side against this tool-server's in-memory session — no token-threading is required. Returns { session_status, is_running, current_owner, … }. If this tool-server process restarted after react-profiler-start, status will report 'taken_over'; use react-profiler-start { force: true } to reclaim.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
@@ -155,28 +149,7 @@ export function createReactProfilerStatusTool(
         };
       }
 
-      if (params.session_id !== undefined) {
-        if (owner.sessionId === params.session_id) {
-          return {
-            hook_exists: true,
-            renderer_interface_found: true,
-            is_running: true,
-            current_session_id: owner.sessionId,
-            current_owner: owner,
-            session_status: "active",
-            note: "Your profiling session is still running. Call react-profiler-stop to collect the data or continue profiling if you can take over where you left off. Ask user if unsure.",
-          };
-        }
-        return {
-          hook_exists: true,
-          renderer_interface_found: true,
-          is_running: true,
-          current_session_id: owner.sessionId,
-          current_owner: owner,
-          session_status: "taken_over",
-          note: "A different profiling session is running. Another agent or tool-server took over; data from your session was lost at the takeover moment.",
-        };
-      }
+      const isMine = api.sessionId !== null && owner.sessionId === api.sessionId;
 
       return {
         hook_exists: true,
@@ -184,8 +157,10 @@ export function createReactProfilerStatusTool(
         is_running: true,
         current_session_id: owner.sessionId,
         current_owner: owner,
-        session_status: "active",
-        note: "A profiling session is running but you didn't provide a session_id to verify ownership; inspect `current_owner` to identify it.",
+        session_status: isMine ? "active" : "taken_over",
+        note: isMine
+          ? "Your profiling session is still running. Call react-profiler-stop to collect the data, or continue profiling."
+          : "A different profiling session is running (another tool-server instance took over, or this process restarted after start). Data from the prior session is lost at the takeover moment. Use react-profiler-start { force: true } to reclaim.",
       };
     },
   };
