@@ -9,15 +9,15 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 ### React Profiler (Hermes / React commits)
 
-| Tool                              | Purpose                                                                                                       |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Optional: `sample_interval_us` (default 100).          |
-| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                    |
+| Tool                              | Purpose                                                                                                                                                                                                                                                           |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Optional: `sample_interval_us` (default 100).                                                                                                                                                              |
+| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                                                                                                                                        |
 | `react-profiler-status`           | **Call if you were interrupted in the middle of the flow, never in another scenario** (debugger drop, Metro reload, pause, subagent handoff, any doubt). Returns `session_status: "active" \| "taken_over" \| "stopped" \| "no_react_runtime"`. Side-effect free. |
-| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits, sorted by `totalRenderMs` DESC. Saves raw data to disk. |
-| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                               |
-| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                     |
-| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                            |
+| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits, sorted by `totalRenderMs` DESC. Saves raw data to disk.                                                                                                                                                     |
+| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                                                                                                                                                   |
+| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                                                                                                                                                                         |
+| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                                                                                                                                                                                |
 
 ### Drill-Down Query Tools (call after analyze)
 
