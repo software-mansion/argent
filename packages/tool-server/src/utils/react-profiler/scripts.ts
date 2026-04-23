@@ -48,6 +48,13 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
 
       var startedAtEpochMs = Date.now();
       ri.__argent_startedAtEpochMs__ = startedAtEpochMs;
+      // Reset the commit-time fiber-name cache BEFORE flipping the
+      // isProfiling flag so the tracker only populates it with fibers seen
+      // during this session. Clearing here rather than in stopProfiling is
+      // load-bearing: STOP_AND_READ_SCRIPT calls ri.stopProfiling() itself
+      // before consulting the cache, so clearing on stop would wipe the
+      // cache out from under the reader on every single session.
+      globalThis.__argent_fiberNames__ = Object.create(null);
       ri.__argent_isProfiling__ = true;
       try {
         return origStart.apply(this, arguments);
@@ -64,6 +71,11 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
       } finally {
         ri.__argent_isProfiling__ = false;
         globalThis.__ARGENT_PROFILER_OWNER__ = null;
+        // NOTE: we intentionally do NOT clear __argent_fiberNames__ here.
+        // STOP_AND_READ_SCRIPT calls ri.stopProfiling() and then reads the
+        // cache to resolve unmounted-fiber names. Clearing here would race
+        // that read and break the fallback for every transient component.
+        // The cache is cleared at the top of the next startProfiling wrapper.
       }
     };
   });
@@ -243,13 +255,23 @@ export const STOP_AND_READ_SCRIPT = `
 
   var displayNameById = {};
   var ids = Object.keys(idSet);
+  var nameCache = globalThis.__argent_fiberNames__ || null;
   for (var i = 0; i < ids.length; i++) {
     var id = ids[i];
     try {
       var n = ri.getDisplayNameForElementID(Number(id));
-      displayNameById[id] = (typeof n === 'string' && n.length > 0) ? n : null;
+      if (typeof n === 'string' && n.length > 0) {
+        displayNameById[id] = n;
+      } else {
+        // Live resolution failed — fiber was likely unmounted before stop
+        // (transient component). Fall back to the commit-time cache populated
+        // by FIBER_ROOT_TRACKER_SCRIPT.
+        var cached = nameCache ? nameCache[id] : undefined;
+        displayNameById[id] = (typeof cached === 'string' && cached.length > 0) ? cached : null;
+      }
     } catch (_e) {
-      displayNameById[id] = null;
+      var cachedErr = nameCache ? nameCache[id] : undefined;
+      displayNameById[id] = (typeof cachedErr === 'string' && cachedErr.length > 0) ? cachedErr : null;
     }
   }
 

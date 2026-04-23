@@ -201,23 +201,56 @@ describe("flattenProfilingData", () => {
     // Named fibers survive.
     expect(commits.every((c) => c.componentName === "Button")).toBe(true);
 
-    // Commit 0 lost fiber 102 (3ms); commit 2 lost fiber 201 (8ms). Commit 1 had no drops.
+    // unattributed ms uses selfDuration (exclusive per-fiber time), not actualDuration.
+    // Commit 0: 102 selfDuration=2; Commit 2: 201 selfDuration=7.
     expect(unattributedByCommit).toEqual([
-      [0, 1, 3],
-      [2, 1, 8],
+      [0, 1, 2],
+      [2, 1, 7],
     ]);
   });
 
-  it("sums multiple dropped fibers within the same commit", () => {
-    // Make commit 0 drop both its fibers by passing empty name map.
+  it("sums multiple dropped fibers within the same commit using selfDuration", () => {
+    // Make every fiber drop by passing an empty name map.
     const { unattributedByCommit } = flattenProfilingData(pd(), {}, fiberMeta);
 
-    // Commit 0: 101 (5ms) + 102 (3ms) = 8ms across 2 fibers.
-    expect(unattributedByCommit[0]).toEqual([0, 2, 8]);
-    // Commit 1: just 101 (2ms).
+    // Commit 0: 101 self=4 + 102 self=2 = 6 across 2 fibers.
+    expect(unattributedByCommit[0]).toEqual([0, 2, 6]);
+    // Commit 1: 101 self=2.
     expect(unattributedByCommit[1]).toEqual([1, 1, 2]);
-    // Commit 2: just 201 (8ms).
-    expect(unattributedByCommit[2]).toEqual([2, 1, 8]);
+    // Commit 2: 201 self=7.
+    expect(unattributedByCommit[2]).toEqual([2, 1, 7]);
+  });
+
+  it("uses selfDuration rather than actualDuration for a nested dropped subtree", () => {
+    // Parent actualDuration includes its child's actualDuration (inclusive).
+    // Using actualDuration for both would double-count the child's work.
+    const nested: ProfilingDataBackend = {
+      dataForRoots: [
+        {
+          rootID: 1,
+          commitData: [
+            {
+              timestamp: 0,
+              duration: 30,
+              fiberActualDurations: [
+                [1, 30], // parent — inclusive 30ms
+                [2, 25], // child  — inclusive 25ms
+              ],
+              fiberSelfDurations: [
+                [1, 5], // parent exclusive 5ms
+                [2, 25], // child exclusive 25ms
+              ],
+              changeDescriptions: [],
+            },
+          ],
+        },
+      ],
+    };
+    const { commits, unattributedByCommit } = flattenProfilingData(nested, {}, {});
+    expect(commits).toHaveLength(0);
+    // Correct answer: 5 + 25 = 30 (the commit's total work).
+    // Bug would give: 30 + 25 = 55.
+    expect(unattributedByCommit).toEqual([[0, 2, 30]]);
   });
 
   it("rounds unattributed ms to 2 decimals", () => {
@@ -233,7 +266,10 @@ describe("flattenProfilingData", () => {
                 [1, 1.23456],
                 [2, 2.34567],
               ],
-              fiberSelfDurations: [],
+              fiberSelfDurations: [
+                [1, 1.23456],
+                [2, 2.34567],
+              ],
               changeDescriptions: [],
             },
           ],
@@ -244,6 +280,32 @@ describe("flattenProfilingData", () => {
     const { unattributedByCommit } = flattenProfilingData(data, {}, {});
     // 1.23456 + 2.34567 = 3.58023 → rounds to 3.58
     expect(unattributedByCommit).toEqual([[0, 2, 3.58]]);
+  });
+
+  it("recovers commits for fibers resolved via the commit-time name cache", () => {
+    // Simulate the output of STOP_AND_READ_SCRIPT after the cache fallback:
+    // all fiber IDs (including ones that would be dropped at stop time) now
+    // resolve to names, so nothing is unattributed and every fiber's
+    // selfDuration is preserved in the commits array.
+    const recoveredNames = {
+      "101": "Button",
+      "102": "Tooltip", // "recovered" transient — resolved via cache
+      "201": "Modal", // "recovered" transient — resolved via cache
+    };
+    const { commits, unattributedByCommit } = flattenProfilingData(
+      pd(),
+      recoveredNames,
+      fiberMeta
+    );
+
+    expect(unattributedByCommit).toEqual([]);
+    const tooltip = commits.find((c) => c.componentName === "Tooltip");
+    expect(tooltip).toBeDefined();
+    expect(tooltip?.selfDuration).toBe(2);
+    expect(tooltip?.actualDuration).toBe(3);
+    const modal = commits.find((c) => c.componentName === "Modal");
+    expect(modal?.selfDuration).toBe(7);
+    expect(modal?.actualDuration).toBe(8);
   });
 });
 
