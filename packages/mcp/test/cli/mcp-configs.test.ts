@@ -863,7 +863,7 @@ describe("opencode adapter", () => {
     const configPath = path.join(tmpDir, "opencode.json");
     fs.writeFileSync(
       configPath,
-      JSON.stringify({ mcp: {}, tools: { "other-mcp*": true, write: "ask" } })
+      JSON.stringify({ mcp: {}, tools: { "other-mcp*": true, "write": "ask" } })
     );
 
     adapter.addAllowlist!(tmpDir, "local");
