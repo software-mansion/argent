@@ -19,11 +19,6 @@ function buildOwner(sessionId: string): ProfilerSessionOwner {
     sessionId,
     startedAtEpochMs: 1_000_000_000,
     lastHeartbeatEpochMs: 1_000_000_000,
-    toolServerPid: 100,
-    toolServerStartedAtEpochMs: 999_999_000,
-    toolName: "react-profiler-start",
-    startArgs: {},
-    commitCountAtStart: 0,
   };
 }
 

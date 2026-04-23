@@ -9,11 +9,6 @@ export interface ProfilerSessionOwner {
   sessionId: string;
   startedAtEpochMs: number;
   lastHeartbeatEpochMs: number;
-  toolServerPid: number;
-  toolServerStartedAtEpochMs: number;
-  toolName: string;
-  startArgs: Record<string, unknown>;
-  commitCountAtStart: number;
 }
 
 /**

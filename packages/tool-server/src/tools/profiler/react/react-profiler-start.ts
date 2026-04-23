@@ -180,13 +180,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         // the wrapper-captured value to eliminate clock skew.
         startedAtEpochMs: 0,
         lastHeartbeatEpochMs: 0,
-        toolServerPid: process.pid,
-        toolServerStartedAtEpochMs: Math.floor(Date.now() - process.uptime() * 1000),
-        toolName: "react-profiler-start",
-        startArgs: {
-          sampleIntervalUs: params.sample_interval_us,
-        },
-        commitCountAtStart: 0,
       };
 
       await cdp.send("Profiler.enable").catch(ignore);
