@@ -10,6 +10,9 @@ export type ReRenderReason =
 export interface HotCommitComponentEntry {
   name: string;
   selfDurationMs: number; // total across all instances in this commit
+  // Inclusive render time: self + entire subtree owned by this component.
+  // Do NOT sum this column across siblings — parent time already includes children.
+  actualDurationMs: number;
   count: number; // number of fiber instances (>1 = list items etc.)
   isFirstMount?: boolean; // true = initial render (mount), not a re-render
   reason?: ReRenderReason;
