@@ -14,11 +14,6 @@ function owner(overrides: Partial<ProfilerSessionOwner> = {}): ProfilerSessionOw
     sessionId: "sess-1",
     startedAtEpochMs: 1_000_000_000,
     lastHeartbeatEpochMs: 1_000_000_000,
-    toolServerPid: 100,
-    toolServerStartedAtEpochMs: 1_000_000_000 - 1000,
-    toolName: "react-profiler-start",
-    startArgs: {},
-    commitCountAtStart: 0,
     ...overrides,
   };
 }

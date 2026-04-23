@@ -166,17 +166,6 @@ export function buildStartScript(ownerJson: string): string {
     : Date.now();
   owner.lastHeartbeatEpochMs = owner.startedAtEpochMs;
 
-  var commitCountAtStart = 0;
-  try {
-    var pd = ri.getProfilingData();
-    if (pd && pd.dataForRoots) {
-      for (var i = 0; i < pd.dataForRoots.length; i++) {
-        commitCountAtStart += (pd.dataForRoots[i].commitData || []).length;
-      }
-    }
-  } catch (_e) {}
-  owner.commitCountAtStart = commitCountAtStart;
-
   globalThis.__ARGENT_PROFILER_OWNER__ = owner;
 
   return JSON.stringify({
