@@ -148,7 +148,7 @@ export function createReactProfilerStopTool(
 Reads commit data from the in-app React DevTools backend.
 Stores results in the ReactProfilerSession for later use by react-profiler-analyze or react-profiler-cpu-summary.
 Call react-profiler-start first, then exercise the app, then call this.
-Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices, session_id } summarizing the session.
+Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits, hot_commit_indices } summarizing the session.
 When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count } — these quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
@@ -309,7 +309,6 @@ Fails if no active profiling session exists or the CDP connection was lost durin
 
       cacheProfilerPaths(api.port, sessionPaths, api.deviceId);
       api.sessionPaths = sessionPaths;
-      const reactSessionId = api.sessionId;
       api.sessionId = null;
       api.ownerToolServerPid = null;
       api.disposeSession();
@@ -321,7 +320,6 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         sample_count: profile.samples.length,
         fiber_renders_captured: allCommits.length,
         hook_installed: true,
-        session_id: reactSessionId,
       };
       if (totalCommits > 0) {
         response["total_react_commits"] = totalCommits;

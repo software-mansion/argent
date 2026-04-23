@@ -78,7 +78,7 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 
 ### Step 1: Start profiling
 
-Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save both `startedAtEpochMs` and `session_id` from the response** — you will need `startedAtEpochMs` for annotation offsets and `session_id` to verify ownership if the session is later interrupted. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it for annotation offsets. Session ownership is verified server-side; no token-threading is required. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
 
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
@@ -152,7 +152,7 @@ If the user stated that they do not wish for changes, present the profiling repo
 - **Re-run after fixes**: Always re-profile after changes. Report honestly whether the metric improved, regressed, or stayed flat — do not assume improvement.
 - **`excluded` is informational**: Components in `animatedSubtrees` and `recyclerChildren` re-render by design.
 - **Strict Mode**: Double-invokes renders. The pipeline halves `normalizedRenderCount` automatically when detected.
-- **Debugger connection**: If interrupted, started profiling also closes. Before attempting recovery, call `react-profiler-status` with the `session_id` from `react-profiler-start` — it tells you whether the session is `active`, `taken_over`, `stopped`, or `no_react_runtime`, so you can decide whether to stop, restart, or reconnect first.
+- **Debugger connection**: If interrupted, started profiling also closes. Before attempting recovery, call `react-profiler-status` — it tells you whether the session is `active`, `taken_over`, `stopped`, or `no_react_runtime`, so you can decide whether to stop, restart, or reconnect first.
 - **Confounders to watch for**:
   - Live API data may differ between runs (different payload sizes, content counts), which shifts render counts and durations independently of your fix. Note when data-dependent components show variance.
   - Profiler overhead inflates CPU measurements. If iOS Instruments shows `JSLexer`, `JSONEmitter`, or Hermes internals dominating the JS thread, that reflects profiler instrumentation cost — not app work. Discount those entries.
