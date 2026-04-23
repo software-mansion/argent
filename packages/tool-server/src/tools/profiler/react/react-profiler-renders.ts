@@ -2,10 +2,9 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
-  FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
-import { HEARTBEAT_SCRIPT } from "../../../utils/react-profiler/scripts";
+import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {

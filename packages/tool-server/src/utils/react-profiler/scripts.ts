@@ -201,6 +201,74 @@ export const STOP_FOR_TAKEOVER_SCRIPT = `
 // #region Data Collection
 
 /**
+ * Injected once on connect — tracks fiber root commits for get_react_renders
+ * and get_fiber_tree. Idempotent (guard via __argent_profiler_installed__).
+ *
+ * Also populates `globalThis.__argent_fiberNames__` with a commit-time
+ * fiberID → displayName cache. This is the only reliable way to recover
+ * names for transient components (modals, popovers, navigation screens)
+ * that unmount between the profiled interaction and `STOP_AND_READ_SCRIPT`:
+ * once a fiber is unmounted the DevTools backend drops it from
+ * `idToDevToolsInstanceMap`, so `getDisplayNameForElementID` returns null
+ * at stop time. Reading the name right after React's own
+ * `handleCommitFiberRoot` runs (synchronous inside `orig.call`) guarantees
+ * the fiber is still present. Fiber IDs are monotonically increasing and
+ * never reused within a renderer, so cache entries never go stale.
+ */
+export const FIBER_ROOT_TRACKER_SCRIPT = `
+(function() {
+  var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hook || hook.__argent_profiler_installed__) return;
+  hook.__argent_profiler_installed__ = true;
+  hook.__argent_roots__ = new Set();
+
+  if (!globalThis.__argent_fiberNames__) {
+    globalThis.__argent_fiberNames__ = Object.create(null);
+  }
+
+  var orig = hook.onCommitFiberRoot;
+  hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
+    hook.__argent_roots__.add(root);
+    if (typeof orig === 'function') orig.call(this, rendererID, root, priorityLevel);
+
+    // Populate fiberID → displayName cache for every fiber that rendered in
+    // this commit. Must run AFTER orig.call() — the DevTools backend writes
+    // commitData synchronously inside handleCommitFiberRoot, so by the time
+    // control returns here getProfilingData() already reflects this commit.
+    try {
+      var ri = hook.rendererInterfaces && hook.rendererInterfaces.get(rendererID);
+      if (!ri || ri.__argent_isProfiling__ !== true) return;
+
+      var pd = ri.getProfilingData ? ri.getProfilingData() : null;
+      if (!pd || !pd.dataForRoots) return;
+
+      var cache = globalThis.__argent_fiberNames__;
+      for (var r = 0; r < pd.dataForRoots.length; r++) {
+        var commitData = pd.dataForRoots[r].commitData;
+        if (!commitData || commitData.length === 0) continue;
+        var latest = commitData[commitData.length - 1];
+        var fa = latest.fiberActualDurations || [];
+        for (var k = 0; k < fa.length; k++) {
+          var entry = fa[k];
+          if (!entry) continue;
+          var fiberID = entry[0];
+          if (cache[fiberID] !== undefined) continue;
+          try {
+            var name = ri.getDisplayNameForElementID(fiberID);
+            if (typeof name === 'string' && name.length > 0) {
+              cache[fiberID] = name;
+            }
+          } catch (_e) {}
+        }
+      }
+    } catch (_e) {
+      // Swallow — a bug in the cache path must never disrupt React rendering.
+    }
+  };
+})();
+`;
+
+/**
  * Stops the backend profiler, then collects the live `getProfilingData()`
  * buffer in a single round-trip. Also resolves every referenced fiber ID to a
  * display name via `getDisplayNameForElementID` so the caller does not need a
