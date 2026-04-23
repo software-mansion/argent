@@ -44,6 +44,8 @@ For app-scoped inspection with full UIKit properties (accessibilityIdentifier, v
 use native-describe-screen with an explicit bundleId instead.
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.
 Only supported on iOS simulators.`,
+    alwaysLoad: true,
+    searchHint: "ios accessibility element tree discovery tap coordinates",
     zodSchema,
     services: () => ({}),
     async execute(_services, params, _options) {
