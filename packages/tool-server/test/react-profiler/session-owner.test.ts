@@ -167,9 +167,7 @@ describe("flattenProfilingData", () => {
 
   it("preserves the change description for the matching fiberID", () => {
     const { commits } = flattenProfilingData(pd(), displayNameById, fiberMeta);
-    const button = commits.find(
-      (c) => c.componentName === "Button" && c.commitIndex === 0
-    );
+    const button = commits.find((c) => c.componentName === "Button" && c.commitIndex === 0);
     expect(button?.changeDescription?.props).toEqual(["onPress"]);
     expect(button?.changeDescription?.isFirstMount).toBe(false);
   });
@@ -287,11 +285,7 @@ describe("flattenProfilingData", () => {
       "102": "Tooltip", // "recovered" transient — resolved via cache
       "201": "Modal", // "recovered" transient — resolved via cache
     };
-    const { commits, unattributedByCommit } = flattenProfilingData(
-      pd(),
-      recoveredNames,
-      fiberMeta
-    );
+    const { commits, unattributedByCommit } = flattenProfilingData(pd(), recoveredNames, fiberMeta);
 
     expect(unattributedByCommit).toEqual([]);
     const tooltip = commits.find((c) => c.componentName === "Tooltip");
@@ -354,11 +348,7 @@ describe("buildHotCommitSummaries (unattributed threading)", () => {
   });
 
   it("only attaches unattributed fields on the commit that recorded drops", () => {
-    const summaries = buildHotCommitSummaries(
-      [commit(0, 20), commit(1, 30)],
-      [0, 1],
-      [[0, 2, 7]]
-    );
+    const summaries = buildHotCommitSummaries([commit(0, 20), commit(1, 30)], [0, 1], [[0, 2, 7]]);
     const byIndex = new Map(summaries.map((s) => [s.commitIndex, s]));
     expect(byIndex.get(0)?.unattributedMs).toBe(7);
     expect(byIndex.get(0)?.unattributedFiberCount).toBe(2);
