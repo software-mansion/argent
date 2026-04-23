@@ -207,10 +207,11 @@ export function buildHotCommitSummaries(
         rootCauseChangedHookNames.length > 0 && { rootCauseChangedHookNames }),
       components: componentEntries,
       totalComponentCount,
-      ...(unattributed && unattributed.count > 0 && {
-        unattributedMs: unattributed.ms,
-        unattributedFiberCount: unattributed.count,
-      }),
+      ...(unattributed &&
+        unattributed.count > 0 && {
+          unattributedMs: unattributed.ms,
+          unattributedFiberCount: unattributed.count,
+        }),
     });
   }
 

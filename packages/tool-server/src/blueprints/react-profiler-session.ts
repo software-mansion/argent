@@ -38,7 +38,7 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
-  sessionId: string | null;          // mirrors __ARGENT_PROFILER_OWNER__.sessionId when we own; null otherwise
+  sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId when we own; null otherwise
   ownerToolServerPid: number | null; // process.pid when this tool-server owns; null otherwise
   disposeSession: () => void;
 }
