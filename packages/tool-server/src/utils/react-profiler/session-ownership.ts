@@ -39,13 +39,13 @@ export interface ProfilingDataBackend {
 
 export const DEFAULT_STALE_THRESHOLD_MS = 5 * 60_000;
 
-export interface StalenessInput {
+interface StalenessInput {
   owner: ProfilerSessionOwner | null;
   nowEpochMs: number;
   staleThresholdMs?: number;
 }
 
-export interface StalenessResult {
+interface StalenessResult {
   stale: boolean;
   ageSeconds: number | null;
   canReclaimWithoutForce: boolean;
