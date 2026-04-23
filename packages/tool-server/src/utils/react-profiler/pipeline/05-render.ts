@@ -17,6 +17,43 @@ import type { SessionContext } from "../types/pipeline";
 const MAX_INLINE_COMMITS = 10;
 const REPORT_FILENAME = "react-profiler-report.md";
 
+interface ComponentAnnotation {
+  displayName: string;
+  tag: string;
+  rawName: string;
+}
+
+// Strips Forget/Memo/ForwardRef wrappers from display names and returns a
+// human-readable annotation for each wrapper found. rawName must be used in all
+// query tool suggestions — every pipeline stage keys on the original DevTools
+// string. Only apply displayName + tag in markdown text.
+function annotateComponentName(raw: string): ComponentAnnotation {
+  let name = raw;
+  let hasForget = false;
+  let hasMemo = false;
+  let hasForwardRef = false;
+
+  for (let i = 0; i < 4; i++) {
+    const m =
+      name.match(/^Forget\((.+)\)$/) ||
+      name.match(/^Memo\((.+)\)$/) ||
+      name.match(/^ForwardRef\((.+)\)$/);
+    if (!m) break;
+    if (name.startsWith("Forget(")) hasForget = true;
+    else if (name.startsWith("Memo(")) hasMemo = true;
+    else if (name.startsWith("ForwardRef(")) hasForwardRef = true;
+    name = m[1]!;
+  }
+
+  const parts: string[] = [];
+  if (hasMemo) parts.push("React.memo");
+  if (hasForget) parts.push("React Compiler");
+  if (hasForwardRef) parts.push("forwardRef");
+  const tag = parts.length > 0 ? ` [${parts.join(" + ")}]` : "";
+
+  return { displayName: name, tag, rawName: raw };
+}
+
 export interface RenderInput {
   hotCommitSummaries: HotCommitSummary[];
   componentFindings: ComponentFinding[];
@@ -163,6 +200,11 @@ function buildFullMarkdown(
     `# Profiling Analysis — ${durationS}s session`,
     `${compilerLine}  **Hot commits:** ${totalHotCommits} of ${input.reactCommits} total`,
     ``,
+    `> **Duration columns:** \`self\` = this component's own render work only (exclusive).`,
+    `> \`w/children\` = self + the entire subtree it owns (inclusive).`,
+    `> Do not sum the \`w/children\` column — a parent's inclusive time already contains its`,
+    `> children's time. Use \`self\` for summing; use \`w/children\` to understand container cost.`,
+    ``,
     `---`,
     `## Slow React Batches`,
     ``,
@@ -186,8 +228,9 @@ function buildFullMarkdown(
         : "—";
       const reasonStr = formatReason(f.dominantReason, f.topChangedProps, f.topChangedHookNames);
       const compilerFlag = f.compilerBailoutSuspected ? " ⚠️" : f.isCompilerOptimized ? " ✓" : "";
+      const ann = annotateComponentName(f.component);
       lines.push(
-        `| \`${f.component}\`${compilerFlag} | ${f.renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
+        `| \`${ann.displayName}\`${ann.tag}${compilerFlag} | ${f.renders} | ${f.totalMs}ms | ${f.avgMs}ms | ${f.maxMs}ms | ${reasonStr} | ${file} |`
       );
     }
 
@@ -311,6 +354,7 @@ function renderCommit(
 
   // Render component entries (mix of re-renders and mounts)
   for (const comp of summary.components) {
+    const ann = annotateComponentName(comp.name);
     const countSuffix = comp.count > 1 ? ` ×${comp.count}` : "";
     let reasonStr: string;
     if (comp.isFirstMount) {
@@ -320,13 +364,47 @@ function renderCommit(
     } else {
       reasonStr = "";
     }
-    lines.push(`- \`${comp.name}\`${countSuffix} ${comp.selfDurationMs}ms${reasonStr}`);
+    lines.push(
+      `- \`${ann.displayName}\`${ann.tag}${countSuffix} — ${comp.selfDurationMs}ms self, ${comp.actualDurationMs}ms w/children${reasonStr}`
+    );
   }
 
   // "... and N more" if component list was capped
   if (summary.totalComponentCount > summary.components.length) {
     const remaining = summary.totalComponentCount - summary.components.length;
     lines.push(`- _... and ${remaining} more_`);
+  }
+
+  // Coverage line: how much of the commit's wall-clock time is explained by the
+  // self-times above. Helps the agent decide whether to drill into the truncated
+  // tail before concluding.
+  const shownSelfMs = summary.components.reduce((s, c) => s + c.selfDurationMs, 0);
+  const roundedShown = Math.round(shownSelfMs * 10) / 10;
+  const coveragePct =
+    summary.totalRenderMs > 0 ? Math.round((shownSelfMs / summary.totalRenderMs) * 100) : 0;
+  const hiddenCount =
+    (summary.totalComponentCount ?? summary.components.length) - summary.components.length;
+
+  if (hiddenCount > 0) {
+    lines.push(
+      `- _Shown: ${roundedShown}ms self / ${summary.totalRenderMs}ms commit (${coveragePct}%) — ` +
+        `${hiddenCount} more components not shown. Use \`profiler-commit-query mode=by_index\` to see all._`
+    );
+  } else if (coveragePct < 80) {
+    lines.push(
+      `- _Shown: ${roundedShown}ms self / ${summary.totalRenderMs}ms commit (${coveragePct}% explained by self-time — remainder is native/layout work outside JS)_`
+    );
+  }
+
+  // Unattributed duration: fibers that rendered in this commit but unmounted
+  // before react-profiler-stop ran, so their display names could not be resolved.
+  // The breakdown above is missing this much work — not silent, just not named.
+  if (summary.unattributedMs !== undefined && summary.unattributedMs >= 1) {
+    const fiberCount = summary.unattributedFiberCount ?? 0;
+    const fiberLabel = fiberCount === 1 ? "fiber" : "fibers";
+    lines.push(
+      `- _⚠️ ${summary.unattributedMs}ms unattributed — ${fiberCount} ${fiberLabel} unmounted before stop (likely transient: modal/tooltip/animation)_`
+    );
   }
 
   // CPU hotspots during this commit (from Hermes CPU profile correlation)
@@ -346,7 +424,8 @@ function renderCommit(
 
 function formatRootCauseLine(summary: HotCommitSummary): string {
   if (!summary.rootCauseComponent) return "";
-  const parts: string[] = [`\`${summary.rootCauseComponent}\` re-rendered`];
+  const ann = annotateComponentName(summary.rootCauseComponent);
+  const parts: string[] = [`\`${ann.displayName}\`${ann.tag} re-rendered`];
   if (summary.rootCauseReason && summary.rootCauseReason !== "unknown") {
     const detail = formatReasonDetail(
       summary.rootCauseReason,
@@ -414,13 +493,15 @@ function renderSuggestedImprovements(
     const loc = f.sourceLocation
       ? `\`${shortenPath(f.sourceLocation.file)}:${f.sourceLocation.line}\``
       : null;
-    lines.push(loc ? `### \`${f.component}\` — ${loc}` : `### \`${f.component}\``);
+    const ann = annotateComponentName(f.component);
+    const heading = `\`${ann.displayName}\`${ann.tag}`;
+    lines.push(loc ? `### ${heading} — ${loc}` : `### ${heading}`);
     lines.push("");
 
     if (f.isCompilerOptimized) {
       lines.push(
         `> React Compiler has already optimized this component. ` +
-          `Re-render cost may originate at the callsite — check that props passed to \`${f.component}\` are stable (no inline objects/functions).`
+          `Re-render cost may originate at the callsite — check that props passed to \`${ann.displayName}\` are stable (no inline objects/functions).`
       );
     } else if (f.compilerBailoutSuspected) {
       lines.push(
@@ -470,8 +551,9 @@ function renderSuggestedImprovements(
           break;
         case "parent":
           if (f.parentTrigger) {
+            const parentAnn = annotateComponentName(f.parentTrigger.component);
             lines.push(
-              `**Parent trigger:** \`${f.parentTrigger.component}\` is re-rendering unnecessarily. ` +
+              `**Parent trigger:** \`${parentAnn.displayName}\`${parentAnn.tag} is re-rendering unnecessarily. ` +
                 `Fix the root cause in the parent first; this component will stop re-rendering as a side effect.`
             );
           } else {
@@ -484,7 +566,7 @@ function renderSuggestedImprovements(
           break;
         default:
           lines.push(
-            `**Review render triggers** for \`${f.component}\` — dominant reason: \`${f.dominantReason}\`.`
+            `**Review render triggers** for \`${ann.displayName}\` — dominant reason: \`${f.dominantReason}\`.`
           );
       }
     }
