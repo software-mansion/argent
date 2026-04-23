@@ -99,7 +99,10 @@ export function flattenProfilingData(
         const componentName = displayNameById[String(fiberID)] ?? null;
         if (!componentName) {
           droppedCount++;
-          droppedMs += actualDuration;
+          // selfDuration is the exclusive per-fiber render time. Summing actualDuration
+          // (inclusive subtree time) across dropped fibers double-counts parent work
+          // whenever both a parent and its child were dropped.
+          droppedMs += selfMap.get(fiberID) ?? 0;
           continue;
         }
         const selfDuration = selfMap.get(fiberID) ?? 0;
