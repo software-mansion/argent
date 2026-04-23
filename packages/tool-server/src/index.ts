@@ -8,6 +8,12 @@ import { startUpdateChecker } from "./utils/update-checker";
 const PROCESS_TIMEOUT_MS = 5_000;
 
 export function start(): void {
+  for (const stream of [process.stdout, process.stderr] as const) {
+    const orig = stream.write.bind(stream);
+    stream.write = ((chunk: string | Uint8Array, ...rest: unknown[]) =>
+      orig(`[${new Date().toISOString()}] ${chunk}`, ...(rest as []))) as typeof stream.write;
+  }
+
   // ── Global error handlers ─────────────────────────────────────────
   // The tool server should exit on uncaught errors (state may be corrupted),
   // but attempt graceful cleanup first so child processes are not orphaned.
