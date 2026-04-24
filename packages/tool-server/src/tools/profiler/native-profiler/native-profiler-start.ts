@@ -3,15 +3,15 @@ import { spawn, execSync } from "child_process";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  IOS_PROFILER_SESSION_NAMESPACE,
-  type IosProfilerSessionApi,
-} from "../../../blueprints/ios-profiler-session";
+  NATIVE_PROFILER_SESSION_NAMESPACE,
+  type NativeProfilerSessionApi,
+} from "../../../blueprints/native-profiler-session";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
   app_process: z
     .string()
     .optional()
@@ -87,26 +87,27 @@ function detectRunningApp(udid: string): string {
   return runningUserApps[0].CFBundleExecutable;
 }
 
-export const iosInstrumentsStartTool: ToolDefinition<
+export const nativeProfilerStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   { status: "recording"; pid: number; traceFile: string }
 > = {
-  id: "ios-profiler-start",
-  description: `Start iOS Instruments profiling via xctrace on a booted simulator or connected device.
+  id: "native-profiler-start",
+  requires: ["xcrun"],
+  description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: not yet supported.
 Auto-detects the running app process unless app_process is explicitly provided.
-After starting, let the user interact with the app, then call ios-profiler-stop.
-Use when you want to capture native CPU, hang, and memory data for a running iOS app.
+After starting, let the user interact with the app, then call native-profiler-stop.
+Use when you want to capture native CPU, hang, and memory data for a running app.
 Returns { status, pid, traceFile } confirming the recording has started.
-Fails if no app is running on the simulator or xctrace cannot attach to the process.`,
+Fails if no app is running on the device, the platform is not supported yet, or the profiler cannot attach to the process.`,
   zodSchema,
   services: (params) => ({
-    session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
   async execute(services, params) {
-    const api = services.session as IosProfilerSessionApi;
+    const api = services.session as NativeProfilerSessionApi;
 
     if (api.profilingActive) {
-      throw new Error(`An iOS profiling session is already running (PID: ${api.xctracePid}).`);
+      throw new Error(`A native profiling session is already running (PID: ${api.xctracePid}).`);
     }
 
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
@@ -117,7 +118,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
       .toISOString()
       .replace(/[-:T]/g, (m) => (m === "T" ? "-" : ""))
       .slice(0, 15);
-    const outputFile = path.join(debugDir, `ios-profiler-${timestamp}.trace`);
+    const outputFile = path.join(debugDir, `native-profiler-${timestamp}.trace`);
 
     api.appProcess = appProcess;
     api.traceFile = outputFile;
@@ -173,7 +174,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
             clearTimeout(api.recordingTimeout);
             api.recordingTimeout = null;
           }
-          reject(new Error(`Failed to attach to iOS process: ${errorOutput}`));
+          reject(new Error(`Failed to attach to the target process: ${errorOutput}`));
         }
       });
 

@@ -6,7 +6,7 @@ import { sendCommand } from "../../utils/simulator-client";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z.string().min(1).describe("Simulator UDID"),
   x: z.number().describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
   y: z.number().describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
 });
@@ -16,6 +16,7 @@ export const gestureTapTool: ToolDefinition<
   { tapped: boolean; timestampMs: number }
 > = {
   id: "gesture-tap",
+  requires: ["xcrun"],
   description: `Press the simulator screen at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
 Sends a Down event followed by an Up event at the same point.
 Use when you need to tap a button, link, or any tappable element on the simulator screen.

@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-app-workflow
-description: Step-by-step workflows for developing or debugging React Native apps with iOS simulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
+description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
 ## 1. Starting the React Native App
@@ -55,7 +55,37 @@ Optional: specify device or simulator, e.g. `npx react-native run-ios --simulato
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If simulator not booted: use the `boot-simulator` tool with proper UDID. Refer to the `argent-simulator-setup` skill.
+- [ ] If simulator not booted: use `boot-device` with the iOS `udid`. Refer to the `argent-simulator-setup` skill.
+
+### 1.4 Run the Android App
+
+In a **separate** terminal:
+
+**Use the project's custom script if one exists** (e.g. `npm run android`, `yarn android:debug`). Otherwise build and install via Gradle + the Android tools:
+
+```bash
+# Build the debug APK from the android/ directory
+cd android && ./gradlew :app:assembleDebug && cd ..
+
+# Resulting APK is typically at:
+#   android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Then, using the argent MCP tools (note: the interaction tools are unified — pass the Android serial as `udid`):
+
+1. `list-devices` — pick a ready Android serial (or boot one via `boot-device` with `avdName`). See the `argent-android-emulator-setup` skill.
+2. `reinstall-app` with `udid=<serial>`, `bundleId=<applicationId>`, absolute `appPath=<path to .apk>`. Set `grantPermissions: true` to skip runtime permission prompts on first launch.
+3. `launch-app` with `udid=<serial>` and `bundleId=<applicationId>` (from `android/app/build.gradle` — the environment inspector surfaces this as `android_application_id`).
+4. **Metro reachability**: run `adb -s <serial> reverse tcp:8081 tcp:8081` so the app on the device can reach Metro on your host. Repeat if the device restarts or adb drops. See the `argent-metro-debugger` skill.
+
+Alternative one-shot: `npx react-native run-android` builds, installs, and launches in a single step. Use this when you don't need explicit control over the emulator serial.
+
+**Agent checklist:**
+
+- [ ] Metro is running
+- [ ] `adb -s <serial> reverse tcp:8081 tcp:8081` done
+- [ ] Command run from project root (or `./gradlew` from `android/`)
+- [ ] If emulator not booted: call `boot-device` with an `avdName` from `list-devices`.avds
 
 ---
 
@@ -131,18 +161,19 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                         |
 | Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                |
 
-### 3.5 iOS Simulator Control
+### 3.5 Device Control
 
-| Action                     | Tool / Command                                     |
-| -------------------------- | -------------------------------------------------- |
-| List devices               | `list-simulators` tool                             |
-| Boot a simulator           | `boot-simulator` tool (pass UDID)                  |
-| Launch an app              | `launch-app` tool (pass UDID + bundle ID)          |
-| Restart an app             | `restart-app` tool (pass UDID + bundle ID)         |
-| Open a URL / deep link     | `open-url` tool (pass UDID + URL)                  |
-| Rotate simulator           | `rotate` tool                                      |
-| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID) |
-| Stop all simulator servers | `stop-all-simulator-servers` tool                  |
+| Action                     | Tool / Command                                                 |
+| -------------------------- | -------------------------------------------------------------- |
+| List devices               | `list-devices` tool (iOS + Android)                            |
+| Boot an iOS simulator      | `boot-device` tool with `udid`                                 |
+| Boot an Android emulator   | `boot-device` tool with `avdName`                              |
+| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)  |
+| Restart an app             | `restart-app` tool (pass device id + bundle id / package name) |
+| Open a URL / deep link     | `open-url` tool (pass device id + URL)                         |
+| Rotate device              | `rotate` tool                                                  |
+| Stop simulator server      | `stop-simulator-server` tool (iOS only — for a specific UDID)  |
+| Stop all simulator servers | `stop-all-simulator-servers` tool (iOS only)                   |
 
 For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
@@ -210,8 +241,8 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Start Metro                  | `npx react-native start`                                                                                                                 |
 | Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
 | Run iOS app                  | `npx react-native run-ios`                                                                                                               |
-| List simulators              | `list-simulators` tool                                                                                                                   |
-| Boot simulator               | `boot-simulator` tool                                                                                                                    |
+| List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
+| Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
 | Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
 | Read JS console logs         | `debugger-log-registry` tool                                                                                                             |

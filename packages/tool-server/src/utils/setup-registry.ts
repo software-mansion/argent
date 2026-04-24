@@ -12,10 +12,10 @@ import { nativeUserInteractableViewAtPointTool } from "../tools/native-devtools/
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
-import { listSimulatorsTool } from "../tools/simulator/list-simulators";
-import { createBootSimulatorTool } from "../tools/simulator/boot-simulator";
-import { launchAppTool } from "../tools/simulator/launch-app";
-import { restartAppTool } from "../tools/simulator/restart-app";
+import { listDevicesTool } from "../tools/devices/list-devices";
+import { createBootDeviceTool } from "../tools/devices/boot-device";
+import { createLaunchAppTool } from "../tools/simulator/launch-app";
+import { createRestartAppTool } from "../tools/simulator/restart-app";
 import { reinstallAppTool } from "../tools/simulator/reinstall-app";
 import { openUrlTool } from "../tools/simulator/open-url";
 import { screenshotTool } from "../tools/interactions/screenshot";
@@ -45,10 +45,10 @@ import { reactProfilerComponentSourceTool } from "../tools/profiler/react/react-
 import { reactProfilerCpuSummaryTool } from "../tools/profiler/react/react-profiler-cpu-summary";
 import { reactProfilerRendersTool } from "../tools/profiler/react/react-profiler-renders";
 import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profiler-fiber-tree";
-import { iosInstrumentsStartTool } from "../tools/profiler/ios-profiler/ios-profiler-start";
-import { iosInstrumentsStopTool } from "../tools/profiler/ios-profiler/ios-profiler-stop";
-import { iosInstrumentsAnalyzeTool } from "../tools/profiler/ios-profiler/ios-profiler-analyze";
-import { iosInstrumentsSessionBlueprint } from "../blueprints/ios-profiler-session";
+import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
+import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
+import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
+import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
 import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
 import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
 import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
@@ -66,6 +66,8 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
+import { androidStopAppTool } from "../tools/android/android-stop-app";
+import { androidLogcatTool } from "../tools/android/android-logcat";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -74,14 +76,14 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
   registry.registerBlueprint(networkInspectorBlueprint);
   registry.registerBlueprint(reactProfilerSessionBlueprint);
-  registry.registerBlueprint(iosInstrumentsSessionBlueprint);
+  registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
-  registry.registerTool(listSimulatorsTool);
-  registry.registerTool(createBootSimulatorTool(registry));
-  registry.registerTool(launchAppTool);
-  registry.registerTool(restartAppTool);
+  registry.registerTool(listDevicesTool);
+  registry.registerTool(createBootDeviceTool(registry));
+  registry.registerTool(createLaunchAppTool(registry));
+  registry.registerTool(createRestartAppTool(registry));
   registry.registerTool(reinstallAppTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(screenshotTool);
@@ -111,9 +113,9 @@ export function createRegistry(): Registry {
   registry.registerTool(reactProfilerCpuSummaryTool);
   registry.registerTool(reactProfilerRendersTool);
   registry.registerTool(reactProfilerFiberTreeTool);
-  registry.registerTool(iosInstrumentsStartTool);
-  registry.registerTool(iosInstrumentsStopTool);
-  registry.registerTool(iosInstrumentsAnalyzeTool);
+  registry.registerTool(nativeProfilerStartTool);
+  registry.registerTool(nativeProfilerStopTool);
+  registry.registerTool(nativeProfilerAnalyzeTool);
   registry.registerTool(profilerCpuQueryTool);
   registry.registerTool(profilerCommitQueryTool);
   registry.registerTool(profilerStackQueryTool);
@@ -144,6 +146,12 @@ export function createRegistry(): Registry {
   // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
+
+  // Android-only tools. Cross-platform tools live under unified names (list-devices,
+  // boot-device, screenshot, gesture-tap, describe, launch-app, ...) and dispatch
+  // on the id shape; see utils/platform-detect.ts.
+  registry.registerTool(androidStopAppTool);
+  registry.registerTool(androidLogcatTool);
 
   return registry;
 }

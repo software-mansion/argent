@@ -140,7 +140,7 @@ const NAMED_KEYS: Record<string, number> = {
 };
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z.string().min(1).describe("Simulator UDID"),
   text: z
     .string()
     .optional()
@@ -161,6 +161,7 @@ export const keyboardTool: ToolDefinition<
   { typed: string; keys: number }
 > = {
   id: "keyboard",
+  requires: ["xcrun"],
   description: `Type text or press special keys on the simulator using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator server is not running.

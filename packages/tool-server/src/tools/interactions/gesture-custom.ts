@@ -25,7 +25,10 @@ const eventSchema = z.object({
 });
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z
+    .string()
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   events: z
     .array(eventSchema)
     .describe(
@@ -43,13 +46,14 @@ const zodSchema = z.object({
 
 export const gestureCustomTool: ToolDefinition<z.infer<typeof zodSchema>, { events: number }> = {
   id: "gesture-custom",
+  requires: ["xcrun"],
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
-All x/y values are normalized 0.0–1.0 (screen fractions, not pixels), matching simulator-server touch input. delayMs controls the delay before each event (default 16ms ≈ 60fps).
+All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
 Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
-Returns { events: number } with the total count of events dispatched. Fails if the simulator server is not running or an event type is invalid.
+Returns { events: number } with the total count of events dispatched. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]

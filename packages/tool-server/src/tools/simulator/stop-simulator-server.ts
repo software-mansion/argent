@@ -12,6 +12,7 @@ export function createStopSimulatorServerTool(
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
+    requires: ["xcrun"],
     description: `Stop the simulator-server process for a specific simulator UDID and free its resources. Use when you are done interacting with one simulator but want to keep others running. Returns { stopped, udid }. Fails silently if no server is running for the given UDID.`,
     zodSchema,
     services: () => ({}),

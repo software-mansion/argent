@@ -51,6 +51,7 @@ type Result =
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
+  requires: ["xcrun"],
   description: `Get the complete UIKit view tree for the running app.
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
 Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce output size. Use the fields param to request only the properties you need.

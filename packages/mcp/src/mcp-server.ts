@@ -116,7 +116,7 @@ export async function startMcpServer(): Promise<void> {
     {
       capabilities: { tools: {} },
       instructions:
-        "Argent — iOS Simulator Control for interacting, testing, profiling and debugging mobile applications. " +
+        "Argent — iOS Simulator and Android Emulator control for interacting, testing, profiling and debugging mobile applications. " +
         "Always use discovery tools (describe / debugger-component-tree / screenshot) before tapping — never guess coordinates. " +
         "On session end: call stop-all-simulator-servers and perform any necessary cleanup. " +
         "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",

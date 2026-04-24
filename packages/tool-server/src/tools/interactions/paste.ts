@@ -10,7 +10,8 @@ const zodSchema = z.object({
 
 export const pasteTool: ToolDefinition<z.infer<typeof zodSchema>, { pasted: boolean }> = {
   id: "paste",
-  description: `Fill the focused field on the simulator by pasting text (fastest text entry).
+  requires: ["xcrun"],
+  description: `Fill the focused field on the iOS simulator by pasting text (fastest text entry).
 Use when you need to fill a text input with a long string faster than character-by-character typing.
 Returns { pasted: true }. Fails if no field is focused or the simulator server is not running.
 Tap the text field first to focus it, then call paste.

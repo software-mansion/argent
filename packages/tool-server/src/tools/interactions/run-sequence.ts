@@ -15,7 +15,7 @@ const ALLOWED_TOOLS = new Set([
 ]);
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID (shared across all steps)"),
+  udid: z.string().min(1).describe("Simulator UDID (shared across all steps)"),
   steps: z
     .array(
       z.object({
@@ -50,6 +50,7 @@ export function createRunSequenceTool(
 ): ToolDefinition<z.infer<typeof zodSchema>, RunSequenceResult> {
   return {
     id: "run-sequence",
+    requires: ["xcrun"],
     description: `Execute multiple simulator interaction steps in a single call.
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
@@ -88,9 +89,7 @@ Stops on the first error and returns partial results.`,
     alwaysLoad: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
-    services: (params) => ({
-      simulatorServer: `SimulatorServer:${params.udid}`,
-    }),
+    services: () => ({}),
     async execute(_services, params) {
       const { udid, steps } = params;
       const results: StepResult[] = [];

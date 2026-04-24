@@ -1,17 +1,17 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  IOS_PROFILER_SESSION_NAMESPACE,
-  type IosProfilerSessionApi,
-} from "../../../blueprints/ios-profiler-session";
+  NATIVE_PROFILER_SESSION_NAMESPACE,
+  type NativeProfilerSessionApi,
+} from "../../../blueprints/native-profiler-session";
 import { exportIosTraceData } from "../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
 });
 
-export const iosInstrumentsStopTool: ToolDefinition<
+export const nativeProfilerStopTool: ToolDefinition<
   z.infer<typeof zodSchema>,
   {
     traceFile: string;
@@ -19,22 +19,24 @@ export const iosInstrumentsStopTool: ToolDefinition<
     exportDiagnostics: ExportDiagnostics;
   }
 > = {
-  id: "ios-profiler-stop",
-  description: `Stop iOS Instruments profiling and export trace data to XML files.
-Sends SIGINT to the running xctrace process, waits for it to finish packaging the trace,
-then exports CPU, hangs, and leaks data. Call ios-profiler-start first.
+  id: "native-profiler-stop",
+  requires: ["xcrun"],
+  description: `Stop native profiling and export trace data to XML files.
+iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks data. Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.
 Returns { traceFile, exportedFiles, exportDiagnostics } with paths to the exported XML data.
-Fails if no active ios-profiler-start session exists for the given device_id.`,
+Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
   services: (params) => ({
-    session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
   }),
   async execute(services) {
-    const api = services.session as IosProfilerSessionApi;
+    const api = services.session as NativeProfilerSessionApi;
 
     if (!api.profilingActive || !api.xctracePid || !api.traceFile) {
-      throw new Error("No active iOS profiling session found. Call ios-profiler-start first.");
+      throw new Error(
+        "No active native profiling session found. Call native-profiler-start first."
+      );
     }
 
     if (api.recordingTimeout) {
