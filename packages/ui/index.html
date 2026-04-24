@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Argent Preview</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0e0e10;
+        --fg: #eaeaea;
+        --muted: #8a8a90;
+        --accent: #6aa6ff;
+        --border: #2a2a2e;
+        --surface: #16161a;
+        --error: #ff8080;
+        --ok: #5cdc8b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font-size: 13px;
+      }
+      #root {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+        flex-shrink: 0;
+      }
+      .toolbar label {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .toolbar select,
+      .toolbar button {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 13px;
+      }
+      .toolbar select {
+        min-width: 240px;
+      }
+      .toolbar button {
+        cursor: pointer;
+      }
+      .toolbar .status {
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .toolbar .debug {
+        color: var(--muted);
+        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        min-width: 220px;
+        text-align: right;
+      }
+      .status.live::before,
+      .status.error::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      .status.live::before {
+        background: var(--ok);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      .status.error::before {
+        background: var(--error);
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      .viewport {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px;
+        min-height: 0;
+        position: relative;
+      }
+      .stage {
+        position: relative;
+        max-width: 100%;
+        max-height: 100%;
+        display: flex;
+      }
+      .stage img {
+        max-width: 100%;
+        max-height: 80vh;
+        object-fit: contain;
+        border-radius: 10px;
+        box-shadow: 0 10px 48px #0008;
+        user-select: none;
+        -webkit-user-drag: none;
+        -webkit-user-select: none;
+        touch-action: none;
+        pointer-events: auto;
+        cursor: crosshair;
+      }
+      /* Multi-touch indicators overlay on the image, positioned via CSS vars. */
+      .touch-dot {
+        position: absolute;
+        top: var(--y);
+        left: var(--x);
+        width: var(--size);
+        height: var(--size);
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        background: rgba(106, 166, 255, 0.25);
+        border: 2px solid rgba(106, 166, 255, 0.9);
+        pointer-events: none;
+        box-shadow: 0 0 12px rgba(106, 166, 255, 0.5);
+      }
+      .touch-dot.pressed {
+        background: rgba(106, 166, 255, 0.55);
+      }
+      .touch-dot.anchor {
+        background: rgba(255, 200, 80, 0.9);
+        border-color: rgba(255, 200, 80, 1);
+      }
+      .empty,
+      .error-box {
+        color: var(--muted);
+        text-align: center;
+        padding: 32px;
+        max-width: 480px;
+        line-height: 1.5;
+      }
+      .error-box {
+        color: var(--error);
+      }
+      code {
+        background: var(--surface);
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="toolbar">
+        <label for="sim-select">Simulator</label>
+        <select id="sim-select">
+          <option>Loading…</option>
+        </select>
+        <button id="refresh-btn" title="Refresh simulator list">⟳</button>
+        <span id="hint" class="debug" style="min-width: auto"></span>
+        <span id="debug" class="debug"></span>
+        <span id="status" class="status">idle</span>
+      </div>
+      <div class="viewport" id="viewport">
+        <div class="empty">Select a booted simulator to start streaming.</div>
+      </div>
+    </div>
+
+    <script>
+      "use strict";
+
+      // ── Config ──────────────────────────────────────────────────────────
+      // Tool-server base URL. When this page is served by tool-server itself,
+      // same-origin is correct. Override via ?toolServer=http://host:port for
+      // standalone testing.
+      const urlParams = new URLSearchParams(window.location.search);
+      const TOOL_SERVER =
+        urlParams.get("toolServer") ||
+        (window.location.origin.startsWith("http")
+          ? window.location.origin
+          : "http://127.0.0.1:3001");
+
+      // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
+      // sim-server's `key` command expects these raw HID codes — shift/modifier
+      // state is conveyed by the browser issuing separate ShiftLeft/ShiftRight
+      // key events which we forward verbatim.
+      const HID = {
+        KeyA: 4,
+        KeyB: 5,
+        KeyC: 6,
+        KeyD: 7,
+        KeyE: 8,
+        KeyF: 9,
+        KeyG: 10,
+        KeyH: 11,
+        KeyI: 12,
+        KeyJ: 13,
+        KeyK: 14,
+        KeyL: 15,
+        KeyM: 16,
+        KeyN: 17,
+        KeyO: 18,
+        KeyP: 19,
+        KeyQ: 20,
+        KeyR: 21,
+        KeyS: 22,
+        KeyT: 23,
+        KeyU: 24,
+        KeyV: 25,
+        KeyW: 26,
+        KeyX: 27,
+        KeyY: 28,
+        KeyZ: 29,
+        Digit1: 30,
+        Digit2: 31,
+        Digit3: 32,
+        Digit4: 33,
+        Digit5: 34,
+        Digit6: 35,
+        Digit7: 36,
+        Digit8: 37,
+        Digit9: 38,
+        Digit0: 39,
+        Enter: 40,
+        Escape: 41,
+        Backspace: 42,
+        Tab: 43,
+        Space: 44,
+        Minus: 45,
+        Equal: 46,
+        BracketLeft: 47,
+        BracketRight: 48,
+        Backslash: 49,
+        Semicolon: 51,
+        Quote: 52,
+        Backquote: 53,
+        Comma: 54,
+        Period: 55,
+        Slash: 56,
+        CapsLock: 57,
+        F1: 58,
+        F2: 59,
+        F3: 60,
+        F4: 61,
+        F5: 62,
+        F6: 63,
+        F7: 64,
+        F8: 65,
+        F9: 66,
+        F10: 67,
+        F11: 68,
+        F12: 69,
+        ArrowRight: 79,
+        ArrowLeft: 80,
+        ArrowDown: 81,
+        ArrowUp: 82,
+        NumpadDivide: 84,
+        NumpadMultiply: 85,
+        NumpadSubtract: 86,
+        NumpadAdd: 87,
+        NumpadEnter: 88,
+        Numpad1: 89,
+        Numpad2: 90,
+        Numpad3: 91,
+        Numpad4: 92,
+        Numpad5: 93,
+        Numpad6: 94,
+        Numpad7: 95,
+        Numpad8: 96,
+        Numpad9: 97,
+        Numpad0: 98,
+        NumpadDecimal: 99,
+        ControlLeft: 224,
+        ShiftLeft: 225,
+        AltLeft: 226,
+        MetaLeft: 227,
+        ControlRight: 228,
+        ShiftRight: 229,
+        AltRight: 230,
+        MetaRight: 231,
+        IntlBackslash: 86,
+      };
+      const CAPS_LOCK_HID = 57;
+
+      // Multi-touch modifier — matches radon-ide: Alt on macOS, Ctrl elsewhere.
+      const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
+      const MULTITOUCH_CODES = IS_MAC
+        ? new Set(["AltLeft", "AltRight"])
+        : new Set(["ControlLeft", "ControlRight"]);
+
+      // ── DOM ─────────────────────────────────────────────────────────────
+      const select = document.getElementById("sim-select");
+      const status = document.getElementById("status");
+      const viewport = document.getElementById("viewport");
+      const refreshBtn = document.getElementById("refresh-btn");
+      const debugEl = document.getElementById("debug");
+      const hintEl = document.getElementById("hint");
+      hintEl.textContent = `Hold ${IS_MAC ? "Option" : "Ctrl"} for pinch · +Shift to move anchor`;
+
+      // ── State ───────────────────────────────────────────────────────────
+      /** @type {WebSocket | null} */
+      let ws = null;
+      let wsOpen = false;
+      let currentUdid = null;
+      let img = null;
+      let stage = null;
+      /** Elements for the three multi-touch indicators (primary / mirror / anchor). */
+      let touchDots = { primary: null, mirror: null, anchor: null };
+      let activePointerId = null;
+      /** True while the mouse button is held inside the stage (finger is "down"). */
+      let isPressing = false;
+      /** True while the multi-touch modifier is held. */
+      let isMultiTouching = false;
+      /** Primary and anchor points in normalized [0,1] space. */
+      let touchPoint = { x: 0.5, y: 0.5 };
+      let anchorPoint = { x: 0.5, y: 0.5 };
+      /** Keys currently held down (HID codes) — released on blur. */
+      const pressedKeys = new Set();
+      /** Last known CapsLock state to resync iOS if it drifts. */
+      let lastCapsLockState = false;
+      let cmdCounter = 0;
+
+      // ── Helpers ─────────────────────────────────────────────────────────
+      function setStatus(text, kind = "") {
+        status.textContent = text;
+        status.className = "status" + (kind ? " " + kind : "");
+      }
+
+      function nextCmdId() {
+        return String(++cmdCounter);
+      }
+
+      function sendCmd(obj) {
+        if (!ws || !wsOpen) {
+          debugEl.textContent = `ws not open — dropped ${obj.cmd}`;
+          return;
+        }
+        ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
+        if (obj.cmd === "touch") {
+          const tail =
+            obj.second_x != null
+              ? ` / (${obj.second_x.toFixed(3)}, ${obj.second_y.toFixed(3)})`
+              : "";
+          debugEl.textContent = `${obj.type} (${obj.x.toFixed(3)}, ${obj.y.toFixed(3)})${tail}`;
+        } else if (obj.cmd === "key") {
+          debugEl.textContent = `key ${obj.direction} ${obj.code}`;
+        } else if (obj.cmd === "wheel") {
+          debugEl.textContent = `wheel dx=${obj.dx} dy=${obj.dy}`;
+        } else {
+          debugEl.textContent = `${obj.cmd}`;
+        }
+      }
+
+      /**
+       * Convert a pointer/mouse/wheel event (in client coords) into the
+       * normalized 0.0–1.0 device space the simulator-server expects.
+       */
+      function toDeviceCoords(ev) {
+        if (!img) return null;
+        const rect = img.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        const xRatio = (ev.clientX - rect.left) / rect.width;
+        const yRatio = (ev.clientY - rect.top) / rect.height;
+        return {
+          x: Math.max(0, Math.min(1, xRatio)),
+          y: Math.max(0, Math.min(1, yRatio)),
+        };
+      }
+
+      function mirrorAround(pt, anchor) {
+        return {
+          x: Math.max(0, Math.min(1, 2 * anchor.x - pt.x)),
+          y: Math.max(0, Math.min(1, 2 * anchor.y - pt.y)),
+        };
+      }
+
+      /**
+       * sim-server wheel deltas are small integers (~3–7). Browser deltaY can be
+       * anything from 0.001 to 400+, so we clamp by magnitude the way radon-ide
+       * does. Sign is negated so scroll direction matches iOS natural-scroll.
+       */
+      function normalizeWheel(delta) {
+        const abs = Math.abs(delta);
+        const magnitude = abs > 150 ? 7 : abs > 50 ? 5 : 3;
+        return -Math.sign(delta) * magnitude;
+      }
+
+      function sendTouchEvent(type) {
+        if (isMultiTouching) {
+          const secondary = mirrorAround(touchPoint, anchorPoint);
+          sendCmd({
+            cmd: "touch",
+            type,
+            x: touchPoint.x,
+            y: touchPoint.y,
+            second_x: secondary.x,
+            second_y: secondary.y,
+          });
+        } else {
+          sendCmd({ cmd: "touch", type, x: touchPoint.x, y: touchPoint.y });
+        }
+      }
+
+      // ── Multi-touch indicators ─────────────────────────────────────────
+      function updateIndicators() {
+        if (!stage) return;
+        if (!isMultiTouching) {
+          for (const k of ["primary", "mirror", "anchor"]) {
+            if (touchDots[k]) touchDots[k].remove();
+            touchDots[k] = null;
+          }
+          return;
+        }
+        const mirror = mirrorAround(touchPoint, anchorPoint);
+        ensureDot("primary", touchPoint, 28, false);
+        ensureDot("mirror", mirror, 28, false);
+        ensureDot("anchor", anchorPoint, 10, true);
+      }
+      function ensureDot(key, pt, size, isAnchor) {
+        const imgRect = img.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        // Position relative to the stage, inside the image area.
+        const offsetX = imgRect.left - stageRect.left;
+        const offsetY = imgRect.top - stageRect.top;
+        const x = offsetX + pt.x * imgRect.width;
+        const y = offsetY + pt.y * imgRect.height;
+        let el = touchDots[key];
+        if (!el) {
+          el = document.createElement("div");
+          el.className = "touch-dot" + (isAnchor ? " anchor" : "");
+          stage.appendChild(el);
+          touchDots[key] = el;
+        }
+        el.style.setProperty("--x", `${x}px`);
+        el.style.setProperty("--y", `${y}px`);
+        el.style.setProperty("--size", `${size}px`);
+        el.classList.toggle("pressed", isPressing && !isAnchor);
+      }
+
+      // ── Simulator list ─────────────────────────────────────────────────
+      async function refreshSimulators() {
+        setStatus("loading simulators…");
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const { simulators } = await res.json();
+          select.innerHTML = "";
+          if (!simulators || simulators.length === 0) {
+            const opt = document.createElement("option");
+            opt.textContent = "(no simulators found)";
+            select.appendChild(opt);
+            select.disabled = true;
+            setStatus("no simulators", "error");
+            return;
+          }
+          select.disabled = false;
+          const placeholder = document.createElement("option");
+          placeholder.value = "";
+          placeholder.textContent = "— choose simulator —";
+          select.appendChild(placeholder);
+          for (const s of simulators) {
+            const opt = document.createElement("option");
+            opt.value = s.udid;
+            opt.textContent = `${s.state === "Booted" ? "● " : "○ "}${s.name}`;
+            opt.disabled = s.state !== "Booted";
+            select.appendChild(opt);
+          }
+          setStatus("idle");
+        } catch (err) {
+          setStatus(`failed: ${err.message || err}`, "error");
+        }
+      }
+
+      // ── Stream + WS wiring ─────────────────────────────────────────────
+      function teardownStream() {
+        releaseAllInput();
+        if (ws) {
+          try {
+            ws.close();
+          } catch {}
+          ws = null;
+        }
+        wsOpen = false;
+        // Explicitly clear the img src — otherwise the browser keeps the MJPEG
+        // HTTP connection open after the element is detached, and re-selecting
+        // a simulator leaks more connections. Same trick radon-ide uses.
+        if (img) {
+          img.src = "";
+          img.removeAttribute("src");
+        }
+        img = null;
+        stage = null;
+        touchDots = { primary: null, mirror: null, anchor: null };
+        viewport.innerHTML = "";
+      }
+
+      async function connect(udid) {
+        teardownStream();
+        currentUdid = udid;
+        setStatus("starting simulator-server…");
+        viewport.innerHTML = '<div class="empty">Starting simulator-server…</div>';
+        let info;
+        try {
+          const res = await fetch(
+            `${TOOL_SERVER}/preview/simulator-server/${encodeURIComponent(udid)}`
+          );
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.error || `HTTP ${res.status}`);
+          }
+          info = await res.json();
+        } catch (err) {
+          setStatus(`failed: ${err.message || err}`, "error");
+          viewport.innerHTML = `<div class="error-box">Could not start simulator-server.<br/>${escapeHtml(String(err.message || err))}</div>`;
+          return;
+        }
+
+        if (!info.streamUrl) {
+          setStatus("no stream URL", "error");
+          viewport.innerHTML =
+            '<div class="error-box">Simulator-server is running but did not advertise a stream URL.<br/>Rebuild with the <code>argent</code> cargo feature (which enables <code>streaming</code>).</div>';
+          return;
+        }
+
+        // Build the viewport.
+        stage = document.createElement("div");
+        stage.className = "stage";
+        img = document.createElement("img");
+        img.alt = `Simulator ${udid.slice(0, 8)}`;
+        img.draggable = false;
+        // Append a cache-buster so re-connects don't reuse a stale MJPEG stream.
+        img.src = `${info.streamUrl}?t=${Date.now()}`;
+        img.onerror = () => setStatus("stream error", "error");
+        stage.appendChild(img);
+        viewport.innerHTML = "";
+        viewport.appendChild(stage);
+
+        attachInputHandlers(img);
+
+        // Open WebSocket to sim-server.
+        ws = new WebSocket(info.wsUrl);
+        ws.onopen = () => {
+          wsOpen = true;
+          setStatus("live", "live");
+        };
+        ws.onclose = () => {
+          wsOpen = false;
+          if (currentUdid === udid) setStatus("disconnected", "error");
+        };
+        ws.onerror = () => {
+          setStatus("ws error", "error");
+        };
+      }
+
+      // ── Input handlers ─────────────────────────────────────────────────
+      /**
+       * Release any held touch/keys. Called on teardown and on window blur —
+       * without this, losing focus mid-drag (or Cmd-tabbing with Shift held)
+       * leaves the device stuck with a phantom touch / modifier.
+       */
+      function releaseAllInput() {
+        if (isPressing) {
+          sendTouchEvent("Up");
+          isPressing = false;
+        }
+        isMultiTouching = false;
+        updateIndicators();
+        for (const code of pressedKeys) {
+          sendCmd({ cmd: "key", direction: "Up", code });
+        }
+        pressedKeys.clear();
+        activePointerId = null;
+      }
+
+      function attachInputHandlers(target) {
+        target.addEventListener("dragstart", (ev) => ev.preventDefault());
+
+        target.addEventListener("pointerdown", (ev) => {
+          if (activePointerId !== null) return;
+          const pt = toDeviceCoords(ev);
+          if (!pt) return;
+          activePointerId = ev.pointerId;
+          try {
+            target.setPointerCapture(ev.pointerId);
+          } catch {}
+          touchPoint = pt;
+          isPressing = true;
+          sendTouchEvent("Down");
+          updateIndicators();
+          ev.preventDefault();
+        });
+        target.addEventListener("pointermove", (ev) => {
+          const pt = toDeviceCoords(ev);
+          if (!pt) return;
+          // Shift + Multi-touch + drag → move the anchor point along with the finger.
+          if (isMultiTouching && ev.shiftKey) {
+            anchorPoint = {
+              x: Math.max(0, Math.min(1, anchorPoint.x + (pt.x - touchPoint.x))),
+              y: Math.max(0, Math.min(1, anchorPoint.y + (pt.y - touchPoint.y))),
+            };
+          }
+          touchPoint = pt;
+          if (ev.pointerId === activePointerId && isPressing) {
+            sendTouchEvent("Move");
+          }
+          updateIndicators();
+          ev.preventDefault();
+        });
+        const endPointer = (ev) => {
+          if (ev.pointerId !== activePointerId) return;
+          const pt = toDeviceCoords(ev);
+          if (pt) touchPoint = pt;
+          if (isPressing) sendTouchEvent("Up");
+          isPressing = false;
+          try {
+            target.releasePointerCapture(ev.pointerId);
+          } catch {}
+          activePointerId = null;
+          updateIndicators();
+          ev.preventDefault();
+        };
+        target.addEventListener("pointerup", endPointer);
+        target.addEventListener("pointercancel", endPointer);
+
+        // Mouse leaves the image while dragging — commit an Up so the device
+        // doesn't stay stuck. If the user drags back in with the button still
+        // held, pointerenter (re)starts a Down at the entry point.
+        target.addEventListener("pointerleave", (ev) => {
+          if (isPressing) {
+            sendTouchEvent("Up");
+            isPressing = false;
+            updateIndicators();
+          }
+        });
+        target.addEventListener("pointerenter", (ev) => {
+          // Only auto-resume if the button is still held (buttons bitmask).
+          if (ev.buttons & 1 && !isPressing) {
+            const pt = toDeviceCoords(ev);
+            if (pt) {
+              touchPoint = pt;
+              isPressing = true;
+              sendTouchEvent("Down");
+              updateIndicators();
+            }
+          }
+        });
+
+        target.addEventListener(
+          "wheel",
+          (ev) => {
+            const pt = toDeviceCoords(ev);
+            if (!pt) return;
+            const dx = normalizeWheel(ev.deltaX);
+            const dy = normalizeWheel(ev.deltaY);
+            if (dx === 0 && dy === 0) {
+              ev.preventDefault();
+              return;
+            }
+            sendCmd({ cmd: "wheel", x: pt.x, y: pt.y, dx, dy });
+            ev.preventDefault();
+          },
+          { passive: false }
+        );
+      }
+
+      function escapeHtml(s) {
+        return s.replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
+        );
+      }
+
+      // ── Events ──────────────────────────────────────────────────────────
+      select.addEventListener("change", () => {
+        const udid = select.value;
+        if (!udid) return;
+        // Blur the select so keys (including the multi-touch Option/Ctrl modifier)
+        // route to our window-level handler instead of being swallowed by the
+        // dropdown's built-in keyboard handling.
+        select.blur();
+        connect(udid).catch((err) => setStatus(String(err.message || err), "error"));
+      });
+      refreshBtn.addEventListener("click", () => {
+        refreshBtn.blur();
+        refreshSimulators();
+      });
+
+      // Global keyboard forwarding — active whenever a simulator is connected
+      // and focus is not on a toolbar control. We forward raw keydown/keyup so
+      // the simulator sees modifier keys (Shift, Ctrl, etc.) as real key events.
+      function shouldForwardKey(ev) {
+        if (!wsOpen) return false;
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === "SELECT" || ae.tagName === "BUTTON" || ae.tagName === "INPUT")) {
+          return false;
+        }
+        // Let the browser keep its own shortcuts (Cmd+R, Cmd+T, Cmd+W, Cmd+L, …).
+        if (ev.metaKey && ev.code !== "MetaLeft" && ev.code !== "MetaRight") return false;
+        return true;
+      }
+
+      /**
+       * Sync CapsLock state to the device. Browser only fires keydown when
+       * CapsLock turns on and keyup when it turns off — never a full sequence.
+       * iOS expects a full down-up to toggle, and can drift out of sync when
+       * CapsLock is pressed outside the webview. On any key event we check if
+       * our cached CapsLock state diverges from the event's modifier state and
+       * emit a full toggle sequence to resync.
+       */
+      function syncCapsLock(ev) {
+        const current = ev.getModifierState && ev.getModifierState("CapsLock");
+        if (current === undefined) return;
+        if (current !== lastCapsLockState) {
+          lastCapsLockState = current;
+          sendCmd({ cmd: "key", direction: "Down", code: CAPS_LOCK_HID });
+          sendCmd({ cmd: "key", direction: "Up", code: CAPS_LOCK_HID });
+        }
+      }
+
+      function handleKeyEvent(ev) {
+        if (!shouldForwardKey(ev)) return;
+        syncCapsLock(ev);
+
+        const isDown = ev.type === "keydown";
+
+        // Multi-touch modifier → enter/exit two-finger mode, anchored at screen
+        // center with the primary finger at the cursor. Shift+drag during
+        // multi-touch moves the anchor.
+        if (MULTITOUCH_CODES.has(ev.code)) {
+          if (isDown && !isMultiTouching) {
+            anchorPoint = { x: 0.5, y: 0.5 };
+            // If we're mid-drag, smoothly promote the single touch to multi-touch
+            // by issuing a Move with the second finger materialized.
+            isMultiTouching = true;
+            updateIndicators();
+            if (isPressing) sendTouchEvent("Move");
+          } else if (!isDown && isMultiTouching) {
+            if (isPressing) sendTouchEvent("Up");
+            isPressing = false;
+            isMultiTouching = false;
+            updateIndicators();
+          }
+          ev.preventDefault();
+          return;
+        }
+
+        const code = HID[ev.code];
+        if (code == null) return;
+        if (code === CAPS_LOCK_HID) return; // handled by syncCapsLock
+
+        if (isDown) {
+          pressedKeys.add(code);
+        } else {
+          pressedKeys.delete(code);
+        }
+        sendCmd({ cmd: "key", direction: isDown ? "Down" : "Up", code });
+        ev.preventDefault();
+      }
+      window.addEventListener("keydown", handleKeyEvent);
+      window.addEventListener("keyup", handleKeyEvent);
+
+      // Disable the right-click context menu over the stage so right-button
+      // drags (if the user tries) don't pop up a menu on top of the stream.
+      window.addEventListener("contextmenu", (ev) => {
+        if (stage && stage.contains(ev.target)) ev.preventDefault();
+      });
+
+      // On focus loss, release any active touches/keys so the device doesn't
+      // stay stuck with a held finger or modifier.
+      window.addEventListener("blur", releaseAllInput);
+
+      window.addEventListener("beforeunload", teardownStream);
+
+      refreshSimulators();
+    </script>
+  </body>
+</html>

@@ -83,6 +83,20 @@ if (fs.existsSync(DYLIBS_SRC)) {
   console.warn(`⚠ Native devtools dylibs not found at ${DYLIBS_SRC} — skipping copy`);
 }
 
+// Copy preview UI (@argent/ui) next to the bundled tool-server so that
+// tool-server's /preview/ endpoint can locate it via __dirname lookup.
+const UI_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/index.html");
+const UI_DEST_DIR = path.resolve(__dirname, "../dist/preview-ui");
+const UI_DEST = path.join(UI_DEST_DIR, "index.html");
+
+if (fs.existsSync(UI_SRC)) {
+  fs.mkdirSync(UI_DEST_DIR, { recursive: true });
+  fs.copyFileSync(UI_SRC, UI_DEST);
+  console.log(`✓ Copied preview UI → ${path.relative(process.cwd(), UI_DEST)}`);
+} else {
+  console.warn(`⚠ Preview UI not found at ${UI_SRC} — skipping copy`);
+}
+
 // Copy Argent.tracetemplate so ios-profiler-start can find it at runtime.
 const TRACE_TEMPLATE_SRC = path.resolve(
   WORKSPACE_ROOT,
