@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { spawn, execSync } from "child_process";
+import { spawn } from "child_process";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
@@ -7,6 +7,11 @@ import {
   type IosProfilerSessionApi,
 } from "../../../blueprints/ios-profiler-session";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+import {
+  checkIsSimulator,
+  detectRunningAppOnSimulator,
+  detectRunningAppOnDevice,
+} from "../../../utils/ios-device";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
 
@@ -16,76 +21,13 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running)."
+      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator or device. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running)."
     ),
   template_path: z
     .string()
     .optional()
     .describe("Path to an Instruments .tracetemplate file (defaults to bundled Argent template)"),
 });
-
-interface AppInfo {
-  CFBundleExecutable: string;
-  CFBundleIdentifier: string;
-  CFBundleDisplayName?: string;
-  ApplicationType: string;
-}
-
-function detectRunningApp(udid: string): string {
-  // 1. Get running UIKitApplication processes
-  const launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
-    encoding: "utf-8",
-  });
-
-  const runningBundleIds = new Set<string>();
-  for (const line of launchctlOutput.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
-    if (match) {
-      runningBundleIds.add(match[1]);
-    }
-  }
-
-  if (runningBundleIds.size === 0) {
-    throw new Error(
-      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
-    );
-  }
-
-  // 2. Get installed app metadata
-  const listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
-    encoding: "utf-8",
-  });
-
-  const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
-
-  // 3. Cross-reference: running user apps
-  const runningUserApps: AppInfo[] = [];
-  for (const [, appInfo] of Object.entries(installedApps)) {
-    if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
-      runningUserApps.push(appInfo);
-    }
-  }
-
-  if (runningUserApps.length === 0) {
-    throw new Error(
-      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry."
-    );
-  }
-
-  if (runningUserApps.length > 1) {
-    const appList = runningUserApps
-      .map(
-        (a) =>
-          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`
-      )
-      .join("\n");
-    throw new Error(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`
-    );
-  }
-
-  return runningUserApps[0].CFBundleExecutable;
-}
 
 export const iosInstrumentsStartTool: ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -110,7 +52,14 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
     }
 
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
-    const appProcess = params.app_process ?? detectRunningApp(params.device_id);
+
+    let appProcess = params.app_process;
+    if (!appProcess) {
+      const isSimulator = await checkIsSimulator(params.device_id);
+      appProcess = isSimulator
+        ? detectRunningAppOnSimulator(params.device_id)
+        : await detectRunningAppOnDevice(params.device_id);
+    }
 
     const debugDir = await getDebugDir();
     const timestamp = new Date()

@@ -12,7 +12,7 @@ import { nativeUserInteractableViewAtPointTool } from "../tools/native-devtools/
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
-import { listSimulatorsTool } from "../tools/simulator/list-simulators";
+import { listDevicesTool } from "../tools/simulator/list-devices";
 import { createBootSimulatorTool } from "../tools/simulator/boot-simulator";
 import { launchAppTool } from "../tools/simulator/launch-app";
 import { restartAppTool } from "../tools/simulator/restart-app";
@@ -78,7 +78,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
-  registry.registerTool(listSimulatorsTool);
+  registry.registerTool(listDevicesTool);
   registry.registerTool(createBootSimulatorTool(registry));
   registry.registerTool(launchAppTool);
   registry.registerTool(restartAppTool);

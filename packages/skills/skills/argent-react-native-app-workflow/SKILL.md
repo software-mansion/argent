@@ -135,7 +135,7 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 
 | Action                     | Tool / Command                                     |
 | -------------------------- | -------------------------------------------------- |
-| List devices               | `list-simulators` tool                             |
+| List devices               | `list-devices` tool                                |
 | Boot a simulator           | `boot-simulator` tool (pass UDID)                  |
 | Launch an app              | `launch-app` tool (pass UDID + bundle ID)          |
 | Restart an app             | `restart-app` tool (pass UDID + bundle ID)         |
@@ -210,7 +210,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Start Metro                  | `npx react-native start`                                                                                                                 |
 | Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
 | Run iOS app                  | `npx react-native run-ios`                                                                                                               |
-| List simulators              | `list-simulators` tool                                                                                                                   |
+| List devices                 | `list-devices` tool                                                                                                                      |
 | Boot simulator               | `boot-simulator` tool                                                                                                                    |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
 | Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
