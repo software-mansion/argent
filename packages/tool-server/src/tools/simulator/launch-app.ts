@@ -92,6 +92,8 @@ Returns { launched, bundleId }. Fails if the app is not installed on the target 
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.camera, com.apple.Photos, com.apple.mobilemail, com.apple.mobilenotes, com.apple.MobileAddressBook
 Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
+    alwaysLoad: true,
+    searchHint: "open start app bundle id package simulator emulator launch",
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {

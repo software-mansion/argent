@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as dns from "node:dns";
+import * as os from "node:os";
 import { execSync } from "node:child_process";
 import semver from "semver";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
@@ -34,6 +35,58 @@ function resolveBundledDir(dirName: "skills" | "rules" | "agents"): string {
 export const SKILLS_DIR = resolveBundledDir("skills");
 export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
+
+// Returns the names of the skills that ship with this argent install — each
+// subdirectory of SKILLS_DIR that contains a SKILL.md. Used to detect which
+// skills on the user's machine are argent-owned so we don't touch anything
+// else during update.
+export function listBundledSkills(skillsDir: string = SKILLS_DIR): string[] {
+  try {
+    return fs
+      .readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((name) => fs.existsSync(path.join(skillsDir, name, "SKILL.md")))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+// Locations of the skills-CLI lock files. These paths mirror the skills CLI
+// (v1.5.x) so we can detect which scopes already track argent skills and only
+// re-sync those. Project lock lives next to the user's working tree, global
+// lock under XDG_STATE_HOME or ~/.agents/.
+export function getProjectSkillLockPath(cwd: string = process.cwd()): string {
+  return path.join(cwd, "skills-lock.json");
+}
+
+export function getGlobalSkillLockPath(): string {
+  const xdgStateHome = process.env.XDG_STATE_HOME;
+  if (xdgStateHome) return path.join(xdgStateHome, "skills", ".skill-lock.json");
+  return path.join(os.homedir(), ".agents", ".skill-lock.json");
+}
+
+// Prefix that identifies every skill argent ships. Used to locate argent-
+// owned entries in the skills CLI lock files (including ones that were
+// removed from the bundled set and need to be pruned).
+export const ARGENT_SKILL_PREFIX = "argent-";
+
+// Returns names in the lock that argent owns (i.e. start with the argent
+// prefix). Argent reserves this namespace, so everything under it is
+// considered ours and is kept in sync with the bundled SKILLS_DIR.
+export function listArgentSkillsInLock(lockPath: string): string[] {
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const lock = JSON.parse(raw) as { skills?: Record<string, unknown> };
+    const tracked = lock.skills ?? {};
+    return Object.keys(tracked)
+      .filter((name) => name.startsWith(ARGENT_SKILL_PREFIX))
+      .sort();
+  } catch {
+    return [];
+  }
+}
 
 const PROJECT_ROOT_MARKERS = [
   ".mcp.json",

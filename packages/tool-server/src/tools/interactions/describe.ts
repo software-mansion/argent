@@ -78,6 +78,8 @@ Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.`,
+    alwaysLoad: true,
+    searchHint: "accessibility element tree ui hierarchy tap coordinates ios android",
     zodSchema,
     services: () => ({}),
     async execute(_services, params, _options) {

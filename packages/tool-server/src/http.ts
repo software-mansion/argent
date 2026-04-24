@@ -75,12 +75,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         description: string;
         inputSchema: Record<string, unknown>;
         outputHint?: string;
+        alwaysLoad?: boolean;
+        searchHint?: string;
       } = {
         name: id,
         description: def?.description ?? "",
         inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
       };
       if (def?.outputHint) entry.outputHint = def.outputHint;
+      if (def?.alwaysLoad) entry.alwaysLoad = true;
+      if (def?.searchHint) entry.searchHint = def.searchHint;
       return entry;
     });
     res.json({ tools });

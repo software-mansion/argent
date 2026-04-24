@@ -535,6 +535,8 @@ Workflow:
 Call again after navigation or state changes since positions may shift.
 Set includeSkipped=true to see a summary of all filtered components.
 Use when you need tap coordinates for a React Native UI element. Returns a compact text tree with (tap: x,y) coords. Fails if Metro debugger is not connected.`,
+  alwaysLoad: true,
+  searchHint: "react native component tree discovery tap coordinates",
   zodSchema,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,

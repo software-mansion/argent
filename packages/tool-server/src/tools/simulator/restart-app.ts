@@ -34,6 +34,8 @@ export function createRestartAppTool(
     description: `Terminate then relaunch an app by bundle id / package name.
 Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection on iOS before the relaunch.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
+    alwaysLoad: true,
+    searchHint: "terminate relaunch restart reset app bundle id package simulator emulator",
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
