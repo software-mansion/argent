@@ -55,7 +55,13 @@ function spawnSimulatorServerProcess(
     });
 
     let apiUrl: string | null = null;
+    let streamUrl: string = "";
     let settled = false;
+    // Grace window after api_ready to let stream_ready arrive. Server prints
+    // stream_ready BEFORE api_ready when streaming is enabled, so this is only
+    // a safety net for races on older/non-streaming builds.
+    const STREAM_GRACE_MS = 500;
+    let apiReadyTimer: NodeJS.Timeout | null = null;
 
     const rl = readline.createInterface({ input: proc.stdout! });
 
@@ -63,20 +69,35 @@ function spawnSimulatorServerProcess(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (apiReadyTimer) clearTimeout(apiReadyTimer);
       rl.close();
       cleanup?.();
       fn();
     };
 
+    const resolveWhenReady = () => {
+      if (apiUrl == null) return;
+      settle(() => resolve({ proc, apiUrl: apiUrl!, streamUrl }));
+    };
+
     rl.on("line", (rawLine: string) => {
       const line = rawLine.trim();
-      if (line.startsWith("api_ready ")) {
+      if (line.startsWith("stream_ready ")) {
+        const match = line.match(/(http:\/\/[^ ]+)/);
+        if (match) streamUrl = match[1]!;
+        // If api_ready already fired and we were waiting on streaming, resolve now.
+        if (apiUrl != null) resolveWhenReady();
+      } else if (line.startsWith("api_ready ")) {
         const match = line.match(/(http:\/\/[^ ]+)/);
         if (match) {
           apiUrl = match[1]!;
-          settle(() => {
-            resolve({ proc, apiUrl: apiUrl!, streamUrl: "" });
-          });
+          if (streamUrl) {
+            resolveWhenReady();
+          } else {
+            // Give stream_ready a short grace window; if it never comes (non-streaming
+            // build), fall through and resolve without a stream URL.
+            apiReadyTimer = setTimeout(() => resolveWhenReady(), STREAM_GRACE_MS);
+          }
         }
       }
     });
