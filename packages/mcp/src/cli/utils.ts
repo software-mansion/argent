@@ -97,6 +97,8 @@ const PROJECT_ROOT_MARKERS = [
   ".codex",
   ".agents",
   ".zed",
+  ".opencode",
+  "opencode.json",
   "skills-lock.json",
 ];
 
