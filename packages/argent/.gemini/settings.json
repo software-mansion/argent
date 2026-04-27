@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "argent": {
+      "command": "argent",
+      "args": ["mcp"],
+      "env": {
+        "ARGENT_MCP_LOG": "/Users/filip/.argent/mcp-calls.log"
+      },
+      "trust": true
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "private": true,
+  "name": "@argent/tools-client",
+  "version": "0.5.3",
+  "description": "Spawn-and-talk client for the argent tool-server (used by MCP and CLI)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.0.18"
+  }
+}

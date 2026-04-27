@@ -31,13 +31,13 @@ packages/native-devtools-ios/bin/simulator-server
 packages/native-devtools-ios/bin/ax-service
 packages/native-devtools-ios/dylibs/
 
-# MCP package generated assets (copied/bundled at build time)
-packages/mcp/bin/
-packages/mcp/dylibs/
-packages/mcp/skills/
-packages/mcp/agents/
-packages/mcp/rules/
-packages/mcp/README.md
+# Argent package generated assets (copied/bundled at build time)
+packages/argent/bin/
+packages/argent/dylibs/
+packages/argent/skills/
+packages/argent/agents/
+packages/argent/rules/
+packages/argent/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/
