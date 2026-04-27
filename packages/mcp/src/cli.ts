@@ -3,12 +3,16 @@
  * argent CLI — globally-installed entry point.
  *
  * Usage:
- *   argent mcp          Start the MCP stdio server (used by editors)
- *   argent init         Set up argent in a workspace (MCP + skills + rules)
- *   argent install      Alias for init
- *   argent update       Check for updates, refresh configuration
- *   argent uninstall    Remove argent from a workspace
- *   argent remove       Alias for uninstall
+ *   argent mcp                    Start the MCP stdio server (used by editors)
+ *   argent init                   Set up argent in a workspace (MCP + skills + rules)
+ *   argent install                Alias for init
+ *   argent update                 Check for updates, refresh configuration
+ *   argent uninstall              Remove argent from a workspace
+ *   argent remove                 Alias for uninstall
+ *   argent tools                  List tools exposed by the tool-server
+ *   argent tools describe <name>  Show one tool's flags
+ *   argent run <tool> [flags]     Invoke a tool by name
+ *   argent server status|stop|logs   Manage the shared tool-server
  */
 
 import { PACKAGE_NAME } from "./cli/constants.js";
@@ -42,6 +46,9 @@ Commands:
   update      Check for updates and refresh configuration
   uninstall   Remove argent configuration from the workspace
   remove      Alias for uninstall
+  tools       List tools exposed by the tool-server
+  run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
+  server      Manage the shared tool-server (status / stop / logs)
 
 Options:
   --help, -h     Show this help message
@@ -65,6 +72,12 @@ async function main(): Promise<void> {
     case "uninstall":
     case "remove":
       return (await import("./cli/uninstall.js")).uninstall(rest);
+    case "tools":
+      return (await import("./cli/tools.js")).tools(rest);
+    case "run":
+      return (await import("./cli/run.js")).run(rest);
+    case "server":
+      return (await import("./cli/server.js")).server(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");
