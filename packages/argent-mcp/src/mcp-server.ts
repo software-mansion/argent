@@ -14,6 +14,10 @@ import {
 } from "./auto-screenshot.js";
 import { toMcpTool } from "./tool-mapping.js";
 
+const MAX_RETRIES = 4;
+const EXP_BACKOFF_BASE = 250;
+const FETCH_TIMEOUT_MS = 30_000;
+
 export async function fetchWithReconnect(
   getUrl: () => string,
   reconnect: () => Promise<void>,
@@ -24,7 +28,12 @@ export async function fetchWithReconnect(
     fetchTimeoutMs?: number;
   }
 ): Promise<Response> {
-  const { expBackoffBase = 250, maxRetries = 4, fetchTimeoutMs = 30_000, init } = config ?? {};
+  const {
+    expBackoffBase = EXP_BACKOFF_BASE,
+    maxRetries = MAX_RETRIES,
+    fetchTimeoutMs = FETCH_TIMEOUT_MS,
+    init,
+  } = config ?? {};
 
   let lastError: unknown;
 
