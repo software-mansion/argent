@@ -14,10 +14,7 @@ export interface PasteServices {
   simulatorServer: SimulatorServerApi;
 }
 
-export async function pasteIos(
-  services: PasteServices,
-  params: PasteParams
-): Promise<PasteResult> {
+export async function pasteIos(services: PasteServices, params: PasteParams): Promise<PasteResult> {
   const api = services.simulatorServer;
   sendCommand(api, { cmd: "paste", text: params.text });
   return { pasted: true };

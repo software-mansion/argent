@@ -159,7 +159,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" });
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
     expect(result.source).toBe("native-devtools");
     expect(result.tree.children[0]?.label).toBe("General");
     expect(result.tree.children[0]?.role).toBe("AXButton");
@@ -211,7 +214,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" });
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
     expect(result.tree.children).toHaveLength(0);
@@ -237,7 +243,9 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({});
     const tool = createDescribeTool(registry);
 
-    await expect(tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" })).rejects.toThrow("ax-service not available");
+    await expect(
+      tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" })
+    ).rejects.toThrow("ax-service not available");
   });
 
   it("returns multiple elements with correct roles", async () => {
@@ -312,7 +320,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" });
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
     expect(result.source).toBe("ax-service");
     expect(result.tree.children).toHaveLength(0);
   });

@@ -2,11 +2,7 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported } from "../../utils/capability";
-import {
-  screenshotIos,
-  type ScreenshotResult,
-  type ScreenshotServices,
-} from "./platforms/ios";
+import { screenshotIos, type ScreenshotResult, type ScreenshotServices } from "./platforms/ios";
 import { screenshotAndroid } from "./platforms/android";
 
 const zodSchema = z.object({

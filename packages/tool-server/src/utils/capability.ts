@@ -11,9 +11,7 @@ export class UnsupportedOperationError extends Error {
   readonly device: DeviceInfo;
   constructor(toolId: string, device: DeviceInfo, reason?: string) {
     const detail = reason ? ` (${reason})` : "";
-    super(
-      `Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.`
-    );
+    super(`Tool '${toolId}' is not supported on ${device.platform} ${device.kind}${detail}.`);
     this.name = "UnsupportedOperationError";
     this.toolId = toolId;
     this.device = device;

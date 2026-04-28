@@ -15,11 +15,7 @@ import { assertSupported } from "./capability";
  * see real names (e.g. `services.simulatorServer`) instead of the raw
  * `Record<string, unknown>` the registry hands in.
  */
-export function dispatchByPlatform<
-  Services,
-  Params extends { udid: string },
-  Result,
->(opts: {
+export function dispatchByPlatform<Services, Params extends { udid: string }, Result>(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: (services: Services, params: Params, device: DeviceInfo) => Promise<Result>;

@@ -1,11 +1,7 @@
 import type { SimulatorServerApi } from "../../../blueprints/simulator-server";
 import { sendCommand } from "../../../utils/simulator-client";
 
-export type Orientation =
-  | "Portrait"
-  | "LandscapeLeft"
-  | "LandscapeRight"
-  | "PortraitUpsideDown";
+export type Orientation = "Portrait" | "LandscapeLeft" | "LandscapeRight" | "PortraitUpsideDown";
 
 export interface RotateParams {
   udid: string;

@@ -11,10 +11,7 @@ import type { DescribeResult } from "../contract";
  *   - DRM / Play Integrity overlays (capture refused)
  *   - Per-call random temp file path under /data/local/tmp/ to avoid races
  */
-export async function describeAndroid(
-  _udid: string,
-  _bundleId?: string
-): Promise<DescribeResult> {
+export async function describeAndroid(_udid: string, _bundleId?: string): Promise<DescribeResult> {
   throw new Error(
     "describe on Android is not yet implemented. Wire `adb exec-out uiautomator dump` + " +
       "uiautomator XML parser here, then add `android: { emulator: true, device: true, unknown: true }` " +
