@@ -2,6 +2,27 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// Stub child_process.execFile so tool-version detection does not spawn
+// 8 real subprocesses per snapshot — that was the dominant per-test cost
+// (~250ms × 18 tests). The returned string is shaped like `node --version`
+// output so downstream parsing (strip leading "v") stays exercised.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (
+      _cmd: string,
+      _args: readonly string[] | undefined,
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string, stderr: string) => void
+    ) => {
+      queueMicrotask(() => cb(null, "v0.0.0\n", ""));
+      return { on: () => {} } as unknown as ReturnType<typeof actual.execFile>;
+    },
+  };
+});
+
 import {
   readWorkspaceSnapshot,
   extractMetroPort,

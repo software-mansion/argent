@@ -3,7 +3,7 @@ import {
   adaptNativeDescribeElementToDescribeNode,
   adaptNativeDescribeToDescribeResult,
   mapNativeTraitsToDescribeRole,
-} from "../src/tools/interactions/describe-native-adapter";
+} from "../src/tools/describe/platforms/ios-native-adapter";
 import type { NativeDescribeScreenResult } from "../src/tools/native-devtools/native-describe-contract";
 
 describe("describe native adapter", () => {

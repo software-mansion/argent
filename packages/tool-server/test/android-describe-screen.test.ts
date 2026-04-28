@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDescribeResult } from "../src/tools/interactions/describe-contract";
+import { parseDescribeResult } from "../src/tools/describe/contract";
 import {
   deriveUiAutomatorRole,
   parseUiAutomatorBounds,

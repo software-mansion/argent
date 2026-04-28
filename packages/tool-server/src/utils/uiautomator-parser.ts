@@ -1,4 +1,4 @@
-import type { DescribeNode } from "../tools/interactions/describe-contract";
+import type { DescribeNode } from "../tools/describe/contract";
 
 interface ParsedXmlNode {
   tag: string;
