@@ -1,29 +1,12 @@
 /**
- * IIFE that scans the Metro module registry for the LogBox module
- * and calls `ignoreAllLogs(true)` to suppress the yellow/red overlay,
- * wraps `LogBoxData.addException` so it short-circuits while LogBox is
- * disabled (the redbox path used by `TurboModuleRegistry.getEnforcing(...)`
- * and other top-level module-load throws — `ignoreAllLogs` only flips an
- * observer flag and does not block `addException`), then clears any
- * already-queued LogBox entries.
+ * Suppress LogBox while the debugger is connected:
+ *  - ignoreAllLogs(true): hide warnings.
+ *  - wrap addException: ignoreAllLogs alone doesn't block fatal redboxes;
+ *    wrapping (rather than replacing) lets ignoreAllLogs(false) re-enable them.
+ *  - clear(): empty already-queued entries.
  *
- * The wrapper consults `LBData.isDisabled()` on each call so a later
- * `LB.ignoreAllLogs(false)` restores fatal-redbox visibility — important
- * for devs who disconnect the debugger and keep developing. When
- * `isDisabled` is unavailable, the wrapper defaults to no-op (matching
- * the prior behavior on RN versions without that API).
- *
- * Uses `__r.getModules()` (available in DEV) to iterate only
- * already-initialized modules, avoiding forced evaluation of unloaded
- * modules. This prevents Metro's `guardedLoadModule` from reporting
- * errors to LogBox when a module's top-level code throws.
- *
- * Falls back to the ErrorUtils-suppression approach when `getModules`
- * is unavailable: temporarily nulls `global.ErrorUtils` so that any
- * errors thrown during `__r(i)` scanning are caught by our try-catch
- * instead of being routed to LogBox via `ErrorUtils.reportFatalError`.
- *
- * Safe to call at any time — exits early when __r is unavailable.
+ * Walks only already-initialized modules (__r.getModules) so we don't
+ * force-load modules that throw on init.
  */
 export const DISABLE_LOGBOX_SCRIPT = `(function() {
   if (typeof __r !== 'function') return;
