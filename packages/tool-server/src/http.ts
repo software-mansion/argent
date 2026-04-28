@@ -5,6 +5,7 @@ import { createIdleTimer } from "./utils/idle-timer";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
+import { createPreviewRouter } from "./preview";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -41,6 +42,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     next();
   });
 
+  // Hidden (not MCP-exposed) preview UI + stream discovery endpoints.
+  // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
+  app.use("/preview", createPreviewRouter(registry));
+
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();
     const services: Record<string, { state: string; dependents: string[] }> = {};
@@ -64,12 +69,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         description: string;
         inputSchema: Record<string, unknown>;
         outputHint?: string;
+        alwaysLoad?: boolean;
+        searchHint?: string;
       } = {
         name: id,
         description: def?.description ?? "",
         inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
       };
       if (def?.outputHint) entry.outputHint = def.outputHint;
+      if (def?.alwaysLoad) entry.alwaysLoad = true;
+      if (def?.searchHint) entry.searchHint = def.searchHint;
       return entry;
     });
     res.json({ tools });

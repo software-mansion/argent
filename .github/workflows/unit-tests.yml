@@ -28,9 +28,7 @@ jobs:
         run: npm install @rollup/rollup-linux-x64-gnu --no-save
 
       - name: Build workspace dependencies
-        run: |
-          npm run build -w packages/registry
-          npm run build -w packages/native-devtools-ios
+        run: npx tsc --build
 
       - name: Run tests
         run: npm test --workspaces --if-present

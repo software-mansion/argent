@@ -27,6 +27,8 @@ Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Swipe down (fromY < toY) to scroll content up.
 Use when you need to scroll a list, dismiss a modal, or navigate between pages. Returns { swiped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
+  alwaysLoad: true,
+  searchHint: "swipe scroll drag pan gesture simulator touch move",
   zodSchema,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
