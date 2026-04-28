@@ -1,6 +1,6 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
-import { classifyDevice } from "../utils/platform-detect";
+import { classifyDevice } from "../utils/device-info";
 
 // The tools that consume this session are cross-platform in name
 // (`native-profiler-*`), but today the only backend is xctrace on iOS. When
@@ -39,7 +39,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<NativeProfilerSess
     // Android backend (Perfetto / simpleperf) is not implemented yet; reject
     // early so an Android serial gets a clear "not yet" message instead of an
     // opaque xctrace failure deeper in.
-    if ((await classifyDevice(_payload)) !== "ios") {
+    if (classifyDevice(_payload) !== "ios") {
       throw new Error(
         `${NATIVE_PROFILER_SESSION_NAMESPACE} currently supports iOS only (xctrace-backed). ` +
           `The target '${_payload}' classifies as Android — Android profiling (Perfetto/simpleperf) is on the roadmap. ` +

@@ -8,7 +8,7 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
-import { classifyDevice } from "../utils/platform-detect";
+import { classifyDevice } from "../utils/device-info";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -130,7 +130,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, stri
   },
   async factory(_deps, payload) {
     const udid = payload;
-    const platform = await classifyDevice(udid);
+    const platform = classifyDevice(udid);
     // iOS accessibility automation flag — no-op equivalent on Android so skip
     // the xcrun call entirely there.
     if (platform === "ios") {

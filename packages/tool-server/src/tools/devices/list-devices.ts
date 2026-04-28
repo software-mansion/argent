@@ -2,7 +2,6 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { listAndroidDevices, listAvds } from "../../utils/adb";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
-import { warmDeviceCache } from "../../utils/platform-detect";
 
 type IosDevice = IosSimulator & { platform: "ios" };
 
@@ -67,13 +66,6 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       sdkLevel: d.sdkLevel,
     }));
     androidTagged.sort(sortAndroid);
-
-    // Populate the classify cache so the next interaction tool call on any of
-    // these ids is a cache hit and doesn't re-run simctl + adb.
-    warmDeviceCache([
-      ...iosTagged.map((d) => ({ udid: d.udid, platform: "ios" as const })),
-      ...androidTagged.map((d) => ({ udid: d.serial, platform: "android" as const })),
-    ]);
 
     return { devices: [...iosTagged, ...androidTagged], avds };
   },

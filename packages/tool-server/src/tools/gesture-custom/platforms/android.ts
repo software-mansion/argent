@@ -5,8 +5,6 @@ import type { GestureCustomParams, GestureCustomResult, GestureCustomServices } 
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Android uses the same `simulator-server` channel as iOS — see comment in
-// `gesture-tap/platforms/android.ts` for context.
 export const androidImpl: PlatformImpl<
   GestureCustomServices,
   GestureCustomParams,

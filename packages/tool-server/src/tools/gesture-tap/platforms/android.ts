@@ -4,9 +4,6 @@ import type { GestureTapParams, GestureTapResult, GestureTapServices } from "./i
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Android gesture-tap goes through the same `simulator-server` channel as iOS:
-// `simulator-server android --id <serial>` accepts the same `{cmd:"touch"}`
-// payload and drives the gRPC EmulatorController. No `adb` shell-out needed.
 export const androidImpl: PlatformImpl<GestureTapServices, GestureTapParams, GestureTapResult> = {
   handler: async (services, params) => {
     const api = services.simulatorServer;

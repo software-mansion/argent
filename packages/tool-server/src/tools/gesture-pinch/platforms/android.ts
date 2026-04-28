@@ -2,10 +2,6 @@ import { sleep, sendTouchEvent } from "../../../utils/gesture-utils";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import type { GesturePinchParams, GesturePinchResult, GesturePinchServices } from "./ios";
 
-// Android uses the same `simulator-server` channel as iOS — see comment in
-// `gesture-tap/platforms/android.ts` for context. Multi-touch is supported
-// because `simulator-server android` drives the gRPC EmulatorController, which
-// accepts second_x/second_y in the touch payload.
 export const androidImpl: PlatformImpl<
   GesturePinchServices,
   GesturePinchParams,

@@ -2,8 +2,6 @@ import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
 import type { RestartAppParams, RestartAppResult, RestartAppServices } from "./ios";
 
-// Note: shares iOS `RestartAppServices` type because `dispatchByPlatform`
-// requires a common Services generic — Android branch never reads it.
 export const androidImpl: PlatformImpl<RestartAppServices, RestartAppParams, RestartAppResult> = {
   requires: ["adb"],
   handler: async (_services, params) => {

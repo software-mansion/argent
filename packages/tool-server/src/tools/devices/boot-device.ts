@@ -13,7 +13,6 @@ import {
   runAdb,
   waitForBootCompleted,
 } from "../../utils/adb";
-import { warmDeviceCache } from "../../utils/platform-detect";
 import { ensureDep } from "../../utils/check-deps";
 
 const execFileAsync = promisify(execFile);
@@ -212,7 +211,6 @@ async function bootIos(
     udid,
   ]);
   await execFileAsync("open", ["-a", "Simulator.app"]);
-  warmDeviceCache([{ udid, platform: "ios" }]);
   return { platform: "ios", udid, booted: true };
 }
 
@@ -394,7 +392,6 @@ async function bootAndroid(params: {
       (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
     );
     if (alreadyRunning) {
-      warmDeviceCache([{ udid: alreadyRunning.serial, platform: "android" }]);
       return {
         platform: "android",
         serial: alreadyRunning.serial,
@@ -447,7 +444,6 @@ async function bootAndroid(params: {
             bootCompletedBudgetMs: 30_000,
           });
           await assertScreencapAlive(result.serial);
-          warmDeviceCache([{ udid: result.serial, platform: "android" }]);
           return {
             platform: "android",
             serial: result.serial,
@@ -497,7 +493,6 @@ async function bootAndroid(params: {
     );
   }
 
-  warmDeviceCache([{ udid: coldResult.serial, platform: "android" }]);
   return {
     platform: "android",
     serial: coldResult.serial,

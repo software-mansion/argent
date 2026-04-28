@@ -2,8 +2,6 @@ import { sleep, sendTouchEvent } from "../../../utils/gesture-utils";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import type { GestureRotateParams, GestureRotateResult, GestureRotateServices } from "./ios";
 
-// Android uses the same `simulator-server` channel as iOS — see comment in
-// `gesture-tap/platforms/android.ts` for context.
 export const androidImpl: PlatformImpl<
   GestureRotateServices,
   GestureRotateParams,

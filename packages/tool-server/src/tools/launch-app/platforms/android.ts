@@ -39,11 +39,6 @@ async function resolveLauncherActivity(udid: string, bundleId: string): Promise<
   return last;
 }
 
-// Note: `LaunchAppServices` (the iOS native-devtools handle) is declared as the
-// service type for both branches because `dispatchByPlatform` requires a common
-// Services generic. The Android branch never reads it — `services()` only
-// resolves the URN for iOS udids, so on Android `services.nativeDevtools` is
-// the unused empty-object cast from the dispatcher.
 export const androidImpl: PlatformImpl<LaunchAppServices, LaunchAppParams, LaunchAppResult> = {
   requires: ["adb"],
   handler: async (_services, params) => {

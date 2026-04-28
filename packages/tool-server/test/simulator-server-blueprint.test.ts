@@ -12,21 +12,12 @@ import { Readable } from "node:stream";
 
 const spawnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
-// classifyDevice shells out to xcrun + adb. We stub execFile so tests are
-// hermetic — the stub returns empty results, which makes classify fall back
-// to the shape heuristic (covered comprehensively in classify-device.test.ts).
-const execFileMock = vi.fn().mockImplementation((_cmd, _args, opts, cb) => {
-  const callback = typeof opts === "function" ? opts : cb!;
-  callback(new Error("stubbed"), { stdout: "", stderr: "" });
-});
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: spawnMock,
-    execFile: (cmd: string, args: readonly string[], opts: unknown, cb?: unknown) =>
-      execFileMock(cmd, args, opts, cb),
   };
 });
 
@@ -65,12 +56,9 @@ function signalReady(proc: ReturnType<typeof makeFakeProc>, port: number) {
 }
 
 describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     spawnMock.mockReset();
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
-    // Reset classify cache so each test's first call re-runs the (stubbed) lookup.
-    const { __resetClassifyCacheForTests } = await import("../src/utils/platform-detect");
-    __resetClassifyCacheForTests();
   });
 
   afterEach(() => {

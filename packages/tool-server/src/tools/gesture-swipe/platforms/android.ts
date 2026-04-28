@@ -4,8 +4,6 @@ import type { GestureSwipeParams, GestureSwipeResult, GestureSwipeServices } fro
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Android uses the same `simulator-server` channel as iOS — see comment in
-// `gesture-tap/platforms/android.ts` for context.
 export const androidImpl: PlatformImpl<
   GestureSwipeServices,
   GestureSwipeParams,

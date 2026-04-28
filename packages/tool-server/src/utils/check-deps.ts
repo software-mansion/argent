@@ -73,10 +73,10 @@ export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void>
 }
 
 /**
- * Single-dep helper for cross-platform tools that branch on `classifyDevice`:
- * the static `requires` field can't express "adb OR xcrun depending on
- * target", so these tools call `ensureDep('xcrun' | 'adb')` right after they
- * know which platform the udid resolved to.
+ * Single-dep convenience over `ensureDeps`. `dispatchByPlatform` already
+ * preflights the matched branch's `requires`; this is for tools that pick
+ * a platform path internally (e.g. `boot-device`, where there is no udid to
+ * classify yet) and want the same 424-with-install-hint failure mode.
  */
 export async function ensureDep(dep: ToolDependency): Promise<void> {
   return ensureDeps([dep]);
