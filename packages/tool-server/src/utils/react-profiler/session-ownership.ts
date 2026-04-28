@@ -11,32 +11,6 @@ export interface ProfilerSessionOwner {
   lastHeartbeatEpochMs: number;
 }
 
-/**
- * The `ProfilingDataBackend` shape returned by `ri.getProfilingData()`.
- */
-export interface BackendCommitData {
-  timestamp: number; // ms since the `startProfiling` call (verified P1)
-  priorityLevel?: string;
-  duration?: number;
-  effectDuration?: number;
-  passiveEffectDuration?: number;
-  fiberActualDurations?: Array<[number, number]>;
-  fiberSelfDurations?: Array<[number, number]>;
-  changeDescriptions?: Array<[number, unknown]>;
-}
-
-export interface BackendRootData {
-  rootID: number;
-  commitData: BackendCommitData[];
-  initialTreeBaseDurations?: Array<[number, number]>;
-}
-
-export interface ProfilingDataBackend {
-  dataForRoots: BackendRootData[];
-  rendererID?: number;
-  timelineData?: unknown;
-}
-
 export const DEFAULT_STALE_THRESHOLD_MS = 5 * 60_000;
 
 interface StalenessInput {

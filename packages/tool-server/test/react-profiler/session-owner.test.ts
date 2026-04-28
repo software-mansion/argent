@@ -3,11 +3,13 @@ import {
   classifyStaleness,
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
-  type ProfilingDataBackend,
 } from "../../src/utils/react-profiler/session-ownership";
 import { flattenProfilingData } from "../../src/tools/profiler/react/react-profiler-stop";
 import { buildHotCommitSummaries } from "../../src/utils/react-profiler/pipeline/00-hot-commits";
-import type { DevToolsFiberCommit } from "../../src/utils/react-profiler/types/input";
+import type {
+  DevToolsFiberCommit,
+  ProfilingDataBackend,
+} from "../../src/utils/react-profiler/types/input";
 
 function owner(overrides: Partial<ProfilerSessionOwner> = {}): ProfilerSessionOwner {
   return {
@@ -74,7 +76,6 @@ describe("flattenProfilingData", () => {
     return {
       dataForRoots: [
         {
-          rootID: 1,
           commitData: [
             {
               timestamp: 10,
@@ -111,7 +112,6 @@ describe("flattenProfilingData", () => {
           ],
         },
         {
-          rootID: 2,
           commitData: [
             {
               timestamp: 50,
@@ -220,7 +220,6 @@ describe("flattenProfilingData", () => {
     const nested: ProfilingDataBackend = {
       dataForRoots: [
         {
-          rootID: 1,
           commitData: [
             {
               timestamp: 0,
@@ -250,7 +249,6 @@ describe("flattenProfilingData", () => {
     const data: ProfilingDataBackend = {
       dataForRoots: [
         {
-          rootID: 1,
           commitData: [
             {
               timestamp: 0,
@@ -268,7 +266,6 @@ describe("flattenProfilingData", () => {
           ],
         },
       ],
-      rendererID: 1,
     };
     const { unattributedByCommit } = flattenProfilingData(data, {}, {});
     // 1.23456 + 2.34567 = 3.58023 → rounds to 3.58

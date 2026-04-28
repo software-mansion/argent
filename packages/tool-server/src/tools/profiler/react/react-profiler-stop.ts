@@ -11,9 +11,9 @@ import type {
   HermesCpuProfile,
   DevToolsFiberCommit,
   DevToolsChangeDescription,
+  ProfilingDataBackend,
 } from "../../../utils/react-profiler/types/input";
 import { getDebugDir, writeDumpCompact } from "../../../utils/react-profiler/debug/dump";
-import type { ProfilingDataBackend } from "../../../utils/react-profiler/session-ownership";
 import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
