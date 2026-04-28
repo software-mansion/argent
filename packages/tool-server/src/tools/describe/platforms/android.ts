@@ -1,10 +1,7 @@
 import { NotImplementedOnPlatformError } from "../../../utils/capability";
 import type { DescribeResult } from "../contract";
 
-export async function describeAndroid(
-  _udid: string,
-  _bundleId?: string
-): Promise<DescribeResult> {
+export async function describeAndroid(_udid: string, _bundleId?: string): Promise<DescribeResult> {
   throw new NotImplementedOnPlatformError({
     toolId: "describe",
     platform: "android",
