@@ -27,9 +27,7 @@ function makeRequire(modules: Map<number, MockModuleMeta>) {
     return meta.exports;
   }
   __r.getModules = () =>
-    Array.from(modules.entries()).map(
-      ([id, meta]) => [id, meta] as [number, MockModuleMeta]
-    );
+    Array.from(modules.entries()).map(([id, meta]) => [id, meta] as [number, MockModuleMeta]);
   return __r;
 }
 
@@ -70,16 +68,22 @@ describe("DISABLE_LOGBOX_SCRIPT", () => {
     const lb = makeLogBox(lbData);
 
     const modules = new Map<number, MockModuleMeta>([
-      [1, {
-        isInitialized: true,
-        factory: () => ({ default: lb }),
-        exports: { default: lb },
-      }],
-      [2, {
-        isInitialized: true,
-        factory: () => lbData,
-        exports: lbData,
-      }],
+      [
+        1,
+        {
+          isInitialized: true,
+          factory: () => ({ default: lb }),
+          exports: { default: lb },
+        },
+      ],
+      [
+        2,
+        {
+          isInitialized: true,
+          factory: () => lbData,
+          exports: lbData,
+        },
+      ],
     ]);
 
     const sandbox = vm.createContext({ __r: makeRequire(modules), global: {} });
