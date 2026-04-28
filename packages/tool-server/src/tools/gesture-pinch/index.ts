@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { pinchIos, type GesturePinchResult, type GesturePinchServices } from "./platforms/ios";
-import { pinchAndroid } from "./platforms/android";
+import { iosImpl, type GesturePinchResult, type GesturePinchServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -63,7 +63,7 @@ Use when you need to zoom in or out on a map, image, or zoomable view. Returns {
   execute: dispatchByPlatform<GesturePinchServices, Params, GesturePinchResult>({
     toolId: "gesture-pinch",
     capability,
-    ios: pinchIos,
-    android: pinchAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

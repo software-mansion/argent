@@ -2,11 +2,11 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import {
-  rotateGestureIos,
+  iosImpl,
   type GestureRotateResult,
   type GestureRotateServices,
 } from "./platforms/ios";
-import { rotateGestureAndroid } from "./platforms/android";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -55,7 +55,7 @@ Use when you need to rotate a map, image picker, or any rotateable UI element. R
   execute: dispatchByPlatform<GestureRotateServices, Params, GestureRotateResult>({
     toolId: "gesture-rotate",
     capability,
-    ios: rotateGestureIos,
-    android: rotateGestureAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

@@ -2,8 +2,8 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { restartAppIos, type RestartAppResult, type RestartAppServices } from "./platforms/ios";
-import { restartAppAndroid } from "./platforms/android";
+import { iosImpl, type RestartAppResult, type RestartAppServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -30,7 +30,7 @@ Use when you need a clean in-memory state without a full reinstall. Also refresh
   execute: dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({
     toolId: "restart-app",
     capability,
-    ios: restartAppIos,
-    android: restartAppAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

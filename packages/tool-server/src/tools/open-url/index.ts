@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { openUrlIos, type OpenUrlResult, type OpenUrlServices } from "./platforms/ios";
-import { openUrlAndroid } from "./platforms/android";
+import { iosImpl, type OpenUrlResult, type OpenUrlServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -33,7 +33,7 @@ Common URL schemes:
   execute: dispatchByPlatform<OpenUrlServices, Params, OpenUrlResult>({
     toolId: "open-url",
     capability,
-    ios: openUrlIos,
-    android: openUrlAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

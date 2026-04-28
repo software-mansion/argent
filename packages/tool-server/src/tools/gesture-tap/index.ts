@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { tapIos, type GestureTapResult, type GestureTapServices } from "./platforms/ios";
-import { tapAndroid } from "./platforms/android";
+import { iosImpl, type GestureTapResult, type GestureTapServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -14,7 +14,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
-  // android: not yet implemented; flip on once `tapAndroid` is real.
+  // android: not yet implemented; flip on once `androidImpl.handler` is real.
 };
 
 export const gestureTapTool: ToolDefinition<Params, GestureTapResult> = {
@@ -34,7 +34,7 @@ Before tapping, determine the correct coordinates by using discovery tools: desc
   execute: dispatchByPlatform<GestureTapServices, Params, GestureTapResult>({
     toolId: "gesture-tap",
     capability,
-    ios: tapIos,
-    android: tapAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

@@ -1,10 +1,9 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import type { DescribeResult } from "./contract";
-import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
-import { describeIos } from "./platforms/ios";
-import { describeAndroid } from "./platforms/android";
+import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { describeIos, iosRequires } from "./platforms/ios";
+import { describeAndroid, androidRequires } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -24,6 +23,11 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
 };
 
+// `describe` doesn't fit dispatchByPlatform's standard service-typed
+// signature because the iOS handler resolves AX / native-devtools through
+// `registry` (closed over below) rather than via the registry's services()
+// declaration. We still feed `iosRequires` / `androidRequires` to the
+// dispatcher so the per-branch host-binary preflight fires uniformly.
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
     id: "describe",
@@ -49,12 +53,17 @@ Only supported on iOS simulators today; Android (uiautomator) is on the roadmap.
     zodSchema,
     capability,
     services: () => ({}),
-    async execute(_services, params, _options) {
-      const device = resolveDevice(params.udid);
-      assertSupported("describe", capability, device);
-      return device.platform === "ios"
-        ? describeIos(registry, params)
-        : describeAndroid(params.udid, params.bundleId);
-    },
+    execute: dispatchByPlatform<Record<string, unknown>, Params, DescribeResult>({
+      toolId: "describe",
+      capability,
+      ios: {
+        requires: iosRequires,
+        handler: (_services, params) => describeIos(registry, params),
+      },
+      android: {
+        requires: androidRequires,
+        handler: (_services, params) => describeAndroid(params.udid, params.bundleId),
+      },
+    }),
   };
 }

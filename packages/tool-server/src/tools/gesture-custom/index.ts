@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { customIos, type GestureCustomResult, type GestureCustomServices } from "./platforms/ios";
-import { customAndroid } from "./platforms/android";
+import { iosImpl, type GestureCustomResult, type GestureCustomServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const eventSchema = z.object({
   type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
@@ -76,7 +76,7 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   execute: dispatchByPlatform<GestureCustomServices, Params, GestureCustomResult>({
     toolId: "gesture-custom",
     capability,
-    ios: customIos,
-    android: customAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

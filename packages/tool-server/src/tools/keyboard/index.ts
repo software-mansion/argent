@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { keyboardIos, type KeyboardResult, type KeyboardServices } from "./platforms/ios";
-import { keyboardAndroid } from "./platforms/android";
+import { iosImpl, type KeyboardResult, type KeyboardServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -43,7 +43,7 @@ Provide text, key, or both. Use instead of paste when paste is unreliable or uns
   execute: dispatchByPlatform<KeyboardServices, Params, KeyboardResult>({
     toolId: "keyboard",
     capability,
-    ios: keyboardIos,
-    android: keyboardAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

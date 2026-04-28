@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { buttonIos, type ButtonResult, type ButtonServices } from "./platforms/ios";
-import { buttonAndroid } from "./platforms/android";
+import { iosImpl, type ButtonResult, type ButtonServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -32,7 +32,7 @@ Fails if the simulator server is not running for the given UDID.`,
   execute: dispatchByPlatform<ButtonServices, Params, ButtonResult>({
     toolId: "button",
     capability,
-    ios: buttonIos,
-    android: buttonAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

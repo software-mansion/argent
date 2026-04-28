@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { pasteIos, type PasteResult, type PasteServices } from "./platforms/ios";
-import { pasteAndroid } from "./platforms/android";
+import { iosImpl, type PasteResult, type PasteServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -30,7 +30,7 @@ If paste doesn't work for a particular field, use the keyboard tool instead.`,
   execute: dispatchByPlatform<PasteServices, Params, PasteResult>({
     toolId: "paste",
     capability,
-    ios: pasteIos,
-    android: pasteAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { swipeIos, type GestureSwipeResult, type GestureSwipeServices } from "./platforms/ios";
-import { swipeAndroid } from "./platforms/android";
+import { iosImpl, type GestureSwipeResult, type GestureSwipeServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -40,7 +40,7 @@ Use when you need to scroll a list, dismiss a modal, or navigate between pages. 
   execute: dispatchByPlatform<GestureSwipeServices, Params, GestureSwipeResult>({
     toolId: "gesture-swipe",
     capability,
-    ios: swipeIos,
-    android: swipeAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

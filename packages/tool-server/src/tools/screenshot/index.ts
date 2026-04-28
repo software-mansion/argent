@@ -1,9 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
-import { screenshotIos, type ScreenshotResult, type ScreenshotServices } from "./platforms/ios";
-import { screenshotAndroid } from "./platforms/android";
+import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { iosImpl, type ScreenshotResult, type ScreenshotServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -42,13 +41,10 @@ Fails if the simulator server is not running or the screenshot request times out
       urn: `SimulatorServer:${params.udid}`,
     },
   }),
-  async execute(services, params, options) {
-    const device = resolveDevice(params.udid);
-    assertSupported("screenshot", capability, device);
-    const platformServices = services as unknown as ScreenshotServices;
-    const signal = options?.signal ?? AbortSignal.timeout(16_000);
-    return device.platform === "ios"
-      ? screenshotIos(platformServices, params, signal)
-      : screenshotAndroid(platformServices, params, signal);
-  },
+  execute: dispatchByPlatform<ScreenshotServices, Params, ScreenshotResult>({
+    toolId: "screenshot",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
 };

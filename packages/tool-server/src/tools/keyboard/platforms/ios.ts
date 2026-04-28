@@ -1,4 +1,5 @@
 import type { SimulatorServerApi } from "../../../blueprints/simulator-server";
+import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -152,54 +153,53 @@ export interface KeyboardServices {
   simulatorServer: SimulatorServerApi;
 }
 
-export async function keyboardIos(
-  services: KeyboardServices,
-  params: KeyboardParams
-): Promise<KeyboardResult> {
-  const api = services.simulatorServer;
-  const delay = params.delayMs ?? 50;
-  let keysPressed = 0;
+export const iosImpl: PlatformImpl<KeyboardServices, KeyboardParams, KeyboardResult> = {
+  handler: async (services, params) => {
+    const api = services.simulatorServer;
+    const delay = params.delayMs ?? 50;
+    let keysPressed = 0;
 
-  const pressKeyCode = async (keyCode: number, withShift = false) => {
-    if (withShift) {
-      api.pressKey("Down", SHIFT_KEYCODE);
-      await sleep(10);
-    }
-    api.pressKey("Down", keyCode);
-    await sleep(delay);
-    api.pressKey("Up", keyCode);
-    if (withShift) {
-      await sleep(10);
-      api.pressKey("Up", SHIFT_KEYCODE);
-    }
-    keysPressed++;
-  };
-
-  if (params.key) {
-    const code = NAMED_KEYS[params.key.toLowerCase()];
-    if (code == null) {
-      throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
-      );
-    }
-    await pressKeyCode(code);
-  }
-
-  if (params.text) {
-    for (const char of params.text) {
-      const base = SHIFT_CHARS[char];
-      if (base !== undefined) {
-        const code = CHAR_TO_KEYCODE[base];
-        if (code == null) throw new Error(`No keycode for character "${char}"`);
-        await pressKeyCode(code, true);
-      } else {
-        const code = CHAR_TO_KEYCODE[char];
-        if (code == null) throw new Error(`No keycode for character "${char}"`);
-        await pressKeyCode(code);
+    const pressKeyCode = async (keyCode: number, withShift = false) => {
+      if (withShift) {
+        api.pressKey("Down", SHIFT_KEYCODE);
+        await sleep(10);
       }
+      api.pressKey("Down", keyCode);
       await sleep(delay);
-    }
-  }
+      api.pressKey("Up", keyCode);
+      if (withShift) {
+        await sleep(10);
+        api.pressKey("Up", SHIFT_KEYCODE);
+      }
+      keysPressed++;
+    };
 
-  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
-}
+    if (params.key) {
+      const code = NAMED_KEYS[params.key.toLowerCase()];
+      if (code == null) {
+        throw new Error(
+          `Unknown key "${params.key}". Supported: ${Object.keys(NAMED_KEYS).join(", ")}`
+        );
+      }
+      await pressKeyCode(code);
+    }
+
+    if (params.text) {
+      for (const char of params.text) {
+        const base = SHIFT_CHARS[char];
+        if (base !== undefined) {
+          const code = CHAR_TO_KEYCODE[base];
+          if (code == null) throw new Error(`No keycode for character "${char}"`);
+          await pressKeyCode(code, true);
+        } else {
+          const code = CHAR_TO_KEYCODE[char];
+          if (code == null) throw new Error(`No keycode for character "${char}"`);
+          await pressKeyCode(code);
+        }
+        await sleep(delay);
+      }
+    }
+
+    return { typed: params.text ?? params.key ?? "", keys: keysPressed };
+  },
+};

@@ -1,5 +1,6 @@
 import type { SimulatorServerApi } from "../../../blueprints/simulator-server";
 import { sendCommand } from "../../../utils/simulator-client";
+import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 
 export type Orientation = "Portrait" | "LandscapeLeft" | "LandscapeRight" | "PortraitUpsideDown";
 
@@ -16,11 +17,10 @@ export interface RotateServices {
   simulatorServer: SimulatorServerApi;
 }
 
-export async function rotateIos(
-  services: RotateServices,
-  params: RotateParams
-): Promise<RotateResult> {
-  const api = services.simulatorServer;
-  sendCommand(api, { cmd: "rotate", direction: params.orientation });
-  return { orientation: params.orientation };
-}
+export const iosImpl: PlatformImpl<RotateServices, RotateParams, RotateResult> = {
+  handler: async (services, params) => {
+    const api = services.simulatorServer;
+    sendCommand(api, { cmd: "rotate", direction: params.orientation });
+    return { orientation: params.orientation };
+  },
+};

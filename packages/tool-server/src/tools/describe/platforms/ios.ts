@@ -1,4 +1,4 @@
-import type { Registry } from "@argent/registry";
+import type { Registry, ToolDependency } from "@argent/registry";
 import type { AXServiceApi } from "../../../blueprints/ax-service";
 import { AX_SERVICE_NAMESPACE } from "../../../blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../../../blueprints/native-devtools";
@@ -13,6 +13,10 @@ export interface DescribeIosParams {
   udid: string;
   bundleId?: string;
 }
+
+// describe on iOS goes through ax-service / native-devtools, both of which
+// resolve via Registry — no direct xcrun shell-out, so no `requires` here.
+export const iosRequires: ToolDependency[] = [];
 
 export async function describeIos(
   registry: Registry,

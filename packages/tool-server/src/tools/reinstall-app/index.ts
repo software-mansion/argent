@@ -2,11 +2,11 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import {
-  reinstallAppIos,
+  iosImpl,
   type ReinstallAppResult,
   type ReinstallAppServices,
 } from "./platforms/ios";
-import { reinstallAppAndroid } from "./platforms/android";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -38,7 +38,7 @@ Use for a full reinstall after rebuilding or to clear app data. Returns { reinst
   execute: dispatchByPlatform<ReinstallAppServices, Params, ReinstallAppResult>({
     toolId: "reinstall-app",
     capability,
-    ios: reinstallAppIos,
-    android: reinstallAppAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

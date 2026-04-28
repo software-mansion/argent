@@ -2,8 +2,8 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { launchAppIos, type LaunchAppResult, type LaunchAppServices } from "./platforms/ios";
-import { launchAppAndroid } from "./platforms/android";
+import { iosImpl, type LaunchAppResult, type LaunchAppServices } from "./platforms/ios";
+import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -43,7 +43,7 @@ Common bundle IDs:
   execute: dispatchByPlatform<LaunchAppServices, Params, LaunchAppResult>({
     toolId: "launch-app",
     capability,
-    ios: launchAppIos,
-    android: launchAppAndroid,
+    ios: iosImpl,
+    android: androidImpl,
   }),
 };

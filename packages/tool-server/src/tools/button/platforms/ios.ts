@@ -1,5 +1,6 @@
 import type { SimulatorServerApi } from "../../../blueprints/simulator-server";
 import { sendCommand } from "../../../utils/simulator-client";
+import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -25,17 +26,16 @@ export interface ButtonServices {
   simulatorServer: SimulatorServerApi;
 }
 
-export async function buttonIos(
-  services: ButtonServices,
-  params: ButtonParams
-): Promise<ButtonResult> {
-  const api = services.simulatorServer;
-  sendCommand(api, {
-    cmd: "button",
-    direction: "Down",
-    button: params.button,
-  });
-  await sleep(50);
-  sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
-  return { pressed: params.button };
-}
+export const iosImpl: PlatformImpl<ButtonServices, ButtonParams, ButtonResult> = {
+  handler: async (services, params) => {
+    const api = services.simulatorServer;
+    sendCommand(api, {
+      cmd: "button",
+      direction: "Down",
+      button: params.button,
+    });
+    await sleep(50);
+    sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
+    return { pressed: params.button };
+  },
+};

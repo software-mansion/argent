@@ -116,26 +116,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         parsedData = parseResult.data;
       }
 
-      // Host-binary preflight: tools with `requires: ['xcrun' | 'adb', ...]`
-      // get a 424 Failed Dependency with an install hint instead of a deep
-      // ENOENT from a child-process call.
-      if (def.requires && def.requires.length > 0) {
-        try {
-          await ensureDeps(def.requires);
-        } catch (err) {
-          if (err instanceof DependencyMissingError) {
-            res.status(424).json({ error: err.message, missing: err.missing });
-            return;
-          }
-          throw err;
-        }
-      }
-
-      // Capability gate: a tool with a declared `capability` plus a `udid`
-      // param is rejected before invocation if the udid resolves to an
-      // unsupported platform/kind. Cross-platform tools double-check inside
-      // their dispatch helper, so non-HTTP callers (run-sequence, flow-run)
-      // are also covered.
+      // Capability gate fires BEFORE the global requires preflight: an
+      // android serial calling an iOS-only tool should get a clean
+      // "unsupported on android" error, not a misleading "xcrun missing".
+      // Cross-platform tools double-check inside their dispatch helper, so
+      // non-HTTP callers (run-sequence, flow-run) are also covered.
       if (def.capability && parsedData && typeof parsedData.udid === "string") {
         try {
           const device = resolveDevice(parsedData.udid);
@@ -143,6 +128,24 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         } catch (err) {
           if (err instanceof UnsupportedOperationError) {
             res.status(400).json({ error: err.message });
+            return;
+          }
+          throw err;
+        }
+      }
+
+      // Global host-binary preflight: tools with `requires: ['xcrun' | 'adb',
+      // ...]` get a 424 Failed Dependency with an install hint instead of a
+      // deep ENOENT from a child-process call. For cross-platform tools where
+      // the binary requirement differs per branch, the per-platform
+      // `PlatformImpl.requires` fires inside `dispatchByPlatform` after the
+      // device is classified — leave `def.requires` empty in that case.
+      if (def.requires && def.requires.length > 0) {
+        try {
+          await ensureDeps(def.requires);
+        } catch (err) {
+          if (err instanceof DependencyMissingError) {
+            res.status(424).json({ error: err.message, missing: err.missing });
             return;
           }
           throw err;
