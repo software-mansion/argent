@@ -89,8 +89,8 @@ After each `gesture-tap` or `gesture-swipe` call, record an annotation using the
 
 ### Step 2: Stop and collect
 
-Call `react-profiler-stop` **and** `ios-profiler-stop` in parallel. Only skip `ios-profiler-stop` if you did not start it in Step 1. Note `duration_ms`, `fiber_renders_captured`, `hook_installed`.
-If `hook_installed: false` or `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
+Call `react-profiler-stop` **and** `ios-profiler-stop` in parallel. Only skip `ios-profiler-stop` if you did not start it in Step 1. Note `duration_ms` and `fiber_renders_captured`.
+If `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
 
 ### Step 3: Analyze
 

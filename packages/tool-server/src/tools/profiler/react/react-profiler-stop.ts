@@ -319,7 +319,6 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         duration_ms,
         sample_count: profile.samples.length,
         fiber_renders_captured: allCommits.length,
-        hook_installed: true,
       };
       if (totalCommits > 0) {
         response["total_react_commits"] = totalCommits;
