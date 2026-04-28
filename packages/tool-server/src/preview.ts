@@ -5,6 +5,7 @@ import express from "express";
 import type { Registry } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { listSimulatorsTool } from "./tools/simulator/list-simulators";
+import type { ActionEventBus } from "./events";
 
 function findUiHtml(): string | null {
   // Candidate paths (first match wins):
@@ -28,7 +29,24 @@ function wsUrlFromHttp(httpUrl: string): string {
   return `${scheme}//${u.host}/ws`;
 }
 
-export function createPreviewRouter(registry: Registry): Router {
+/**
+ * Best-effort: turn on the simulator-server's built-in pointer trail so that
+ * agent taps and swipes leave a visible trace baked into the MJPEG stream.
+ * Failure is silent — the overlay still works without it.
+ */
+async function enablePointerTrail(apiUrl: string, length: number): Promise<void> {
+  try {
+    await fetch(`${apiUrl.replace(/\/$/, "")}/api/pointer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trail: length }),
+    });
+  } catch {
+    // No-op: simulator-server may not be running yet, or may not support it.
+  }
+}
+
+export function createPreviewRouter(registry: Registry, actionBus: ActionEventBus): Router {
   const router = express.Router();
 
   router.get("/simulators", async (_req: Request, res: Response) => {
@@ -54,6 +72,9 @@ export function createPreviewRouter(registry: Registry): Router {
       const api = await registry.resolveService<SimulatorServerApi>(
         `${SIMULATOR_SERVER_NAMESPACE}:${udid}`
       );
+      // The UI just attached to a simulator-server — turn on the pointer trail
+      // so finger paths show up baked into the stream. Best-effort.
+      void enablePointerTrail(api.apiUrl, 24);
       res.json({
         udid,
         apiUrl: api.apiUrl,
@@ -63,6 +84,48 @@ export function createPreviewRouter(registry: Registry): Router {
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  // Server-Sent Events stream of every tool invocation. The preview UI uses
+  // this to overlay the agent's actions on top of the simulator video.
+  router.get("/events", (req: Request, res: Response) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    // Initial comment so the client knows the stream opened.
+    res.write(`: connected\n\n`);
+
+    const heartbeat = setInterval(() => {
+      // Keep proxies from closing the connection on idle.
+      res.write(`: ping\n\n`);
+    }, 15000);
+
+    const unsubscribe = actionBus.subscribe((event) => {
+      // SSE: one logical message per tool-call phase. Stringify defensively
+      // — a tool that returns a circular structure shouldn't kill the stream.
+      let payload: string;
+      try {
+        payload = JSON.stringify(event);
+      } catch {
+        payload = JSON.stringify({
+          id: event.id,
+          name: event.name,
+          phase: event.phase,
+          ts: event.ts,
+          error: "unserializable result",
+        });
+      }
+      res.write(`event: action\ndata: ${payload}\n\n`);
+    });
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+      res.end();
+    });
   });
 
   router.get("/", (_req: Request, res: Response) => {

@@ -13,6 +13,7 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import { ActionEventBus } from "./events";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -37,6 +38,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   app.use(express.json());
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
+  const actionBus = new ActionEventBus();
 
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -51,7 +53,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   // Hidden (not MCP-exposed) preview UI + stream discovery endpoints.
   // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
-  app.use("/preview", createPreviewRouter(registry));
+  app.use("/preview", createPreviewRouter(registry, actionBus));
 
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();
@@ -157,10 +159,35 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
+      const actionId = actionBus.newId();
+      const startedAt = Date.now();
+      // Only publish when someone is listening — keeps args/results from being
+      // serialized for nothing in the common case (no preview UI attached).
+      const broadcasting = actionBus.listenerCount() > 0;
+      if (broadcasting) {
+        actionBus.publish({
+          id: actionId,
+          name,
+          phase: "start",
+          ts: startedAt,
+          args: parsedData,
+        });
+      }
+
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
+        if (broadcasting) {
+          actionBus.publish({
+            id: actionId,
+            name,
+            phase: "end",
+            ts: Date.now(),
+            result: data,
+            durationMs: Date.now() - startedAt,
+          });
+        }
         const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
         const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
@@ -173,6 +200,16 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             : {}),
         });
       } catch (err: unknown) {
+        if (broadcasting) {
+          actionBus.publish({
+            id: actionId,
+            name,
+            phase: "error",
+            ts: Date.now(),
+            error: err instanceof Error ? err.message : String(err),
+            durationMs: Date.now() - startedAt,
+          });
+        }
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });
           return;
