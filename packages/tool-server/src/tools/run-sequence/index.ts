@@ -17,7 +17,12 @@ const ALLOWED_TOOLS = new Set([
 ]);
 
 const zodSchema = z.object({
-  udid: z.string().min(1).describe("Simulator UDID (shared across all steps)"),
+  udid: z
+    .string()
+    .min(1)
+    .describe(
+      "Target device id from `list-devices` (iOS UDID or Android serial) — shared across all steps."
+    ),
   steps: z
     .array(
       z.object({

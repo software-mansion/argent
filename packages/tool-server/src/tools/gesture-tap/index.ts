@@ -5,7 +5,10 @@ import { iosImpl, type GestureTapResult, type GestureTapServices } from "./platf
 import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
-  udid: z.string().min(1).describe("Simulator UDID"),
+  udid: z
+    .string()
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   x: z.number().describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
   y: z.number().describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
 });

@@ -5,7 +5,7 @@ import { iosImpl, type PasteResult, type PasteServices } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z.string().min(1).describe("iOS simulator UDID — paste is iOS-only."),
   text: z.string().describe("Text to paste into the focused field"),
 });
 

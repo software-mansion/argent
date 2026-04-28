@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { Registry, ToolDefinition } from "@argent/registry";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import {
   adbShell,
@@ -521,6 +521,15 @@ function waitForEarlyExit(getExit: () => Error | null): Promise<never> {
   });
 }
 
+// boot-device dispatches internally on `udid` vs `avdName` rather than via
+// `dispatchByPlatform` (the helper assumes a single udid input). Capability
+// is still declared so the HTTP gate rejects an iOS udid on a host without
+// xcrun, etc., and so `list-devices` consumers can rely on uniform metadata.
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
+};
+
 export function createBootDeviceTool(
   registry: Registry
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
@@ -532,6 +541,7 @@ Use at the start of a session once you have picked a target.
 Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, coldBoot }.
 Android boots take 2–10 minutes depending on machine and cold/warm state; if any boot stage fails, the tool terminates the emulator it spawned so the next retry starts clean.`,
     zodSchema,
+    capability,
     services: () => ({}),
     async execute(_services, params) {
       const hasUdid = Boolean(params.udid);
