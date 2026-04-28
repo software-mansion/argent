@@ -7,8 +7,8 @@
  *
  * What it does:
  *   1. Builds native devtools dylibs (libArgentInjectionBootstrap, libNativeDevtoolsIos, libKeyboardPatch)
- *   2. Builds MCP TypeScript (tsc only, no esbuild tool-server bundle)
- *   3. Sets up packages/mcp/bin/ and packages/mcp/dist/ for local use
+ *   2. Builds the dispatcher TypeScript (tsc only, no esbuild bundles)
+ *   3. Sets up packages/argent/bin/ and packages/argent/dist/ for local use
  *   4. Patches supported editor MCP configs to point argent at the local dist
  *   5. Starts the tool-server from source via ts-node (no build needed)
  *   6. Writes ~/.argent/tool-server.json so the local MCP picks it up
@@ -25,7 +25,7 @@ const path = require("path");
 const os = require("os");
 
 const ROOT = path.resolve(__dirname, "..");
-const MCP_PKG = path.join(ROOT, "packages", "mcp");
+const ARGENT_PKG = path.join(ROOT, "packages", "argent");
 const TOOL_SERVER_PKG = path.join(ROOT, "packages", "tool-server");
 const NATIVE_DEVTOOLS_PKG = path.join(ROOT, "packages", "native-devtools-ios");
 const STATE_DIR = path.join(os.homedir(), ".argent");
@@ -120,16 +120,16 @@ if (submoduleReady) {
 
 // ── Step 2: Build MCP TypeScript ─────────────────────────────────────────────
 
-console.log("Building MCP TypeScript...");
-execSync("npm run build:mcp -w @swmansion/argent", {
+console.log("Building dispatcher TypeScript...");
+execSync("npm run build:dispatcher -w @swmansion/argent", {
   cwd: ROOT,
   stdio: "inherit",
 });
-console.log("✓ MCP TypeScript built\n");
+console.log("✓ Dispatcher TypeScript built\n");
 
-// ── Step 3: Set up packages/mcp/bin/ and skills/rules/agents ─────────────────
+// ── Step 3: Set up packages/argent/bin/ and skills/rules/agents ──────────────
 
-const BIN_DIR = path.join(MCP_PKG, "bin");
+const BIN_DIR = path.join(ARGENT_PKG, "bin");
 const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", "simulator-server");
 const BIN_DEST = path.join(BIN_DIR, "simulator-server");
 fs.mkdirSync(BIN_DIR, { recursive: true });
@@ -147,7 +147,7 @@ for (const [srcName, destName] of [
   ["skills/agents", "agents"],
 ]) {
   const src = path.join(ROOT, "packages", srcName);
-  const dest = path.join(MCP_PKG, destName);
+  const dest = path.join(ARGENT_PKG, destName);
   if (fs.existsSync(src)) {
     fs.rmSync(dest, { recursive: true, force: true });
     fs.cpSync(src, dest, { recursive: true });
@@ -157,7 +157,7 @@ console.log("✓ Copied skills/rules/agents");
 
 // Stub tool-server.cjs — the launcher won't use it as long as the dev server
 // is registered in the state file, but it needs to exist to avoid a crash.
-const STUB = path.join(MCP_PKG, "dist", "tool-server.cjs");
+const STUB = path.join(ARGENT_PKG, "dist", "tool-server.cjs");
 if (!fs.existsSync(STUB)) {
   fs.mkdirSync(path.dirname(STUB), { recursive: true });
   fs.writeFileSync(
@@ -192,7 +192,7 @@ function restoreMcpEntry(configPath, originalEntry, existedBefore) {
 
 // ── Step 4: Patch editor MCP configs to use local MCP dist ───────────────────
 
-const LOCAL_MCP_ENTRY = path.join(MCP_PKG, "dist", "cli.js");
+const LOCAL_MCP_ENTRY = path.join(ARGENT_PKG, "dist", "cli.js");
 const LOG_FILE = path.join(STATE_DIR, "mcp-calls.log");
 
 const claudeConfigExists = fs.existsSync(CLAUDE_JSON);

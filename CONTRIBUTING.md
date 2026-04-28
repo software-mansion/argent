@@ -66,7 +66,11 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 | ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@argent/registry`            | `packages/registry`            | Core library: dependency-aware service lifecycle, blueprints, tools, URNs                                                                               |
 | `@argent/tool-server`         | `packages/tool-server`         | HTTP API over the registry (port 3001). Registers all blueprints and tools                                                                              |
-| `@swmansion/argent`           | `packages/mcp`                 | MCP bridge — exposes tools to AI assistants via Model Context Protocol                                                                                  |
+| `@swmansion/argent`           | `packages/argent`              | Published bin shell — minimal dispatcher + bundled subcommands + native runtime assets                                                                  |
+| `@argent/tools-client`        | `packages/argent-tools-client` | HTTP client + tool-server launcher shared by `@argent/mcp` and `@argent/cli`                                                                            |
+| `@argent/mcp`                 | `packages/argent-mcp`          | MCP stdio protocol adapter — proxies Claude/Cursor calls to the tool-server                                                                             |
+| `@argent/cli`                 | `packages/argent-cli`          | Shell CLI commands: `argent run`, `argent tools`, `argent server`                                                                                       |
+| `@argent/installer`           | `packages/argent-installer`    | Workspace setup logic: `argent init`, `update`, `uninstall`                                                                                             |
 | `@argent/skills`              | `packages/skills`              | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools                                                              |
 | `@argent/native-devtools-ios` | `packages/native-devtools-ios` | Pre-built dylibs for iOS simulator injection (view hierarchy, network inspection). ObjC source lives in `packages/argent-private` _(private submodule)_ |
 

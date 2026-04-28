@@ -1,10 +1,10 @@
-name: Publish to npm
+name: Publish prerelease to npm (next)
 
 on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag, or SHA to publish (e.g. v0.5.3)"
+        description: "Branch, tag, or SHA to publish (e.g. v0.6.0-next.0)"
         required: true
         type: string
 
@@ -24,6 +24,16 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
+
+      - name: Verify package version is a prerelease
+        run: |
+          VERSION=$(node -p "require('./packages/argent/package.json').version")
+          echo "Resolved version: $VERSION"
+          if [[ "$VERSION" != *-* ]]; then
+            echo "::error::Version '$VERSION' is not a SemVer prerelease (no '-IDENTIFIER' suffix). Refusing to publish under the 'next' dist-tag." >&2
+            echo "Bump the version in packages/argent/package.json to e.g. ${VERSION}-next.0 before running this workflow." >&2
+            exit 1
+          fi
 
       - name: Resolve native binaries tag
         id: binaries_tag
@@ -52,6 +62,6 @@ jobs:
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
       - run: npm pack --dry-run -w @swmansion/argent
 
-      - run: npm publish -w @swmansion/argent
+      - run: npm publish -w @swmansion/argent --tag next
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
