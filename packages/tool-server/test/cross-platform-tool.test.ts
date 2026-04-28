@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import {
-  dispatchByPlatform,
-  type PlatformImpl,
-} from "../src/utils/cross-platform-tool";
-import {
-  __resetDepCacheForTests,
-  __primeDepCacheForTests,
-} from "../src/utils/check-deps";
+import { dispatchByPlatform, type PlatformImpl } from "../src/utils/cross-platform-tool";
+import { __resetDepCacheForTests, __primeDepCacheForTests } from "../src/utils/check-deps";
 import { UnsupportedOperationError } from "../src/utils/capability";
 import type { ToolCapability } from "@argent/registry";
 

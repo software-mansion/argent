@@ -21,36 +21,35 @@ export interface GesturePinchServices {
   simulatorServer: SimulatorServerApi;
 }
 
-export const iosImpl: PlatformImpl<GesturePinchServices, GesturePinchParams, GesturePinchResult> =
-  {
-    handler: async (services, params) => {
-      const api = services.simulatorServer;
-      const duration = params.durationMs ?? 300;
-      const steps = Math.max(1, Math.round(duration / 16));
-      const angleDeg = params.angle ?? 0;
-      const angleRad = (angleDeg * Math.PI) / 180;
-      const cosA = Math.cos(angleRad);
-      const sinA = Math.sin(angleRad);
+export const iosImpl: PlatformImpl<GesturePinchServices, GesturePinchParams, GesturePinchResult> = {
+  handler: async (services, params) => {
+    const api = services.simulatorServer;
+    const duration = params.durationMs ?? 300;
+    const steps = Math.max(1, Math.round(duration / 16));
+    const angleDeg = params.angle ?? 0;
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const cosA = Math.cos(angleRad);
+    const sinA = Math.sin(angleRad);
 
-      let timestampMs = 0;
+    let timestampMs = 0;
 
-      for (let i = 0; i <= steps; i++) {
-        const t = i / steps;
-        const dist = params.startDistance + (params.endDistance - params.startDistance) * t;
-        const halfDist = dist / 2;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const dist = params.startDistance + (params.endDistance - params.startDistance) * t;
+      const halfDist = dist / 2;
 
-        const x1 = params.centerX - halfDist * cosA;
-        const y1 = params.centerY - halfDist * sinA;
-        const x2 = params.centerX + halfDist * cosA;
-        const y2 = params.centerY + halfDist * sinA;
+      const x1 = params.centerX - halfDist * cosA;
+      const y1 = params.centerY - halfDist * sinA;
+      const x2 = params.centerX + halfDist * cosA;
+      const y2 = params.centerY + halfDist * sinA;
 
-        const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
-        if (i === 0) timestampMs = Date.now();
+      const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+      if (i === 0) timestampMs = Date.now();
 
-        sendTouchEvent(api, type, x1, y1, x2, y2);
-        if (i < steps) await sleep(16);
-      }
+      sendTouchEvent(api, type, x1, y1, x2, y2);
+      if (i < steps) await sleep(16);
+    }
 
-      return { pinched: true, timestampMs };
-    },
-  };
+    return { pinched: true, timestampMs };
+  },
+};

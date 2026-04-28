@@ -4,10 +4,7 @@ import type { DescribeResult } from "../contract";
 
 export const androidRequires: ToolDependency[] = ["adb"];
 
-export async function describeAndroid(
-  _udid: string,
-  _bundleId?: string
-): Promise<DescribeResult> {
+export async function describeAndroid(_udid: string, _bundleId?: string): Promise<DescribeResult> {
   throw new NotImplementedOnPlatformError({
     toolId: "describe",
     platform: "android",

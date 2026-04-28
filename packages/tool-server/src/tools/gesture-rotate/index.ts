@@ -1,11 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import {
-  iosImpl,
-  type GestureRotateResult,
-  type GestureRotateServices,
-} from "./platforms/ios";
+import { iosImpl, type GestureRotateResult, type GestureRotateServices } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({
