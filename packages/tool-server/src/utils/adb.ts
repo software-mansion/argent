@@ -87,11 +87,12 @@ export function parseAdbDevices(stdout: string): Array<{ serial: string; state: 
 }
 
 /**
- * Light-weight listing used by `classifyDevice` and anywhere else that only
- * needs to know which serials exist. Skips the per-device getprop round-trips
- * so a cold classify is one `adb devices` call, not 1 + 3N shell-outs.
+ * Light-weight listing for callers that only need which serials exist.
+ * Skips the per-device getprop round-trips so the call is one `adb devices`
+ * shell-out, not 1 + 3N. Used by `listAndroidDevices` as the first hop before
+ * it enriches each entry.
  */
-export async function listAndroidSerials(): Promise<Array<{ serial: string; state: string }>> {
+async function listAndroidSerials(): Promise<Array<{ serial: string; state: string }>> {
   const { stdout } = await runAdb(["devices"]);
   return parseAdbDevices(stdout);
 }

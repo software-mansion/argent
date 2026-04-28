@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { classifyDevice } from "../../utils/device-info";
+import { resolveDevice } from "../../utils/device-info";
 import { iosImpl, type RestartAppResult, type RestartAppServices } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
@@ -38,7 +38,7 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
   capability,
   // Only iOS needs the native-devtools service for relaunch injection.
   services: (params): Record<string, ServiceRef> =>
-    classifyDevice(params.udid) === "ios"
+    resolveDevice(params.udid).platform === "ios"
       ? { nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}` }
       : {},
   execute: dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({

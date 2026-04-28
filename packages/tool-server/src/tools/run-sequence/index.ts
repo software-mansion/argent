@@ -55,9 +55,10 @@ type RunSequenceResult = {
 };
 
 // run-sequence is platform-neutral by construction: every step is dispatched
-// through `registry.invokeTool`, which routes each step's tool by classifyDevice.
-// The capability here just gates the *outer* invocation, mirroring the inner tools'
-// support matrix so the failure mode is consistent.
+// through `registry.invokeTool`, and each step's tool runs its own
+// `dispatchByPlatform` against `params.udid`. The capability here just gates
+// the *outer* invocation, mirroring the inner tools' support matrix so the
+// failure mode is consistent.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },

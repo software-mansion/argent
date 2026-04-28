@@ -6,7 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import { bootstrapDylibPath } from "@argent/native-devtools-ios";
-import { classifyDevice } from "../utils/device-info";
+import { resolveDevice } from "../utils/device-info";
 
 const execFileAsync = promisify(execFile);
 
@@ -220,7 +220,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string
     // an agent to feed one of those to a native-devtools tool and get a
     // cryptic simctl/launchctl failure from deeper in the stack. Gate here so
     // the error says the right thing up front.
-    if (classifyDevice(udid) !== "ios") {
+    if (resolveDevice(udid).platform !== "ios") {
       throw new Error(
         `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${udid}' classifies as Android — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
       );
