@@ -35,14 +35,22 @@ function wsUrlFromHttp(httpUrl: string): string {
  * Failure is silent — the overlay still works without it.
  */
 async function enablePointerTrail(apiUrl: string, length: number): Promise<void> {
+  // Cap how long we'll wait for the simulator-server to acknowledge — if it's
+  // hung or doesn't implement the endpoint, we don't want to block the
+  // /preview/simulator-server/:udid response.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2000);
   try {
     await fetch(`${apiUrl.replace(/\/$/, "")}/api/pointer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ trail: length }),
+      signal: controller.signal,
     });
   } catch {
     // No-op: simulator-server may not be running yet, or may not support it.
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -95,12 +103,25 @@ export function createPreviewRouter(registry: Registry, actionBus: ActionEventBu
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders?.();
 
+    // Wrap every write so a transport-level error (client gone, broken pipe)
+    // tears the subscription down once instead of cascading throws through
+    // each subsequent publish or heartbeat tick.
+    let closed = false;
+    const safeWrite = (chunk: string): void => {
+      if (closed) return;
+      try {
+        res.write(chunk);
+      } catch {
+        teardown();
+      }
+    };
+
     // Initial comment so the client knows the stream opened.
-    res.write(`: connected\n\n`);
+    safeWrite(`: connected\n\n`);
 
     const heartbeat = setInterval(() => {
       // Keep proxies from closing the connection on idle.
-      res.write(`: ping\n\n`);
+      safeWrite(`: ping\n\n`);
     }, 15000);
 
     const unsubscribe = actionBus.subscribe((event) => {
@@ -118,14 +139,22 @@ export function createPreviewRouter(registry: Registry, actionBus: ActionEventBu
           error: "unserializable result",
         });
       }
-      res.write(`event: action\ndata: ${payload}\n\n`);
+      safeWrite(`event: action\ndata: ${payload}\n\n`);
     });
 
-    req.on("close", () => {
+    function teardown(): void {
+      if (closed) return;
+      closed = true;
       clearInterval(heartbeat);
       unsubscribe();
-      res.end();
-    });
+      try {
+        res.end();
+      } catch {
+        // Already torn down by the transport — nothing to do.
+      }
+    }
+
+    req.on("close", teardown);
   });
 
   router.get("/", (_req: Request, res: Response) => {

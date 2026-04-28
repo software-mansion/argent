@@ -40,6 +40,54 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
   const actionBus = new ActionEventBus();
 
+  // Wrap registry.invokeTool so EVERY tool call — top-level via /tools/:name
+  // AND nested calls from compound tools like run-sequence and flow-execute —
+  // shows up in the action stream. Without this, an agent that runs a 5-step
+  // sequence would only emit one outer event with no args/results for inner
+  // taps and swipes, defeating the "visualize every action" goal.
+  const originalInvokeTool = registry.invokeTool.bind(registry);
+  registry.invokeTool = async function wrappedInvokeTool<T>(
+    id: string,
+    params?: unknown,
+    invokeOptions?: Parameters<typeof originalInvokeTool>[2]
+  ): Promise<T> {
+    const broadcasting = actionBus.listenerCount() > 0;
+    if (!broadcasting) {
+      return originalInvokeTool(id, params, invokeOptions) as Promise<T>;
+    }
+    const actionId = actionBus.newId();
+    const startedAt = Date.now();
+    actionBus.publish({
+      id: actionId,
+      name: id,
+      phase: "start",
+      ts: startedAt,
+      args: params,
+    });
+    try {
+      const result = await originalInvokeTool(id, params, invokeOptions);
+      actionBus.publish({
+        id: actionId,
+        name: id,
+        phase: "end",
+        ts: Date.now(),
+        result,
+        durationMs: Date.now() - startedAt,
+      });
+      return result as T;
+    } catch (err) {
+      actionBus.publish({
+        id: actionId,
+        name: id,
+        phase: "error",
+        ts: Date.now(),
+        error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startedAt,
+      });
+      throw err;
+    }
+  } as typeof registry.invokeTool;
+
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -159,35 +207,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
-      const actionId = actionBus.newId();
-      const startedAt = Date.now();
-      // Only publish when someone is listening — keeps args/results from being
-      // serialized for nothing in the common case (no preview UI attached).
-      const broadcasting = actionBus.listenerCount() > 0;
-      if (broadcasting) {
-        actionBus.publish({
-          id: actionId,
-          name,
-          phase: "start",
-          ts: startedAt,
-          args: parsedData,
-        });
-      }
-
       try {
+        // The wrapped registry.invokeTool above publishes start/end/error to
+        // the action bus, so this path doesn't need its own instrumentation.
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
-        if (broadcasting) {
-          actionBus.publish({
-            id: actionId,
-            name,
-            phase: "end",
-            ts: Date.now(),
-            result: data,
-            durationMs: Date.now() - startedAt,
-          });
-        }
         const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
         const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
@@ -200,16 +225,6 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             : {}),
         });
       } catch (err: unknown) {
-        if (broadcasting) {
-          actionBus.publish({
-            id: actionId,
-            name,
-            phase: "error",
-            ts: Date.now(),
-            error: err instanceof Error ? err.message : String(err),
-            durationMs: Date.now() - startedAt,
-          });
-        }
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });
           return;

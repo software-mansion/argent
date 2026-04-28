@@ -1146,6 +1146,14 @@
 
       /** id → { item, badge, duration, detail } for in-progress tool calls. */
       const inflight = new Map();
+      /**
+       * `${id}:${phase}` keys we have already rendered. Browser EventSource
+       * auto-reconnects on transient drops; if the server re-sends events
+       * after a brief disconnect we don't want duplicate rows in the feed.
+       * Bounded so a long session doesn't grow unbounded.
+       */
+      const seenEvents = new Set();
+      const SEEN_CAP = 1000;
       /** EventSource singleton. Browser auto-reconnects on transient failure. */
       let actionEvents = null;
 
@@ -1502,6 +1510,18 @@
       }
 
       function handleAction(event) {
+        const key = `${event.id}:${event.phase}`;
+        if (seenEvents.has(key)) return;
+        seenEvents.add(key);
+        if (seenEvents.size > SEEN_CAP) {
+          // Drop oldest insertion order — Set iteration order is insertion order.
+          const drop = seenEvents.size - SEEN_CAP;
+          let i = 0;
+          for (const k of seenEvents) {
+            if (i++ >= drop) break;
+            seenEvents.delete(k);
+          }
+        }
         if (event.phase === "start") {
           const rec = feedAdd(event);
           inflight.set(event.id, rec);
