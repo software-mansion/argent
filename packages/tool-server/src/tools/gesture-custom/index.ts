@@ -1,8 +1,10 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type GestureCustomResult, type GestureCustomServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../utils/simulator-client";
+import { interpolateEvents } from "../../utils/gesture-utils";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const eventSchema = z.object({
   type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
@@ -44,12 +46,16 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  events: number;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const gestureCustomTool: ToolDefinition<Params, GestureCustomResult> = {
+export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
@@ -76,10 +82,24 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
-  execute: dispatchByPlatform<GestureCustomServices, Params, GestureCustomResult>({
-    toolId: "gesture-custom",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const events =
+      params.interpolate && params.interpolate > 0
+        ? interpolateEvents(params.events, params.interpolate)
+        : params.events;
+
+    for (const event of events) {
+      await sleep(event.delayMs ?? 16);
+      sendCommand(api, {
+        cmd: "touch",
+        type: event.type,
+        x: event.x,
+        y: event.y,
+        second_x: event.x2 ?? null,
+        second_y: event.y2 ?? null,
+      });
+    }
+    return { events: events.length };
+  },
 };

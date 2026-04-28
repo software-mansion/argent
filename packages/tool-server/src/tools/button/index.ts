@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type ButtonResult, type ButtonServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../utils/simulator-client";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z
@@ -16,12 +17,16 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  pressed: string;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const buttonTool: ToolDefinition<Params, ButtonResult> = {
+export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
   description: `Press a simulator hardware button. Sends Down then Up events automatically.
 Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.
@@ -33,10 +38,15 @@ Fails if the simulator server is not running for the given UDID.`,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
-  execute: dispatchByPlatform<ButtonServices, Params, ButtonResult>({
-    toolId: "button",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    sendCommand(api, {
+      cmd: "button",
+      direction: "Down",
+      button: params.button,
+    });
+    await sleep(50);
+    sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
+    return { pressed: params.button };
+  },
 };

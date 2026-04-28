@@ -1,8 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type ScreenshotResult, type ScreenshotServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { httpScreenshot } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
   udid: z
@@ -25,12 +24,17 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  url: string;
+  path: string;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const screenshotTool: ToolDefinition<Params, ScreenshotResult> = {
+export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
   description: `Capture a screenshot of the simulator screen. Returns { url, path } and the MCP adapter renders it as a visible image.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
@@ -45,10 +49,9 @@ Fails if the simulator server is not running or the screenshot request times out
       urn: `SimulatorServer:${params.udid}`,
     },
   }),
-  execute: dispatchByPlatform<ScreenshotServices, Params, ScreenshotResult>({
-    toolId: "screenshot",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params, options) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const signal = options?.signal ?? AbortSignal.timeout(16_000);
+    return httpScreenshot(api, params.rotation, signal, params.scale);
+  },
 };

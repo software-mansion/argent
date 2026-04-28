@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type GestureTapResult, type GestureTapServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../utils/simulator-client";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z
@@ -15,12 +16,17 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  tapped: boolean;
+  timestampMs: number;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const gestureTapTool: ToolDefinition<Params, GestureTapResult> = {
+export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
   description: `Press the simulator screen at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
 Sends a Down event followed by an Up event at the same point.
@@ -34,10 +40,26 @@ Before tapping, determine the correct coordinates by using discovery tools: desc
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
-  execute: dispatchByPlatform<GestureTapServices, Params, GestureTapResult>({
-    toolId: "gesture-tap",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const timestampMs = Date.now();
+    sendCommand(api, {
+      cmd: "touch",
+      type: "Down",
+      x: params.x,
+      y: params.y,
+      second_x: null,
+      second_y: null,
+    });
+    await sleep(50);
+    sendCommand(api, {
+      cmd: "touch",
+      type: "Up",
+      x: params.x,
+      y: params.y,
+      second_x: null,
+      second_y: null,
+    });
+    return { tapped: true, timestampMs };
+  },
 };

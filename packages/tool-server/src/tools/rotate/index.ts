@@ -1,8 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type RotateResult, type RotateServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
   udid: z
@@ -16,12 +15,16 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  orientation: string;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const rotateTool: ToolDefinition<Params, RotateResult> = {
+export const rotateTool: ToolDefinition<Params, Result> = {
   id: "rotate",
   description: `Set the device orientation to Portrait, LandscapeLeft, LandscapeRight, or PortraitUpsideDown.
 Use to test layout in a different orientation. Re-run \`describe\` afterwards — frame coordinates change with the orientation.
@@ -31,10 +34,9 @@ Returns { orientation }. Fails if the target device is not booted.`,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
-  execute: dispatchByPlatform<RotateServices, Params, RotateResult>({
-    toolId: "rotate",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    sendCommand(api, { cmd: "rotate", direction: params.orientation });
+    return { orientation: params.orientation };
+  },
 };

@@ -1,8 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type PasteResult, type PasteServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
   udid: z.string().min(1).describe("iOS simulator UDID — paste is iOS-only."),
@@ -11,11 +10,18 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  pasted: boolean;
+}
+
+// Capability gate (HTTP layer + dispatchByPlatform-style consumers) rejects
+// Android serials with "Tool 'paste' is not supported on android". The handler
+// itself is iOS-only — no platforms/ split needed.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
 };
 
-export const pasteTool: ToolDefinition<Params, PasteResult> = {
+export const pasteTool: ToolDefinition<Params, Result> = {
   id: "paste",
   description: `Fill the focused field on the iOS simulator by pasting text (fastest text entry).
 Use when you need to fill a text input with a long string faster than character-by-character typing.
@@ -27,10 +33,9 @@ If paste doesn't work for a particular field, use the keyboard tool instead.`,
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
-  execute: dispatchByPlatform<PasteServices, Params, PasteResult>({
-    toolId: "paste",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    sendCommand(api, { cmd: "paste", text: params.text });
+    return { pasted: true };
+  },
 };

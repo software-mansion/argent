@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type GestureSwipeResult, type GestureSwipeServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { sendCommand } from "../../utils/simulator-client";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z
@@ -21,12 +22,17 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  swiped: boolean;
+  timestampMs: number;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const gestureSwipeTool: ToolDefinition<Params, GestureSwipeResult> = {
+export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
   description: `Execute a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
 Generates interpolated Move events for a natural feel (~60fps).
@@ -40,10 +46,29 @@ Use when you need to scroll a list, dismiss a modal, or navigate between pages. 
   services: (params) => ({
     simulatorServer: `SimulatorServer:${params.udid}`,
   }),
-  execute: dispatchByPlatform<GestureSwipeServices, Params, GestureSwipeResult>({
-    toolId: "gesture-swipe",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const duration = params.durationMs ?? 300;
+    const steps = Math.max(1, Math.round(duration / 16));
+    let timestampMs = 0;
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = params.fromX + (params.toX - params.fromX) * t;
+      const y = params.fromY + (params.toY - params.fromY) * t;
+      const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+      if (i === 0) timestampMs = Date.now();
+      sendCommand(api, {
+        cmd: "touch",
+        type,
+        x,
+        y,
+        second_x: null,
+        second_y: null,
+      });
+      if (i < steps) await sleep(16);
+    }
+
+    return { swiped: true, timestampMs };
+  },
 };
