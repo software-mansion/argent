@@ -34,13 +34,15 @@ interface MockRi {
   getDisplayNameForElementID: ReturnType<typeof vi.fn>;
 }
 
-function makeRi(opts: {
-  willThrowOnStart?: boolean;
-  startsButLeavesFlagFalse?: boolean;
-  rootID?: number;
-  commits?: BackendCommit[];
-  names?: Record<number, string>;
-} = {}): MockRi {
+function makeRi(
+  opts: {
+    willThrowOnStart?: boolean;
+    startsButLeavesFlagFalse?: boolean;
+    rootID?: number;
+    commits?: BackendCommit[];
+    names?: Record<number, string>;
+  } = {}
+): MockRi {
   const ri = {
     __argent_isProfiling__: false,
     __argent_startedAtEpochMs__: null,
@@ -57,9 +59,7 @@ function makeRi(opts: {
     ri.__argent_isProfiling__ = false;
   });
   ri.getProfilingData = vi.fn(() => ({
-    dataForRoots: opts.commits
-      ? [{ rootID: opts.rootID ?? 1, commitData: opts.commits }]
-      : [],
+    dataForRoots: opts.commits ? [{ rootID: opts.rootID ?? 1, commitData: opts.commits }] : [],
   }));
   ri.getDisplayNameForElementID = vi.fn((id: number) =>
     opts.names && opts.names[id] != null ? opts.names[id] : null
