@@ -1,13 +1,16 @@
+import { NotImplementedOnPlatformError } from "../../../utils/capability";
 import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "./ios";
 
-/**
- * Android reinstall path (when implemented):
- *   `adb -s <serial> install -r [-d] [-g] <path/to/app.apk>`
- *   -r: reinstall, keep data; -d: allow downgrade; -g: grant runtime perms.
- */
 export async function reinstallAppAndroid(
   _services: ReinstallAppServices,
   _params: ReinstallAppParams
 ): Promise<ReinstallAppResult> {
-  throw new Error("reinstall-app on Android is not yet implemented (use `adb install -r`).");
+  throw new NotImplementedOnPlatformError({
+    toolId: "reinstall-app",
+    platform: "android",
+    hint:
+      "Use `adb -s <serial> install -r [-d allowDowngrade] [-g grantPermissions] " +
+      "<path/to/app.apk>`. The `appPath` param should accept an .apk file when " +
+      "the device is Android.",
+  });
 }

@@ -7,7 +7,11 @@ import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./ut
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
-import { assertSupported, UnsupportedOperationError } from "./utils/capability";
+import {
+  assertSupported,
+  NotImplementedOnPlatformError,
+  UnsupportedOperationError,
+} from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
@@ -176,6 +180,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         }
         if (err instanceof UnsupportedOperationError) {
           res.status(400).json({ error: err.message });
+          return;
+        }
+        if (err instanceof NotImplementedOnPlatformError) {
+          res.status(501).json({
+            error: err.message,
+            toolId: err.toolId,
+            platform: err.platform,
+            hint: err.hint,
+          });
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });

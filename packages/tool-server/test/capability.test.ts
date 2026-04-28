@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
+import {
+  assertSupported,
+  NotImplementedOnPlatformError,
+  UnsupportedOperationError,
+} from "../src/utils/capability";
 import type { DeviceInfo, ToolCapability } from "@argent/registry";
 
 const iosSim: DeviceInfo = { id: "x", platform: "ios", kind: "simulator" };
@@ -37,5 +41,34 @@ describe("assertSupported", () => {
     };
     expect(() => assertSupported("t", cap, iosSim)).not.toThrow();
     expect(() => assertSupported("t", cap, androidEmu)).not.toThrow();
+  });
+});
+
+describe("NotImplementedOnPlatformError", () => {
+  it("composes a uniform message with toolId, platform, and the file path to fill in", () => {
+    const err = new NotImplementedOnPlatformError({
+      toolId: "gesture-tap",
+      platform: "android",
+      hint: "Use `adb shell input tap <x> <y>`.",
+    });
+    expect(err.name).toBe("NotImplementedOnPlatformError");
+    expect(err.toolId).toBe("gesture-tap");
+    expect(err.platform).toBe("android");
+    expect(err.hint).toBe("Use `adb shell input tap <x> <y>`.");
+    expect(err.message).toContain("gesture-tap");
+    expect(err.message).toContain("android");
+    expect(err.message).toContain("tools/gesture-tap/platforms/android.ts");
+    expect(err.message).toContain("capability declaration");
+    expect(err.message).toContain("Use `adb shell input tap");
+  });
+
+  it("works without a hint", () => {
+    const err = new NotImplementedOnPlatformError({
+      toolId: "screenshot",
+      platform: "android",
+    });
+    expect(err.hint).toBeNull();
+    expect(err.message).toContain("screenshot");
+    expect(err.message).toContain("android");
   });
 });

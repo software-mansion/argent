@@ -1,3 +1,4 @@
+import { NotImplementedOnPlatformError } from "../../../utils/capability";
 import type { ScreenshotParams, ScreenshotResult, ScreenshotServices } from "./ios";
 
 export async function screenshotAndroid(
@@ -5,8 +6,11 @@ export async function screenshotAndroid(
   _params: ScreenshotParams,
   _signal: AbortSignal
 ): Promise<ScreenshotResult> {
-  throw new Error(
-    "screenshot on Android is not yet implemented. Wire `adb exec-out screencap -p` here, " +
-      "save the PNG to /tmp, and return { url, path }."
-  );
+  throw new NotImplementedOnPlatformError({
+    toolId: "screenshot",
+    platform: "android",
+    hint:
+      "Use `adb -s <serial> exec-out screencap -p` to get raw PNG bytes; save to " +
+      "/tmp and return { url, path }. Apply scale/rotation client-side after capture.",
+  });
 }

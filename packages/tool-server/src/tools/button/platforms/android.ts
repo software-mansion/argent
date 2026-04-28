@@ -1,10 +1,13 @@
+import { NotImplementedOnPlatformError } from "../../../utils/capability";
 import type { ButtonParams, ButtonResult, ButtonServices } from "./ios";
 
 export async function buttonAndroid(
   _services: ButtonServices,
   _params: ButtonParams
 ): Promise<ButtonResult> {
-  // Android equivalents: home/back/appSwitch via `adb shell input keyevent`,
-  // power/volume via the same. Wire those here when implementing Android.
-  throw new Error("button on Android is not yet implemented (use `adb shell input keyevent`).");
+  throw new NotImplementedOnPlatformError({
+    toolId: "button",
+    platform: "android",
+    hint: "Use `adb shell input keyevent <KEYCODE>`: home=3, back=4, appSwitch=187, volumeUp=24, volumeDown=25, power=26.",
+  });
 }
