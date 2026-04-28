@@ -5,8 +5,6 @@ description: Android-specific notes for interacting with the UI. Use when drivin
 
 Pass the Android adb `serial` (e.g. `emulator-5554`) as `udid` to the unified interaction tools (`gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc.). Dispatch is automatic — see `argent-simulator-interact` for tool-by-tool usage.
 
-`android-stop-app` and `android-logcat` are Android-only with no iOS counterpart.
-
 ## Android-specific gotchas
 
 - **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts.

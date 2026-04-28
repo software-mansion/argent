@@ -66,8 +66,6 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
-import { androidStopAppTool } from "../tools/android/android-stop-app";
-import { androidLogcatTool } from "../tools/android/android-logcat";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -146,12 +144,6 @@ export function createRegistry(): Registry {
   // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
-
-  // Android-only tools. Cross-platform tools live under unified names (list-devices,
-  // boot-device, screenshot, gesture-tap, describe, launch-app, ...) and dispatch
-  // on the id shape; see utils/platform-detect.ts.
-  registry.registerTool(androidStopAppTool);
-  registry.registerTool(androidLogcatTool);
 
   return registry;
 }

@@ -1,6 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { androidStopAppTool } from "../src/tools/android/android-stop-app";
-import { androidLogcatTool } from "../src/tools/android/android-logcat";
 import { createLaunchAppTool } from "../src/tools/simulator/launch-app";
 import { createRestartAppTool } from "../src/tools/simulator/restart-app";
 import type { Registry } from "@argent/registry";
@@ -28,16 +26,6 @@ describe("bundleId validation — tools that interpolate into adb shell", () => 
   const toolCases = [
     { name: "launch-app", schema: launchApp.zodSchema, baseArgs: { udid: "emulator-5554" } },
     { name: "restart-app", schema: restartApp.zodSchema, baseArgs: { udid: "emulator-5554" } },
-    {
-      name: "android-stop-app",
-      schema: androidStopAppTool.zodSchema,
-      baseArgs: { udid: "emulator-5554" },
-    },
-    {
-      name: "android-logcat",
-      schema: androidLogcatTool.zodSchema,
-      baseArgs: { udid: "emulator-5554" },
-    },
   ];
 
   const injectionPayloads = [
@@ -110,24 +98,6 @@ describe("activity validation — launch-app Android branch", () => {
   });
 });
 
-describe("android-logcat tag validation", () => {
-  it("rejects a logcat tag with shell metachars", () => {
-    const parsed = androidLogcatTool.zodSchema.safeParse({
-      udid: "emulator-5554",
-      tag: "Tag;rm -rf /sdcard",
-    });
-    expect(parsed.success).toBe(false);
-  });
-
-  it("accepts an ordinary logcat tag", () => {
-    const parsed = androidLogcatTool.zodSchema.safeParse({
-      udid: "emulator-5554",
-      tag: "ReactNativeJS",
-    });
-    expect(parsed.success).toBe(true);
-  });
-});
-
 describe('empty-udid guard (#7) — cross-platform tools reject `udid: ""`', () => {
   // Without .min(1), an empty udid flows through to `adb -s "" shell …`
   // which silently targets the default device on a multi-host setup.
@@ -138,12 +108,6 @@ describe('empty-udid guard (#7) — cross-platform tools reject `udid: ""`', () 
   }> = [
     { name: "launch-app", schema: launchApp.zodSchema, extra: { bundleId: "com.x" } },
     { name: "restart-app", schema: restartApp.zodSchema, extra: { bundleId: "com.x" } },
-    {
-      name: "android-stop-app",
-      schema: androidStopAppTool.zodSchema,
-      extra: { bundleId: "com.x" },
-    },
-    { name: "android-logcat", schema: androidLogcatTool.zodSchema, extra: {} },
   ];
 
   for (const { name, schema, extra } of toolCases) {
