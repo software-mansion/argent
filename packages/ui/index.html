@@ -3,20 +3,53 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Argent Preview</title>
+    <meta name="color-scheme" content="dark" />
+    <title>Argent — observing</title>
     <style>
+      /* ─────────────────────────────────────────────────────────────────
+         Tokens
+         ───────────────────────────────────────────────────────────────── */
       :root {
-        color-scheme: light dark;
-        --bg: #0e0e10;
-        --fg: #eaeaea;
-        --muted: #8a8a90;
-        --accent: #6aa6ff;
-        --border: #2a2a2e;
-        --surface: #16161a;
-        --error: #ff8080;
-        --ok: #5cdc8b;
+        /* Surface palette */
+        --bg: #06070b;
+        --bg-2: #0b0d14;
+        --surface-1: rgba(255, 255, 255, 0.04);
+        --surface-2: rgba(255, 255, 255, 0.06);
+        --border-1: rgba(255, 255, 255, 0.07);
+        --border-2: rgba(255, 255, 255, 0.12);
+
+        /* Text */
+        --fg-1: #f6f7fb;
+        --fg-2: #b9bcca;
+        --fg-3: #757988;
+        --fg-4: #4a4e5d;
+
+        /* Category accents */
+        --c-touch: #6aa6ff;
+        --c-hardware: #b794ff;
+        --c-inspect: #ffd166;
+        --c-capture: #5cdc8b;
+        --c-lifecycle: #ff9b6a;
+        --c-debug: #6affd4;
+        --c-meta: #cfd2dd;
+        --c-error: #ff8080;
+
+        /* Sizing */
+        --device-max-h: 86vh;
+        --device-min-w: 360px;
+        --sidebar-w: 400px;
+
+        /* Easings */
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+        --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
       }
-      * {
+
+      /* ─────────────────────────────────────────────────────────────────
+         Reset + base
+         ───────────────────────────────────────────────────────────────── */
+      *,
+      *::before,
+      *::after {
         box-sizing: border-box;
       }
       html,
@@ -24,378 +57,509 @@
         margin: 0;
         padding: 0;
         height: 100%;
+        overflow: hidden;
         background: var(--bg);
-        color: var(--fg);
+        color: var(--fg-1);
         font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        font-size: 13px;
+          -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, system-ui,
+          sans-serif;
+        font-feature-settings: "ss01", "cv11";
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
       }
+      ::selection {
+        background: rgba(106, 166, 255, 0.35);
+        color: var(--fg-1);
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Layout
+         ───────────────────────────────────────────────────────────────── */
       #root {
-        display: flex;
-        flex-direction: column;
+        position: relative;
         height: 100%;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        grid-template-columns: 1fr var(--sidebar-w);
+        background:
+          radial-gradient(
+            140% 100% at 30% 0%,
+            rgba(106, 166, 255, 0.18) 0%,
+            transparent 55%
+          ),
+          radial-gradient(140% 100% at 80% 100%, rgba(183, 148, 255, 0.14) 0%, transparent 60%),
+          radial-gradient(60% 60% at 50% 50%, var(--bg-2) 0%, var(--bg) 100%);
       }
-      .toolbar {
+      /* Vignette that focuses attention on the centered device. */
+      .vignette {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+        background: radial-gradient(
+          80% 70% at 50% 55%,
+          transparent 0%,
+          transparent 50%,
+          rgba(0, 0, 0, 0.45) 100%
+        );
+      }
+      .ambient {
+        position: fixed;
+        inset: -15vh -15vw;
+        pointer-events: none;
+        z-index: 0;
+        background:
+          radial-gradient(46% 36% at 28% 28%, rgba(106, 166, 255, 0.32), transparent 62%),
+          radial-gradient(40% 30% at 72% 64%, rgba(183, 148, 255, 0.28), transparent 62%),
+          radial-gradient(28% 22% at 50% 50%, rgba(106, 255, 212, 0.08), transparent 70%);
+        filter: blur(80px) saturate(1.25);
+        animation: ambientDrift 22s var(--ease-in-out) infinite alternate;
+      }
+      @keyframes ambientDrift {
+        from {
+          transform: translate3d(-2%, -1%, 0) scale(1);
+        }
+        to {
+          transform: translate3d(3%, 2%, 0) scale(1.05);
+        }
+      }
+      .grain {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+        opacity: 0.5;
+        background-image: radial-gradient(
+          rgba(255, 255, 255, 0.045) 1px,
+          transparent 1px
+        );
+        background-size: 3px 3px;
+        mix-blend-mode: overlay;
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Header chrome
+         ───────────────────────────────────────────────────────────────── */
+      header.chrome {
+        grid-column: 1 / -1;
+        position: relative;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 14px 22px 12px;
+        border-bottom: 1px solid var(--border-1);
+        background: linear-gradient(
+          180deg,
+          rgba(8, 10, 14, 0.92) 0%,
+          rgba(8, 10, 14, 0.62) 100%
+        );
+        backdrop-filter: blur(14px) saturate(1.2);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+      }
+      .brand {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border);
-        background: var(--surface);
-        flex-shrink: 0;
-      }
-      .toolbar label {
-        color: var(--muted);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-      }
-      .toolbar select,
-      .toolbar button {
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 13px;
-      }
-      .toolbar select {
-        min-width: 240px;
-      }
-      .toolbar button {
-        cursor: pointer;
-      }
-      .toolbar .status {
-        margin-left: auto;
-        color: var(--muted);
         font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--fg-2);
+        font-weight: 600;
       }
-      .toolbar .debug {
-        color: var(--muted);
-        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+      .brand .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #6aa6ff, #b794ff);
+        box-shadow: 0 0 12px rgba(106, 166, 255, 0.8);
+      }
+      .brand .word {
+        color: var(--fg-1);
+      }
+      .brand .verb {
+        color: var(--fg-3);
+        margin-left: 4px;
+        letter-spacing: 0.14em;
+      }
+      .device-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 11px 5px 9px;
+        border: 1px solid var(--border-2);
+        border-radius: 999px;
+        background: var(--surface-1);
+        font-size: 12px;
+        color: var(--fg-1);
+      }
+      .device-pill .icon {
+        width: 14px;
+        height: 14px;
+        opacity: 0.9;
+      }
+      .device-pill .runtime {
+        color: var(--fg-3);
+      }
+      .conn {
+        margin-left: auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
         font-size: 11px;
-        min-width: 220px;
-        text-align: right;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--fg-2);
       }
-      .status.live::before,
-      .status.error::before {
-        content: "";
-        display: inline-block;
+      .conn .pulse {
         width: 8px;
         height: 8px;
         border-radius: 50%;
-        margin-right: 6px;
-        vertical-align: middle;
+        background: var(--fg-3);
+        box-shadow: 0 0 0 0 transparent;
       }
-      .status.live::before {
-        background: var(--ok);
-        animation: pulse 1.6s ease-in-out infinite;
+      .conn.live .pulse {
+        background: var(--c-capture);
+        animation: livePulse 1.6s ease-out infinite;
       }
-      .status.error::before {
-        background: var(--error);
+      .conn.reconnecting .pulse {
+        background: var(--c-inspect);
+        animation: livePulse 1s ease-out infinite;
       }
-      @keyframes pulse {
-        0%,
+      .conn.offline .pulse {
+        background: var(--c-error);
+      }
+      @keyframes livePulse {
+        0% {
+          box-shadow: 0 0 0 0 currentColor;
+          opacity: 1;
+        }
+        70% {
+          box-shadow: 0 0 0 8px transparent;
+          opacity: 1;
+        }
         100% {
           opacity: 1;
         }
+      }
+      .stats {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        font-size: 12px;
+        color: var(--fg-2);
+      }
+      .stats .stat strong {
+        color: var(--fg-1);
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        margin-right: 4px;
+      }
+      .stats .stat .label {
+        color: var(--fg-3);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-size: 10px;
+      }
+      .stats .sep {
+        width: 1px;
+        height: 12px;
+        background: var(--border-1);
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Stage (centered device)
+         ───────────────────────────────────────────────────────────────── */
+      main.stage {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        grid-template-rows: 1fr auto;
+        align-items: center;
+        justify-items: center;
+        padding: 28px 28px 24px;
+        min-height: 0;
+      }
+      .device-wrap {
+        position: relative;
+        display: grid;
+        place-items: center;
+        height: 100%;
+        width: 100%;
+        min-height: 0;
+      }
+      .device-glow {
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        width: 78%;
+        max-width: 760px;
+        aspect-ratio: 9 / 16;
+        background: radial-gradient(
+          55% 55% at 50% 50%,
+          rgba(106, 166, 255, 0.55) 0%,
+          rgba(183, 148, 255, 0.28) 40%,
+          transparent 78%
+        );
+        filter: blur(64px);
+        opacity: 0.85;
+        z-index: 0;
+        animation: glowBreathe 7s ease-in-out infinite;
+      }
+      @keyframes glowBreathe {
+        0%,
+        100% {
+          opacity: 0.7;
+          transform: scale(1);
+        }
         50% {
-          opacity: 0.4;
+          opacity: 1;
+          transform: scale(1.05);
         }
       }
-      .viewport {
-        flex: 1;
+      .device {
+        position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 12px;
-        min-height: 0;
-        position: relative;
+        max-height: var(--device-max-h);
+        min-width: var(--device-min-w);
+        z-index: 1;
+        filter: drop-shadow(0 40px 90px rgba(0, 0, 0, 0.7))
+          drop-shadow(0 0 60px rgba(106, 166, 255, 0.12));
       }
-      .stage {
-        position: relative;
+      .stream {
         max-width: 100%;
-        max-height: 100%;
-        display: flex;
-      }
-      .stage img {
-        max-width: 100%;
-        max-height: 80vh;
+        max-height: var(--device-max-h);
+        min-width: var(--device-min-w);
         object-fit: contain;
-        border-radius: 10px;
-        box-shadow: 0 10px 48px #0008;
+        border-radius: 18px;
         user-select: none;
         -webkit-user-drag: none;
         -webkit-user-select: none;
-        touch-action: none;
-        pointer-events: auto;
-        cursor: crosshair;
-      }
-      /* Multi-touch indicators overlay on the image, positioned via CSS vars. */
-      .touch-dot {
-        position: absolute;
-        top: var(--y);
-        left: var(--x);
-        width: var(--size);
-        height: var(--size);
-        transform: translate(-50%, -50%);
-        border-radius: 50%;
-        background: rgba(106, 166, 255, 0.25);
-        border: 2px solid rgba(106, 166, 255, 0.9);
         pointer-events: none;
-        box-shadow: 0 0 12px rgba(106, 166, 255, 0.5);
-      }
-      .touch-dot.pressed {
-        background: rgba(106, 166, 255, 0.55);
-      }
-      .touch-dot.anchor {
-        background: rgba(255, 200, 80, 0.9);
-        border-color: rgba(255, 200, 80, 1);
-      }
-      .empty,
-      .error-box {
-        color: var(--muted);
-        text-align: center;
-        padding: 32px;
-        max-width: 480px;
-        line-height: 1.5;
-      }
-      .error-box {
-        color: var(--error);
-      }
-      code {
-        background: var(--surface);
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 12px;
-      }
-
-      /* Layout: toolbar on top, then a row with viewport + activity feed. */
-      .main {
-        flex: 1;
-        display: flex;
-        min-height: 0;
-      }
-      .feed {
-        width: 360px;
-        flex-shrink: 0;
-        border-left: 1px solid var(--border);
-        background: var(--surface);
-        display: flex;
-        flex-direction: column;
-        overflow: hidden;
-        transition: width 180ms ease;
-      }
-      .feed.collapsed {
-        width: 0;
-        border-left: 0;
-      }
-      .feed-header {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border);
-        font-size: 11px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        color: var(--muted);
-      }
-      .feed-header .clear-btn {
-        margin-left: auto;
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        padding: 2px 8px;
-        border-radius: 3px;
-        font-size: 11px;
-        cursor: pointer;
-      }
-      .feed-status {
-        font-size: 11px;
-        color: var(--muted);
-      }
-      .feed-status.live {
-        color: var(--ok);
-      }
-      .feed-status.error {
-        color: var(--error);
-      }
-      .feed-list {
-        flex: 1;
-        overflow-y: auto;
-        padding: 4px 0;
-      }
-      .feed-empty {
-        color: var(--muted);
-        text-align: center;
-        padding: 32px 12px;
-        font-size: 12px;
-      }
-      .feed-item {
-        padding: 6px 12px;
-        border-bottom: 1px solid var(--border);
-        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-        font-size: 12px;
-        cursor: pointer;
-        animation: feedItemIn 220ms ease-out;
-      }
-      .feed-item:hover {
-        background: rgba(106, 166, 255, 0.05);
-      }
-      .feed-item.expanded {
-        background: rgba(106, 166, 255, 0.08);
-      }
-      .feed-item .row {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .feed-item .name {
-        color: var(--fg);
-        font-weight: 500;
-      }
-      .feed-item .duration {
-        margin-left: auto;
-        color: var(--muted);
-        font-size: 11px;
-      }
-      .feed-item .args {
-        color: var(--muted);
-        font-size: 11px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        margin-top: 2px;
-      }
-      .feed-item .badge {
-        font-size: 9px;
-        padding: 1px 5px;
-        border-radius: 3px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        font-weight: 600;
-      }
-      .feed-item.in-progress .badge {
-        background: rgba(106, 166, 255, 0.18);
-        color: var(--accent);
-      }
-      .feed-item.ok .badge {
-        background: rgba(92, 220, 139, 0.15);
-        color: var(--ok);
-      }
-      .feed-item.error .badge {
-        background: rgba(255, 128, 128, 0.18);
-        color: var(--error);
-      }
-      .feed-item.error .name {
-        color: var(--error);
-      }
-      .feed-item .detail {
-        display: none;
-        font-size: 11px;
-        color: var(--muted);
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: 3px;
-        margin-top: 6px;
-        padding: 6px;
-        white-space: pre-wrap;
-        word-break: break-word;
-        max-height: 280px;
-        overflow: auto;
-      }
-      .feed-item.expanded .detail {
         display: block;
       }
-      @keyframes feedItemIn {
-        from {
-          opacity: 0;
-          transform: translateX(8px);
-        }
-        to {
-          opacity: 1;
-          transform: translateX(0);
-        }
-      }
-
-      /* Action overlay above the simulator video. */
       .overlay {
         position: absolute;
         inset: 0;
         pointer-events: none;
         overflow: visible;
       }
-      .action-tap {
-        position: absolute;
-        width: 40px;
-        height: 40px;
+      .stream-fallback {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: min(420px, 60vw);
+        aspect-ratio: 9 / 19.5;
+        border-radius: 14px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.01)),
+          radial-gradient(60% 40% at 50% 30%, rgba(106, 166, 255, 0.12), transparent 70%);
+        border: 1px solid var(--border-1);
+        padding: 32px;
+        gap: 14px;
+        color: var(--fg-2);
+        text-align: center;
+      }
+      .stream-fallback .title {
+        font-size: 15px;
+        color: var(--fg-1);
+        font-weight: 600;
+      }
+      .stream-fallback .sub {
+        font-size: 12px;
+        color: var(--fg-3);
+        max-width: 280px;
+        line-height: 1.5;
+      }
+      .stream-fallback .spinner {
+        width: 20px;
+        height: 20px;
         border-radius: 50%;
-        border: 2px solid var(--accent);
-        background: rgba(106, 166, 255, 0.18);
-        box-shadow: 0 0 18px rgba(106, 166, 255, 0.65);
+        border: 2px solid var(--border-2);
+        border-top-color: var(--c-touch);
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Spatial overlay primitives
+         ───────────────────────────────────────────────────────────────── */
+      .ov-tap {
+        position: absolute;
+        width: 140px;
+        height: 140px;
+        border-radius: 50%;
         transform: translate(-50%, -50%);
-        animation: tapPulse 700ms ease-out forwards;
+        pointer-events: none;
       }
-      .action-tap.inspect {
-        border-color: #f7c948;
-        background: rgba(247, 201, 72, 0.2);
-        box-shadow: 0 0 18px rgba(247, 201, 72, 0.65);
+      .ov-tap .ring {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 3px solid currentColor;
+        opacity: 0;
+        box-shadow: 0 0 32px currentColor, 0 0 8px currentColor;
+        animation: tapRing 2400ms var(--ease-out) forwards;
       }
-      .action-tap.error {
-        border-color: var(--error);
-        background: rgba(255, 128, 128, 0.2);
-        box-shadow: 0 0 18px rgba(255, 128, 128, 0.65);
+      .ov-tap .ring.r2 {
+        animation-delay: 220ms;
       }
-      .action-tap.pinch-marker {
-        border-color: #f7c948;
-        background: rgba(247, 201, 72, 0.2);
-        box-shadow: 0 0 18px rgba(247, 201, 72, 0.65);
-        animation: none;
-        transition:
-          left 380ms ease-out,
-          opacity 400ms ease-out;
+      .ov-tap .ring.r3 {
+        animation-delay: 440ms;
       }
-      @keyframes tapPulse {
+      .ov-tap .core {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 28px;
+        height: 28px;
+        margin-left: -14px;
+        margin-top: -14px;
+        border-radius: 50%;
+        background: currentColor;
+        box-shadow: 0 0 40px currentColor, 0 0 12px currentColor;
+        opacity: 0;
+        animation: tapCore 1800ms var(--ease-out) forwards;
+      }
+      @keyframes tapRing {
         0% {
-          transform: translate(-50%, -50%) scale(0.4);
+          transform: scale(0.1);
+          opacity: 0;
+          border-width: 5px;
+        }
+        15% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.9;
+        }
+        100% {
+          transform: scale(2.2);
+          opacity: 0;
+          border-width: 1px;
+        }
+      }
+      @keyframes tapCore {
+        0% {
+          transform: scale(0.3);
           opacity: 0;
         }
-        25% {
-          transform: translate(-50%, -50%) scale(1.05);
+        18% {
+          transform: scale(1.1);
+          opacity: 1;
+        }
+        70% {
+          transform: scale(1);
           opacity: 1;
         }
         100% {
-          transform: translate(-50%, -50%) scale(1.7);
+          transform: scale(0.7);
           opacity: 0;
         }
       }
-      .swipe-svg {
+      .ov-label {
+        position: absolute;
+        transform: translate(-50%, calc(-100% - 12px));
+        font-family: -apple-system, "SF Pro Display", system-ui, sans-serif;
+        font-weight: 700;
+        font-size: 13px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--fg-1);
+        background: color-mix(in srgb, currentColor 35%, rgba(0, 0, 0, 0.85));
+        border: 1px solid color-mix(in srgb, currentColor 60%, transparent);
+        padding: 4px 10px;
+        border-radius: 6px;
+        box-shadow: 0 0 18px color-mix(in srgb, currentColor 35%, transparent),
+          0 4px 16px rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        white-space: nowrap;
+        opacity: 0;
+        animation: labelFloat 1500ms var(--ease-out) forwards;
+        pointer-events: none;
+      }
+      @keyframes labelFloat {
+        0% {
+          opacity: 0;
+          transform: translate(-50%, calc(-100% + 0px));
+        }
+        15% {
+          opacity: 1;
+          transform: translate(-50%, calc(-100% - 12px));
+        }
+        80% {
+          opacity: 1;
+          transform: translate(-50%, calc(-100% - 12px));
+        }
+        100% {
+          opacity: 0;
+          transform: translate(-50%, calc(-100% - 26px));
+        }
+      }
+      .ov-svg {
         position: absolute;
         inset: 0;
         width: 100%;
         height: 100%;
         overflow: visible;
+        pointer-events: none;
       }
-      .swipe-svg path {
+      .ov-svg .trail {
         fill: none;
-        stroke: var(--accent);
-        stroke-width: 3;
+        stroke: currentColor;
+        stroke-width: 6;
         stroke-linecap: round;
-        filter: drop-shadow(0 0 6px rgba(106, 166, 255, 0.7));
-        stroke-dasharray: 1500;
-        stroke-dashoffset: 1500;
-        animation:
-          dashIn 700ms ease-out forwards,
-          fadeOut 700ms 900ms ease-in forwards;
+        stroke-linejoin: round;
+        filter: drop-shadow(0 0 16px currentColor) drop-shadow(0 0 6px currentColor);
+        animation: fadeOut 900ms 2100ms var(--ease-in-out) forwards;
       }
-      .swipe-svg polygon {
-        fill: var(--accent);
-        filter: drop-shadow(0 0 6px rgba(106, 166, 255, 0.7));
+      .ov-svg .trail-glow {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 24;
+        stroke-linecap: round;
+        opacity: 0.32;
+        filter: blur(8px);
+        animation: fadeOut 900ms 2100ms var(--ease-in-out) forwards;
+      }
+      @keyframes dashIn {
+        to {
+          stroke-dashoffset: 0;
+        }
+      }
+      .ov-svg .arrow {
+        fill: currentColor;
         opacity: 0;
+        filter: drop-shadow(0 0 14px currentColor) drop-shadow(0 0 6px currentColor);
         animation:
-          fadeIn 220ms 420ms ease-out forwards,
-          fadeOut 700ms 900ms ease-in forwards;
+          fadeIn 280ms 800ms var(--ease-out) forwards,
+          fadeOut 900ms 2100ms var(--ease-in-out) forwards;
+      }
+      .ov-svg .head {
+        fill: currentColor;
+        filter: drop-shadow(0 0 12px currentColor);
+        opacity: 0;
+        animation: headTravel 800ms var(--ease-out) forwards,
+          fadeOut 600ms 800ms ease-out forwards;
+      }
+      .ov-svg .pinch-line {
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-dasharray: 4 6;
+        opacity: 0;
+        filter: drop-shadow(0 0 6px currentColor);
+        animation:
+          fadeIn 220ms 80ms var(--ease-out) forwards,
+          fadeOut 500ms 1000ms ease-out forwards;
       }
       @keyframes dashIn {
         to {
@@ -412,113 +576,617 @@
           opacity: 0;
         }
       }
-      .action-flash {
-        position: absolute;
-        background: white;
-        border-radius: 10px;
-        opacity: 0;
-        animation: flashFade 480ms ease-out forwards;
-      }
-      @keyframes flashFade {
+      @keyframes headTravel {
         0% {
           opacity: 0;
         }
         15% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0.4;
+        }
+      }
+      .ov-pinch {
+        position: absolute;
+        width: 110px;
+        height: 110px;
+        margin-left: -55px;
+        margin-top: -55px;
+        border-radius: 50%;
+        pointer-events: none;
+        background-color: color-mix(in srgb, currentColor 18%, transparent);
+        background-image: radial-gradient(
+          circle,
+          color-mix(in srgb, currentColor 45%, transparent) 0%,
+          color-mix(in srgb, currentColor 12%, transparent) 50%,
+          rgba(255, 255, 255, 0) 78%
+        );
+        border: 4px solid currentColor;
+        box-shadow: 0 0 32px currentColor, 0 0 10px currentColor;
+        opacity: 0;
+        animation: pinchPop 2200ms var(--ease-out) forwards;
+        transition: left 1000ms var(--ease-out), top 1000ms var(--ease-out);
+      }
+      @keyframes pinchPop {
+        0% {
+          opacity: 0;
+          transform: scale(0.4);
+        }
+        15% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        85% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(0.9);
+        }
+      }
+      .ov-crosshair {
+        position: absolute;
+        width: 160px;
+        height: 160px;
+        margin-left: -80px;
+        margin-top: -80px;
+        pointer-events: none;
+        color: var(--c-inspect);
+        opacity: 0;
+        animation: crossPop 2400ms var(--ease-out) forwards;
+      }
+      .ov-crosshair .v,
+      .ov-crosshair .h {
+        position: absolute;
+        background: currentColor;
+        box-shadow: 0 0 16px currentColor, 0 0 4px currentColor;
+      }
+      .ov-crosshair .v {
+        left: 50%;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        margin-left: -1.5px;
+      }
+      .ov-crosshair .h {
+        top: 50%;
+        left: 0;
+        right: 0;
+        height: 3px;
+        margin-top: -1.5px;
+      }
+      .ov-crosshair .ring {
+        position: absolute;
+        inset: 32px;
+        border-radius: 50%;
+        border: 3px solid currentColor;
+        box-shadow: 0 0 18px currentColor inset, 0 0 18px currentColor;
+      }
+      @keyframes crossPop {
+        0% {
+          opacity: 0;
+          transform: scale(0.4);
+        }
+        12% {
+          opacity: 1;
+          transform: scale(1.05);
+        }
+        25% {
+          transform: scale(1);
+        }
+        80% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(1.15);
+        }
+      }
+      .ov-flash {
+        position: absolute;
+        background: white;
+        border-radius: 14px;
+        opacity: 0;
+        animation: shutter 700ms var(--ease-out) forwards;
+        pointer-events: none;
+      }
+      .ov-shutter-bar {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 50%;
+        background: linear-gradient(180deg, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.7));
+        pointer-events: none;
+      }
+      .ov-shutter-bar.top {
+        top: 0;
+        transform: translateY(-101%);
+        animation: shutterTop 700ms var(--ease-out) forwards;
+        border-radius: 14px 14px 0 0;
+      }
+      .ov-shutter-bar.bot {
+        bottom: 0;
+        transform: translateY(101%);
+        animation: shutterBot 700ms var(--ease-out) forwards;
+        border-radius: 0 0 14px 14px;
+      }
+      @keyframes shutter {
+        0% {
+          opacity: 0;
+        }
+        18% {
           opacity: 0.55;
         }
         100% {
           opacity: 0;
         }
       }
+      @keyframes shutterTop {
+        0%,
+        100% {
+          transform: translateY(-101%);
+        }
+        25%,
+        45% {
+          transform: translateY(0%);
+        }
+      }
+      @keyframes shutterBot {
+        0%,
+        100% {
+          transform: translateY(101%);
+        }
+        25%,
+        45% {
+          transform: translateY(0%);
+        }
+      }
 
-      /* HUD chips for non-spatial actions (button, keyboard, app launch...). */
-      .hud-layer {
+      /* ─────────────────────────────────────────────────────────────────
+         Now-playing caption
+         ───────────────────────────────────────────────────────────────── */
+      .now {
+        position: relative;
+        z-index: 3;
+        margin-top: 18px;
+        width: min(720px, 90%);
+        min-height: 64px;
+      }
+      .now-card {
+        position: relative;
+        display: grid;
+        grid-template-columns: 56px 1fr;
+        gap: 14px;
+        align-items: center;
+        padding: 14px 22px;
+        border-radius: 18px;
+        border: 1px solid var(--border-2);
+        background: linear-gradient(
+          180deg,
+          rgba(14, 16, 24, 0.85) 0%,
+          rgba(8, 10, 14, 0.85) 100%
+        );
+        backdrop-filter: blur(18px) saturate(1.3);
+        -webkit-backdrop-filter: blur(18px) saturate(1.3);
+        box-shadow:
+          0 1px 0 rgba(255, 255, 255, 0.04) inset,
+          0 30px 60px rgba(0, 0, 0, 0.6);
+        opacity: 0;
+        transform: translateY(20px);
+        transition:
+          opacity 420ms var(--ease-out),
+          transform 420ms var(--ease-out);
+        overflow: hidden;
+      }
+      .now.show .now-card {
+        opacity: 1;
+        transform: translateY(0);
+      }
+      .now-card::before {
+        content: "";
         position: absolute;
-        left: 12px;
-        top: 12px;
-        right: 12px;
-        pointer-events: none;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 3px;
+        background: currentColor;
+        box-shadow: 0 0 16px currentColor;
+      }
+      .now-card.ok::after,
+      .now-card.err::after {
+        content: "";
+        position: absolute;
+        right: 18px;
+        top: 16px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .now-card.ok::after {
+        background: var(--c-capture);
+        box-shadow: 0 0 10px var(--c-capture);
+      }
+      .now-card.err::after {
+        background: var(--c-error);
+        box-shadow: 0 0 10px var(--c-error);
+      }
+      .now-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 26px;
+        background: color-mix(in srgb, currentColor 18%, transparent);
+        border: 1px solid color-mix(in srgb, currentColor 36%, transparent);
+        color: currentColor;
+        text-shadow: 0 0 14px currentColor;
+      }
+      .now-text .title {
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: -0.005em;
+        color: var(--fg-1);
+        line-height: 1.2;
+      }
+      .now-text .sub {
+        font-size: 12.5px;
+        color: var(--fg-3);
+        margin-top: 3px;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+      }
+      .now-progress {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 2px;
+        background: var(--border-1);
+        overflow: hidden;
+      }
+      .now-progress::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 30%;
+        background: currentColor;
+        box-shadow: 0 0 10px currentColor;
+      }
+      .now-card.indeterminate .now-progress::before {
+        animation: indet 1.6s linear infinite;
+      }
+      .now-card.done .now-progress::before {
+        width: 100%;
+        animation: none;
+        opacity: 0.5;
+      }
+      @keyframes indet {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(360%);
+        }
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Timeline (right sidebar)
+         ───────────────────────────────────────────────────────────────── */
+      aside.timeline {
+        position: relative;
+        z-index: 2;
         display: flex;
         flex-direction: column;
-        gap: 6px;
-        align-items: flex-start;
+        border-left: 1px solid var(--border-1);
+        background: linear-gradient(
+          180deg,
+          rgba(8, 10, 14, 0.6) 0%,
+          rgba(8, 10, 14, 0.78) 100%
+        );
+        backdrop-filter: blur(14px) saturate(1.2);
+        -webkit-backdrop-filter: blur(14px) saturate(1.2);
+        min-height: 0;
       }
-      .hud-chip {
-        background: rgba(0, 0, 0, 0.78);
-        color: var(--fg);
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        padding: 6px 12px;
-        border-radius: 18px;
+      .timeline-header {
+        padding: 18px 22px 10px;
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        border-bottom: 1px solid var(--border-1);
+      }
+      .timeline-header .eyebrow {
+        font-size: 10px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+      }
+      .timeline-header .count {
+        font-size: 11px;
+        color: var(--fg-2);
+        margin-left: auto;
+        font-variant-numeric: tabular-nums;
+      }
+      .timeline-list {
+        flex: 1;
+        margin: 0;
+        padding: 8px 0 24px;
+        overflow-y: auto;
+        list-style: none;
+        scroll-behavior: smooth;
+      }
+      .timeline-list::-webkit-scrollbar {
+        width: 8px;
+      }
+      .timeline-list::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.06);
+        border-radius: 6px;
+      }
+      .timeline-empty {
+        padding: 32px 22px;
+        color: var(--fg-3);
         font-size: 12px;
-        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-        max-width: 100%;
+        text-align: center;
+      }
+      .tl-item {
+        position: relative;
+        display: grid;
+        grid-template-columns: 42px 1fr auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 22px 12px 22px;
+        animation: tlIn 420ms var(--ease-out);
+      }
+      .tl-item::before {
+        /* color rail */
+        content: "";
+        position: absolute;
+        left: 14px;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: currentColor;
+        opacity: 0.16;
+      }
+      .tl-item:first-child::before {
+        top: 50%;
+      }
+      .tl-item:last-child::before {
+        bottom: 50%;
+      }
+      .tl-item.in-progress {
+        background: linear-gradient(
+          90deg,
+          color-mix(in srgb, currentColor 12%, transparent),
+          transparent 60%
+        );
+      }
+      @keyframes tlIn {
+        from {
+          opacity: 0;
+          transform: translateY(-8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .tl-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        background: color-mix(in srgb, currentColor 22%, transparent);
+        color: currentColor;
+        border: 1px solid color-mix(in srgb, currentColor 38%, transparent);
+        box-shadow: 0 0 18px color-mix(in srgb, currentColor 45%, transparent);
+      }
+      .tl-text {
+        min-width: 0;
+      }
+      .tl-text .title {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--fg-1);
+        white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        letter-spacing: -0.005em;
+      }
+      .tl-text .sub {
+        font-size: 11.5px;
+        color: var(--fg-3);
         white-space: nowrap;
-        backdrop-filter: blur(6px);
-        animation:
-          chipIn 220ms ease-out,
-          chipOut 280ms 1900ms ease-in forwards;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+        margin-top: 2px;
       }
-      .hud-chip.error {
-        color: var(--error);
-        border-color: rgba(255, 128, 128, 0.4);
+      .tl-meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
       }
-      @keyframes chipIn {
-        from {
-          transform: translateY(-8px);
-          opacity: 0;
+      .tl-time {
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--fg-3);
+        font-variant-numeric: tabular-nums;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
+      }
+      .tl-status {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+      .tl-status.in-progress {
+        background: currentColor;
+        animation: livePulse 1.2s ease-out infinite;
+      }
+      .tl-status.ok {
+        background: var(--c-capture);
+        box-shadow: 0 0 6px var(--c-capture);
+      }
+      .tl-status.err {
+        background: var(--c-error);
+        box-shadow: 0 0 6px var(--c-error);
+      }
+      .tl-divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--border-1), transparent);
+        margin: 8px 22px;
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Category color hooks
+         ───────────────────────────────────────────────────────────────── */
+      .c-touch {
+        color: var(--c-touch);
+      }
+      .c-hardware {
+        color: var(--c-hardware);
+      }
+      .c-inspect {
+        color: var(--c-inspect);
+      }
+      .c-capture {
+        color: var(--c-capture);
+      }
+      .c-lifecycle {
+        color: var(--c-lifecycle);
+      }
+      .c-debug {
+        color: var(--c-debug);
+      }
+      .c-meta {
+        color: var(--c-meta);
+      }
+      .c-error {
+        color: var(--c-error);
+      }
+      .c-other {
+        color: var(--c-meta);
+      }
+
+      /* ─────────────────────────────────────────────────────────────────
+         Initial empty / waiting states
+         ───────────────────────────────────────────────────────────────── */
+      .waiting {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        color: var(--fg-2);
+      }
+      .waiting .pulse-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--c-touch);
+        box-shadow: 0 0 28px var(--c-touch);
+        animation: livePulse 1.6s ease-out infinite;
+      }
+
+      /* responsive: collapse sidebar on narrow screens */
+      @media (max-width: 1080px) {
+        :root {
+          --sidebar-w: 360px;
         }
-        to {
-          transform: translateY(0);
-          opacity: 1;
-        }
       }
-      @keyframes chipOut {
-        to {
-          transform: translateY(-8px);
-          opacity: 0;
+      @media (max-width: 880px) {
+        #root {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto 1fr auto;
+        }
+        aside.timeline {
+          border-left: 0;
+          border-top: 1px solid var(--border-1);
+          max-height: 38vh;
         }
       }
     </style>
   </head>
   <body>
     <div id="root">
-      <div class="toolbar">
-        <label for="sim-select">Simulator</label>
-        <select id="sim-select">
-          <option>Loading…</option>
-        </select>
-        <button id="refresh-btn" title="Refresh simulator list">⟳</button>
-        <button id="feed-toggle" title="Toggle activity feed">☰</button>
-        <span id="hint" class="debug" style="min-width: auto"></span>
-        <span id="debug" class="debug"></span>
-        <span id="status" class="status">idle</span>
-      </div>
-      <div class="main">
-        <div class="viewport" id="viewport">
-          <div class="empty">Select a booted simulator to start streaming.</div>
+      <div class="ambient" aria-hidden="true"></div>
+      <div class="vignette" aria-hidden="true"></div>
+      <div class="grain" aria-hidden="true"></div>
+
+      <header class="chrome">
+        <div class="brand">
+          <span class="dot"></span>
+          <span class="word">Argent</span>
+          <span class="verb">observing</span>
         </div>
-        <aside class="feed" id="feed-aside">
-          <div class="feed-header">
-            <span>Agent activity</span>
-            <span id="feed-status" class="feed-status">offline</span>
-            <button id="clear-feed" class="clear-btn">clear</button>
+        <div class="device-pill" id="device-pill" hidden>
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="6" y="2" width="12" height="20" rx="2.5"></rect>
+            <path d="M11 18h2"></path>
+          </svg>
+          <span id="device-name">—</span>
+          <span class="runtime" id="device-runtime"></span>
+        </div>
+        <div class="stats">
+          <div class="stat">
+            <strong id="stat-actions">0</strong>
+            <span class="label">actions</span>
           </div>
-          <div class="feed-list" id="feed-list">
-            <div class="feed-empty" id="feed-empty">No tool calls yet.</div>
+          <div class="sep"></div>
+          <div class="stat">
+            <strong id="stat-errors">0</strong>
+            <span class="label">errors</span>
           </div>
-        </aside>
-      </div>
+          <div class="sep"></div>
+          <div class="stat">
+            <strong id="stat-elapsed">0:00</strong>
+            <span class="label">elapsed</span>
+          </div>
+        </div>
+        <div class="conn offline" id="conn">
+          <span class="pulse"></span>
+          <span id="conn-text">connecting</span>
+        </div>
+      </header>
+
+      <main class="stage">
+        <div class="device-wrap" id="device-wrap">
+          <div class="device-glow"></div>
+          <div class="waiting" id="waiting">
+            <span class="pulse-dot"></span>
+            <span>looking for a booted simulator…</span>
+          </div>
+        </div>
+        <div class="now" id="now"></div>
+      </main>
+
+      <aside class="timeline">
+        <div class="timeline-header">
+          <span class="eyebrow">Timeline</span>
+          <span class="count" id="tl-count"></span>
+        </div>
+        <ol class="timeline-list" id="tl-list">
+          <li class="timeline-empty" id="tl-empty">No actions observed yet.</li>
+        </ol>
+      </aside>
     </div>
 
     <script>
       "use strict";
 
-      // ── Config ──────────────────────────────────────────────────────────
-      // Tool-server base URL. When this page is served by tool-server itself,
-      // same-origin is correct. Override via ?toolServer=http://host:port for
-      // standalone testing.
+      // ─────────────────────────────────────────────────────────────────
+      // Config
+      // ─────────────────────────────────────────────────────────────────
       const urlParams = new URLSearchParams(window.location.search);
       const TOOL_SERVER =
         urlParams.get("toolServer") ||
@@ -526,337 +1194,418 @@
           ? window.location.origin
           : "http://127.0.0.1:3001");
 
-      // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
-      // sim-server's `key` command expects these raw HID codes — shift/modifier
-      // state is conveyed by the browser issuing separate ShiftLeft/ShiftRight
-      // key events which we forward verbatim.
-      const HID = {
-        KeyA: 4,
-        KeyB: 5,
-        KeyC: 6,
-        KeyD: 7,
-        KeyE: 8,
-        KeyF: 9,
-        KeyG: 10,
-        KeyH: 11,
-        KeyI: 12,
-        KeyJ: 13,
-        KeyK: 14,
-        KeyL: 15,
-        KeyM: 16,
-        KeyN: 17,
-        KeyO: 18,
-        KeyP: 19,
-        KeyQ: 20,
-        KeyR: 21,
-        KeyS: 22,
-        KeyT: 23,
-        KeyU: 24,
-        KeyV: 25,
-        KeyW: 26,
-        KeyX: 27,
-        KeyY: 28,
-        KeyZ: 29,
-        Digit1: 30,
-        Digit2: 31,
-        Digit3: 32,
-        Digit4: 33,
-        Digit5: 34,
-        Digit6: 35,
-        Digit7: 36,
-        Digit8: 37,
-        Digit9: 38,
-        Digit0: 39,
-        Enter: 40,
-        Escape: 41,
-        Backspace: 42,
-        Tab: 43,
-        Space: 44,
-        Minus: 45,
-        Equal: 46,
-        BracketLeft: 47,
-        BracketRight: 48,
-        Backslash: 49,
-        Semicolon: 51,
-        Quote: 52,
-        Backquote: 53,
-        Comma: 54,
-        Period: 55,
-        Slash: 56,
-        CapsLock: 57,
-        F1: 58,
-        F2: 59,
-        F3: 60,
-        F4: 61,
-        F5: 62,
-        F6: 63,
-        F7: 64,
-        F8: 65,
-        F9: 66,
-        F10: 67,
-        F11: 68,
-        F12: 69,
-        ArrowRight: 79,
-        ArrowLeft: 80,
-        ArrowDown: 81,
-        ArrowUp: 82,
-        NumpadDivide: 84,
-        NumpadMultiply: 85,
-        NumpadSubtract: 86,
-        NumpadAdd: 87,
-        NumpadEnter: 88,
-        Numpad1: 89,
-        Numpad2: 90,
-        Numpad3: 91,
-        Numpad4: 92,
-        Numpad5: 93,
-        Numpad6: 94,
-        Numpad7: 95,
-        Numpad8: 96,
-        Numpad9: 97,
-        Numpad0: 98,
-        NumpadDecimal: 99,
-        ControlLeft: 224,
-        ShiftLeft: 225,
-        AltLeft: 226,
-        MetaLeft: 227,
-        ControlRight: 228,
-        ShiftRight: 229,
-        AltRight: 230,
-        MetaRight: 231,
-        IntlBackslash: 86,
+      // ─────────────────────────────────────────────────────────────────
+      // DOM refs
+      // ─────────────────────────────────────────────────────────────────
+      const $ = (id) => document.getElementById(id);
+      const els = {
+        deviceWrap: $("device-wrap"),
+        waiting: $("waiting"),
+        devicePill: $("device-pill"),
+        deviceName: $("device-name"),
+        deviceRuntime: $("device-runtime"),
+        statActions: $("stat-actions"),
+        statErrors: $("stat-errors"),
+        statElapsed: $("stat-elapsed"),
+        conn: $("conn"),
+        connText: $("conn-text"),
+        now: $("now"),
+        tlList: $("tl-list"),
+        tlEmpty: $("tl-empty"),
+        tlCount: $("tl-count"),
       };
-      const CAPS_LOCK_HID = 57;
 
-      // Multi-touch modifier — matches radon-ide: Alt on macOS, Ctrl elsewhere.
-      const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform);
-      const MULTITOUCH_CODES = IS_MAC
-        ? new Set(["AltLeft", "AltRight"])
-        : new Set(["ControlLeft", "ControlRight"]);
-
-      // ── DOM ─────────────────────────────────────────────────────────────
-      const select = document.getElementById("sim-select");
-      const status = document.getElementById("status");
-      const viewport = document.getElementById("viewport");
-      const refreshBtn = document.getElementById("refresh-btn");
-      const debugEl = document.getElementById("debug");
-      const hintEl = document.getElementById("hint");
-      hintEl.textContent = `Hold ${IS_MAC ? "Option" : "Ctrl"} for pinch · +Shift to move anchor`;
-
-      // ── State ───────────────────────────────────────────────────────────
-      /** @type {WebSocket | null} */
-      let ws = null;
-      let wsOpen = false;
+      // ─────────────────────────────────────────────────────────────────
+      // State
+      // ─────────────────────────────────────────────────────────────────
+      let stream = null; // <img> element of MJPEG stream
+      let overlayLayer = null; // floats above .stream
+      let device = null; // .device wrapper
       let currentUdid = null;
-      let img = null;
-      let stage = null;
-      /** Action-overlay layers (created per-stream alongside the <img>). */
-      let overlayLayer = null;
-      let hudLayer = null;
-      /** Elements for the three multi-touch indicators (primary / mirror / anchor). */
-      let touchDots = { primary: null, mirror: null, anchor: null };
-      let activePointerId = null;
-      /** True while the mouse button is held inside the stage (finger is "down"). */
-      let isPressing = false;
-      /** True while the multi-touch modifier is held. */
-      let isMultiTouching = false;
-      /** Primary and anchor points in normalized [0,1] space. */
-      let touchPoint = { x: 0.5, y: 0.5 };
-      let anchorPoint = { x: 0.5, y: 0.5 };
-      /** Keys currently held down (HID codes) — released on blur. */
-      const pressedKeys = new Set();
-      /** Last known CapsLock state to resync iOS if it drifts. */
-      let lastCapsLockState = false;
-      let cmdCounter = 0;
+      let actionEvents = null;
+      const inflight = new Map(); // id → { item, statusEl, descObj, startedAt }
+      const seen = new Set(); // `${id}:${phase}` deduplication
+      const SEEN_CAP = 1000;
+      const sessionStart = performance.now();
+      let totalActions = 0;
+      let totalErrors = 0;
+      let visibleNowId = null;
+      let nowFadeTimer = null;
 
-      // ── Helpers ─────────────────────────────────────────────────────────
-      function setStatus(text, kind = "") {
-        status.textContent = text;
-        status.className = "status" + (kind ? " " + kind : "");
+      // ─────────────────────────────────────────────────────────────────
+      // Action taxonomy
+      // ─────────────────────────────────────────────────────────────────
+      function categoryFor(name) {
+        if (!name) return "other";
+        if (name.startsWith("gesture-")) return "touch";
+        if (["button", "keyboard", "rotate", "paste"].includes(name)) return "hardware";
+        if (
+          name === "describe" ||
+          name === "native-describe-screen" ||
+          name === "native-full-hierarchy" ||
+          name === "native-find-views" ||
+          name === "native-view-at-point" ||
+          name === "native-user-interactable-view-at-point"
+        )
+          return "inspect";
+        if (name === "screenshot") return "capture";
+        if (
+          [
+            "launch-app",
+            "restart-app",
+            "reinstall-app",
+            "boot-simulator",
+            "open-url",
+            "stop-metro",
+            "stop-simulator-server",
+            "stop-all-simulator-servers",
+          ].includes(name)
+        )
+          return "lifecycle";
+        if (
+          name.startsWith("debugger-") ||
+          name.startsWith("react-profiler-") ||
+          name.startsWith("ios-profiler-") ||
+          name.startsWith("profiler-") ||
+          name.startsWith("view-network-") ||
+          name === "native-network-logs"
+        )
+          return "debug";
+        if (name === "run-sequence" || name.startsWith("flow-")) return "meta";
+        return "other";
       }
 
-      function nextCmdId() {
-        return String(++cmdCounter);
+      function pct(n) {
+        if (typeof n !== "number") return "—";
+        return `${Math.round(n * 100)}%`;
       }
-
-      function sendCmd(obj) {
-        if (!ws || !wsOpen) {
-          debugEl.textContent = `ws not open — dropped ${obj.cmd}`;
-          return;
-        }
-        ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
-        if (obj.cmd === "touch") {
-          const tail =
-            obj.second_x != null
-              ? ` / (${obj.second_x.toFixed(3)}, ${obj.second_y.toFixed(3)})`
-              : "";
-          debugEl.textContent = `${obj.type} (${obj.x.toFixed(3)}, ${obj.y.toFixed(3)})${tail}`;
-        } else if (obj.cmd === "key") {
-          debugEl.textContent = `key ${obj.direction} ${obj.code}`;
-        } else if (obj.cmd === "wheel") {
-          debugEl.textContent = `wheel dx=${obj.dx} dy=${obj.dy}`;
-        } else {
-          debugEl.textContent = `${obj.cmd}`;
+      function loc(args) {
+        if (!args) return "";
+        if (typeof args.x === "number" && typeof args.y === "number")
+          return `${pct(args.x)} × ${pct(args.y)}`;
+        if (typeof args.centerX === "number" && typeof args.centerY === "number")
+          return `${pct(args.centerX)} × ${pct(args.centerY)}`;
+        return "";
+      }
+      function trunc(s, n) {
+        s = String(s ?? "");
+        return s.length > n ? s.slice(0, n - 1) + "…" : s;
+      }
+      function dirWord(args) {
+        const dx = (args.toX ?? 0) - (args.fromX ?? 0);
+        const dy = (args.toY ?? 0) - (args.fromY ?? 0);
+        if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "right" : "left";
+        return dy > 0 ? "down" : "up";
+      }
+      function dirArrow(args) {
+        const dx = (args.toX ?? 0) - (args.fromX ?? 0);
+        const dy = (args.toY ?? 0) - (args.fromY ?? 0);
+        if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "→" : "←";
+        return dy > 0 ? "↓" : "↑";
+      }
+      function buttonIcon(name) {
+        switch (name) {
+          case "home":
+            return "⏺";
+          case "back":
+            return "◁";
+          case "power":
+            return "⏻";
+          case "volumeUp":
+            return "🔊";
+          case "volumeDown":
+            return "🔉";
+          case "appSwitch":
+            return "⊞";
+          case "actionButton":
+            return "◉";
+          default:
+            return "⏺";
         }
       }
 
       /**
-       * Convert a pointer/mouse/wheel event (in client coords) into the
-       * normalized 0.0–1.0 device space the simulator-server expects.
+       * Map a raw tool name + args into a presentable description.
+       * { icon, title, sub, label } — `label` is the tiny floating label
+       * drawn next to spatial markers; falls back to title.
        */
-      function toDeviceCoords(ev) {
-        if (!img) return null;
-        const rect = img.getBoundingClientRect();
-        if (!rect.width || !rect.height) return null;
-        const xRatio = (ev.clientX - rect.left) / rect.width;
-        const yRatio = (ev.clientY - rect.top) / rect.height;
-        return {
-          x: Math.max(0, Math.min(1, xRatio)),
-          y: Math.max(0, Math.min(1, yRatio)),
-        };
-      }
-
-      function mirrorAround(pt, anchor) {
-        return {
-          x: Math.max(0, Math.min(1, 2 * anchor.x - pt.x)),
-          y: Math.max(0, Math.min(1, 2 * anchor.y - pt.y)),
-        };
-      }
-
-      /**
-       * sim-server wheel deltas are small integers (~3–7). Browser deltaY can be
-       * anything from 0.001 to 400+, so we clamp by magnitude the way radon-ide
-       * does. Sign is negated so scroll direction matches iOS natural-scroll.
-       */
-      function normalizeWheel(delta) {
-        const abs = Math.abs(delta);
-        const magnitude = abs > 150 ? 7 : abs > 50 ? 5 : 3;
-        return -Math.sign(delta) * magnitude;
-      }
-
-      function sendTouchEvent(type) {
-        if (isMultiTouching) {
-          const secondary = mirrorAround(touchPoint, anchorPoint);
-          sendCmd({
-            cmd: "touch",
-            type,
-            x: touchPoint.x,
-            y: touchPoint.y,
-            second_x: secondary.x,
-            second_y: secondary.y,
-          });
-        } else {
-          sendCmd({ cmd: "touch", type, x: touchPoint.x, y: touchPoint.y });
-        }
-      }
-
-      // ── Multi-touch indicators ─────────────────────────────────────────
-      function updateIndicators() {
-        if (!stage) return;
-        if (!isMultiTouching) {
-          for (const k of ["primary", "mirror", "anchor"]) {
-            if (touchDots[k]) touchDots[k].remove();
-            touchDots[k] = null;
+      function describe(name, args = {}) {
+        switch (name) {
+          case "gesture-tap":
+            return { icon: "👆", title: "Tap", sub: loc(args), label: "TAP" };
+          case "gesture-swipe":
+            return {
+              icon: dirArrow(args),
+              title: `Swipe ${dirWord(args)}`,
+              sub: `${pct(args.fromX)},${pct(args.fromY)} → ${pct(args.toX)},${pct(args.toY)}`,
+              label: `SWIPE ${dirArrow(args)}`,
+            };
+          case "gesture-pinch": {
+            const grow = (args.endDistance ?? 0) > (args.startDistance ?? 0);
+            return {
+              icon: grow ? "⤢" : "⤡",
+              title: `Pinch ${grow ? "out" : "in"}`,
+              sub: `${pct(args.startDistance)} → ${pct(args.endDistance)} @ ${loc({ x: args.centerX, y: args.centerY })}`,
+              label: `PINCH ${grow ? "OUT" : "IN"}`,
+            };
           }
-          return;
+          case "gesture-rotate":
+            return {
+              icon: "↻",
+              title: "Rotate gesture",
+              sub: `${loc({ x: args.centerX, y: args.centerY })}`,
+              label: "ROTATE",
+            };
+          case "gesture-custom":
+            return {
+              icon: "〰",
+              title: "Custom gesture",
+              sub: `${args.events?.length || 0} events`,
+              label: "GESTURE",
+            };
+          case "native-view-at-point":
+          case "native-user-interactable-view-at-point":
+            return {
+              icon: "🎯",
+              title: "Inspect view",
+              sub: loc(args),
+              label: "INSPECT",
+            };
+          case "describe":
+            return { icon: "🌳", title: "Describe screen", sub: "reading accessibility tree" };
+          case "native-describe-screen":
+            return {
+              icon: "🌳",
+              title: "Describe native screen",
+              sub: trunc(args.bundleId, 40),
+            };
+          case "native-full-hierarchy":
+            return {
+              icon: "🌲",
+              title: "Full view hierarchy",
+              sub: trunc(args.bundleId, 40),
+            };
+          case "native-find-views": {
+            const sel =
+              args.identifier ||
+              args.label ||
+              args.nativeID ||
+              args.className ||
+              "(any)";
+            return { icon: "🔎", title: "Find views", sub: trunc(sel, 40) };
+          }
+          case "screenshot":
+            return { icon: "📸", title: "Screenshot", sub: "capturing screen" };
+          case "button":
+            return {
+              icon: buttonIcon(args.button),
+              title: `Press ${args.button || "button"}`,
+              sub: "hardware button",
+            };
+          case "keyboard":
+            return {
+              icon: "⌨",
+              title: "Keyboard",
+              sub: args.text ? trunc(args.text, 40) : args.key || "—",
+            };
+          case "paste":
+            return { icon: "📋", title: "Paste", sub: trunc(args.text || "", 40) };
+          case "rotate":
+            return {
+              icon: "↻",
+              title: "Rotate device",
+              sub: args.orientation || "—",
+            };
+          case "launch-app":
+            return { icon: "🚀", title: "Launch app", sub: args.bundleId || "—" };
+          case "restart-app":
+            return { icon: "🔄", title: "Restart app", sub: args.bundleId || "—" };
+          case "reinstall-app":
+            return { icon: "📦", title: "Reinstall app", sub: args.bundleId || "—" };
+          case "boot-simulator":
+            return {
+              icon: "⏻",
+              title: "Boot simulator",
+              sub: (args.udid || "").slice(0, 8),
+            };
+          case "open-url":
+            return { icon: "🔗", title: "Open URL", sub: trunc(args.url, 48) };
+          case "run-sequence":
+            return {
+              icon: "▶",
+              title: "Run sequence",
+              sub: `${args.steps?.length || 0} steps`,
+            };
+          case "view-network-logs":
+            return { icon: "🌐", title: "Network logs", sub: trunc(args.bundleId, 40) };
+          case "view-network-request-details":
+            return { icon: "🌐", title: "Inspect request", sub: trunc(args.eventId, 24) };
+          case "debugger-evaluate":
+            return {
+              icon: "🪛",
+              title: "Evaluate JS",
+              sub: trunc(args.expression || "", 48),
+            };
+          case "debugger-reload-metro":
+            return { icon: "🔁", title: "Reload Metro", sub: "" };
+          case "debugger-component-tree":
+            return { icon: "⚛", title: "Component tree", sub: "" };
+          case "debugger-inspect-element":
+            return { icon: "⚛", title: "Inspect element", sub: "" };
+          case "debugger-log-registry":
+            return { icon: "🪵", title: "Read console logs", sub: "" };
+          case "debugger-connect":
+            return { icon: "🪛", title: "Connect debugger", sub: "" };
+          case "debugger-status":
+            return { icon: "🪛", title: "Debugger status", sub: "" };
+          case "react-profiler-start":
+          case "react-profiler-stop":
+          case "react-profiler-analyze":
+          case "react-profiler-renders":
+          case "react-profiler-cpu-summary":
+          case "react-profiler-component-source":
+          case "react-profiler-fiber-tree":
+            return { icon: "📈", title: name.replace(/-/g, " "), sub: "react profiler" };
+          case "ios-profiler-start":
+          case "ios-profiler-stop":
+          case "ios-profiler-analyze":
+            return { icon: "📈", title: name.replace(/-/g, " "), sub: "instruments" };
+          case "profiler-load":
+          case "profiler-cpu-query":
+          case "profiler-commit-query":
+          case "profiler-stack-query":
+          case "profiler-combined-report":
+            return { icon: "📈", title: name.replace(/-/g, " "), sub: "profiler" };
+          case "list-simulators":
+            return { icon: "📋", title: "List simulators", sub: "" };
+          case "gather-workspace-data":
+            return { icon: "📁", title: "Read workspace", sub: "" };
+          case "stop-metro":
+            return { icon: "⏹", title: "Stop Metro", sub: "" };
+          case "stop-simulator-server":
+            return { icon: "⏹", title: "Stop simulator-server", sub: "" };
+          case "stop-all-simulator-servers":
+            return { icon: "⏹", title: "Stop all simulator-servers", sub: "" };
+          case "native-devtools-status":
+            return { icon: "🛠", title: "Native devtools status", sub: "" };
+          case "native-network-logs":
+            return { icon: "🌐", title: "Native network logs", sub: trunc(args.bundleId, 40) };
+          case "flow-start-recording":
+          case "flow-add-step":
+          case "flow-add-echo":
+          case "flow-finish-recording":
+          case "flow-read-prerequisite":
+          case "flow-execute":
+            return { icon: "🎬", title: name.replace(/-/g, " "), sub: trunc(args.flowName || args.name || "", 40) };
+          default:
+            return { icon: "·", title: name, sub: "" };
         }
-        const mirror = mirrorAround(touchPoint, anchorPoint);
-        ensureDot("primary", touchPoint, 28, false);
-        ensureDot("mirror", mirror, 28, false);
-        ensureDot("anchor", anchorPoint, 10, true);
-      }
-      function ensureDot(key, pt, size, isAnchor) {
-        const imgRect = img.getBoundingClientRect();
-        const stageRect = stage.getBoundingClientRect();
-        // Position relative to the stage, inside the image area.
-        const offsetX = imgRect.left - stageRect.left;
-        const offsetY = imgRect.top - stageRect.top;
-        const x = offsetX + pt.x * imgRect.width;
-        const y = offsetY + pt.y * imgRect.height;
-        let el = touchDots[key];
-        if (!el) {
-          el = document.createElement("div");
-          el.className = "touch-dot" + (isAnchor ? " anchor" : "");
-          stage.appendChild(el);
-          touchDots[key] = el;
-        }
-        el.style.setProperty("--x", `${x}px`);
-        el.style.setProperty("--y", `${y}px`);
-        el.style.setProperty("--size", `${size}px`);
-        el.classList.toggle("pressed", isPressing && !isAnchor);
       }
 
-      // ── Simulator list ─────────────────────────────────────────────────
-      async function refreshSimulators() {
-        setStatus("loading simulators…");
+      // ─────────────────────────────────────────────────────────────────
+      // Streaming: pick a simulator, build the device DOM
+      // ─────────────────────────────────────────────────────────────────
+      async function pickSimulator() {
         try {
           const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const { simulators } = await res.json();
-          select.innerHTML = "";
-          if (!simulators || simulators.length === 0) {
-            const opt = document.createElement("option");
-            opt.textContent = "(no simulators found)";
-            select.appendChild(opt);
-            select.disabled = true;
-            setStatus("no simulators", "error");
-            return;
+          const booted = (simulators || []).filter((s) => s.state === "Booted");
+          if (booted.length === 0) {
+            renderWaiting("looking for a booted simulator…");
+            return null;
           }
-          select.disabled = false;
-          const placeholder = document.createElement("option");
-          placeholder.value = "";
-          placeholder.textContent = "— choose simulator —";
-          select.appendChild(placeholder);
-          for (const s of simulators) {
-            const opt = document.createElement("option");
-            opt.value = s.udid;
-            opt.textContent = `${s.state === "Booted" ? "● " : "○ "}${s.name}`;
-            opt.disabled = s.state !== "Booted";
-            select.appendChild(opt);
-          }
-          setStatus("idle");
+          return booted[0];
         } catch (err) {
-          setStatus(`failed: ${err.message || err}`, "error");
+          renderWaiting(`could not reach tool-server (${trunc(err.message, 40)})`);
+          return null;
         }
       }
 
-      // ── Stream + WS wiring ─────────────────────────────────────────────
-      function teardownStream() {
-        releaseAllInput();
-        if (ws) {
-          try {
-            ws.close();
-          } catch {}
-          ws = null;
+      function renderWaiting(message) {
+        if (!els.deviceWrap) return;
+        // Re-create waiting state if it's been removed.
+        let w = $("waiting");
+        if (!w) {
+          w = document.createElement("div");
+          w.className = "waiting";
+          w.id = "waiting";
+          w.innerHTML = `<span class="pulse-dot"></span><span></span>`;
+          els.deviceWrap.appendChild(w);
         }
-        wsOpen = false;
-        // Explicitly clear the img src — otherwise the browser keeps the MJPEG
-        // HTTP connection open after the element is detached, and re-selecting
-        // a simulator leaks more connections. Same trick radon-ide uses.
-        if (img) {
-          img.src = "";
-          img.removeAttribute("src");
-        }
-        img = null;
-        stage = null;
+        w.lastChild.textContent = message;
+        teardownDevice();
+      }
+
+      function teardownDevice() {
+        if (device && device.parentNode) device.remove();
+        device = null;
+        stream = null;
         overlayLayer = null;
-        hudLayer = null;
-        touchDots = { primary: null, mirror: null, anchor: null };
-        // Any in-flight tool-call records point at DOM nodes we just dropped;
-        // discard them so finalize() doesn't write to a detached subtree.
-        inflight.clear();
-        viewport.innerHTML = "";
       }
 
-      async function connect(udid) {
-        teardownStream();
-        currentUdid = udid;
-        setStatus("starting simulator-server…");
-        viewport.innerHTML = '<div class="empty">Starting simulator-server…</div>';
+      function buildDevice(info) {
+        const w = $("waiting");
+        if (w) w.remove();
+        teardownDevice();
+        device = document.createElement("div");
+        device.className = "device";
+        if (info.streamUrl) {
+          stream = document.createElement("img");
+          stream.className = "stream";
+          stream.alt = "";
+          stream.draggable = false;
+          stream.src = `${info.streamUrl}?t=${Date.now()}`;
+          stream.onerror = () => {
+            // Replace with a fallback panel; overlays still render on top of it.
+            renderStreamFallback("the stream dropped — overlays still live");
+          };
+          device.appendChild(stream);
+        } else {
+          renderStreamFallbackInto(device, "no stream URL — overlays still live");
+        }
+        overlayLayer = document.createElement("div");
+        overlayLayer.className = "overlay";
+        device.appendChild(overlayLayer);
+        els.deviceWrap.appendChild(device);
+      }
+
+      function renderStreamFallback(msg) {
+        if (!device) return;
+        device.innerHTML = "";
+        renderStreamFallbackInto(device, msg);
+        overlayLayer = document.createElement("div");
+        overlayLayer.className = "overlay";
+        device.appendChild(overlayLayer);
+      }
+
+      function renderStreamFallbackInto(parent, msg) {
+        const fb = document.createElement("div");
+        fb.className = "stream-fallback";
+        fb.innerHTML = `
+          <div class="spinner"></div>
+          <div class="title">${msg}</div>
+          <div class="sub">Action overlays continue to render here for every tool call the agent makes.</div>
+        `;
+        parent.appendChild(fb);
+      }
+
+      async function connectSimulator() {
+        const sim = await pickSimulator();
+        if (!sim) {
+          // Try again in 3s.
+          setTimeout(connectSimulator, 3000);
+          return;
+        }
+        currentUdid = sim.udid;
+        els.deviceName.textContent = sim.name;
+        els.deviceRuntime.textContent = formatRuntime(sim.runtime);
+        els.devicePill.hidden = false;
+
         let info;
         try {
           const res = await fetch(
-            `${TOOL_SERVER}/preview/simulator-server/${encodeURIComponent(udid)}`
+            `${TOOL_SERVER}/preview/simulator-server/${encodeURIComponent(sim.udid)}`
           );
           if (!res.ok) {
             const body = await res.json().catch(() => ({}));
@@ -864,684 +1613,496 @@
           }
           info = await res.json();
         } catch (err) {
-          setStatus(`failed: ${err.message || err}`, "error");
-          viewport.innerHTML = `<div class="error-box">Could not start simulator-server.<br/>${escapeHtml(String(err.message || err))}</div>`;
+          renderWaiting(`simulator-server failed: ${trunc(err.message, 60)}`);
+          setTimeout(connectSimulator, 4000);
           return;
         }
 
-        if (!info.streamUrl) {
-          setStatus("no stream URL", "error");
-          viewport.innerHTML =
-            '<div class="error-box">Simulator-server is running but did not advertise a stream URL.<br/>Rebuild with the <code>argent</code> cargo feature (which enables <code>streaming</code>).</div>';
-          return;
-        }
-
-        // Build the viewport.
-        stage = document.createElement("div");
-        stage.className = "stage";
-        img = document.createElement("img");
-        img.alt = `Simulator ${udid.slice(0, 8)}`;
-        img.draggable = false;
-        // Append a cache-buster so re-connects don't reuse a stale MJPEG stream.
-        img.src = `${info.streamUrl}?t=${Date.now()}`;
-        img.onerror = () => setStatus("stream error", "error");
-        stage.appendChild(img);
-        // Action overlay (taps/swipes/etc) and HUD (button/keyboard chips) are
-        // siblings of the <img>, sized via CSS to inset:0 of the stage.
-        overlayLayer = document.createElement("div");
-        overlayLayer.className = "overlay";
-        stage.appendChild(overlayLayer);
-        hudLayer = document.createElement("div");
-        hudLayer.className = "hud-layer";
-        stage.appendChild(hudLayer);
-        viewport.innerHTML = "";
-        viewport.appendChild(stage);
-
-        attachInputHandlers(img);
-
-        // Open WebSocket to sim-server.
-        ws = new WebSocket(info.wsUrl);
-        ws.onopen = () => {
-          wsOpen = true;
-          setStatus("live", "live");
-        };
-        ws.onclose = () => {
-          wsOpen = false;
-          if (currentUdid === udid) setStatus("disconnected", "error");
-        };
-        ws.onerror = () => {
-          setStatus("ws error", "error");
-        };
+        buildDevice(info);
       }
 
-      // ── Input handlers ─────────────────────────────────────────────────
-      /**
-       * Release any held touch/keys. Called on teardown and on window blur —
-       * without this, losing focus mid-drag (or Cmd-tabbing with Shift held)
-       * leaves the device stuck with a phantom touch / modifier.
-       */
-      function releaseAllInput() {
-        if (isPressing) {
-          sendTouchEvent("Up");
-          isPressing = false;
-        }
-        isMultiTouching = false;
-        updateIndicators();
-        for (const code of pressedKeys) {
-          sendCmd({ cmd: "key", direction: "Up", code });
-        }
-        pressedKeys.clear();
-        activePointerId = null;
+      function formatRuntime(s) {
+        if (!s) return "";
+        // "com.apple.CoreSimulator.SimRuntime.iOS-18-5" → "iOS 18.5"
+        const m = /SimRuntime\.([A-Za-z]+)-(\d+)-(\d+)/.exec(s);
+        if (m) return `${m[1]} ${m[2]}.${m[3]}`;
+        return s;
       }
 
-      function attachInputHandlers(target) {
-        target.addEventListener("dragstart", (ev) => ev.preventDefault());
-
-        target.addEventListener("pointerdown", (ev) => {
-          if (activePointerId !== null) return;
-          const pt = toDeviceCoords(ev);
-          if (!pt) return;
-          activePointerId = ev.pointerId;
-          try {
-            target.setPointerCapture(ev.pointerId);
-          } catch {}
-          touchPoint = pt;
-          isPressing = true;
-          sendTouchEvent("Down");
-          updateIndicators();
-          ev.preventDefault();
-        });
-        target.addEventListener("pointermove", (ev) => {
-          const pt = toDeviceCoords(ev);
-          if (!pt) return;
-          // Shift + Multi-touch + drag → move the anchor point along with the finger.
-          if (isMultiTouching && ev.shiftKey) {
-            anchorPoint = {
-              x: Math.max(0, Math.min(1, anchorPoint.x + (pt.x - touchPoint.x))),
-              y: Math.max(0, Math.min(1, anchorPoint.y + (pt.y - touchPoint.y))),
-            };
-          }
-          touchPoint = pt;
-          if (ev.pointerId === activePointerId && isPressing) {
-            sendTouchEvent("Move");
-          }
-          updateIndicators();
-          ev.preventDefault();
-        });
-        const endPointer = (ev) => {
-          if (ev.pointerId !== activePointerId) return;
-          const pt = toDeviceCoords(ev);
-          if (pt) touchPoint = pt;
-          if (isPressing) sendTouchEvent("Up");
-          isPressing = false;
-          try {
-            target.releasePointerCapture(ev.pointerId);
-          } catch {}
-          activePointerId = null;
-          updateIndicators();
-          ev.preventDefault();
-        };
-        target.addEventListener("pointerup", endPointer);
-        target.addEventListener("pointercancel", endPointer);
-
-        // Mouse leaves the image while dragging — commit an Up so the device
-        // doesn't stay stuck. If the user drags back in with the button still
-        // held, pointerenter (re)starts a Down at the entry point.
-        target.addEventListener("pointerleave", (ev) => {
-          if (isPressing) {
-            sendTouchEvent("Up");
-            isPressing = false;
-            updateIndicators();
-          }
-        });
-        target.addEventListener("pointerenter", (ev) => {
-          // Only auto-resume if the button is still held (buttons bitmask).
-          if (ev.buttons & 1 && !isPressing) {
-            const pt = toDeviceCoords(ev);
-            if (pt) {
-              touchPoint = pt;
-              isPressing = true;
-              sendTouchEvent("Down");
-              updateIndicators();
-            }
-          }
-        });
-
-        target.addEventListener(
-          "wheel",
-          (ev) => {
-            const pt = toDeviceCoords(ev);
-            if (!pt) return;
-            const dx = normalizeWheel(ev.deltaX);
-            const dy = normalizeWheel(ev.deltaY);
-            if (dx === 0 && dy === 0) {
-              ev.preventDefault();
-              return;
-            }
-            sendCmd({ cmd: "wheel", x: pt.x, y: pt.y, dx, dy });
-            ev.preventDefault();
-          },
-          { passive: false }
-        );
-      }
-
-      function escapeHtml(s) {
-        return s.replace(
-          /[&<>"']/g,
-          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]
-        );
-      }
-
-      // ── Events ──────────────────────────────────────────────────────────
-      select.addEventListener("change", () => {
-        const udid = select.value;
-        if (!udid) return;
-        // Blur the select so keys (including the multi-touch Option/Ctrl modifier)
-        // route to our window-level handler instead of being swallowed by the
-        // dropdown's built-in keyboard handling.
-        select.blur();
-        connect(udid).catch((err) => setStatus(String(err.message || err), "error"));
-      });
-      refreshBtn.addEventListener("click", () => {
-        refreshBtn.blur();
-        refreshSimulators();
-      });
-
-      // Global keyboard forwarding — active whenever a simulator is connected
-      // and focus is not on a toolbar control. We forward raw keydown/keyup so
-      // the simulator sees modifier keys (Shift, Ctrl, etc.) as real key events.
-      function shouldForwardKey(ev) {
-        if (!wsOpen) return false;
-        const ae = document.activeElement;
-        if (ae && (ae.tagName === "SELECT" || ae.tagName === "BUTTON" || ae.tagName === "INPUT")) {
-          return false;
-        }
-        // Let the browser keep its own shortcuts (Cmd+R, Cmd+T, Cmd+W, Cmd+L, …).
-        if (ev.metaKey && ev.code !== "MetaLeft" && ev.code !== "MetaRight") return false;
-        return true;
-      }
-
-      /**
-       * Sync CapsLock state to the device. Browser only fires keydown when
-       * CapsLock turns on and keyup when it turns off — never a full sequence.
-       * iOS expects a full down-up to toggle, and can drift out of sync when
-       * CapsLock is pressed outside the webview. On any key event we check if
-       * our cached CapsLock state diverges from the event's modifier state and
-       * emit a full toggle sequence to resync.
-       */
-      function syncCapsLock(ev) {
-        const current = ev.getModifierState && ev.getModifierState("CapsLock");
-        if (current === undefined) return;
-        if (current !== lastCapsLockState) {
-          lastCapsLockState = current;
-          sendCmd({ cmd: "key", direction: "Down", code: CAPS_LOCK_HID });
-          sendCmd({ cmd: "key", direction: "Up", code: CAPS_LOCK_HID });
-        }
-      }
-
-      function handleKeyEvent(ev) {
-        if (!shouldForwardKey(ev)) return;
-        syncCapsLock(ev);
-
-        const isDown = ev.type === "keydown";
-
-        // Multi-touch modifier → enter/exit two-finger mode, anchored at screen
-        // center with the primary finger at the cursor. Shift+drag during
-        // multi-touch moves the anchor.
-        if (MULTITOUCH_CODES.has(ev.code)) {
-          if (isDown && !isMultiTouching) {
-            anchorPoint = { x: 0.5, y: 0.5 };
-            // If we're mid-drag, smoothly promote the single touch to multi-touch
-            // by issuing a Move with the second finger materialized.
-            isMultiTouching = true;
-            updateIndicators();
-            if (isPressing) sendTouchEvent("Move");
-          } else if (!isDown && isMultiTouching) {
-            if (isPressing) sendTouchEvent("Up");
-            isPressing = false;
-            isMultiTouching = false;
-            updateIndicators();
-          }
-          ev.preventDefault();
-          return;
-        }
-
-        const code = HID[ev.code];
-        if (code == null) return;
-        if (code === CAPS_LOCK_HID) return; // handled by syncCapsLock
-
-        if (isDown) {
-          pressedKeys.add(code);
-        } else {
-          pressedKeys.delete(code);
-        }
-        sendCmd({ cmd: "key", direction: isDown ? "Down" : "Up", code });
-        ev.preventDefault();
-      }
-      window.addEventListener("keydown", handleKeyEvent);
-      window.addEventListener("keyup", handleKeyEvent);
-
-      // Disable the right-click context menu over the stage so right-button
-      // drags (if the user tries) don't pop up a menu on top of the stream.
-      window.addEventListener("contextmenu", (ev) => {
-        if (stage && stage.contains(ev.target)) ev.preventDefault();
-      });
-
-      // On focus loss, release any active touches/keys so the device doesn't
-      // stay stuck with a held finger or modifier.
-      window.addEventListener("blur", releaseAllInput);
-
-      window.addEventListener("beforeunload", teardownStream);
-
-      // ── Action overlay & activity feed ─────────────────────────────────
-      // Subscribes to /preview/events (SSE) and renders every tool call the
-      // agent makes both as a transient overlay above the stream and as a
-      // permanent entry in the right-hand activity feed.
-      const feedListEl = document.getElementById("feed-list");
-      const feedEmptyEl = document.getElementById("feed-empty");
-      const feedStatusEl = document.getElementById("feed-status");
-      const feedAside = document.getElementById("feed-aside");
-      const feedToggleBtn = document.getElementById("feed-toggle");
-      const clearFeedBtn = document.getElementById("clear-feed");
-
-      /** id → { item, badge, duration, detail } for in-progress tool calls. */
-      const inflight = new Map();
-      /**
-       * `${id}:${phase}` keys we have already rendered. Browser EventSource
-       * auto-reconnects on transient drops; if the server re-sends events
-       * after a brief disconnect we don't want duplicate rows in the feed.
-       * Bounded so a long session doesn't grow unbounded.
-       */
-      const seenEvents = new Set();
-      const SEEN_CAP = 1000;
-      /** EventSource singleton. Browser auto-reconnects on transient failure. */
-      let actionEvents = null;
-
-      clearFeedBtn.addEventListener("click", () => {
-        feedListEl.querySelectorAll(".feed-item").forEach((n) => n.remove());
-        inflight.clear();
-        feedEmptyEl.style.display = "block";
-        clearFeedBtn.blur();
-      });
-      feedToggleBtn.addEventListener("click", () => {
-        feedAside.classList.toggle("collapsed");
-        feedToggleBtn.blur();
-      });
-
-      function setFeedStatus(text, kind) {
-        feedStatusEl.textContent = text;
-        feedStatusEl.className = "feed-status" + (kind ? " " + kind : "");
-      }
-
-      function imgRectInStage() {
-        if (!img || !stage) return null;
-        const a = img.getBoundingClientRect();
-        const s = stage.getBoundingClientRect();
+      // ─────────────────────────────────────────────────────────────────
+      // Geometry helpers
+      // ─────────────────────────────────────────────────────────────────
+      function streamRect() {
+        if (!stream || !device) return null;
+        const a = stream.getBoundingClientRect();
+        const d = device.getBoundingClientRect();
         if (!a.width || !a.height) return null;
         return {
-          left: a.left - s.left,
-          top: a.top - s.top,
+          left: a.left - d.left,
+          top: a.top - d.top,
           width: a.width,
           height: a.height,
         };
       }
-
-      /** Map a normalized [0,1] device point to stage-local pixels. */
-      function devToStagePx(pt) {
-        const r = imgRectInStage();
+      function fallbackRect() {
+        // For the fallback panel, use the device rect itself.
+        if (!device) return null;
+        const d = device.getBoundingClientRect();
+        if (!d.width || !d.height) return null;
+        return { left: 0, top: 0, width: d.width, height: d.height };
+      }
+      function deviceRect() {
+        return streamRect() || fallbackRect();
+      }
+      function devToPx(pt) {
+        const r = deviceRect();
         if (!r) return null;
         const x = Math.max(0, Math.min(1, pt.x));
         const y = Math.max(0, Math.min(1, pt.y));
         return { x: r.left + x * r.width, y: r.top + y * r.height };
       }
 
-      function spawnTap(args, kind) {
+      // ─────────────────────────────────────────────────────────────────
+      // Spatial visualizers
+      // ─────────────────────────────────────────────────────────────────
+      function spawnTap(args, cat, label) {
         if (!overlayLayer) return;
-        if (typeof args?.x !== "number" || typeof args?.y !== "number") return;
-        const p = devToStagePx({ x: args.x, y: args.y });
+        const p = devToPx({ x: args.x, y: args.y });
         if (!p) return;
-        const el = document.createElement("div");
-        el.className = "action-tap" + (kind ? " " + kind : "");
-        el.style.left = p.x + "px";
-        el.style.top = p.y + "px";
-        overlayLayer.appendChild(el);
-        setTimeout(() => el.remove(), 800);
+        const wrap = document.createElement("div");
+        wrap.className = `ov-tap c-${cat}`;
+        wrap.style.left = p.x + "px";
+        wrap.style.top = p.y + "px";
+        wrap.innerHTML =
+          '<span class="ring"></span><span class="ring r2"></span><span class="ring r3"></span><span class="core"></span>';
+        overlayLayer.appendChild(wrap);
+        setTimeout(() => wrap.remove(), 2900);
+        if (label) spawnLabel(p, label, cat);
       }
 
-      function spawnSwipePath(points) {
+      function spawnLabel(p, text, cat) {
+        const lab = document.createElement("div");
+        lab.className = `ov-label c-${cat}`;
+        lab.textContent = text;
+        lab.style.left = p.x + "px";
+        lab.style.top = p.y - 28 + "px";
+        overlayLayer.appendChild(lab);
+        setTimeout(() => lab.remove(), 1700);
+      }
+
+      function spawnPath(points, cat, label, anchor) {
         if (!overlayLayer || points.length < 2) return;
         const NS = "http://www.w3.org/2000/svg";
         const svg = document.createElementNS(NS, "svg");
-        svg.setAttribute("class", "swipe-svg");
-        const d = points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
-        const path = document.createElementNS(NS, "path");
-        path.setAttribute("d", d);
-        svg.appendChild(path);
+        svg.setAttribute("class", `ov-svg c-${cat}`);
+        // Lock the SVG user-coordinate system to match its rendered pixel
+        // size so the absolute coords we emit below land where we want.
+        const r = overlayLayer.getBoundingClientRect();
+        svg.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+        svg.setAttribute("preserveAspectRatio", "none");
+        const d = points.map((pt, i) => `${i === 0 ? "M" : "L"}${pt.x},${pt.y}`).join(" ");
+        // Compute the actual path length so the dasharray animation can be
+        // exact (rather than guessing 2400 — large constants don't always
+        // animate cleanly across browsers).
+        const dx = points[points.length - 1].x - points[0].x;
+        const dy = points[points.length - 1].y - points[0].y;
+        const len = Math.max(40, Math.hypot(dx, dy));
+        const glow = document.createElementNS(NS, "path");
+        glow.setAttribute("class", "trail-glow");
+        glow.setAttribute("d", d);
+        glow.setAttribute("fill", "none");
+        glow.setAttribute("stroke", "currentColor");
+        glow.style.strokeDasharray = String(len);
+        glow.style.strokeDashoffset = String(len);
+        svg.appendChild(glow);
+        const trail = document.createElementNS(NS, "path");
+        trail.setAttribute("class", "trail");
+        trail.setAttribute("d", d);
+        trail.setAttribute("fill", "none");
+        trail.setAttribute("stroke", "currentColor");
+        trail.style.strokeDasharray = String(len);
+        trail.style.strokeDashoffset = String(len);
+        svg.appendChild(trail);
+        // Force reflow then animate to 0 so the keyframe is reliable
+        // even when the target value differs per element.
+        requestAnimationFrame(() => {
+          trail.style.transition = "stroke-dashoffset 1100ms cubic-bezier(0.22, 1, 0.36, 1)";
+          glow.style.transition = "stroke-dashoffset 1100ms cubic-bezier(0.22, 1, 0.36, 1)";
+          trail.style.strokeDashoffset = "0";
+          glow.style.strokeDashoffset = "0";
+        });
         // Arrowhead at the final point.
         const last = points[points.length - 1];
         const prev = points[points.length - 2];
         const angle = Math.atan2(last.y - prev.y, last.x - prev.x);
-        const ah = 12;
+        const ah = 16;
         const lx = last.x - ah * Math.cos(angle - Math.PI / 6);
         const ly = last.y - ah * Math.sin(angle - Math.PI / 6);
         const rx = last.x - ah * Math.cos(angle + Math.PI / 6);
         const ry = last.y - ah * Math.sin(angle + Math.PI / 6);
         const arrow = document.createElementNS(NS, "polygon");
+        arrow.setAttribute("class", "arrow");
+        arrow.setAttribute("fill", "currentColor");
         arrow.setAttribute("points", `${last.x},${last.y} ${lx},${ly} ${rx},${ry}`);
         svg.appendChild(arrow);
         overlayLayer.appendChild(svg);
-        setTimeout(() => svg.remove(), 1700);
+        setTimeout(() => svg.remove(), 3200);
+        if (label && anchor) spawnLabel(anchor, label, cat);
       }
 
-      function spawnSwipe(args) {
-        const a = devToStagePx({ x: args.fromX, y: args.fromY });
-        const b = devToStagePx({ x: args.toX, y: args.toY });
+      function spawnSwipe(args, cat, label) {
+        const a = devToPx({ x: args.fromX, y: args.fromY });
+        const b = devToPx({ x: args.toX, y: args.toY });
         if (!a || !b) return;
-        spawnSwipePath([a, b]);
+        spawnPath([a, b], cat, label, a);
       }
 
-      function spawnCustomGesture(args) {
-        const events = Array.isArray(args?.events) ? args.events : [];
+      function spawnCustomGesture(args, cat, label) {
+        const events = Array.isArray(args.events) ? args.events : [];
         const points = [];
         for (const e of events) {
           if (typeof e?.x !== "number" || typeof e?.y !== "number") continue;
-          const p = devToStagePx({ x: e.x, y: e.y });
+          const p = devToPx({ x: e.x, y: e.y });
           if (p) points.push(p);
         }
         if (!points.length) return;
         if (points.length === 1) {
-          spawnTap({ x: events[0].x, y: events[0].y });
+          spawnTap({ x: events[0].x, y: events[0].y }, cat, label);
           return;
         }
-        spawnSwipePath(points);
+        spawnPath(points, cat, label, points[0]);
       }
 
-      function spawnPinch(args) {
+      function spawnPinch(args, cat, label) {
         if (!overlayLayer) return;
-        if (typeof args?.centerX !== "number" || typeof args?.centerY !== "number") return;
-        const c = devToStagePx({ x: args.centerX, y: args.centerY });
+        if (typeof args.centerX !== "number" || typeof args.centerY !== "number") return;
+        const c = devToPx({ x: args.centerX, y: args.centerY });
         if (!c) return;
-        // Pinch is animated as two fingers spreading from startDistance to
-        // endDistance (in normalized [0,1] device coords). We render in pixels.
-        const r = imgRectInStage();
-        const scaleToPx = r ? Math.min(r.width, r.height) : 0;
-        const startSpread = (Number(args.startDistance) || 0.1) * scaleToPx * 0.5;
-        const endSpread = (Number(args.endDistance) || 0.2) * scaleToPx * 0.5;
+        const r = deviceRect();
+        const px = (v) => v * Math.min(r.width, r.height) * 0.5;
+        const startSpread = px(Math.max(0.04, args.startDistance || 0));
+        const endSpread = px(Math.max(0.04, args.endDistance || 0));
+        const NS = "http://www.w3.org/2000/svg";
+        // Connecting line that extends with the spread.
+        const svg = document.createElementNS(NS, "svg");
+        svg.setAttribute("class", `ov-svg c-${cat}`);
+        const olr = overlayLayer.getBoundingClientRect();
+        svg.setAttribute("viewBox", `0 0 ${olr.width} ${olr.height}`);
+        svg.setAttribute("preserveAspectRatio", "none");
+        const line = document.createElementNS(NS, "line");
+        line.setAttribute("class", "pinch-line");
+        line.setAttribute("x1", c.x - startSpread);
+        line.setAttribute("y1", c.y);
+        line.setAttribute("x2", c.x + startSpread);
+        line.setAttribute("y2", c.y);
+        svg.appendChild(line);
+        overlayLayer.appendChild(svg);
+        // Animate the line endpoints to the end spread.
+        requestAnimationFrame(() => {
+          line.setAttribute("x1", c.x - endSpread);
+          line.setAttribute("x2", c.x + endSpread);
+          line.style.transition = "all 1000ms var(--ease-out)";
+        });
+        setTimeout(() => svg.remove(), 2400);
         for (const sign of [-1, 1]) {
           const dot = document.createElement("div");
-          dot.className = "action-tap pinch-marker";
+          dot.className = `ov-pinch c-${cat}`;
           dot.style.left = c.x + sign * startSpread + "px";
           dot.style.top = c.y + "px";
           overlayLayer.appendChild(dot);
-          // Animate after layout so the transition fires.
           requestAnimationFrame(() => {
             dot.style.left = c.x + sign * endSpread + "px";
           });
-          setTimeout(() => {
-            dot.style.opacity = "0";
-          }, 480);
-          setTimeout(() => dot.remove(), 900);
+          setTimeout(() => dot.remove(), 2400);
         }
+        if (label) spawnLabel(c, label, cat);
       }
 
-      function spawnFlash() {
+      function spawnInspect(args, cat, label) {
         if (!overlayLayer) return;
-        const r = imgRectInStage();
+        const p = devToPx({ x: args.x, y: args.y });
+        if (!p) return;
+        const el = document.createElement("div");
+        el.className = `ov-crosshair c-${cat}`;
+        el.style.left = p.x + "px";
+        el.style.top = p.y + "px";
+        el.innerHTML = '<span class="v"></span><span class="h"></span><span class="ring"></span>';
+        overlayLayer.appendChild(el);
+        setTimeout(() => el.remove(), 2500);
+        if (label) spawnLabel(p, label, cat);
+      }
+
+      function spawnScreenshotEffect() {
+        if (!overlayLayer) return;
+        const r = deviceRect();
         if (!r) return;
+        // White flash filling the screen rect.
         const flash = document.createElement("div");
-        flash.className = "action-flash";
+        flash.className = "ov-flash";
         flash.style.left = r.left + "px";
         flash.style.top = r.top + "px";
         flash.style.width = r.width + "px";
         flash.style.height = r.height + "px";
         overlayLayer.appendChild(flash);
-        setTimeout(() => flash.remove(), 600);
-      }
-
-      function spawnHud(text, kind) {
-        if (!hudLayer) return;
-        const chip = document.createElement("div");
-        chip.className = "hud-chip" + (kind ? " " + kind : "");
-        chip.textContent = text;
-        hudLayer.appendChild(chip);
-        setTimeout(() => chip.remove(), 2400);
-      }
-
-      /**
-       * Per-tool visualization. Called twice per invocation: once with phase
-       * "start" (we know args), once with "end" or "error" (we know result).
-       * Most spatial visualizations fire on start so the agent's intent shows
-       * up immediately; screenshot's flash also fires on start.
-       */
-      function visualize(name, phase, args, error) {
-        if (phase !== "start") {
-          if (phase === "error" && (name === "gesture-tap" || name === "gesture-swipe")) {
-            spawnHud(`${name} failed: ${truncate(error || "", 60)}`, "error");
-          }
-          return;
+        setTimeout(() => flash.remove(), 800);
+        // Two shutter bars that meet then split.
+        for (const side of ["top", "bot"]) {
+          const bar = document.createElement("div");
+          bar.className = `ov-shutter-bar ${side}`;
+          bar.style.left = r.left + "px";
+          bar.style.width = r.width + "px";
+          bar.style.height = r.height / 2 + "px";
+          if (side === "top") bar.style.top = r.top + "px";
+          if (side === "bot") bar.style.top = r.top + r.height / 2 + "px";
+          // Override since CSS uses absolute fixed sides; we want stage-relative.
+          bar.style.position = "absolute";
+          bar.style.bottom = "auto";
+          overlayLayer.appendChild(bar);
+          setTimeout(() => bar.remove(), 800);
         }
-        switch (name) {
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // Now-playing caption
+      // ─────────────────────────────────────────────────────────────────
+      function showNow(event, descObj, cat) {
+        clearTimeout(nowFadeTimer);
+        visibleNowId = event.id;
+        const phase = event.phase;
+        const isStart = phase === "start";
+        const isErr = phase === "error";
+        let card = els.now.querySelector(".now-card");
+        if (!card) {
+          card = document.createElement("div");
+          card.className = "now-card";
+          card.innerHTML = `
+            <div class="now-icon"></div>
+            <div class="now-text">
+              <div class="title"></div>
+              <div class="sub"></div>
+            </div>
+            <div class="now-progress"></div>
+          `;
+          els.now.appendChild(card);
+        }
+        card.classList.remove("ok", "err", "indeterminate", "done");
+        card.classList.add(isStart ? "indeterminate" : isErr ? "err" : "ok");
+        if (!isStart) card.classList.add("done");
+        // Color the card by category (inherits via currentColor).
+        card.style.color = `var(--c-${cat})`;
+        card.querySelector(".now-icon").textContent = isErr ? "⚠" : descObj.icon;
+        const title = isStart
+          ? descObj.title
+          : isErr
+            ? `${descObj.title} failed`
+            : `${descObj.title}`;
+        card.querySelector(".title").textContent = title;
+        const dur = event.durationMs;
+        const subText = isErr
+          ? trunc(event.error || "", 80)
+          : !isStart && dur != null
+            ? `${descObj.sub ? descObj.sub + " · " : ""}${formatMs(dur)}`
+            : descObj.sub || "—";
+        card.querySelector(".sub").textContent = subText;
+
+        els.now.classList.add("show");
+        if (!isStart) {
+          // Done — auto-fade.
+          nowFadeTimer = setTimeout(() => {
+            // Only fade if a newer event hasn't already taken over.
+            if (visibleNowId === event.id) els.now.classList.remove("show");
+          }, 2200);
+        }
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // Timeline
+      // ─────────────────────────────────────────────────────────────────
+      function timelineAdd(event, descObj, cat) {
+        if (els.tlEmpty && els.tlEmpty.parentNode) els.tlEmpty.remove();
+        const li = document.createElement("li");
+        li.className = `tl-item c-${cat} in-progress`;
+        li.dataset.ts = String(event.ts);
+        li.innerHTML = `
+          <div class="tl-icon"></div>
+          <div class="tl-text">
+            <div class="title"></div>
+            <div class="sub"></div>
+          </div>
+          <div class="tl-meta">
+            <span class="tl-time">now</span>
+            <span class="tl-status in-progress"></span>
+          </div>
+        `;
+        li.querySelector(".tl-icon").textContent = descObj.icon;
+        li.querySelector(".title").textContent = descObj.title;
+        li.querySelector(".sub").textContent = descObj.sub;
+        // Insert at top.
+        els.tlList.insertBefore(li, els.tlList.firstChild);
+        // Cap to 80 items (drop oldest).
+        const items = els.tlList.querySelectorAll(".tl-item");
+        for (let i = 80; i < items.length; i++) items[i].remove();
+        return { item: li, statusEl: li.querySelector(".tl-status") };
+      }
+
+      function timelineFinalize(rec, event, descObj) {
+        if (!rec || !rec.item.isConnected) return;
+        rec.item.classList.remove("in-progress");
+        const ok = event.phase === "end";
+        rec.statusEl.classList.remove("in-progress");
+        rec.statusEl.classList.add(ok ? "ok" : "err");
+        // Update subtitle to include duration; preserve original sub if present.
+        const sub = rec.item.querySelector(".sub");
+        const original = descObj.sub || "";
+        const dur = event.durationMs != null ? formatMs(event.durationMs) : "";
+        if (ok) {
+          sub.textContent = original ? `${original} · ${dur}` : dur;
+        } else {
+          sub.textContent = trunc(event.error || "failed", 60);
+          rec.item.classList.add("c-error");
+        }
+      }
+
+      function formatMs(ms) {
+        if (ms == null) return "—";
+        if (ms < 1000) return `${Math.round(ms)} ms`;
+        return `${(ms / 1000).toFixed(2)} s`;
+      }
+      function timeAgo(then) {
+        const s = Math.max(0, Math.round((Date.now() - then) / 1000));
+        if (s < 5) return "now";
+        if (s < 60) return `${s}s ago`;
+        const m = Math.floor(s / 60);
+        if (m < 60) return `${m}m ago`;
+        const h = Math.floor(m / 60);
+        return `${h}h ago`;
+      }
+      function refreshTimes() {
+        document.querySelectorAll(".tl-item[data-ts]").forEach((el) => {
+          const ts = Number(el.dataset.ts);
+          const t = el.querySelector(".tl-time");
+          if (t) t.textContent = timeAgo(ts);
+        });
+      }
+      setInterval(refreshTimes, 1000);
+
+      // ─────────────────────────────────────────────────────────────────
+      // Stats / chrome
+      // ─────────────────────────────────────────────────────────────────
+      function bumpCounters(event) {
+        if (event.phase === "start") {
+          totalActions++;
+          els.statActions.textContent = String(totalActions);
+        } else if (event.phase === "error") {
+          totalErrors++;
+          els.statErrors.textContent = String(totalErrors);
+        }
+        const elapsed = Math.floor((performance.now() - sessionStart) / 1000);
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        els.statElapsed.textContent = `${m}:${String(s).padStart(2, "0")}`;
+        els.tlCount.textContent = `${totalActions} ${totalActions === 1 ? "action" : "actions"}`;
+      }
+      setInterval(() => {
+        const elapsed = Math.floor((performance.now() - sessionStart) / 1000);
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        els.statElapsed.textContent = `${m}:${String(s).padStart(2, "0")}`;
+      }, 1000);
+
+      function setConn(state, label) {
+        els.conn.classList.remove("live", "reconnecting", "offline");
+        els.conn.classList.add(state);
+        els.connText.textContent = label;
+      }
+
+      // ─────────────────────────────────────────────────────────────────
+      // Visualizer dispatch
+      // ─────────────────────────────────────────────────────────────────
+      function visualize(event, descObj, cat) {
+        if (event.phase !== "start") return;
+        const args = event.args || {};
+        switch (event.name) {
           case "gesture-tap":
-            spawnTap(args);
+            spawnTap(args, cat, descObj.label);
             return;
           case "gesture-swipe":
-            spawnSwipe(args);
+            spawnSwipe(args, cat, descObj.label);
             return;
           case "gesture-pinch":
-            spawnPinch(args);
+            spawnPinch(args, cat, descObj.label);
             return;
           case "gesture-rotate":
-            if (typeof args?.centerX === "number" && typeof args?.centerY === "number") {
-              spawnTap({ x: args.centerX, y: args.centerY }, "inspect");
-            }
-            {
-              const sweep =
-                typeof args?.startAngle === "number" && typeof args?.endAngle === "number"
-                  ? `${(((args.endAngle - args.startAngle) * 180) / Math.PI).toFixed(0)}°`
-                  : "";
-              spawnHud(`↻ rotate ${sweep}`);
-            }
+            spawnTap({ x: args.centerX, y: args.centerY }, cat, descObj.label);
             return;
           case "gesture-custom":
-            spawnCustomGesture(args);
+            spawnCustomGesture(args, cat, descObj.label);
             return;
           case "native-view-at-point":
           case "native-user-interactable-view-at-point":
-            spawnTap(args, "inspect");
-            spawnHud(`🔍 inspect (${formatXY(args)})`);
+            spawnInspect(args, "inspect", descObj.label);
             return;
           case "screenshot":
-            spawnFlash();
-            spawnHud("📸 screenshot");
-            return;
-          case "describe":
-          case "native-describe-screen":
-          case "native-full-hierarchy":
-            spawnHud(`🌳 ${name}`);
-            return;
-          case "native-find-views": {
-            // Pick the most descriptive selector field that was actually set.
-            const sel =
-              args?.identifier || args?.label || args?.nativeID || args?.className || "";
-            spawnHud(`🔎 find: ${truncate(sel, 32)}`);
-            return;
-          }
-          case "button":
-            spawnHud(`⏺ ${args?.button || "button"}`);
-            return;
-          case "keyboard":
-            if (args?.text) {
-              spawnHud(`⌨ ${truncate(args.text, 24)}`);
-            } else if (args?.key) {
-              spawnHud(`⌨ ${args.key}`);
-            } else {
-              spawnHud("⌨ keyboard");
-            }
-            return;
-          case "rotate":
-            spawnHud(`↻ ${args?.orientation || "rotate"}`);
-            return;
-          case "launch-app":
-            spawnHud(`🚀 launch ${args?.bundleId || ""}`);
-            return;
-          case "restart-app":
-            spawnHud(`🔄 restart ${args?.bundleId || ""}`);
-            return;
-          case "reinstall-app":
-            spawnHud(`📦 reinstall ${args?.bundleId || ""}`);
-            return;
-          case "boot-simulator":
-            spawnHud(`⏻ boot ${(args?.udid || "").slice(0, 8)}`);
-            return;
-          case "open-url":
-            spawnHud(`🔗 ${truncate(args?.url || "", 48)}`);
-            return;
-          case "run-sequence": {
-            const n = Array.isArray(args?.steps) ? args.steps.length : 0;
-            spawnHud(`▶ sequence (${n} step${n === 1 ? "" : "s"})`);
-            return;
-          }
-          case "view-network-logs":
-            spawnHud(`🌐 network logs`);
-            return;
-          case "debugger-evaluate":
-            spawnHud(`🪛 eval: ${truncate(args?.expression || "", 32)}`);
-            return;
-          case "debugger-reload-metro":
-            spawnHud("🔁 metro reload");
+            spawnScreenshotEffect();
             return;
           default:
-            // Feed-only — no overlay treatment for this tool.
+            // Non-spatial action — caption + timeline only, no overlay marker.
             return;
         }
       }
 
-      function formatXY(args) {
-        if (typeof args?.x === "number" && typeof args?.y === "number") {
-          return `${args.x.toFixed(2)}, ${args.y.toFixed(2)}`;
-        }
-        return "";
-      }
-      function truncate(s, n) {
-        s = String(s);
-        return s.length > n ? s.slice(0, n - 1) + "…" : s;
-      }
-
-      // ── Activity feed ───────────────────────────────────────────────────
-      function feedAdd(event) {
-        feedEmptyEl.style.display = "none";
-        const item = document.createElement("div");
-        item.className = "feed-item in-progress";
-        const row = document.createElement("div");
-        row.className = "row";
-        const badge = document.createElement("span");
-        badge.className = "badge";
-        badge.textContent = "•••";
-        const name = document.createElement("span");
-        name.className = "name";
-        name.textContent = event.name;
-        const duration = document.createElement("span");
-        duration.className = "duration";
-        duration.textContent = "…";
-        row.appendChild(badge);
-        row.appendChild(name);
-        row.appendChild(duration);
-        item.appendChild(row);
-        const args = document.createElement("div");
-        args.className = "args";
-        args.textContent = formatArgsLine(event.args);
-        item.appendChild(args);
-        const detail = document.createElement("div");
-        detail.className = "detail";
-        item.appendChild(detail);
-        item.addEventListener("click", () => item.classList.toggle("expanded"));
-        feedListEl.insertBefore(item, feedListEl.firstChild?.nextSibling || null);
-        // Cap at 200 items to keep the DOM bounded during long sessions.
-        const items = feedListEl.querySelectorAll(".feed-item");
-        for (let i = 200; i < items.length; i++) items[i].remove();
-        return { item, badge, duration, detail };
-      }
-
-      function feedFinalize(rec, event, ok) {
-        if (!rec || !rec.item.isConnected) return;
-        rec.item.classList.remove("in-progress");
-        rec.item.classList.add(ok ? "ok" : "error");
-        rec.badge.textContent = ok ? "OK" : "ERR";
-        rec.duration.textContent = formatMs(event.durationMs);
-        rec.detail.textContent = formatDetailBlock(event, ok);
-      }
-
-      function formatArgsLine(a) {
-        if (a == null) return "";
-        try {
-          const s = JSON.stringify(a);
-          return truncate(s, 96);
-        } catch {
-          return String(a);
-        }
-      }
-      function formatDetailBlock(event, ok) {
-        const parts = [];
-        if (event.args !== undefined) {
-          parts.push("args:\n" + safeStringify(event.args));
-        }
-        if (ok && event.result !== undefined) {
-          parts.push("result:\n" + safeStringify(event.result));
-        }
-        if (!ok && event.error) {
-          parts.push("error:\n" + event.error);
-        }
-        return parts.join("\n\n");
-      }
-      function safeStringify(v) {
-        try {
-          const s = JSON.stringify(v, null, 2);
-          // Cap detail body to avoid pathological multi-MB results making the
-          // sidebar jank — full payload is still on the wire if needed.
-          return s.length > 4000 ? s.slice(0, 4000) + "\n…(truncated)" : s;
-        } catch {
-          return String(v);
-        }
-      }
-      function formatMs(ms) {
-        if (ms == null) return "—";
-        if (ms < 1000) return Math.round(ms) + "ms";
-        return (ms / 1000).toFixed(2) + "s";
-      }
-
+      // ─────────────────────────────────────────────────────────────────
+      // Event handler
+      // ─────────────────────────────────────────────────────────────────
       function handleAction(event) {
         const key = `${event.id}:${event.phase}`;
-        if (seenEvents.has(key)) return;
-        seenEvents.add(key);
-        if (seenEvents.size > SEEN_CAP) {
-          // Drop oldest insertion order — Set iteration order is insertion order.
-          const drop = seenEvents.size - SEEN_CAP;
-          let i = 0;
-          for (const k of seenEvents) {
-            if (i++ >= drop) break;
-            seenEvents.delete(k);
+        if (seen.has(key)) return;
+        seen.add(key);
+        if (seen.size > SEEN_CAP) {
+          let drop = seen.size - SEEN_CAP;
+          for (const k of seen) {
+            if (drop-- <= 0) break;
+            seen.delete(k);
           }
         }
+
+        const cat = categoryFor(event.name);
+        const descObj = describe(event.name, event.args || {});
+
         if (event.phase === "start") {
-          const rec = feedAdd(event);
-          inflight.set(event.id, rec);
-          visualize(event.name, "start", event.args);
+          const rec = timelineAdd(event, descObj, cat);
+          inflight.set(event.id, { rec, descObj, cat, startedAt: event.ts });
+          showNow(event, descObj, cat);
+          visualize(event, descObj, cat);
         } else {
-          const rec = inflight.get(event.id);
+          const ent = inflight.get(event.id);
           inflight.delete(event.id);
-          feedFinalize(rec, event, event.phase === "end");
-          visualize(event.name, event.phase, event.args, event.error);
+          if (ent) {
+            timelineFinalize(ent.rec, event, ent.descObj);
+            showNow(event, ent.descObj, ent.cat);
+          } else {
+            // We missed the start (e.g., we were just opening). Add it now.
+            const rec = timelineAdd(event, descObj, cat);
+            timelineFinalize(rec, event, descObj);
+            showNow(event, descObj, cat);
+          }
         }
+
+        bumpCounters(event);
       }
 
+      // ─────────────────────────────────────────────────────────────────
+      // SSE subscription
+      // ─────────────────────────────────────────────────────────────────
       function subscribeActions() {
         if (actionEvents) {
           try {
             actionEvents.close();
           } catch {}
         }
+        setConn("reconnecting", "connecting");
         actionEvents = new EventSource(`${TOOL_SERVER}/preview/events`);
-        actionEvents.addEventListener("open", () => setFeedStatus("live", "live"));
+        actionEvents.addEventListener("open", () => setConn("live", "live"));
         actionEvents.addEventListener("action", (e) => {
           let event;
           try {
@@ -1552,13 +2113,27 @@
           handleAction(event);
         });
         actionEvents.onerror = () => {
-          // EventSource auto-retries on the next tick. Reflect status until then.
-          setFeedStatus("reconnecting…", "error");
+          setConn("reconnecting", "reconnecting");
         };
       }
 
+      // ─────────────────────────────────────────────────────────────────
+      // Bootstrap
+      // ─────────────────────────────────────────────────────────────────
+      // Pause MJPEG when tab is hidden so we don't burn cycles.
+      document.addEventListener("visibilitychange", () => {
+        if (!stream) return;
+        if (document.hidden) {
+          stream.dataset.paused = stream.src;
+          stream.src = "";
+        } else if (stream.dataset.paused) {
+          stream.src = stream.dataset.paused;
+          delete stream.dataset.paused;
+        }
+      });
+
       subscribeActions();
-      refreshSimulators();
+      connectSimulator();
     </script>
   </body>
 </html>
