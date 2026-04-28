@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Branch, tag, or SHA to publish (e.g. v0.5.2)"
+        description: "Branch, tag, or SHA to publish (e.g. v0.5.3)"
         required: true
         type: string
 
@@ -45,11 +45,11 @@ jobs:
 
       - run: npm run build -w @swmansion/argent
 
-      - run: test -x packages/mcp/bin/simulator-server
-      - run: test -x packages/mcp/bin/ax-service
-      - run: test -f packages/mcp/dylibs/libNativeDevtoolsIos.dylib
-      - run: test -f packages/mcp/dylibs/libKeyboardPatch.dylib
-      - run: test -f packages/mcp/dylibs/libArgentInjectionBootstrap.dylib
+      - run: test -x packages/argent/bin/simulator-server
+      - run: test -x packages/argent/bin/ax-service
+      - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent

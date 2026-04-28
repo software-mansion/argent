@@ -32,6 +32,8 @@ Common bundle IDs:
 - Clock:     com.apple.mobiletimer
 - Calendar:  com.apple.mobilecal
 - Contacts:  com.apple.MobileAddressBook`,
+  alwaysLoad: true,
+  searchHint: "open start app bundle id simulator launch",
   zodSchema,
   services: (params) => ({
     nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,

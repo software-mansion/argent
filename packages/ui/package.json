@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "name": "@argent/ui",
+  "version": "0.0.1",
+  "description": "Simple browser UI that streams a simulator and forwards taps/gestures directly to the argent simulator-server.",
+  "files": [
+    "index.html"
+  ]
+}

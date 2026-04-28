@@ -27,6 +27,8 @@ export const screenshotTool: ToolDefinition<
   description: `Capture a screenshot of the simulator screen. Returns { url, path } and the MCP adapter renders it as a visible image.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator server is not running or the screenshot request times out.`,
+  alwaysLoad: true,
+  searchHint: "simulator screen image capture baseline",
   zodSchema,
   outputHint: "image",
   services: (params) => ({
