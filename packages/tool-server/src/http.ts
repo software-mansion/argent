@@ -6,6 +6,9 @@ import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
+import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
+import { assertSupported, UnsupportedOperationError } from "./utils/capability";
+import { resolveDevice } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -109,6 +112,39 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         parsedData = parseResult.data;
       }
 
+      // Host-binary preflight: tools with `requires: ['xcrun' | 'adb', ...]`
+      // get a 424 Failed Dependency with an install hint instead of a deep
+      // ENOENT from a child-process call.
+      if (def.requires && def.requires.length > 0) {
+        try {
+          await ensureDeps(def.requires);
+        } catch (err) {
+          if (err instanceof DependencyMissingError) {
+            res.status(424).json({ error: err.message, missing: err.missing });
+            return;
+          }
+          throw err;
+        }
+      }
+
+      // Capability gate: a tool with a declared `capability` plus a `udid`
+      // param is rejected before invocation if the udid resolves to an
+      // unsupported platform/kind. Cross-platform tools double-check inside
+      // their dispatch helper, so non-HTTP callers (run-sequence, flow-run)
+      // are also covered.
+      if (def.capability && parsedData && typeof parsedData.udid === "string") {
+        try {
+          const device = resolveDevice(parsedData.udid);
+          assertSupported(def.id, def.capability, device);
+        } catch (err) {
+          if (err instanceof UnsupportedOperationError) {
+            res.status(400).json({ error: err.message });
+            return;
+          }
+          throw err;
+        }
+      }
+
       const controller = new AbortController();
       res.on("close", () => {
         if (!res.writableFinished) controller.abort();
@@ -132,6 +168,14 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       } catch (err: unknown) {
         if (err instanceof ToolNotFoundError) {
           res.status(404).json({ error: err.message });
+          return;
+        }
+        if (err instanceof DependencyMissingError) {
+          res.status(424).json({ error: err.message, missing: err.missing });
+          return;
+        }
+        if (err instanceof UnsupportedOperationError) {
+          res.status(400).json({ error: err.message });
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });

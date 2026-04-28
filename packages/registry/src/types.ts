@@ -60,6 +60,54 @@ export interface InvokeToolOptions {
   signal?: AbortSignal;
 }
 
+// ── Device + Capability Types ──
+
+export type Platform = "ios" | "android";
+
+export type DeviceKind = "simulator" | "emulator" | "device" | "unknown";
+
+/**
+ * Universal device handle. Platform-aware tools resolve a `udid` parameter into
+ * a `DeviceInfo` and use it to dispatch to the right per-platform implementation.
+ */
+export interface DeviceInfo {
+  id: string;
+  platform: Platform;
+  kind: DeviceKind;
+  name?: string;
+  state?: string;
+  avdName?: string | null;
+  sdkLevel?: number | null;
+}
+
+/**
+ * Per-platform support matrix. A tool with no `apple` block does not run on
+ * iOS; a tool with `apple: { simulator: true }` runs on iOS simulators only.
+ * The optional `supports` predicate refines further (e.g. exclude tvOS).
+ */
+export interface ToolCapability {
+  apple?: {
+    simulator?: boolean;
+    device?: boolean;
+  };
+  android?: {
+    emulator?: boolean;
+    device?: boolean;
+    unknown?: boolean;
+  };
+  /** Optional refiner. Returns true if this device is supported. */
+  supports?: (device: DeviceInfo) => boolean;
+}
+
+/**
+ * Host binaries a tool cannot run without. The HTTP dispatcher checks each
+ * entry against `PATH` before invoking the tool and returns an install-hint
+ * error if any are missing. Use only for tools that are *always* on one
+ * platform; cross-platform tools should branch on `classifyDevice` first and
+ * call `ensureDep()` after they know the target platform.
+ */
+export type ToolDependency = "adb" | "xcrun";
+
 // ── Tool Types ──
 
 export interface ToolDefinition<TParams = void, TResult = unknown> {
@@ -83,6 +131,10 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * via `_meta["anthropic/searchHint"]`.
    */
   searchHint?: string;
+  /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
+  capability?: ToolCapability;
+  /** Host binaries that must be on PATH. Checked by the HTTP dispatcher before `execute` runs. */
+  requires?: ToolDependency[];
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
   execute(

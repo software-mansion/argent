@@ -1,0 +1,60 @@
+import { z } from "zod";
+import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { DescribeResult } from "./contract";
+import { resolveDevice } from "../../utils/device-info";
+import { assertSupported } from "../../utils/capability";
+import { describeIos } from "./platforms/ios";
+import { describeAndroid } from "./platforms/android";
+
+const zodSchema = z.object({
+  udid: z.string().describe("Simulator UDID"),
+  bundleId: z
+    .string()
+    .optional()
+    .describe(
+      "Optional app bundle ID. Used as a target hint when the AX-service returns no elements " +
+        "and the describe tool falls back to native-devtools inspection. " +
+        "If omitted, the fallback auto-detects the frontmost connected app."
+    ),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
+const capability: ToolCapability = {
+  apple: { simulator: true, device: true },
+};
+
+export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
+  return {
+    id: "describe",
+    description: `Get the iOS accessibility element tree for the current simulator screen.
+Uses the AXRuntime accessibility service to inspect whatever is currently visible — including
+system dialogs, permission prompts, and any foreground app content.
+
+When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
+with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
+
+Returns a JSON tree of UI elements with roles, labels, values, and frame coordinates in normalized
+[0,1] space (fractions of the screen, not pixels) — the same coordinate space as tap/swipe/gesture
+and simulator-server touch input.
+
+Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
+
+For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
+use native-describe-screen with an explicit bundleId instead.
+For React Native apps, debugger-component-tree returns React component names with tap coordinates.
+Only supported on iOS simulators today; Android (uiautomator) is on the roadmap.`,
+    alwaysLoad: true,
+    searchHint: "ios accessibility element tree discovery tap coordinates",
+    zodSchema,
+    capability,
+    services: () => ({}),
+    async execute(_services, params, _options) {
+      const device = resolveDevice(params.udid);
+      assertSupported("describe", capability, device);
+      return device.platform === "ios"
+        ? describeIos(registry, params)
+        : describeAndroid(params.udid, params.bundleId);
+    },
+  };
+}

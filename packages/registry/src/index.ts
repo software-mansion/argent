@@ -11,6 +11,11 @@ export type {
   URN,
   ServiceRef,
   InvokeToolOptions,
+  Platform,
+  DeviceKind,
+  DeviceInfo,
+  ToolCapability,
+  ToolDependency,
 } from "./types";
 export { parseURN } from "./urn";
 export {
