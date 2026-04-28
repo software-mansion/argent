@@ -104,14 +104,11 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
     };
   }
 
-  // Compute relative timestamps: use minimum timestamp across all summaries as t=0
-  const minTs = Math.min(...input.hotCommitSummaries.map((s) => s.timestampMs));
-
   // Sort annotations by offsetMs for binary search
   const annotations = (input.annotations ?? []).slice().sort((a, b) => a.offsetMs - b.offsetMs);
 
   // Full report: all commits
-  const fullMarkdown = buildFullMarkdown(input, minTs, annotations, hotCommitsTotal);
+  const fullMarkdown = buildFullMarkdown(input, annotations, hotCommitsTotal);
 
   // Capped report: top MAX_INLINE_COMMITS hot commits by totalRenderMs
   const topHotByMs = hotCommits
@@ -130,7 +127,6 @@ export async function renderProfilingReport(input: RenderInput): Promise<RenderO
   const hotCommitsShown = Math.min(hotCommitsTotal, MAX_INLINE_COMMITS);
   const cappedMarkdown = buildFullMarkdown(
     { ...input, hotCommitSummaries: cappedSummaries },
-    minTs,
     annotations,
     hotCommitsTotal
   );
@@ -184,7 +180,6 @@ function renderCompilerStatus(enabled: boolean, detectedAtRuntime: boolean): str
 
 function buildFullMarkdown(
   input: RenderInput,
-  minTs: number,
   annotations: Array<{ offsetMs: number; label: string }>,
   totalHotCommits: number
 ): string {
@@ -211,7 +206,7 @@ function buildFullMarkdown(
   ];
 
   for (const summary of input.hotCommitSummaries) {
-    lines.push(...renderCommit(summary, minTs, annotations, sessionContext));
+    lines.push(...renderCommit(summary, annotations, sessionContext));
     lines.push("");
   }
 
@@ -300,11 +295,10 @@ function buildFullMarkdown(
 
 function renderCommit(
   summary: HotCommitSummary,
-  minTs: number,
   annotations: Array<{ offsetMs: number; label: string }>,
   sessionContext: SessionContext
 ): string[] {
-  const relativeMs = summary.timestampMs - minTs;
+  const relativeMs = Math.max(0, summary.timestampMs);
   const relativeS = (relativeMs / 1000).toFixed(1);
   const tierEmoji = summary.tier === "hot" ? "🔴" : summary.tier === "warm" ? "🟡" : "🔵";
 

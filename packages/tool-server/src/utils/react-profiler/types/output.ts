@@ -31,7 +31,9 @@ export interface CpuCommitHotspot {
 
 export interface HotCommitSummary {
   commitIndex: number;
-  timestampMs: number; // performance.now() from device (absolute)
+  // ms since profile-start (React DevTools sets this as
+  // `performance.now() - profilingStartTime`, NOT absolute perf.now).
+  timestampMs: number;
   totalRenderMs: number;
   isMargin: boolean;
   tier: "hot" | "warm" | null; // null = margin; hot = >50ms, warm = 16-50ms
