@@ -9,21 +9,49 @@ export type ContentBlock =
   | { type: "image"; data: string; mimeType: string };
 
 export async function toMcpContent(result: unknown, outputHint?: string): Promise<ContentBlock[]> {
-  if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
-    const imgRes = await fetch((result as { url: string }).url);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    const filePath = (result as { path?: string }).path ?? "";
-    return [
-      {
-        type: "image" as const,
-        data: buf.toString("base64"),
-        mimeType: "image/png" as const,
-      },
-      { type: "text" as const, text: `Saved: ${filePath}` },
-    ];
+  if (outputHint === "image" && result && typeof result === "object") {
+    const r = result as { url?: string; path?: string };
+    const buf = await loadImageBytes(r);
+    if (buf) {
+      return [
+        {
+          type: "image" as const,
+          data: buf.toString("base64"),
+          mimeType: "image/png" as const,
+        },
+        { type: "text" as const, text: `Saved: ${r.path ?? r.url ?? ""}` },
+      ];
+    }
   }
 
   return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
+}
+
+/**
+ * Resolve image bytes from a tool result with `{url, path}`. Tries `url`
+ * first via fetch (works for the simulator-server's `/media/...` URLs); if
+ * that fails or `url` is a `file://` reference (the simctl fallback), reads
+ * `path` directly from disk. Returns null if both paths fail so the caller
+ * can fall back to a text representation.
+ */
+async function loadImageBytes(r: { url?: string; path?: string }): Promise<Buffer | null> {
+  if (r.url && !r.url.startsWith("file://")) {
+    try {
+      const res = await fetch(r.url);
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+    } catch {
+      // Fall through to path-based read.
+    }
+  }
+  if (r.path) {
+    try {
+      const fs = await import("node:fs/promises");
+      return await fs.readFile(r.path);
+    } catch {
+      // Last resort: nothing to return.
+    }
+  }
+  return null;
 }
 
 export type FlowExecuteResult = {

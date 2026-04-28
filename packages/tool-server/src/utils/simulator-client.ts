@@ -104,10 +104,15 @@ export async function httpScreenshot(
     error?: string;
   }>("Screenshot", api, "/api/screenshot", body, signal);
 
+  // Streaming-disabled / license-gated radon builds answer 200 OK with
+  // {"error": "Screenshot is not available for your license plan"}, so the
+  // status check alone isn't enough — surface any `error` field we get back.
+  if (resBody.error) {
+    throw new Error(`Screenshot failed: ${resBody.error}`);
+  }
   if (!res.ok) {
-    const serverMsg = resBody.error ?? `HTTP ${res.status}`;
     throw new Error(
-      `Screenshot failed: ${serverMsg}. ` +
+      `Screenshot failed: HTTP ${res.status}. ` +
         `Ensure the simulator is booted and the simulator-server is running.`
     );
   }
