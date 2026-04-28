@@ -47,6 +47,9 @@ function makeLogBoxData() {
     isMessageIgnored() {
       return false;
     },
+    isDisabled() {
+      return data._isDisabled;
+    },
     setDisabled(v: boolean) {
       data._isDisabled = v;
     },
@@ -96,6 +99,57 @@ describe("DISABLE_LOGBOX_SCRIPT", () => {
     expect(calls.addException).toBe(0);
   });
 
+  it("re-enables addException when LogBox is later un-disabled (e.g. ignoreAllLogs(false))", () => {
+    // Regression guard: an earlier revision replaced addException with a hard
+    // no-op, which left fatal redboxes silently swallowed even after a dev
+    // disconnected the debugger and called ignoreAllLogs(false). The wrapper
+    // must consult isDisabled() per call so the original behavior returns.
+    const { data: lbData, calls } = makeLogBoxData();
+    const lb = makeLogBox(lbData);
+
+    const modules = new Map<number, MockModuleMeta>([
+      [1, { isInitialized: true, factory: () => ({ default: lb }), exports: { default: lb } }],
+      [2, { isInitialized: true, factory: () => lbData, exports: lbData }],
+    ]);
+    const sandbox = vm.createContext({ __r: makeRequire(modules), global: {} });
+    vm.runInContext(DISABLE_LOGBOX_SCRIPT, sandbox);
+
+    // Disabled: addException no-ops.
+    expect(lbData._isDisabled).toBe(true);
+    lbData.addException();
+    expect(calls.addException).toBe(0);
+
+    // Re-enable: addException now calls through to the original.
+    lb.ignoreAllLogs(false);
+    expect(lbData._isDisabled).toBe(false);
+    lbData.addException();
+    expect(calls.addException).toBe(1);
+
+    // Disable again: addException no-ops again.
+    lb.ignoreAllLogs(true);
+    lbData.addException();
+    expect(calls.addException).toBe(1);
+  });
+
+  it("does not double-wrap addException if the script is run twice", () => {
+    const { data: lbData, calls } = makeLogBoxData();
+    const lb = makeLogBox(lbData);
+    const modules = new Map<number, MockModuleMeta>([
+      [1, { isInitialized: true, factory: () => ({ default: lb }), exports: { default: lb } }],
+      [2, { isInitialized: true, factory: () => lbData, exports: lbData }],
+    ]);
+    const sandbox = vm.createContext({ __r: makeRequire(modules), global: {} });
+    vm.runInContext(DISABLE_LOGBOX_SCRIPT, sandbox);
+    const wrappedOnce = lbData.addException;
+    vm.runInContext(DISABLE_LOGBOX_SCRIPT, sandbox);
+    expect(lbData.addException).toBe(wrappedOnce);
+
+    // Behavior still correct: re-enable still falls through to the original.
+    lb.ignoreAllLogs(false);
+    lbData.addException();
+    expect(calls.addException).toBe(1);
+  });
+
   it("exits cleanly when __r is unavailable", () => {
     const sandbox = vm.createContext({ global: {} });
     expect(() => vm.runInContext(DISABLE_LOGBOX_SCRIPT, sandbox)).not.toThrow();
@@ -103,9 +157,10 @@ describe("DISABLE_LOGBOX_SCRIPT", () => {
 
   it("falls back to the ErrorUtils-suppressing scan when getModules is missing", () => {
     const { data: lbData, calls } = makeLogBoxData();
+    const lb = makeLogBox(lbData);
 
     function __r(id: number) {
-      if (id === 0) return { default: makeLogBox(lbData) };
+      if (id === 0) return { default: lb };
       if (id === 1) return lbData;
       throw new Error("missing");
     }
@@ -118,5 +173,10 @@ describe("DISABLE_LOGBOX_SCRIPT", () => {
     lbData.addException();
     expect(calls.addException).toBe(0);
     expect(globalShim.ErrorUtils).toEqual({ sentinel: 1 });
+
+    // Same re-enable behavior on the fallback path.
+    lb.ignoreAllLogs(false);
+    lbData.addException();
+    expect(calls.addException).toBe(1);
   });
 });

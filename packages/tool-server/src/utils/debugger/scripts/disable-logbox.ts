@@ -1,11 +1,17 @@
 /**
  * IIFE that scans the Metro module registry for the LogBox module
  * and calls `ignoreAllLogs(true)` to suppress the yellow/red overlay,
- * monkey-patches `LogBoxData.addException` to drop uncaught exceptions
- * (the redbox path used by `TurboModuleRegistry.getEnforcing(...)` and
- * other top-level module-load throws — `ignoreAllLogs` only flips an
+ * wraps `LogBoxData.addException` so it short-circuits while LogBox is
+ * disabled (the redbox path used by `TurboModuleRegistry.getEnforcing(...)`
+ * and other top-level module-load throws — `ignoreAllLogs` only flips an
  * observer flag and does not block `addException`), then clears any
  * already-queued LogBox entries.
+ *
+ * The wrapper consults `LBData.isDisabled()` on each call so a later
+ * `LB.ignoreAllLogs(false)` restores fatal-redbox visibility — important
+ * for devs who disconnect the debugger and keep developing. When
+ * `isDisabled` is unavailable, the wrapper defaults to no-op (matching
+ * the prior behavior on RN versions without that API).
  *
  * Uses `__r.getModules()` (available in DEV) to iterate only
  * already-initialized modules, avoiding forced evaluation of unloaded
@@ -70,8 +76,14 @@ export const DISABLE_LOGBOX_SCRIPT = `(function() {
     LB.ignoreAllLogs(true);
   }
   if (LBData) {
-    if (typeof LBData.addException === 'function') {
-      LBData.addException = function() {};
+    if (typeof LBData.addException === 'function' && !LBData.__argentAddExceptionWrapped) {
+      var origAddException = LBData.addException;
+      LBData.addException = function() {
+        var disabled = typeof LBData.isDisabled === 'function' ? LBData.isDisabled() : true;
+        if (disabled) return;
+        return origAddException.apply(LBData, arguments);
+      };
+      LBData.__argentAddExceptionWrapped = true;
     }
     LBData.clear();
   }
