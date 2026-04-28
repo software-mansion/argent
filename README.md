@@ -76,15 +76,16 @@ argent init
 
 `argent init` auto-detects and configures MCP for:
 
-| Editor      | Config location                                               |
-| ----------- | ------------------------------------------------------------- |
-| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)            |
-| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global) |
-| VS Code     | `.vscode/mcp.json`                                            |
-| Windsurf    | `.windsurf/mcp.json`                                          |
-| Zed         | `.zed/settings.json`                                          |
-| Gemini CLI  | `.gemini/settings.json`                                       |
-| Codex CLI   | `.codex/config.yaml`                                          |
+| Editor      | Config location                                                          |
+| ----------- | ------------------------------------------------------------------------ |
+| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                       |
+| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)            |
+| VS Code     | `.vscode/mcp.json`                                                       |
+| Windsurf    | `.windsurf/mcp.json`                                                     |
+| Zed         | `.zed/settings.json`                                                     |
+| Gemini CLI  | `.gemini/settings.json`                                                  |
+| Codex CLI   | `.codex/config.yaml`                                                     |
+| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
 
 ## Privacy
 
