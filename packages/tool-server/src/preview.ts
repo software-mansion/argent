@@ -4,7 +4,7 @@ import type { Request, Response, Router } from "express";
 import express from "express";
 import type { Registry } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE, type SimulatorServerApi } from "./blueprints/simulator-server";
-import { listSimulatorsTool } from "./tools/simulator/list-simulators";
+import { listDevicesTool } from "./tools/devices/list-devices";
 
 function findUiHtml(): string | null {
   // Candidate paths (first match wins):
@@ -34,15 +34,21 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/simulators", async (_req: Request, res: Response) => {
     try {
       const data = await registry.invokeTool<{
-        simulators: Array<{
-          udid: string;
-          name: string;
-          state: string;
-          runtime: string;
-          isAvailable: boolean;
-        }>;
-      }>(listSimulatorsTool.id);
-      res.json(data);
+        devices: Array<
+          | { platform: "ios"; udid: string; name: string; state: string; runtime: string }
+          | { platform: "android" }
+        >;
+      }>(listDevicesTool.id);
+      const simulators = data.devices
+        .filter((d): d is Extract<typeof d, { platform: "ios" }> => d.platform === "ios")
+        .map(({ udid, name, state, runtime }) => ({
+          udid,
+          name,
+          state,
+          runtime,
+          isAvailable: true,
+        }));
+      res.json({ simulators });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
