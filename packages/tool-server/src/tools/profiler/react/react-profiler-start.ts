@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import { z } from "zod";
 import { type Registry, type ToolDefinition, ServiceState } from "@argent/registry";
 import {
@@ -6,128 +7,17 @@ import {
   clearCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-debugger";
-
-const COMMIT_CAPTURE_SCRIPT = `
-(function __argent_commitCaptureInit() {
-  // Always reset the data array and commit index so each start() begins fresh.
-  globalThis.__ARGENT_DEVTOOLS_COMMITS__ = [];
-  globalThis.__ARGENT_DEVTOOLS_COMMIT_INDEX__ = 0;
-  var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook) return;
-  // Idempotency guard: only wrap onCommitFiberRoot once per JS runtime lifetime.
-  // Subsequent start() calls reset the arrays above but skip re-wrapping the hook,
-  // preventing N nested wrappers (and N duplicate entries per commit) on re-use.
-  if (hook.__argent_commit_capture__) return;
-  hook.__argent_commit_capture__ = true;
-  var origOnCommit = hook.onCommitFiberRoot;
-
-  function __argent_getChangedHookIndices(fiber) {
-    if (!fiber.alternate) return null;
-    var changed = [];
-    var curr = fiber.memoizedState;
-    var prev = fiber.alternate.memoizedState;
-    var idx = 0;
-    try {
-      while (curr) {
-        if (prev && curr.memoizedState !== prev.memoizedState) changed.push(idx);
-        curr = curr.next;
-        prev = prev ? prev.next : null;
-        idx++;
-        if (idx > 100) break;
-      }
-    } catch(e) {}
-    return changed.length > 0 ? changed : null;
-  }
-
-  function __argent_getNearestParentName(fiber) {
-    var ret = fiber.return;
-    while (ret) {
-      var pn = (ret.type && (ret.type.displayName || ret.type.name)) || null;
-      if (pn) return pn;
-      ret = ret.return;
-    }
-    return null;
-  }
-
-  hook.onCommitFiberRoot = function __argent_onCommitFiberRoot(rendererID, root, priorityLevel) {
-    var ts = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    var idx = globalThis.__ARGENT_DEVTOOLS_COMMIT_INDEX__++;
-    var commitDur = (root && root.current && typeof root.current.actualDuration === 'number')
-      ? root.current.actualDuration : 0;
-    var stack = root && root.current ? [root.current] : [];
-    while (stack.length > 0) {
-      var fiber = stack.pop();
-      if (!fiber) continue;
-      try {
-        var name = (fiber.type && (fiber.type.displayName || fiber.type.name)) || null;
-        if (name && typeof fiber.actualDuration === 'number') {
-          var isFirst = fiber.alternate === null;
-          var cd = null;
-          if (!isFirst && fiber.alternate) {
-            var pp = fiber.alternate.memoizedProps || {};
-            var cp = fiber.memoizedProps || {};
-            var changed = [];
-            var keys = Object.keys(cp);
-            for (var i = 0; i < keys.length; i++) {
-              if (pp[keys[i]] !== cp[keys[i]]) changed.push(keys[i]);
-            }
-            var ppkeys = Object.keys(pp);
-            for (var j = 0; j < ppkeys.length; j++) {
-              if (!(ppkeys[j] in cp)) changed.push(ppkeys[j]);
-            }
-            var changedHooks = __argent_getChangedHookIndices(fiber);
-            var hasContextDeps = false;
-            try { hasContextDeps = fiber.dependencies !== null && fiber.dependencies !== undefined; } catch(e) {}
-            cd = {
-              props: changed.length > 0 ? changed : null,
-              state: false,
-              hooks: changedHooks,
-              context: hasContextDeps && changed.length === 0 && changedHooks === null,
-              didHooksChange: changedHooks !== null,
-              isFirstMount: false
-            };
-          } else {
-            cd = { props: null, state: false, hooks: null, context: false, didHooksChange: false, isFirstMount: true };
-          }
-          var hookTypes = (fiber._debugHookTypes && fiber._debugHookTypes.length > 0) ? fiber._debugHookTypes : null;
-          var isCompilerOptimized = false;
-          try {
-            // Check current fiber's updateQueue (React 18.3+ / 19)
-            if (fiber.updateQueue && fiber.updateQueue.memoCache != null) isCompilerOptimized = true;
-            // Also check alternate fiber (the previous committed version)
-            if (!isCompilerOptimized && fiber.alternate && fiber.alternate.updateQueue && fiber.alternate.updateQueue.memoCache != null) isCompilerOptimized = true;
-          } catch(e) {}
-          if (!isCompilerOptimized && fiber._debugHookTypes) {
-            for (var hi = 0; hi < fiber._debugHookTypes.length; hi++) {
-              var ht = fiber._debugHookTypes[hi];
-              // 'useMemoCache' = React 19 internal name; 'MemoCache' = DevTools debug name;
-              // 'unstable_useMemoCache' = React 18 export name used by react/compiler-runtime
-              if (ht === 'useMemoCache' || ht === 'MemoCache' || ht === 'unstable_useMemoCache') { isCompilerOptimized = true; break; }
-            }
-          }
-          var parentName = __argent_getNearestParentName(fiber);
-          globalThis.__ARGENT_DEVTOOLS_COMMITS__.push({
-            commitIndex: idx,
-            timestamp: ts,
-            componentName: name,
-            actualDuration: fiber.actualDuration,
-            selfDuration: fiber.selfBaseDuration || 0,
-            commitDuration: commitDur,
-            didRender: fiber.actualDuration > 0,
-            changeDescription: cd,
-            hookTypes: hookTypes,
-            parentName: parentName,
-            isCompilerOptimized: isCompilerOptimized
-          });
-        }
-      } catch(e) {}
-      if (fiber.sibling) stack.push(fiber.sibling);
-      if (fiber.child) stack.push(fiber.child);
-    }
-    if (typeof origOnCommit === 'function') origOnCommit.call(this, rendererID, root, priorityLevel);
-  };
-})();
-`;
+import {
+  REACT_NATIVE_PROFILER_SETUP_SCRIPT,
+  READ_STATE_SCRIPT,
+  buildStartScript,
+  STOP_FOR_TAKEOVER_SCRIPT,
+} from "../../../utils/react-profiler/scripts";
+import {
+  classifyStaleness,
+  DEFAULT_STALE_THRESHOLD_MS,
+  type ProfilerSessionOwner,
+} from "../../../utils/react-profiler/session-ownership";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -138,7 +28,24 @@ const zodSchema = z.object({
     .positive()
     .default(100)
     .describe("CPU sampling interval in microseconds (default 100)"),
+  force: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Take over an active profiling session even when it is owned by another tool-server and still fresh. Set to true only when you know the prior owner is gone."
+    ),
 });
+
+type ReadStateResult =
+  | { hookExists: false }
+  | { hookExists: true; rendererInterfaceFound: false }
+  | {
+      hookExists: true;
+      rendererInterfaceFound: true;
+      isRunning: boolean;
+      owner: ProfilerSessionOwner | null;
+      nowEpochMs: number;
+    };
 
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
   try {
@@ -148,23 +55,17 @@ function safeGetState(registry: Registry, urn: string): ServiceState | null {
   }
 }
 
-export function createReactProfilerStartTool(registry: Registry): ToolDefinition<
-  z.infer<typeof zodSchema>,
-  {
-    started_at: string;
-    startedAtEpochMs: number;
-    hermes_version: string;
-    detected_architecture: string | null;
-  }
-> {
+export function createReactProfilerStartTool(
+  registry: Registry
+): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
   return {
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
-Sets up the ReactProfilerSession (auto-connects to Metro if not already connected), then starts CPU sampling and injects the React fiber commit-capture hook.
+Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling).
+If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session, but BEFORE OVERTAKING - ask the user for approval first, see relevant skill for guidance. 
 Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
-Use when you need to measure React render performance or JS CPU hotspots in the running app.
-Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success.
+Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     services: () => ({}),
@@ -193,8 +94,6 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         }
       }
 
-      // Pre-clean: if either service is in a non-healthy state, dispose both so
-      // resolveService starts fresh instead of hitting "terminated during init".
       const snapshot = registry.getSnapshot();
       const psEntry = snapshot.services.get(psUrn);
       const jsdEntry = snapshot.services.get(jsdUrn);
@@ -210,11 +109,9 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       }
 
       let api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
-
       if (!api.cdp.isConnected()) {
         await disposeAndWait();
         api = await registry.resolveService<ReactProfilerSessionApi>(psUrn);
-
         if (!api.cdp.isConnected()) {
           throw new Error(
             "CDP connection not available. The Hermes runtime may still be loading. Call react-profiler-start again."
@@ -224,55 +121,103 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       const cdp = api.cdp;
 
-      // If a previous stop failed mid-execution, profilingActive may still be true.
-      // Stop the profiler first to avoid a double-start error in Hermes.
+      // Inject the native-profiler instrumentation (idempotent).
+      await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+
+      // Snapshot backend state so we can decide whether to start, take over, or refuse.
+      const stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+      if (!stateJson) {
+        throw new Error("Failed to read React profiler state from runtime (no value returned).");
+      }
+      const state = JSON.parse(stateJson) as ReadStateResult;
+
+      if (!state.hookExists) {
+        throw new Error(
+          "__REACT_DEVTOOLS_GLOBAL_HOOK__ not present. React profiling requires a development build of the app."
+        );
+      }
+      if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
+        throw new Error(
+          "No React renderer interface attached yet. Wait for the app to render its first commit and retry."
+        );
+      }
+
+      // If a session is already active, classify it and decide.
+      if (state.isRunning) {
+        const owner: ProfilerSessionOwner | null = state.owner;
+        const staleness = classifyStaleness({
+          owner,
+          nowEpochMs: state.nowEpochMs,
+          staleThresholdMs: DEFAULT_STALE_THRESHOLD_MS,
+        });
+
+        const canTakeOverSilently = staleness.canReclaimWithoutForce || params.force === true;
+        if (!canTakeOverSilently) {
+          return {
+            already_running: true,
+            owner,
+            age_seconds: staleness.ageSeconds,
+            stale: staleness.stale,
+            how_to_reclaim:
+              'A profiling session is already active. Stop and ask the user whether you should take over the session. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field. If the sessions is marked as "stale", takeover is safe and may be initiated without prompting the user. Inform about possible cause of already running or stale session. When informing the user, warn about caveats of continuing profiling and taking over the old session.',
+          };
+        }
+
+        // Reclaim path: stop the prior session so we can start cleanly.
+        await cdp.evaluate(STOP_FOR_TAKEOVER_SCRIPT).catch(ignore);
+      }
+
+      // Defensive: if Hermes thinks it's already sampling CPU, stop before re-starting.
       if (api.profilingActive) {
         await cdp.send("Profiler.stop").catch(ignore);
         api.profilingActive = false;
       }
 
-      // Inject commit-capture hook FIRST (before startProfiling) so no commits are missed
-      await cdp.evaluate(COMMIT_CAPTURE_SCRIPT);
+      const sessionId = crypto.randomUUID();
+      const ownerPayload: ProfilerSessionOwner = {
+        sessionId,
+        // startedAtEpochMs/lastHeartbeatEpochMs set inside the script using
+        // the wrapper-captured value to eliminate clock skew.
+        startedAtEpochMs: 0,
+        lastHeartbeatEpochMs: 0,
+      };
 
-      // Re-enable Profiler domain (no-op if already enabled, re-enables after Fast Refresh)
       await cdp.send("Profiler.enable").catch(ignore);
+      await cdp.send("Profiler.start", { interval: params.sample_interval_us });
 
-      await cdp.send("Profiler.start", {
-        interval: params.sample_interval_us,
-      });
+      const startJson = (await cdp.evaluate(buildStartScript(JSON.stringify(ownerPayload)))) as
+        | string
+        | undefined;
+      if (!startJson) {
+        throw new Error("Failed to start React profiler (no value returned from runtime).");
+      }
+      const startResult = JSON.parse(startJson) as {
+        ok: boolean;
+        reason?: string;
+        message?: string;
+        startedAtEpochMs?: number;
+        isProfilingFlagSet?: boolean;
+        ownerInstalled?: boolean;
+      };
 
-      // Verify the hook was installed correctly
-      const verifyResult = (await cdp.evaluate(`
-        JSON.stringify({
-          hookExists: typeof globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ !== 'undefined',
-          arrayCreated: Array.isArray(globalThis.__ARGENT_DEVTOOLS_COMMITS__),
-          hookPatched: !!globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__?.__argent_commit_capture__
-        })
-      `)) as string | undefined;
-
-      let commitCaptureVerification: Record<string, boolean> | null = null;
-      if (verifyResult) {
-        commitCaptureVerification = JSON.parse(verifyResult) as Record<string, boolean>;
+      if (!startResult.ok) {
+        // Roll back CPU sampler so we don't leak state.
+        await cdp.send("Profiler.stop").catch(ignore);
+        throw new Error(
+          `React profiler failed to start (${startResult.reason ?? "unknown"}${
+            startResult.message ? `: ${startResult.message}` : ""
+          })`
+        );
       }
 
-      // Enable React profiling via DevTools hook (best-effort)
-      await cdp
-        .evaluate(
-          `
-          var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-          if (hook) {
-            hook._profiling = true;
-            if (typeof hook.startProfiling === 'function') hook.startProfiling(true);
-            if (hook.rendererInterfaces) {
-              hook.rendererInterfaces.forEach(function(ri) {
-                try { if (ri && ri.startProfiling) ri.startProfiling(true); } catch(e) {}
-              });
-            }
-          }
-          undefined
-        `
-        )
-        .catch(ignore);
+      if (startResult.isProfilingFlagSet !== true || startResult.ownerInstalled !== true) {
+        await cdp.send("Profiler.stop").catch(ignore);
+        throw new Error(
+          `React profiler failed to start (post-start verification failed: isProfilingFlagSet=${startResult.isProfilingFlagSet === true}, ownerInstalled=${startResult.ownerInstalled === true})`
+        );
+      }
+
+      const startedAtEpochMs = startResult.startedAtEpochMs ?? Date.now();
 
       clearCachedProfilerPaths(api.port, api.deviceId);
       api.sessionPaths = null;
@@ -280,16 +225,15 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       api.anyCompilerOptimized = null;
       api.hotCommitIndices = null;
       api.totalReactCommits = null;
-      api.profileStartWallMs = Date.now();
+      api.profileStartWallMs = startedAtEpochMs;
+      api.sessionId = sessionId;
+      api.ownerToolServerPid = process.pid;
 
       return {
-        started_at: new Date(api.profileStartWallMs).toISOString(),
-        startedAtEpochMs: api.profileStartWallMs,
+        started_at: new Date(startedAtEpochMs).toISOString(),
+        startedAtEpochMs,
         hermes_version: api.hermesVersion,
         detected_architecture: api.detectedArchitecture,
-        ...(commitCaptureVerification && {
-          commit_capture: commitCaptureVerification,
-        }),
       };
     },
   };
