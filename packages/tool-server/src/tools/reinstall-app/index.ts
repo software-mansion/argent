@@ -29,13 +29,6 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
-const dispatch = dispatchByPlatform<ReinstallAppServices, Params, ReinstallAppResult>({
-  toolId: "reinstall-app",
-  capability,
-  ios: iosImpl,
-  android: androidImpl,
-});
-
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
   description: `Install or reinstall an app on the device.
@@ -43,6 +36,11 @@ Use for a full reinstall after rebuilding, or to clear app data (iOS clears data
 Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android).`,
   zodSchema,
   capability,
-  services: dispatch.services,
-  execute: dispatch.execute,
+  services: () => ({}),
+  execute: dispatchByPlatform<ReinstallAppServices, Params, ReinstallAppResult>({
+    toolId: "reinstall-app",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
 };

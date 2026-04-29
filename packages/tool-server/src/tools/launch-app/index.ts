@@ -1,6 +1,8 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { resolveDevice } from "../../utils/device-info";
 import type { LaunchAppResult, LaunchAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
@@ -44,13 +46,6 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
-const dispatch = dispatchByPlatform<LaunchAppServices, Params, LaunchAppResult>({
-  toolId: "launch-app",
-  capability,
-  ios: iosImpl,
-  android: androidImpl,
-});
-
 export const launchAppTool: ToolDefinition<Params, LaunchAppResult> = {
   id: "launch-app",
   description: `Open an app by its bundle id (iOS) or package name (Android).
@@ -63,6 +58,16 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
   searchHint: "open start app bundle id package simulator emulator launch",
   zodSchema,
   capability,
-  services: dispatch.services,
-  execute: dispatch.execute,
+  // Only iOS needs the native-devtools service for launch-time injection.
+  // Resolving it on Android would force the iOS-only blueprint to spin up.
+  services: (params): Record<string, ServiceRef> =>
+    resolveDevice(params.udid).platform === "ios"
+      ? { nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}` }
+      : {},
+  execute: dispatchByPlatform<LaunchAppServices, Params, LaunchAppResult>({
+    toolId: "launch-app",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
 };

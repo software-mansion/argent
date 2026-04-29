@@ -1,6 +1,8 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
+import { resolveDevice } from "../../utils/device-info";
 import type { RestartAppResult, RestartAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
@@ -26,13 +28,6 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
-const dispatch = dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({
-  toolId: "restart-app",
-  capability,
-  ios: iosImpl,
-  android: androidImpl,
-});
-
 export const restartAppTool: ToolDefinition<Params, RestartAppResult> = {
   id: "restart-app",
   description: `Terminate then relaunch an app by bundle id / package name.
@@ -42,6 +37,15 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
   searchHint: "terminate relaunch restart reset app bundle id package simulator emulator",
   zodSchema,
   capability,
-  services: dispatch.services,
-  execute: dispatch.execute,
+  // Only iOS needs the native-devtools service for relaunch injection.
+  services: (params): Record<string, ServiceRef> =>
+    resolveDevice(params.udid).platform === "ios"
+      ? { nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}` }
+      : {},
+  execute: dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({
+    toolId: "restart-app",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
 };

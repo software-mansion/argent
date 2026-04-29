@@ -24,13 +24,6 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
-const dispatch = dispatchByPlatform<OpenUrlServices, Params, OpenUrlResult>({
-  toolId: "open-url",
-  capability,
-  ios: iosImpl,
-  android: androidImpl,
-});
-
 export const openUrlTool: ToolDefinition<Params, OpenUrlResult> = {
   id: "open-url",
   description: `Open a URL or URL scheme on the device.
@@ -39,6 +32,11 @@ Cross-platform schemes: https://, tel:, mailto:. iOS also: messages://, settings
 Returns { opened, url }. Fails if no app is registered to handle the URI.`,
   zodSchema,
   capability,
-  services: dispatch.services,
-  execute: dispatch.execute,
+  services: () => ({}),
+  execute: dispatchByPlatform<OpenUrlServices, Params, OpenUrlResult>({
+    toolId: "open-url",
+    capability,
+    ios: iosImpl,
+    android: androidImpl,
+  }),
 };

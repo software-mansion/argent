@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import type { SimulatorServerApi } from "../../blueprints/simulator-server";
-import { dispatchByPlatform, type PlatformImpl } from "../../utils/cross-platform-tool";
+import { resolveDevice } from "../../utils/device-info";
+import { assertSupported } from "../../utils/capability";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -54,77 +54,19 @@ type RunSequenceResult = {
   steps: StepResult[];
 };
 
-interface Services {
-  simulatorServer: SimulatorServerApi;
-}
-
 // run-sequence is platform-neutral by construction: every step is dispatched
 // through `registry.invokeTool`, and each step's tool runs its own
-// `dispatchByPlatform` against `params.udid`. The capability here gates the
-// *outer* invocation (uniformly via `dispatchByPlatform`), mirroring the inner
-// tools' support matrix so the failure mode is consistent.
+// `dispatchByPlatform` against `params.udid`. The capability here just gates
+// the *outer* invocation, mirroring the inner tools' support matrix so the
+// failure mode is consistent.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-const sharedServices: PlatformImpl<Services, Params, RunSequenceResult>["services"] = (params) => ({
-  simulatorServer: `SimulatorServer:${params.udid}`,
-});
-
 export function createRunSequenceTool(
   registry: Registry
 ): ToolDefinition<Params, RunSequenceResult> {
-  // Same handler runs on iOS and Android — the per-step tools handle their
-  // own platform routing internally. Wrapping it in `dispatchByPlatform`
-  // (rather than calling `assertSupported` inline) keeps the capability
-  // gate uniform with every other cross-platform tool.
-  const sharedHandler: PlatformImpl<Services, Params, RunSequenceResult>["handler"] = async (
-    _services,
-    params
-  ) => {
-    const { udid, steps } = params;
-    const results: StepResult[] = [];
-
-    for (const step of steps) {
-      if (!ALLOWED_TOOLS.has(step.tool)) {
-        results.push({
-          tool: step.tool,
-          error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
-        });
-        break;
-      }
-
-      try {
-        const toolArgs = { ...step.args, udid };
-        const result = await registry.invokeTool(step.tool, toolArgs);
-        results.push({ tool: step.tool, result });
-      } catch (err) {
-        results.push({
-          tool: step.tool,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        break;
-      }
-
-      const delay = step.delayMs ?? 100;
-      if (delay > 0) await sleep(delay);
-    }
-
-    return {
-      completed: results.filter((r) => "result" in r).length,
-      total: steps.length,
-      steps: results,
-    };
-  };
-
-  const dispatch = dispatchByPlatform<Services, Params, RunSequenceResult>({
-    toolId: "run-sequence",
-    capability,
-    ios: { services: sharedServices, handler: sharedHandler },
-    android: { services: sharedServices, handler: sharedHandler },
-  });
-
   return {
     id: "run-sequence",
     description: `Execute multiple simulator interaction steps in a single call.
@@ -166,7 +108,46 @@ Stops on the first error and returns partial results.`,
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     capability,
-    services: dispatch.services,
-    execute: dispatch.execute,
+    services: (params) => ({
+      simulatorServer: `SimulatorServer:${params.udid}`,
+    }),
+    async execute(_services, params) {
+      const device = resolveDevice(params.udid);
+      assertSupported("run-sequence", capability, device);
+
+      const { udid, steps } = params;
+      const results: StepResult[] = [];
+
+      for (const step of steps) {
+        if (!ALLOWED_TOOLS.has(step.tool)) {
+          results.push({
+            tool: step.tool,
+            error: `Tool "${step.tool}" is not allowed in run-sequence. Allowed: ${[...ALLOWED_TOOLS].join(", ")}`,
+          });
+          break;
+        }
+
+        try {
+          const toolArgs = { ...step.args, udid };
+          const result = await registry.invokeTool(step.tool, toolArgs);
+          results.push({ tool: step.tool, result });
+        } catch (err) {
+          results.push({
+            tool: step.tool,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          break;
+        }
+
+        const delay = step.delayMs ?? 100;
+        if (delay > 0) await sleep(delay);
+      }
+
+      return {
+        completed: results.filter((r) => "result" in r).length,
+        total: steps.length,
+        steps: results,
+      };
+    },
   };
 }
