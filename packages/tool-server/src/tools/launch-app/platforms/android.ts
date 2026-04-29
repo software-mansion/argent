@@ -1,6 +1,6 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
-import type { LaunchAppParams, LaunchAppResult, LaunchAppServices } from "./shared";
+import type { LaunchAppParams, LaunchAppResult, LaunchAppServices } from "../types";
 
 // `am start -W` always prints a `Status:` banner. A positive-match check on
 // `Status: ok` is more robust than scanning for keywords like "Error": the old

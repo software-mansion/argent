@@ -1,6 +1,6 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
-import type { RestartAppParams, RestartAppResult, RestartAppServices } from "./shared";
+import type { RestartAppParams, RestartAppResult, RestartAppServices } from "../types";
 
 export const androidImpl: PlatformImpl<RestartAppServices, RestartAppParams, RestartAppResult> = {
   requires: ["adb"],

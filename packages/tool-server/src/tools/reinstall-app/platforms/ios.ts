@@ -6,7 +6,7 @@ import type {
   ReinstallAppParams,
   ReinstallAppResult,
   ReinstallAppServices,
-} from "./shared";
+} from "../types";
 
 const execFileAsync = promisify(execFile);
 

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "./shared";
+import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 
 const execFileAsync = promisify(execFile);
 

@@ -1,6 +1,6 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
-import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "./shared";
+import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "../types";
 
 export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["adb"],

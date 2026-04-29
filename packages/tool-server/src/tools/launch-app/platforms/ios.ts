@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import type { LaunchAppParams, LaunchAppResult, LaunchAppServices } from "./shared";
+import type { LaunchAppParams, LaunchAppResult, LaunchAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
 
