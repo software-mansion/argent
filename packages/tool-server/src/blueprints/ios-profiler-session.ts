@@ -20,7 +20,13 @@ export interface IosProfilerSessionApi {
   wallClockStartMs: number | null;
   parsedData: IosProfilerParsedData | null;
   recordingTimeout: NodeJS.Timeout | null;
+  recordingTimedOut: boolean;
 }
+
+// Matches STOP_GRACE_MS in ios-profiler-stop.ts — both wait on the same
+// physical operation (xctrace finalising the .trace bundle after SIGINT).
+// A tight bound here re-introduces the §3.4 truncation bug on large traces.
+const DISPOSE_FINALIZE_MS = 30_000;
 
 export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSessionApi, string> = {
   namespace: IOS_PROFILER_SESSION_NAMESPACE,
@@ -40,6 +46,7 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSession
       wallClockStartMs: null,
       parsedData: null,
       recordingTimeout: null,
+      recordingTimedOut: false,
     };
 
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -52,12 +59,31 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSession
           state.recordingTimeout = null;
         }
         if (state.profilingActive && state.xctracePid) {
+          const pid = state.xctracePid;
           try {
-            process.kill(state.xctracePid, "SIGINT");
+            process.kill(pid, "SIGINT");
+          } catch {
+            // process may already be dead
+          }
+          // Give xctrace a bounded window to finalise the trace bundle on
+          // disk. Without this wait, registry teardown during an active
+          // recording produces a truncated .trace.
+          const deadline = Date.now() + DISPOSE_FINALIZE_MS;
+          while (Date.now() < deadline) {
+            try {
+              process.kill(pid, 0);
+            } catch {
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          try {
+            process.kill(pid, "SIGKILL");
           } catch {
             // process may already be dead
           }
           state.profilingActive = false;
+          state.xctracePid = null;
         }
       },
       events,

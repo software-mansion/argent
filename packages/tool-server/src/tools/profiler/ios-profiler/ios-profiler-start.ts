@@ -7,8 +7,12 @@ import {
   type IosProfilerSessionApi,
 } from "../../../blueprints/ios-profiler-session";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+import { listenForDarwinNotification, type NotifyHandle } from "../../../utils/ios-profiler/notify";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
+const STARTUP_TIMEOUT_MS = 15_000;
+const DETECT_RUNNING_APP_TIMEOUT_MS = 5_000;
+const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator or device UDID"),
@@ -32,10 +36,19 @@ interface AppInfo {
 }
 
 function detectRunningApp(udid: string): string {
-  // 1. Get running UIKitApplication processes
-  const launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
-    encoding: "utf-8",
-  });
+  let launchctlOutput: string;
+  try {
+    launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+    );
+  }
 
   const runningBundleIds = new Set<string>();
   for (const line of launchctlOutput.split("\n")) {
@@ -51,14 +64,22 @@ function detectRunningApp(udid: string): string {
     );
   }
 
-  // 2. Get installed app metadata
-  const listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
-    encoding: "utf-8",
-  });
+  let listAppsOutput: string;
+  try {
+    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+    );
+  }
 
   const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
 
-  // 3. Cross-reference: running user apps
   const runningUserApps: AppInfo[] = [];
   for (const [, appInfo] of Object.entries(installedApps)) {
     if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
@@ -121,68 +142,191 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
 
     api.appProcess = appProcess;
     api.traceFile = outputFile;
+    api.recordingTimedOut = false;
+
+    // P2: subscribe-before-spawn for the locale-robust ready signal. Darwin
+    // notifications are not queued, so the listener must be registered before
+    // xctrace can fire `--notify-tracing-started`. The stdout substring match
+    // remains as a fallback.
+    const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
+    let notify: NotifyHandle | null = null;
+    try {
+      const handle = listenForDarwinNotification(notifyName);
+      const ready = await Promise.race([
+        handle.ready.then(() => true as const),
+        new Promise<false>((r) => setTimeout(() => r(false), NOTIFY_REGISTER_TIMEOUT_MS)),
+      ]);
+      if (ready) {
+        notify = handle;
+      } else {
+        handle.cancel();
+        process.stderr.write(
+          `[ios-profiler] notifyutil did not register within ${NOTIFY_REGISTER_TIMEOUT_MS} ms; ` +
+            `falling back to stdout substring match.\n`
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(
+        `[ios-profiler] failed to spawn notifyutil (${msg}); falling back to stdout substring match.\n`
+      );
+    }
+
+    const xctraceArgs = [
+      "record",
+      "--template",
+      templatePath,
+      "--device",
+      params.device_id,
+      "--attach",
+      appProcess,
+      "--output",
+      outputFile,
+      "--no-prompt",
+    ];
+    if (notify) {
+      xctraceArgs.push("--notify-tracing-started", notifyName);
+    }
 
     return new Promise((resolve, reject) => {
-      const xctraceProcess = spawn("xctrace", [
-        "record",
-        "--template",
-        templatePath,
-        "--device",
-        params.device_id,
-        "--attach",
-        appProcess,
-        "--output",
-        outputFile,
-      ]);
+      const xctraceProcess = spawn("xctrace", xctraceArgs, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
       api.xctracePid = xctraceProcess.pid ?? null;
 
+      let settled = false;
+      let stderrBuffer = "";
+
+      const cleanupNotify = () => {
+        if (notify) {
+          notify.cancel();
+          notify = null;
+        }
+      };
+
+      let startupTimer: NodeJS.Timeout | null = null;
+
+      const onReady = () => {
+        if (settled) return;
+        settled = true;
+        if (startupTimer) {
+          clearTimeout(startupTimer);
+          startupTimer = null;
+        }
+        cleanupNotify();
+        api.profilingActive = true;
+        api.wallClockStartMs = Date.now();
+        if (!api.xctracePid) {
+          // Should not happen — pid is set synchronously after spawn — but
+          // guard anyway so we don't resolve with `pid: 0`.
+          reject(new Error("xctrace process has no pid; cannot resolve start."));
+          return;
+        }
+        api.recordingTimeout = setTimeout(
+          () => {
+            try {
+              xctraceProcess.kill("SIGINT");
+            } catch {
+              // already dead
+            }
+            api.profilingActive = false;
+            api.xctracePid = null;
+            api.recordingTimeout = null;
+            api.recordingTimedOut = true;
+          },
+          10 * 60 * 1000
+        );
+        resolve({
+          status: "recording",
+          pid: api.xctracePid,
+          traceFile: outputFile,
+        });
+      };
+
+      const clearStartupTimer = () => {
+        if (startupTimer) {
+          clearTimeout(startupTimer);
+          startupTimer = null;
+        }
+      };
+
+      startupTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        startupTimer = null;
+        cleanupNotify();
+        try {
+          xctraceProcess.kill("SIGKILL");
+        } catch {
+          // already dead
+        }
+        api.xctracePid = null;
+        api.traceFile = null;
+        api.appProcess = null;
+        reject(
+          new Error(
+            `xctrace record did not start within ${STARTUP_TIMEOUT_MS} ms. ` +
+              `Last stderr: ${stderrBuffer.trim() || "<empty>"}`
+          )
+        );
+      }, STARTUP_TIMEOUT_MS);
+
+      if (notify) {
+        notify.fired.then(onReady).catch(() => {
+          // notify failures fall through to stdout substring match
+        });
+      }
+
       xctraceProcess.stdout.on("data", (data: Buffer) => {
         const output = data.toString();
-
-        if (output.includes("Ctrl-C to stop") || output.includes("Starting recording")) {
-          api.profilingActive = true;
-          api.wallClockStartMs = Date.now();
-          if (api.xctracePid) {
-            api.recordingTimeout = setTimeout(
-              () => {
-                xctraceProcess.kill("SIGINT");
-                api.profilingActive = false;
-                api.xctracePid = null;
-                api.recordingTimeout = null;
-              },
-              10 * 60 * 1000
-            );
-            resolve({
-              status: "recording",
-              pid: api.xctracePid,
-              traceFile: outputFile,
-            });
-          }
+        if (
+          !settled &&
+          (output.includes("Ctrl-C to stop") || output.includes("Starting recording"))
+        ) {
+          onReady();
         }
       });
 
       xctraceProcess.stderr.on("data", (data: Buffer) => {
-        const errorOutput = data.toString();
-        if (
-          errorOutput.includes("Target failed to run") ||
-          errorOutput.includes("failed with errors")
-        ) {
-          api.xctracePid = null;
-          if (api.recordingTimeout) {
-            clearTimeout(api.recordingTimeout);
-            api.recordingTimeout = null;
+        stderrBuffer += data.toString();
+      });
+
+      xctraceProcess.on("exit", (code, signal) => {
+        if (settled) {
+          // Recording was already live (or already failed); clean up if it exits.
+          if (api.profilingActive) {
+            if (api.recordingTimeout) {
+              clearTimeout(api.recordingTimeout);
+              api.recordingTimeout = null;
+            }
+            api.xctracePid = null;
+            api.profilingActive = false;
           }
-          reject(new Error(`Failed to attach to iOS process: ${errorOutput}`));
+          return;
         }
+        settled = true;
+        clearStartupTimer();
+        cleanupNotify();
+        api.xctracePid = null;
+        api.traceFile = null;
+        api.appProcess = null;
+        reject(
+          new Error(
+            `xctrace record exited before recording started (code=${code}, signal=${signal}). ` +
+              `stderr: ${stderrBuffer.trim() || "<empty>"}`
+          )
+        );
       });
 
       xctraceProcess.on("error", (err: Error) => {
+        if (settled) return;
+        settled = true;
+        clearStartupTimer();
+        cleanupNotify();
         api.xctracePid = null;
-        if (api.recordingTimeout) {
-          clearTimeout(api.recordingTimeout);
-          api.recordingTimeout = null;
-        }
+        api.traceFile = null;
+        api.appProcess = null;
         reject(new Error(`Failed to start xctrace: ${err.message}`));
       });
     });
