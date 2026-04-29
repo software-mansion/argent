@@ -9,10 +9,6 @@ export interface ReinstallAppParams {
   udid: string;
   bundleId: string;
   appPath: string;
-  /** Android-only: ignored on iOS. */
-  grantPermissions?: boolean;
-  /** Android-only: ignored on iOS. */
-  allowDowngrade?: boolean;
 }
 
 export interface ReinstallAppResult {

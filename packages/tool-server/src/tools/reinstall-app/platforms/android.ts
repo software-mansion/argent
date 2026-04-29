@@ -12,9 +12,11 @@ export const androidImpl: PlatformImpl<
   handler: async (_services, params) => {
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
-    const args = ["-s", udid, "install", "-r"];
-    if (params.allowDowngrade) args.push("-d");
-    if (params.grantPermissions) args.push("-g");
+
+    // -r - Allow app overwriting
+    // -d - Allow installations with lower versions
+    // -g - Prevent permissions popup
+    const args = ["-s", udid, "install", "-r", "-d", "-g"];
     args.push(absolute);
     const { stdout, stderr } = await runAdb(args, { timeoutMs: 180_000 });
     const output = `${stdout}\n${stderr}`;

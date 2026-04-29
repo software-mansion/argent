@@ -19,14 +19,6 @@ const zodSchema = z.object({
     .describe(
       "Path to the app bundle. iOS: `.app` directory (e.g. ./build/.../MyApp.app). Android: `.apk` file (e.g. android/app/build/outputs/apk/debug/app-debug.apk). Relative paths are resolved from the current working directory."
     ),
-  grantPermissions: z
-    .boolean()
-    .optional()
-    .describe("Android-only: auto-grant all runtime permissions on install. Ignored on iOS."),
-  allowDowngrade: z
-    .boolean()
-    .optional()
-    .describe("Android-only: allow installing a lower versionCode. Ignored on iOS."),
 });
 
 type Params = z.infer<typeof zodSchema>;
