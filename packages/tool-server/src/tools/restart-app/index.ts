@@ -3,7 +3,8 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import { iosImpl, type RestartAppResult, type RestartAppServices } from "./platforms/ios";
+import type { RestartAppResult, RestartAppServices } from "./platforms/shared";
+import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 const BUNDLE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;

@@ -3,7 +3,8 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import { iosImpl, type LaunchAppResult, type LaunchAppServices } from "./platforms/ios";
+import type { LaunchAppResult, LaunchAppServices } from "./platforms/shared";
+import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 // Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;

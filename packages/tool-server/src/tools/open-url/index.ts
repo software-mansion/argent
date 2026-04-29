@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type OpenUrlResult, type OpenUrlServices } from "./platforms/ios";
+import type { OpenUrlResult, OpenUrlServices } from "./platforms/shared";
+import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
 const zodSchema = z.object({

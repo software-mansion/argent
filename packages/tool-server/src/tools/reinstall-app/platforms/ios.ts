@@ -2,21 +2,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve as resolvePath } from "node:path";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import type {
+  ReinstallAppParams,
+  ReinstallAppResult,
+  ReinstallAppServices,
+} from "./shared";
 
 const execFileAsync = promisify(execFile);
-
-export interface ReinstallAppParams {
-  udid: string;
-  bundleId: string;
-  appPath: string;
-}
-
-export interface ReinstallAppResult {
-  reinstalled: boolean;
-  bundleId: string;
-}
-
-export type ReinstallAppServices = Record<string, never>;
 
 export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, ReinstallAppResult> = {
   requires: ["xcrun"],

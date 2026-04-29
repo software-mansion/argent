@@ -1,7 +1,7 @@
 import { resolve as resolvePath } from "node:path";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { runAdb } from "../../../utils/adb";
-import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "./ios";
+import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "./shared";
 
 export const androidImpl: PlatformImpl<
   ReinstallAppServices,

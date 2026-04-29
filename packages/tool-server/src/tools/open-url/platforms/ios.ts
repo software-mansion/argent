@@ -1,20 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import type { OpenUrlParams, OpenUrlResult, OpenUrlServices } from "./shared";
 
 const execFileAsync = promisify(execFile);
-
-export interface OpenUrlParams {
-  udid: string;
-  url: string;
-}
-
-export interface OpenUrlResult {
-  opened: boolean;
-  url: string;
-}
-
-export type OpenUrlServices = Record<string, never>;
 
 export const iosImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlResult> = {
   requires: ["xcrun"],
