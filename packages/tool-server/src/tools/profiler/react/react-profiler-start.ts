@@ -62,7 +62,7 @@ export function createReactProfilerStartTool(
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.
 Delegates React commit capture to the in-app React DevTools backend (ri.startProfiling).
-If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session.
+If another tool-server already owns the session, returns { already_running: true, owner, stale, how_to_reclaim } without clobbering their data. Pass { force: true } to reclaim a fresh owner's session, but BEFORE OVERTAKING - ask the user for approval first, see relevant skill for guidance. 
 Before calling this, ask the user if they also want native iOS profiling (ios-profiler-start) — recommend running both in parallel for a complete picture.
 After starting, ask the user to perform the interaction to profile, then call react-profiler-stop.
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
@@ -159,7 +159,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
             how_to_reclaim:
-              "A profiling session is already active. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field — if it looks stale (lastHeartbeatEpochMs is old) or has no owner, takeover is safe. Ask the user, whether you should simply continue with ongoing profiling session or reinitialise it with new react-profiler-start. Inform about possible cause of already running or stale session. Inform about caveats of continuing profiling the old session.",
+              'A profiling session is already active. Stop and ask the user whether you should take over the session. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field. If the sessions is marked as "stale", takeover is safe and may be initiated without prompting the user. Inform about possible cause of already running or stale session. When informing the user, warn about caveats of continuing profiling and taking over the old session.',
           };
         }
 

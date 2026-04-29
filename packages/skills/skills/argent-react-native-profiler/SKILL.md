@@ -82,6 +82,9 @@ Mind the react-native and ios-native profiler selection mentioned above when sta
 
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
+If you received information about **existing profiling session** being owned by another agent:
+- if session is marked as "stale", you may overtake it without prompting the user for allowance
+- if session is NOT "stale" - before taking action and terminating the other session, **stop and ask user what you should do**, explaining the situation.
 
 #### Annotate every interaction
 
