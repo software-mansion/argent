@@ -25,7 +25,7 @@ describe("dispatchByPlatform", () => {
     const iosHandler = vi.fn().mockResolvedValue("from-ios");
     const androidHandler = vi.fn().mockResolvedValue("from-android");
 
-    const execute = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const { execute } = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
       toolId: "test",
       capability: capabilityBoth,
       ios: { handler: iosHandler },
@@ -41,7 +41,7 @@ describe("dispatchByPlatform", () => {
   });
 
   it("rejects with UnsupportedOperationError when capability does not declare the platform", async () => {
-    const execute = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const { execute } = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
       toolId: "ios-only-tool",
       capability: capabilityIosOnly,
       ios: { handler: async () => "ok" },
@@ -60,7 +60,7 @@ describe("dispatchByPlatform", () => {
     const iosHandler = vi.fn().mockResolvedValue("ios-ran");
     const androidHandler = vi.fn().mockResolvedValue("android-ran");
 
-    const execute = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const { execute } = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
       toolId: "test",
       capability: capabilityBoth,
       ios: { requires: ["xcrun"], handler: iosHandler },
@@ -77,7 +77,7 @@ describe("dispatchByPlatform", () => {
       return { sawSignal: !!options?.signal, sawService: services.foo };
     });
 
-    const execute = dispatchByPlatform<{ foo: string }, { udid: string }, unknown>({
+    const { execute } = dispatchByPlatform<{ foo: string }, { udid: string }, unknown>({
       toolId: "test",
       capability: capabilityBoth,
       ios: { handler },
@@ -98,7 +98,7 @@ describe("dispatchByPlatform", () => {
       handler,
     };
 
-    const a = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const { execute } = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
       toolId: "t",
       capability: capabilityBoth,
       ios: noRequires,
@@ -106,7 +106,59 @@ describe("dispatchByPlatform", () => {
     });
 
     // No primed cache, no ensureDeps probe — these would fail if ensureDeps fired.
-    await expect(a({}, { udid: iosUdid })).resolves.toBe("ok");
-    await expect(a({}, { udid: androidUdid })).resolves.toBe("ok");
+    await expect(execute({}, { udid: iosUdid })).resolves.toBe("ok");
+    await expect(execute({}, { udid: androidUdid })).resolves.toBe("ok");
+  });
+
+  it("uses the custom `device` callback for tools without a single udid input", async () => {
+    type P = { iosUdid?: string; androidName?: string };
+    const iosHandler = vi.fn().mockResolvedValue("from-ios");
+    const androidHandler = vi.fn().mockResolvedValue("from-android");
+
+    const { execute } = dispatchByPlatform<Record<string, never>, P, string>({
+      toolId: "boot-like",
+      capability: capabilityBoth,
+      device: (params) =>
+        params.iosUdid
+          ? { id: params.iosUdid, platform: "ios", kind: "simulator" }
+          : { id: params.androidName!, platform: "android", kind: "emulator" },
+      ios: { handler: iosHandler },
+      android: { handler: androidHandler },
+    });
+
+    expect(await execute({}, { iosUdid })).toBe("from-ios");
+    expect(await execute({}, { androidName: "Pixel_7" })).toBe("from-android");
+    expect(iosHandler).toHaveBeenCalledOnce();
+    expect(androidHandler).toHaveBeenCalledOnce();
+  });
+
+  it("returns a `services` function that picks the matching branch's URN map", async () => {
+    const { services } = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+      toolId: "test",
+      capability: capabilityBoth,
+      ios: {
+        services: (params) => ({ nativeDevtools: `NativeDevtools:${params.udid}` }),
+        handler: async () => "ok",
+      },
+      android: {
+        services: () => ({}),
+        handler: async () => "ok",
+      },
+    });
+
+    expect(services({ udid: iosUdid })).toEqual({ nativeDevtools: `NativeDevtools:${iosUdid}` });
+    expect(services({ udid: androidUdid })).toEqual({});
+  });
+
+  it("returns an empty services map when neither branch declares any", async () => {
+    const { services } = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+      toolId: "test",
+      capability: capabilityBoth,
+      ios: { handler: async () => "ok" },
+      android: { handler: async () => "ok" },
+    });
+
+    expect(services({ udid: iosUdid })).toEqual({});
+    expect(services({ udid: androidUdid })).toEqual({});
   });
 });

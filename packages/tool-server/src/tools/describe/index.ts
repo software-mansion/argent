@@ -27,12 +27,25 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
-// `describe` doesn't fit dispatchByPlatform's standard service-typed
-// signature because the iOS handler resolves AX / native-devtools through
-// `registry` (closed over below) rather than via the registry's services()
-// declaration. We still feed `iosRequires` / `androidRequires` to the
-// dispatcher so the per-branch host-binary preflight fires uniformly.
+// `describe` doesn't declare its services through `PlatformImpl.services`
+// because the iOS handler resolves AX / native-devtools through `registry`
+// (closed over below) rather than via the registry's services() declaration.
+// We still feed `iosRequires` / `androidRequires` to the dispatcher so the
+// per-branch host-binary preflight fires uniformly.
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
+  const dispatch = dispatchByPlatform<Record<string, unknown>, Params, DescribeResult>({
+    toolId: "describe",
+    capability,
+    ios: {
+      requires: iosRequires,
+      handler: (_services, params) => describeIos(registry, params),
+    },
+    android: {
+      requires: androidRequires,
+      handler: (_services, params) => describeAndroid(params.udid, params.bundleId),
+    },
+  });
+
   return {
     id: "describe",
     description: `Get the accessibility element tree for the current screen.
@@ -55,18 +68,7 @@ For React Native apps, debugger-component-tree returns React component names wit
     searchHint: "accessibility element tree ui hierarchy tap coordinates ios android",
     zodSchema,
     capability,
-    services: () => ({}),
-    execute: dispatchByPlatform<Record<string, unknown>, Params, DescribeResult>({
-      toolId: "describe",
-      capability,
-      ios: {
-        requires: iosRequires,
-        handler: (_services, params) => describeIos(registry, params),
-      },
-      android: {
-        requires: androidRequires,
-        handler: (_services, params) => describeAndroid(params.udid, params.bundleId),
-      },
-    }),
+    services: dispatch.services,
+    execute: dispatch.execute,
   };
 }
