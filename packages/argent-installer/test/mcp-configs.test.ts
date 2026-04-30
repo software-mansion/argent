@@ -910,13 +910,34 @@ describe("opencode adapter", () => {
     expect(adapter.projectPath(tmpDir)).toBe(path.join(tmpDir, "opencode.json"));
   });
 
-  it("globalPath prefers existing config.json over default opencode.json", () => {
+  it("globalPath returns legacy config.json when it is the only candidate", () => {
     homedirOverride = path.join(tmpDir, "home");
     const opencodeDir = path.join(homedirOverride, ".config", "opencode");
     fs.mkdirSync(opencodeDir, { recursive: true });
     const configJsonPath = path.join(opencodeDir, "config.json");
     fs.writeFileSync(configJsonPath, "{}");
     expect(adapter.globalPath()).toBe(configJsonPath);
+  });
+
+  // Mirrors opencode's own globalConfigFile() precedence so the file argent
+  // writes is the same one opencode treats as authoritative.
+  it("globalPath prefers opencode.jsonc over opencode.json over config.json", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const opencodeDir = path.join(homedirOverride, ".config", "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.writeFileSync(path.join(opencodeDir, "config.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.jsonc"), "{}");
+    expect(adapter.globalPath()).toBe(path.join(opencodeDir, "opencode.jsonc"));
+  });
+
+  it("globalPath prefers opencode.json over config.json when .jsonc is absent", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const opencodeDir = path.join(homedirOverride, ".config", "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.writeFileSync(path.join(opencodeDir, "config.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.json"), "{}");
+    expect(adapter.globalPath()).toBe(path.join(opencodeDir, "opencode.json"));
   });
 
   it("globalPath falls back to opencode.json when no candidate exists", () => {
