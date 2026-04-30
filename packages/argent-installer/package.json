@@ -13,6 +13,7 @@
   "dependencies": {
     "@argent/tools-client": "file:../argent-tools-client",
     "@clack/prompts": "^1.1.0",
+    "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",
     "semver": "^7.7.4",
     "smol-toml": "^1.6.1",

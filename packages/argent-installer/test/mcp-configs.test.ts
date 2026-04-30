@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parse as parseYaml } from "yaml";
+import { parse as parseJsonc } from "jsonc-parser";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
@@ -53,6 +54,15 @@ function setupTmpDir(): string {
 
 function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+// JSONC-tolerant variant for tests that read back files the Zed adapter
+// wrote — those preserve user comments and trailing commas, so strict
+// JSON.parse rejects them.
+function readJsoncFile(filePath: string): Record<string, unknown> {
+  return parseJsonc(fs.readFileSync(filePath, "utf8"), [], {
+    allowTrailingComma: true,
+  }) as Record<string, unknown>;
 }
 
 function readYamlFile(filePath: string): Record<string, unknown> {
@@ -287,6 +297,76 @@ describe("Zed adapter", () => {
 
   it("globalPath returns ~/.config/zed/settings.json", () => {
     expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".config", "zed", "settings.json"));
+  });
+
+  // Zed's settings.json is JSONC. The plain JSON.parse → mutate → JSON.stringify
+  // round-trip used elsewhere strips every // and /* */ comment, plus trailing
+  // commas. The Zed adapter goes through editJsoncFile so user-authored
+  // formatting outside the touched key survives byte-for-byte.
+  it("preserves user comments and trailing commas across write/remove", () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const original = `{
+  // Theme
+  "theme": "One Dark",
+  /* fonts */
+  "buffer_font_size": 14,
+}
+`;
+    fs.writeFileSync(configPath, original);
+
+    adapter.write(configPath, getMcpEntry());
+    let after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// Theme");
+    expect(after).toContain("/* fonts */");
+    expect(after).toContain('"buffer_font_size": 14');
+    // The trailing comma after the last user key must still be present.
+    expect(after).toMatch(/14,\s*\n/);
+    // And the argent entry actually got written.
+    expect(readJsoncFile(configPath).context_servers).toHaveProperty("argent");
+
+    expect(adapter.remove(configPath)).toBe(true);
+    after = fs.readFileSync(configPath, "utf8");
+    // Comments stay after we leave again.
+    expect(after).toContain("// Theme");
+    expect(after).toContain("/* fonts */");
+    // context_servers wrapper was empty after removing argent and got pruned.
+    expect(readJsoncFile(configPath)).not.toHaveProperty("context_servers");
+  });
+
+  it("removes the file when only the argent key was present", () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    // No user keys, just our entry — remove() should clean up the file.
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it("addAllowlist/removeAllowlist round-trip preserves comments", () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{
+  // user note
+  "theme": "Solarized"
+}
+`
+    );
+
+    adapter.addAllowlist(tmpDir, "local");
+    let after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// user note");
+    expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
+      default: "allow",
+    });
+
+    adapter.removeAllowlist(tmpDir, "local");
+    after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// user note");
+    expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
+      default: "confirm",
+    });
   });
 });
 
