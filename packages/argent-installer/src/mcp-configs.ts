@@ -10,12 +10,14 @@ import {
 } from "./constants.js";
 import {
   readJson,
+  readJsonc,
   writeJson,
   dirExists,
   readToml,
   writeToml,
   readYaml,
   writeYaml,
+  editJsoncFile,
 } from "./utils.js";
 import { isMap } from "yaml";
 
@@ -385,26 +387,29 @@ const zedAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".config", "zed", "settings.json");
   },
 
+  // Zed's settings.json is JSONC (line + block comments, trailing commas).
+  // The previous JSON.parse → mutate → JSON.stringify path silently stripped
+  // every comment in the user's hand-edited file. All four entry points now
+  // go through editJsoncFile, which applies path-targeted text edits via
+  // jsonc-parser so comments and formatting outside the touched key survive.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.context_servers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["context_servers", MCP_SERVER_KEY], {
       source: "custom",
       command: entry.command,
       args: entry.args,
       env: entry.env,
-    };
-    config.context_servers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    // JSONC-tolerant read: a user-authored settings.json may contain comments
+    // that JSON.parse would reject (silently swallowed by readJson, leaving
+    // this branch thinking nothing needed removing).
+    const config = readJsonc(configPath);
     const servers = config.context_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["context_servers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
@@ -417,13 +422,7 @@ const zedAdapter: McpConfigAdapter = {
       scope === "global"
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
-    const config = readJson(settingsPath);
-    const agent = (config.agent ?? {}) as Record<string, unknown>;
-    const perms = (agent.tool_permissions ?? {}) as Record<string, unknown>;
-    perms.default = "allow";
-    agent.tool_permissions = perms;
-    config.agent = agent;
-    writeJson(settingsPath, config);
+    editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "allow");
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
@@ -432,13 +431,12 @@ const zedAdapter: McpConfigAdapter = {
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
     if (!fs.existsSync(settingsPath)) return;
-    const config = readJson(settingsPath);
+    const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
       | Record<string, unknown>
       | undefined;
     if (!perms || perms.default !== "allow") return;
-    perms.default = "confirm";
-    writeJsonOrRemove(settingsPath, config);
+    editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
   },
 };
 
