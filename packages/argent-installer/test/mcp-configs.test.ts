@@ -900,6 +900,32 @@ describe("opencode adapter", () => {
     );
   });
 
+  it("projectPath prefers existing opencode.jsonc over default opencode.json", () => {
+    const jsoncPath = path.join(tmpDir, "opencode.jsonc");
+    fs.writeFileSync(jsoncPath, "{}");
+    expect(adapter.projectPath(tmpDir)).toBe(jsoncPath);
+  });
+
+  it("projectPath falls back to opencode.json when no candidate exists", () => {
+    expect(adapter.projectPath(tmpDir)).toBe(path.join(tmpDir, "opencode.json"));
+  });
+
+  it("globalPath prefers existing config.json over default opencode.json", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const opencodeDir = path.join(homedirOverride, ".config", "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    const configJsonPath = path.join(opencodeDir, "config.json");
+    fs.writeFileSync(configJsonPath, "{}");
+    expect(adapter.globalPath()).toBe(configJsonPath);
+  });
+
+  it("globalPath falls back to opencode.json when no candidate exists", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    expect(adapter.globalPath()).toBe(
+      path.join(homedirOverride, ".config", "opencode", "opencode.json")
+    );
+  });
+
   it("addAllowlist sets 'argent*' wildcard in tools (local)", () => {
     const configPath = path.join(tmpDir, "opencode.json");
     adapter.write(configPath, getMcpEntry());

@@ -681,6 +681,11 @@ const hermesAdapter: McpConfigAdapter = {
 
 const OPENCODE_BINARY = "opencode";
 const OPENCODE_ALLOWLIST_PATTERN = "argent*";
+// Filename candidates opencode's own loader recognizes. Precedence matches
+// upstream: project walks accept .jsonc first; global merges config.json
+// (legacy/migrated) before opencode.json/.jsonc.
+const OPENCODE_PROJECT_FILES = ["opencode.jsonc", "opencode.json"] as const;
+const OPENCODE_GLOBAL_FILES = ["config.json", "opencode.json", "opencode.jsonc"] as const;
 
 function hasOpenCodeBinary(): boolean {
   try {
@@ -692,6 +697,14 @@ function hasOpenCodeBinary(): boolean {
   }
 }
 
+function pickOpencodeConfig(dir: string, candidates: readonly string[]): string {
+  for (const name of candidates) {
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(dir, "opencode.json");
+}
+
 const openCodeAdapter: McpConfigAdapter = {
   name: "opencode",
 
@@ -700,11 +713,11 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 
   projectPath(root: string): string | null {
-    return path.join(root, "opencode.json");
+    return pickOpencodeConfig(root, OPENCODE_PROJECT_FILES);
   },
 
   globalPath(): string | null {
-    return path.join(homedir(), ".config", "opencode", "opencode.json");
+    return pickOpencodeConfig(path.join(homedir(), ".config", "opencode"), OPENCODE_GLOBAL_FILES);
   },
 
   write(configPath: string, entry: McpServerEntry): void {
