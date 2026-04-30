@@ -1,7 +1,7 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
-import { shutdownChild } from "../utils/ios-profiler/lifecycle";
+import { waitForChildExit } from "../utils/ios-profiler/lifecycle";
 
 export const IOS_PROFILER_SESSION_NAMESPACE = "IosProfilerSession";
 
@@ -26,12 +26,12 @@ export interface IosProfilerSessionApi {
   recordingTimedOut: boolean;
 }
 
-// Match the SIGINT/SIGTERM/SIGKILL ladder used by ios-profiler-stop. Both
-// teardown paths wait on the same physical operation (xctrace finalising the
-// .trace bundle after SIGINT) so they share the same timings.
-const DISPOSE_GRACE_MS = 30_000;
-const DISPOSE_TERM_MS = 5_000;
-const DISPOSE_KILL_MS = 5_000;
+// Discard semantics on dispose: registry teardown only fires from process
+// shutdown, where any in-flight xctrace recording is being abandoned. Skip the
+// SIGINT finalise grace (that is the explicit `ios-profiler-stop` contract)
+// and SIGKILL straight away so shutdown is not held up. The partial .trace on
+// disk is left in place.
+const DISPOSE_REAP_MS = 1_000;
 
 export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSessionApi, string> = {
   namespace: IOS_PROFILER_SESSION_NAMESPACE,
@@ -66,11 +66,12 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSession
         }
         const child = state.xctraceProcess;
         if (state.profilingActive && child) {
-          await shutdownChild(child, {
-            graceMs: DISPOSE_GRACE_MS,
-            termMs: DISPOSE_TERM_MS,
-            killMs: DISPOSE_KILL_MS,
-          });
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // already dead
+          }
+          await waitForChildExit(child, DISPOSE_REAP_MS);
           state.profilingActive = false;
           state.xctracePid = null;
           state.xctraceProcess = null;
