@@ -21,7 +21,7 @@ import {
 } from "./utils.js";
 import { isMap } from "yaml";
 
-const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "..", "tool-server.cjs");
+const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "tool-server.cjs");
 
 function getAvailableToolIds(): string[] {
   const out = execFileSync("node", [TOOL_SERVER_BUNDLE, "-t"], { encoding: "utf8" });

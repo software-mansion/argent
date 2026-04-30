@@ -1,7 +1,7 @@
 <br/>
 <p align="center">
   <a href="https://argent.swmansion.com">
-    <img width="1100" height="382" alt="argent_header" src="https://github.com/user-attachments/assets/d504d45b-c458-4f74-962c-c1cc76a82c2b" />
+    <img width="1100" height="382" alt="argent-header" src="https://github.com/user-attachments/assets/6cec01d5-da3c-4b6c-97c3-0374a63c213c" />
   </a>
 </p>
 <br/>

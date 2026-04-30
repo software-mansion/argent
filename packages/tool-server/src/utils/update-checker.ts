@@ -1,4 +1,5 @@
 import https from "node:https";
+import semver from "semver";
 import { version as currentVersion } from "../../package.json";
 
 const PACKAGE_NAME = "@swmansion/argent";
@@ -38,27 +39,13 @@ export function suppressUpdateNote(durationMs: number): void {
   suppressUntil = Date.now() + durationMs;
 }
 
-/**
- * Parses a semver string "major.minor.patch" into numeric components.
- * Returns null for non-semver strings (pre-release tags, etc.).
- */
-function parseSemver(v: string): [number, number, number] | null {
-  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(v);
-  if (!match) return null;
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-/**
- * Returns true if `latest` is strictly greater than `current` by semver ordering.
- * Returns false for non-semver strings (pre-release, local dev versions).
- */
 function isNewerVersion(latest: string, current: string): boolean {
-  const l = parseSemver(latest);
-  const c = parseSemver(current);
-  if (!l || !c) return false;
-  if (l[0] !== c[0]) return l[0] > c[0];
-  if (l[1] !== c[1]) return l[1] > c[1];
-  return l[2] > c[2];
+  if (!semver.valid(latest) || !semver.valid(current)) return false;
+  // Never push prereleases — only notify when a stable version is newer.
+  // This still flags correctly when `current` is a prerelease (e.g. 0.6.0-next.0
+  // → 0.6.0) because semver.gt treats stable as greater than its prereleases.
+  if (semver.prerelease(latest)) return false;
+  return semver.gt(latest, current);
 }
 
 /**
