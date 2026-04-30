@@ -6,6 +6,7 @@ import {
 } from "../../../blueprints/ios-profiler-session";
 import { exportIosTraceData } from "../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
+import { shutdownChild } from "../../../utils/ios-profiler/lifecycle";
 
 const STOP_GRACE_MS = 30_000;
 const STOP_TERM_MS = 5_000;
@@ -20,19 +21,6 @@ interface StopResult {
   exportedFiles: Record<string, string | null>;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
-}
-
-async function waitForExit(pid: number, ms: number): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return true;
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  return false;
 }
 
 export const iosInstrumentsStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
@@ -67,7 +55,7 @@ Fails if no active ios-profiler-start session exists for the given device_id.`,
       };
     }
 
-    if (!api.profilingActive || !api.xctracePid || !api.traceFile) {
+    if (!api.profilingActive || !api.xctraceProcess || !api.traceFile) {
       throw new Error("No active iOS profiling session found. Call ios-profiler-start first.");
     }
 
@@ -76,48 +64,33 @@ Fails if no active ios-profiler-start session exists for the given device_id.`,
       api.recordingTimeout = null;
     }
 
-    const pidToKill = api.xctracePid;
-    try {
-      process.kill(pidToKill, "SIGINT");
-    } catch {
-      // already dead
-    }
+    const result = await shutdownChild(api.xctraceProcess, {
+      graceMs: STOP_GRACE_MS,
+      termMs: STOP_TERM_MS,
+      killMs: STOP_KILL_MS,
+    });
 
-    let exited = await waitForExit(pidToKill, STOP_GRACE_MS);
     let warning: string | undefined;
-    if (!exited) {
-      try {
-        process.kill(pidToKill, "SIGTERM");
-      } catch {
-        // already dead
-      }
-      exited = await waitForExit(pidToKill, STOP_TERM_MS);
-    }
-    if (!exited) {
-      try {
-        process.kill(pidToKill, "SIGKILL");
-      } catch {
-        // already dead
-      }
-      await waitForExit(pidToKill, STOP_KILL_MS);
+    if (!result.clean) {
       warning =
-        "xctrace did not respond to SIGINT/SIGTERM; SIGKILL was used. " +
-        "Trace bundle may be incomplete.";
+        `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
+        `${result.signalUsed} was used. Trace bundle may be incomplete.`;
       process.stderr.write(`[ios-profiler] ${warning}\n`);
     }
 
     api.profilingActive = false;
     api.xctracePid = null;
+    api.xctraceProcess = null;
 
     const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile);
     api.exportedFiles = exportedFiles;
 
-    const result: StopResult = {
+    const stopResult: StopResult = {
       traceFile: api.traceFile,
       exportedFiles,
       exportDiagnostics: diagnostics,
     };
-    if (warning) result.warning = warning;
-    return result;
+    if (warning) stopResult.warning = warning;
+    return stopResult;
   },
 };

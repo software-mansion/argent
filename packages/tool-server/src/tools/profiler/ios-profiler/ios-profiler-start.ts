@@ -194,6 +194,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
       });
 
       api.xctracePid = xctraceProcess.pid ?? null;
+      api.xctraceProcess = xctraceProcess;
 
       let settled = false;
       let stderrBuffer = "";
@@ -232,6 +233,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
             }
             api.profilingActive = false;
             api.xctracePid = null;
+            api.xctraceProcess = null;
             api.recordingTimeout = null;
             api.recordingTimedOut = true;
           },
@@ -262,6 +264,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
           // already dead
         }
         api.xctracePid = null;
+        api.xctraceProcess = null;
         api.traceFile = null;
         api.appProcess = null;
         reject(
@@ -301,6 +304,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
               api.recordingTimeout = null;
             }
             api.xctracePid = null;
+            api.xctraceProcess = null;
             api.profilingActive = false;
           }
           return;
@@ -309,6 +313,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
         clearStartupTimer();
         cleanupNotify();
         api.xctracePid = null;
+        api.xctraceProcess = null;
         api.traceFile = null;
         api.appProcess = null;
         reject(
@@ -325,6 +330,7 @@ Fails if no app is running on the simulator or xctrace cannot attach to the proc
         clearStartupTimer();
         cleanupNotify();
         api.xctracePid = null;
+        api.xctraceProcess = null;
         api.traceFile = null;
         api.appProcess = null;
         reject(new Error(`Failed to start xctrace: ${err.message}`));

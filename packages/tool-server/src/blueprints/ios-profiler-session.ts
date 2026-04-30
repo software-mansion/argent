@@ -1,5 +1,7 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
+import { shutdownChild } from "../utils/ios-profiler/lifecycle";
 
 export const IOS_PROFILER_SESSION_NAMESPACE = "IosProfilerSession";
 
@@ -14,6 +16,7 @@ export interface IosProfilerSessionApi {
   deviceId: string;
   appProcess: string | null;
   xctracePid: number | null;
+  xctraceProcess: ChildProcess | null;
   traceFile: string | null;
   exportedFiles: Record<string, string | null> | null;
   profilingActive: boolean;
@@ -23,10 +26,12 @@ export interface IosProfilerSessionApi {
   recordingTimedOut: boolean;
 }
 
-// Matches STOP_GRACE_MS in ios-profiler-stop.ts — both wait on the same
-// physical operation (xctrace finalising the .trace bundle after SIGINT).
-// A tight bound here re-introduces the §3.4 truncation bug on large traces.
-const DISPOSE_FINALIZE_MS = 30_000;
+// Match the SIGINT/SIGTERM/SIGKILL ladder used by ios-profiler-stop. Both
+// teardown paths wait on the same physical operation (xctrace finalising the
+// .trace bundle after SIGINT) so they share the same timings.
+const DISPOSE_GRACE_MS = 30_000;
+const DISPOSE_TERM_MS = 5_000;
+const DISPOSE_KILL_MS = 5_000;
 
 export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSessionApi, string> = {
   namespace: IOS_PROFILER_SESSION_NAMESPACE,
@@ -40,6 +45,7 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSession
       deviceId: _payload,
       appProcess: null,
       xctracePid: null,
+      xctraceProcess: null,
       traceFile: null,
       exportedFiles: null,
       profilingActive: false,
@@ -58,32 +64,16 @@ export const iosInstrumentsSessionBlueprint: ServiceBlueprint<IosProfilerSession
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
         }
-        if (state.profilingActive && state.xctracePid) {
-          const pid = state.xctracePid;
-          try {
-            process.kill(pid, "SIGINT");
-          } catch {
-            // process may already be dead
-          }
-          // Give xctrace a bounded window to finalise the trace bundle on
-          // disk. Without this wait, registry teardown during an active
-          // recording produces a truncated .trace.
-          const deadline = Date.now() + DISPOSE_FINALIZE_MS;
-          while (Date.now() < deadline) {
-            try {
-              process.kill(pid, 0);
-            } catch {
-              break;
-            }
-            await new Promise((r) => setTimeout(r, 200));
-          }
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-            // process may already be dead
-          }
+        const child = state.xctraceProcess;
+        if (state.profilingActive && child) {
+          await shutdownChild(child, {
+            graceMs: DISPOSE_GRACE_MS,
+            termMs: DISPOSE_TERM_MS,
+            killMs: DISPOSE_KILL_MS,
+          });
           state.profilingActive = false;
           state.xctracePid = null;
+          state.xctraceProcess = null;
         }
       },
       events,
