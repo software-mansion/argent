@@ -8,11 +8,9 @@ export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlRe
     // Single-quote the URL so `adb shell` doesn't reinterpret characters like
     // `&`, `?`, `#` or whitespace as shell metachars on the device side.
     const quoted = `'${params.url.replace(/'/g, "'\\''")}'`;
-    const out = await adbShell(
-      params.udid,
-      `am start -a android.intent.action.VIEW -d ${quoted}`,
-      { timeoutMs: 15_000 }
-    );
+    const out = await adbShell(params.udid, `am start -a android.intent.action.VIEW -d ${quoted}`, {
+      timeoutMs: 15_000,
+    });
     if (/Error:|No Activity found/i.test(out)) {
       throw new Error(`open-url failed: ${out.trim()}`);
     }

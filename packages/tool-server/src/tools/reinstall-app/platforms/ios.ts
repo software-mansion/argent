@@ -2,11 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve as resolvePath } from "node:path";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import type {
-  ReinstallAppParams,
-  ReinstallAppResult,
-  ReinstallAppServices,
-} from "../types";
+import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
 
