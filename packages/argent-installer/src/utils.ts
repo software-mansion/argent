@@ -113,6 +113,7 @@ const PROJECT_ROOT_MARKERS = [
   ".zed",
   ".opencode",
   "opencode.json",
+  "opencode.jsonc",
   "skills-lock.json",
 ];
 

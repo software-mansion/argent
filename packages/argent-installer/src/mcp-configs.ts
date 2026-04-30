@@ -682,6 +682,10 @@ const hermesAdapter: McpConfigAdapter = {
 const OPENCODE_BINARY = "opencode";
 const OPENCODE_ALLOWLIST_PATTERN = "argent*";
 
+// Same filename prioritization order that's used by opencode CLI
+const OPENCODE_PROJECT_FILES = ["opencode.jsonc", "opencode.json"] as const;
+const OPENCODE_GLOBAL_FILES = ["opencode.jsonc", "opencode.json", "config.json"] as const;
+
 function hasOpenCodeBinary(): boolean {
   try {
     const cmd = process.platform === "win32" ? "where" : "which";
@@ -692,6 +696,14 @@ function hasOpenCodeBinary(): boolean {
   }
 }
 
+function pickOpencodeConfig(dir: string, candidates: readonly string[]): string {
+  for (const name of candidates) {
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(dir, "opencode.json");
+}
+
 const openCodeAdapter: McpConfigAdapter = {
   name: "opencode",
 
@@ -700,54 +712,44 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 
   projectPath(root: string): string | null {
-    return path.join(root, "opencode.json");
+    return pickOpencodeConfig(root, OPENCODE_PROJECT_FILES);
   },
 
   globalPath(): string | null {
-    return path.join(homedir(), ".config", "opencode", "opencode.json");
+    return pickOpencodeConfig(path.join(homedir(), ".config", "opencode"), OPENCODE_GLOBAL_FILES);
   },
 
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcp ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcp", MCP_SERVER_KEY], {
       type: "local",
       command: [entry.command, ...entry.args],
       enabled: true,
       environment: entry.env,
-    };
-    config.mcp = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcp as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcp", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
-    const config = readJson(configPath);
-    const tools = (config.tools ?? {}) as Record<string, unknown>;
-    tools[OPENCODE_ALLOWLIST_PATTERN] = true;
-    config.tools = tools;
-    writeJson(configPath, config);
+    editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], true);
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath || !fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const tools = config.tools as Record<string, unknown> | undefined;
     if (!tools || !(OPENCODE_ALLOWLIST_PATTERN in tools)) return;
-    delete tools[OPENCODE_ALLOWLIST_PATTERN];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], undefined);
   },
 };
 
