@@ -7,6 +7,12 @@ import semver from "semver";
 import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { Document, parseDocument } from "yaml";
+import {
+  applyEdits as applyJsoncEdits,
+  modify as modifyJsonc,
+  parse as parseJsonc,
+  type JSONPath,
+} from "jsonc-parser";
 
 // ── Package root resolution ───────────────────────────────────────────────────
 // At runtime this module ships in two shapes:
@@ -107,6 +113,7 @@ const PROJECT_ROOT_MARKERS = [
   ".zed",
   ".opencode",
   "opencode.json",
+  "opencode.jsonc",
   "skills-lock.json",
 ];
 
@@ -184,6 +191,116 @@ export function readJson(filePath: string): Record<string, unknown> {
 export function writeJson(filePath: string, data: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
+}
+
+// ── JSONC helpers ────────────────────────────────────────────────────────────
+// Comment-preserving edits for editor settings files that are JSONC (Zed).
+// Unlike the JSON.parse → mutate → JSON.stringify path used elsewhere, these
+// helpers operate on the source string via jsonc-parser's modify(), so user
+// comments, trailing commas, blank lines, and key ordering all survive.
+
+// jsonc-parser's modify() needs a formatting hint for newly-inserted keys.
+// Zed's bundled defaults use 2-space indentation; matching that keeps writes
+// visually consistent for the common case.
+const JSONC_FORMATTING = { tabSize: 2, insertSpaces: true } as const;
+
+function setJsoncIn(text: string, jsonPath: JSONPath, value: unknown): string {
+  const edits = modifyJsonc(text, jsonPath, value, { formattingOptions: JSONC_FORMATTING });
+  return applyJsoncEdits(text, edits);
+}
+
+function readJsoncFileRaw(filePath: string): { text: string; hadBom: boolean } {
+  if (!fs.existsSync(filePath)) return { text: "{}", hadBom: false };
+  let text = fs.readFileSync(filePath, "utf8");
+  const hadBom = text.charCodeAt(0) === 0xfeff;
+  if (hadBom) text = text.slice(1);
+  if (text.trim() === "") text = "{}";
+  return { text, hadBom };
+}
+
+function getAtJsoncPath(value: unknown, jsonPath: JSONPath): unknown {
+  let cur: unknown = value;
+  for (const key of jsonPath) {
+    if (!cur || typeof cur !== "object") return undefined;
+    cur = (cur as Record<string | number, unknown>)[key as string | number];
+  }
+  return cur;
+}
+
+function isEmptyPlainObject(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value as object).length === 0
+  );
+}
+
+function rmEmptyDir(dirPath: string): void {
+  try {
+    if (!fs.existsSync(dirPath)) return;
+    if (!fs.statSync(dirPath).isDirectory()) return;
+    if (fs.readdirSync(dirPath).length > 0) return;
+    fs.rmdirSync(dirPath);
+  } catch {
+    // non-fatal
+  }
+}
+
+/**
+ * Read a JSON-with-Comments file (line + block comments + trailing commas).
+ * Used by callers that need to inspect Zed's settings.json without the
+ * `JSON.parse` failure on user-authored comments. For mutations go through
+ * {@link editJsoncFile} instead — it preserves comments on write.
+ */
+export function readJsonc(filePath: string): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) return {};
+  let raw = fs.readFileSync(filePath, "utf8");
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+  if (raw.trim() === "") return {};
+  const parsed = parseJsonc(raw, [], { allowTrailingComma: true }) as
+    | Record<string, unknown>
+    | undefined;
+  return parsed ?? {};
+}
+
+/**
+ * Apply a single path-targeted edit to a JSONC config file in place.
+ * Comments, trailing commas, blank lines, and key ordering outside the
+ * edited path are preserved (jsonc-parser's modify() operates on the source
+ * text rather than a parsed object).
+ *
+ * Pass `undefined` as `value` to delete the key. Empty ancestor objects are
+ * pruned, and if the document collapses to `{}` the file (and an empty
+ * parent directory) is removed — mirroring the JSON `writeJsonOrRemove`
+ * semantics used elsewhere.
+ *
+ * Use this for editor settings files that are JSONC (Zed). For pure JSON
+ * configs go through {@link writeJson} instead — JSONC.modify is overhead
+ * when there are no comments to preserve.
+ */
+export function editJsoncFile(filePath: string, jsonPath: JSONPath, value: unknown): void {
+  const { text: initial, hadBom } = readJsoncFileRaw(filePath);
+  let text = setJsoncIn(initial, jsonPath, value);
+
+  if (value === undefined) {
+    for (let i = jsonPath.length - 1; i > 0; i--) {
+      const parentPath = jsonPath.slice(0, i);
+      const parsed = parseJsonc(text, [], { allowTrailingComma: true });
+      if (!isEmptyPlainObject(getAtJsoncPath(parsed, parentPath))) break;
+      text = setJsoncIn(text, parentPath, undefined);
+    }
+  }
+
+  const parsed = parseJsonc(text, [], { allowTrailingComma: true });
+  if (isEmptyPlainObject(parsed)) {
+    fs.rmSync(filePath, { force: true });
+    rmEmptyDir(path.dirname(filePath));
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, (hadBom ? "﻿" : "") + text);
 }
 
 // ── Directory helpers ─────────────────────────────────────────────────────────

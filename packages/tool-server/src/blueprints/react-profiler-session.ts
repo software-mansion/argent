@@ -1,27 +1,9 @@
 import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
+import { FIBER_ROOT_TRACKER_SCRIPT } from "../utils/react-profiler/scripts";
 
 export const REACT_PROFILER_SESSION_NAMESPACE = "ReactProfilerSession";
-
-/**
- * Injected once on connect — tracks fiber root commits for get_react_renders
- * and get_fiber_tree. Idempotent (guard via __argent_profiler_installed__).
- */
-export const FIBER_ROOT_TRACKER_SCRIPT = `
-(function() {
-  var hook = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
-  if (!hook || hook.__argent_profiler_installed__) return;
-  hook.__argent_profiler_installed__ = true;
-  hook.__argent_roots__ = new Set();
-
-  var orig = hook.onCommitFiberRoot;
-  hook.onCommitFiberRoot = function __argent_fiberRootTracker(rendererID, root, priorityLevel) {
-    hook.__argent_roots__.add(root);
-    if (typeof orig === 'function') orig.call(this, rendererID, root, priorityLevel);
-  };
-})();
-`;
 
 export interface ScriptSourceEntry {
   url: string;
@@ -56,6 +38,8 @@ export interface ReactProfilerSessionApi {
   hotCommitIndices: number[] | null;
   totalReactCommits: number | null;
   profileStartWallMs: number | null;
+  sessionId: string | null; // mirrors __ARGENT_PROFILER_OWNER__.sessionId when we own; null otherwise
+  ownerToolServerPid: number | null; // process.pid when this tool-server owns; null otherwise
   disposeSession: () => void;
 }
 
@@ -106,6 +90,8 @@ export const reactProfilerSessionBlueprint: ServiceBlueprint<ReactProfilerSessio
       hotCommitIndices: null,
       totalReactCommits: null,
       profileStartWallMs: null,
+      sessionId: null,
+      ownerToolServerPid: null,
       disposeSession: () => events.emit("terminated"),
     };
 

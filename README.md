@@ -1,11 +1,7 @@
 <br/>
 <p align="center">
   <a href="https://argent.swmansion.com">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png">
-      <source media="(prefers-color-scheme: light)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_white_mode.png">
-      <img alt="banner" src="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png" width="80%">
-    </picture>
+    <img width="1100" height="382" alt="argent_header" src="https://github.com/user-attachments/assets/d504d45b-c458-4f74-962c-c1cc76a82c2b" />
   </a>
 </p>
 <br/>

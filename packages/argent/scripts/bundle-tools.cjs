@@ -35,6 +35,14 @@ const ALIASES = {
   "@argent/cli": CLI_ENTRY,
 };
 
+// esbuild on platform:"node" defaults mainFields to ["main","module"], which
+// picks UMD entries that use runtime `require("./impl/...")`. Those requires
+// can't be statically resolved during bundling and fail at runtime because
+// the impl/ folder isn't shipped next to the bundle. Prefer "module" so we
+// pick ESM entries with static imports that get fully inlined. Affects e.g.
+// jsonc-parser, which ships both UMD (main) and ESM (module).
+const MAIN_FIELDS = ["module", "main"];
+
 // Banner injected into ESM bundles so any inlined CJS dependencies that call
 // `require()` work without a real CJS context.
 const ESM_REQUIRE_BANNER = {
@@ -72,6 +80,7 @@ esbuild.buildSync({
   format: "cjs",
   outfile: OUT_FILE,
   alias: ALIASES,
+  mainFields: MAIN_FIELDS,
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
@@ -89,6 +98,7 @@ esbuild.buildSync({
   alias: ALIASES,
   banner: ESM_REQUIRE_BANNER,
   external: ["node:*"],
+  mainFields: MAIN_FIELDS,
 });
 
 console.log(`✓ Bundled installer → ${path.relative(process.cwd(), INSTALLER_OUT_FILE)}`);
@@ -105,6 +115,7 @@ esbuild.buildSync({
   alias: ALIASES,
   banner: ESM_REQUIRE_BANNER,
   external: ["node:*"],
+  mainFields: MAIN_FIELDS,
 });
 
 console.log(`✓ Bundled MCP server → ${path.relative(process.cwd(), MCP_OUT_FILE)}`);
@@ -120,6 +131,7 @@ esbuild.buildSync({
   alias: ALIASES,
   banner: ESM_REQUIRE_BANNER,
   external: ["node:*"],
+  mainFields: MAIN_FIELDS,
 });
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);

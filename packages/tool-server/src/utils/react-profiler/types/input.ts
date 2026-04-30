@@ -24,6 +24,26 @@ export interface HermesCpuProfile {
   timeDeltas: number[];
 }
 
+// Raw shape returned by `ri.getProfilingData()` — only the fields we actually
+// read in `flattenProfilingData` and the injected stop-and-read script. The
+// React DevTools backend emits more (priorityLevel, effectDuration, rootID,
+// rendererID, timelineData, …) but we never consume those, so they're omitted.
+export interface BackendCommitData {
+  timestamp: number; // ms since the `startProfiling` call
+  duration?: number;
+  fiberActualDurations?: Array<[number, number]>;
+  fiberSelfDurations?: Array<[number, number]>;
+  changeDescriptions?: Array<[number, unknown]>;
+}
+
+export interface BackendRootData {
+  commitData: BackendCommitData[];
+}
+
+export interface ProfilingDataBackend {
+  dataForRoots: BackendRootData[];
+}
+
 // React DevTools ProfilingData shape
 export interface DevToolsChangeDescription {
   props: string[] | null; // changed prop names
@@ -76,5 +96,8 @@ export interface RawProfilingInput {
     allClear?: boolean; // true if all commits were below 16ms floor
     maxCommitMs?: number; // max commit heat when allClear=true
     totalReactCommits?: number; // total unique commit batches (for accurate all-clear display)
+    // Per-commit tuples [commitIndex, droppedFiberCount, droppedActualDurationMs] for
+    // fibers the stop-time name resolver could not identify (transient/unmounted components).
+    unattributedByCommit?: Array<[number, number, number]>;
   };
 }

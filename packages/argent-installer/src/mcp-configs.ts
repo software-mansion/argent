@@ -10,12 +10,14 @@ import {
 } from "./constants.js";
 import {
   readJson,
+  readJsonc,
   writeJson,
   dirExists,
   readToml,
   writeToml,
   readYaml,
   writeYaml,
+  editJsoncFile,
 } from "./utils.js";
 import { isMap } from "yaml";
 
@@ -385,26 +387,29 @@ const zedAdapter: McpConfigAdapter = {
     return path.join(homedir(), ".config", "zed", "settings.json");
   },
 
+  // Zed's settings.json is JSONC (line + block comments, trailing commas).
+  // The previous JSON.parse → mutate → JSON.stringify path silently stripped
+  // every comment in the user's hand-edited file. All four entry points now
+  // go through editJsoncFile, which applies path-targeted text edits via
+  // jsonc-parser so comments and formatting outside the touched key survive.
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.context_servers ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["context_servers", MCP_SERVER_KEY], {
       source: "custom",
       command: entry.command,
       args: entry.args,
       env: entry.env,
-    };
-    config.context_servers = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    // JSONC-tolerant read: a user-authored settings.json may contain comments
+    // that JSON.parse would reject (silently swallowed by readJson, leaving
+    // this branch thinking nothing needed removing).
+    const config = readJsonc(configPath);
     const servers = config.context_servers as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["context_servers", MCP_SERVER_KEY], undefined);
     return true;
   },
 
@@ -417,13 +422,7 @@ const zedAdapter: McpConfigAdapter = {
       scope === "global"
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
-    const config = readJson(settingsPath);
-    const agent = (config.agent ?? {}) as Record<string, unknown>;
-    const perms = (agent.tool_permissions ?? {}) as Record<string, unknown>;
-    perms.default = "allow";
-    agent.tool_permissions = perms;
-    config.agent = agent;
-    writeJson(settingsPath, config);
+    editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "allow");
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
@@ -432,13 +431,12 @@ const zedAdapter: McpConfigAdapter = {
         ? path.join(homedir(), ".config", "zed", "settings.json")
         : path.join(root, ".zed", "settings.json");
     if (!fs.existsSync(settingsPath)) return;
-    const config = readJson(settingsPath);
+    const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as
       | Record<string, unknown>
       | undefined;
     if (!perms || perms.default !== "allow") return;
-    perms.default = "confirm";
-    writeJsonOrRemove(settingsPath, config);
+    editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "confirm");
   },
 };
 
@@ -684,6 +682,10 @@ const hermesAdapter: McpConfigAdapter = {
 const OPENCODE_BINARY = "opencode";
 const OPENCODE_ALLOWLIST_PATTERN = "argent*";
 
+// Same filename prioritization order that's used by opencode CLI
+const OPENCODE_PROJECT_FILES = ["opencode.jsonc", "opencode.json"] as const;
+const OPENCODE_GLOBAL_FILES = ["opencode.jsonc", "opencode.json", "config.json"] as const;
+
 function hasOpenCodeBinary(): boolean {
   try {
     const cmd = process.platform === "win32" ? "where" : "which";
@@ -694,6 +696,14 @@ function hasOpenCodeBinary(): boolean {
   }
 }
 
+function pickOpencodeConfig(dir: string, candidates: readonly string[]): string {
+  for (const name of candidates) {
+    const candidate = path.join(dir, name);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(dir, "opencode.json");
+}
+
 const openCodeAdapter: McpConfigAdapter = {
   name: "opencode",
 
@@ -702,54 +712,44 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 
   projectPath(root: string): string | null {
-    return path.join(root, "opencode.json");
+    return pickOpencodeConfig(root, OPENCODE_PROJECT_FILES);
   },
 
   globalPath(): string | null {
-    return path.join(homedir(), ".config", "opencode", "opencode.json");
+    return pickOpencodeConfig(path.join(homedir(), ".config", "opencode"), OPENCODE_GLOBAL_FILES);
   },
 
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcp ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcp", MCP_SERVER_KEY], {
       type: "local",
       command: [entry.command, ...entry.args],
       enabled: true,
       environment: entry.env,
-    };
-    config.mcp = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcp as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcp", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
-    const config = readJson(configPath);
-    const tools = (config.tools ?? {}) as Record<string, unknown>;
-    tools[OPENCODE_ALLOWLIST_PATTERN] = true;
-    config.tools = tools;
-    writeJson(configPath, config);
+    editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], true);
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath || !fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const tools = config.tools as Record<string, unknown> | undefined;
     if (!tools || !(OPENCODE_ALLOWLIST_PATTERN in tools)) return;
-    delete tools[OPENCODE_ALLOWLIST_PATTERN];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], undefined);
   },
 };
 

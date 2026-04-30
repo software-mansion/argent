@@ -40,6 +40,7 @@ import { networkRequestTool } from "../tools/network/network-request";
 import { createDescribeTool } from "../tools/describe";
 import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
 import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
+import { createReactProfilerStatusTool } from "../tools/profiler/react/react-profiler-status";
 import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
 import { reactProfilerComponentSourceTool } from "../tools/profiler/react/react-profiler-component-source";
 import { reactProfilerCpuSummaryTool } from "../tools/profiler/react/react-profiler-cpu-summary";
@@ -106,6 +107,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createDescribeTool(registry));
   registry.registerTool(createReactProfilerStartTool(registry));
   registry.registerTool(createReactProfilerStopTool(registry));
+  registry.registerTool(createReactProfilerStatusTool(registry));
   registry.registerTool(reactProfilerAnalyzeTool);
   registry.registerTool(reactProfilerComponentSourceTool);
   registry.registerTool(reactProfilerCpuSummaryTool);

@@ -9,14 +9,15 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 
 ### React Profiler (Hermes / React commits)
 
-| Tool                              | Purpose                                                                                                       |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Optional: `sample_interval_us` (default 100).          |
-| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                    |
-| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits, sorted by `totalRenderMs` DESC. Saves raw data to disk. |
-| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                               |
-| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                     |
-| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                            |
+| Tool                              | Purpose                                                                                                                                                                                                                                                           |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `react-profiler-start`            | Start CPU sampling + inject React commit-capture hook. Optional: `sample_interval_us` (default 100).                                                                                                                                                              |
+| `react-profiler-stop`             | Stop recording; stores cpuProfile + commitTree in session.                                                                                                                                                                                                        |
+| `react-profiler-status`           | **Call if you were interrupted in the middle of the flow, never in another scenario** (debugger drop, Metro reload, pause, subagent handoff, any doubt). Returns `session_status: "active" \| "taken_over" \| "stopped" \| "no_react_runtime"`. Side-effect free. |
+| `react-profiler-analyze`          | Run pipeline -> report with CPU-enriched hot commits, sorted by `totalRenderMs` DESC. Saves raw data to disk.                                                                                                                                                     |
+| `react-profiler-component-source` | AST lookup: file, line, memoization status, 50 lines of source for a component.                                                                                                                                                                                   |
+| `react-profiler-renders`          | Live fiber walk: render counts + durations per component (no profiling session required).                                                                                                                                                                         |
+| `react-profiler-fiber-tree`       | Live fiber walk: full component hierarchy as JSON.                                                                                                                                                                                                                |
 
 ### Drill-Down Query Tools (call after analyze)
 
@@ -77,10 +78,13 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 
 ### Step 1: Start profiling
 
-Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it later to compute annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
+Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it for annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
 
 - if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
+  If you received information about **existing profiling session** being owned by another agent:
+- if session is marked as "stale", you may overtake it without prompting the user for allowance
+- if session is NOT "stale" - before taking action and terminating the other session, **stop and ask user what you should do**, explaining the situation.
 
 #### Annotate every interaction
 
@@ -88,8 +92,8 @@ After each `gesture-tap` or `gesture-swipe` call, record an annotation using the
 
 ### Step 2: Stop and collect
 
-Call `react-profiler-stop` **and** `native-profiler-stop` in parallel. Only skip `native-profiler-stop` if you did not start it in Step 1. Note `duration_ms`, `fiber_renders_captured`, `hook_installed`.
-If `hook_installed: false` or `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
+Call `react-profiler-stop` **and** `native-profiler-stop` in parallel. Only skip `native-profiler-stop` if you did not start it in Step 1. Note `duration_ms` and `fiber_renders_captured`.
+If `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
 
 ### Step 3: Analyze
 
@@ -151,7 +155,7 @@ If the user stated that they do not wish for changes, present the profiling repo
 - **Re-run after fixes**: Always re-profile after changes. Report honestly whether the metric improved, regressed, or stayed flat — do not assume improvement.
 - **`excluded` is informational**: Components in `animatedSubtrees` and `recyclerChildren` re-render by design.
 - **Strict Mode**: Double-invokes renders. The pipeline halves `normalizedRenderCount` automatically when detected.
-- **Debugger connection**: If interrupted, started profiling also closes. Check debugger status and restart the flow on errors.
+- **Debugger connection**: If interrupted, started profiling also closes. Before attempting recovery, call `react-profiler-status` — it tells you whether the session is `active`, `taken_over`, `stopped`, or `no_react_runtime`, so you can decide whether to stop, restart, or reconnect first.
 - **Confounders to watch for**:
   - Live API data may differ between runs (different payload sizes, content counts), which shifts render counts and durations independently of your fix. Note when data-dependent components show variance.
   - Profiler overhead inflates CPU measurements. If iOS Instruments shows `JSLexer`, `JSONEmitter`, or Hermes internals dominating the JS thread, that reflects profiler instrumentation cost — not app work. Discount those entries.
