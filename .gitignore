@@ -42,4 +42,5 @@ packages/argent/README.md
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/
 .cursor/
+.vscode/
 .mcp.json

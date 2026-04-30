@@ -185,6 +185,15 @@ describe("resolveProjectRoot", () => {
 
     expect(resolveProjectRoot(nestedDir)).toBe(nestedDir);
   });
+
+  it("recognizes opencode.jsonc as a project root marker", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    const nestedDir = path.join(projectRoot, "src");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, "opencode.jsonc"), "{}");
+
+    expect(resolveProjectRoot(nestedDir)).toBe(projectRoot);
+  });
 });
 
 // ── detectPackageManager ──────────────────────────────────────────────────────

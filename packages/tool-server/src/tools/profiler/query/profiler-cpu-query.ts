@@ -168,7 +168,7 @@ function renderCallTree(
       const child = nodeMap.get(childId);
       if (!child) continue;
       const name = child.callFrame.functionName;
-      if (!name || name === "(idle)") continue;
+      if (!name || name === "(idle)" || name === "[idle]" || name === "[root]") continue;
       if (isArgentProfilerFunction(name)) continue;
       const existing = calleeHits.get(name);
       if (existing) {
@@ -210,7 +210,7 @@ function renderCallTree(
       const parent = nodeMap.get(parentId);
       if (!parent) continue;
       const name = parent.callFrame.functionName;
-      if (!name || name === "(root)") continue;
+      if (!name || name === "(root)" || name === "[root]" || name === "[idle]") continue;
       if (isArgentProfilerFunction(name)) continue;
       const existing = callerHits.get(name);
       if (existing) {

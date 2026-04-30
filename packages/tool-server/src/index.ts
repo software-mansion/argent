@@ -7,7 +7,31 @@ import { startUpdateChecker } from "./utils/update-checker";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 
+/**
+ * Prepends an ISO timestamp to every line written to stdout/stderr.
+ *
+ * We replace `stream.write` rather than wrapping `console.*` because the MCP
+ * transport and other internal paths bypass `console` and call `process.stdout`
+ * / `process.stderr` directly.
+ *
+ * The override is safe: we call the original bound `write` with the modified
+ * chunk and forward all remaining arguments unchanged.
+ *
+ * Set WRAP_STDIO_DISABLED=1 in the environment to opt out (diagnosis mainly)
+ */
+function initializeStdioTimestampWrapper(): void {
+  if (process.env.WRAP_STDIO_DISABLED) return;
+
+  for (const stream of [process.stdout, process.stderr] as const) {
+    const orig = stream.write.bind(stream);
+    stream.write = ((chunk: string | Uint8Array, ...rest: unknown[]) =>
+      orig(`[${new Date().toISOString()}] ${chunk}`, ...(rest as []))) as typeof stream.write;
+  }
+}
+
 export function start(): void {
+  initializeStdioTimestampWrapper();
+
   // ── Global error handlers ─────────────────────────────────────────
   // The tool server should exit on uncaught errors (state may be corrupted),
   // but attempt graceful cleanup first so child processes are not orphaned.

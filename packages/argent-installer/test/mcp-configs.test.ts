@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { parse as parseYaml } from "yaml";
+import { parse as parseJsonc } from "jsonc-parser";
 import {
   ALL_ADAPTERS,
   getMcpEntry,
@@ -53,6 +54,15 @@ function setupTmpDir(): string {
 
 function readJsonFile(filePath: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+// JSONC-tolerant variant for tests that read back files the Zed adapter
+// wrote — those preserve user comments and trailing commas, so strict
+// JSON.parse rejects them.
+function readJsoncFile(filePath: string): Record<string, unknown> {
+  return parseJsonc(fs.readFileSync(filePath, "utf8"), [], {
+    allowTrailingComma: true,
+  }) as Record<string, unknown>;
 }
 
 function readYamlFile(filePath: string): Record<string, unknown> {
@@ -287,6 +297,76 @@ describe("Zed adapter", () => {
 
   it("globalPath returns ~/.config/zed/settings.json", () => {
     expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".config", "zed", "settings.json"));
+  });
+
+  // Zed's settings.json is JSONC. The plain JSON.parse → mutate → JSON.stringify
+  // round-trip used elsewhere strips every // and /* */ comment, plus trailing
+  // commas. The Zed adapter goes through editJsoncFile so user-authored
+  // formatting outside the touched key survives byte-for-byte.
+  it("preserves user comments and trailing commas across write/remove", () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const original = `{
+  // Theme
+  "theme": "One Dark",
+  /* fonts */
+  "buffer_font_size": 14,
+}
+`;
+    fs.writeFileSync(configPath, original);
+
+    adapter.write(configPath, getMcpEntry());
+    let after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// Theme");
+    expect(after).toContain("/* fonts */");
+    expect(after).toContain('"buffer_font_size": 14');
+    // The trailing comma after the last user key must still be present.
+    expect(after).toMatch(/14,\s*\n/);
+    // And the argent entry actually got written.
+    expect(readJsoncFile(configPath).context_servers).toHaveProperty("argent");
+
+    expect(adapter.remove(configPath)).toBe(true);
+    after = fs.readFileSync(configPath, "utf8");
+    // Comments stay after we leave again.
+    expect(after).toContain("// Theme");
+    expect(after).toContain("/* fonts */");
+    // context_servers wrapper was empty after removing argent and got pruned.
+    expect(readJsoncFile(configPath)).not.toHaveProperty("context_servers");
+  });
+
+  it("removes the file when only the argent key was present", () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    adapter.write(configPath, getMcpEntry());
+    // No user keys, just our entry — remove() should clean up the file.
+    expect(adapter.remove(configPath)).toBe(true);
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it("addAllowlist/removeAllowlist round-trip preserves comments", () => {
+    const configPath = path.join(tmpDir, ".zed", "settings.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      `{
+  // user note
+  "theme": "Solarized"
+}
+`
+    );
+
+    adapter.addAllowlist(tmpDir, "local");
+    let after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// user note");
+    expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
+      default: "allow",
+    });
+
+    adapter.removeAllowlist(tmpDir, "local");
+    after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// user note");
+    expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
+      default: "confirm",
+    });
   });
 });
 
@@ -820,6 +900,53 @@ describe("opencode adapter", () => {
     );
   });
 
+  it("projectPath prefers existing opencode.jsonc over default opencode.json", () => {
+    const jsoncPath = path.join(tmpDir, "opencode.jsonc");
+    fs.writeFileSync(jsoncPath, "{}");
+    expect(adapter.projectPath(tmpDir)).toBe(jsoncPath);
+  });
+
+  it("projectPath falls back to opencode.json when no candidate exists", () => {
+    expect(adapter.projectPath(tmpDir)).toBe(path.join(tmpDir, "opencode.json"));
+  });
+
+  it("globalPath returns legacy config.json when it is the only candidate", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const opencodeDir = path.join(homedirOverride, ".config", "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    const configJsonPath = path.join(opencodeDir, "config.json");
+    fs.writeFileSync(configJsonPath, "{}");
+    expect(adapter.globalPath()).toBe(configJsonPath);
+  });
+
+  // Mirrors opencode's own globalConfigFile() precedence so the file argent
+  // writes is the same one opencode treats as authoritative.
+  it("globalPath prefers opencode.jsonc over opencode.json over config.json", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const opencodeDir = path.join(homedirOverride, ".config", "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.writeFileSync(path.join(opencodeDir, "config.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.jsonc"), "{}");
+    expect(adapter.globalPath()).toBe(path.join(opencodeDir, "opencode.jsonc"));
+  });
+
+  it("globalPath prefers opencode.json over config.json when .jsonc is absent", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    const opencodeDir = path.join(homedirOverride, ".config", "opencode");
+    fs.mkdirSync(opencodeDir, { recursive: true });
+    fs.writeFileSync(path.join(opencodeDir, "config.json"), "{}");
+    fs.writeFileSync(path.join(opencodeDir, "opencode.json"), "{}");
+    expect(adapter.globalPath()).toBe(path.join(opencodeDir, "opencode.json"));
+  });
+
+  it("globalPath falls back to opencode.json when no candidate exists", () => {
+    homedirOverride = path.join(tmpDir, "home");
+    expect(adapter.globalPath()).toBe(
+      path.join(homedirOverride, ".config", "opencode", "opencode.json")
+    );
+  });
+
   it("addAllowlist sets 'argent*' wildcard in tools (local)", () => {
     const configPath = path.join(tmpDir, "opencode.json");
     adapter.write(configPath, getMcpEntry());
@@ -873,6 +1000,32 @@ describe("opencode adapter", () => {
     expect(tools["other-mcp*"]).toBe(true);
     expect(tools.write).toBe("ask");
     expect(tools["argent*"]).toBe(true);
+  });
+
+  // opencode supports both opencode.json (strict JSON) and opencode.jsonc
+  // (with comments + trailing commas). Going through editJsoncFile means
+  // user-authored comments survive write/remove the same way they do for Zed.
+  it("preserves user comments when writing into opencode.jsonc", () => {
+    const configPath = path.join(tmpDir, "opencode.jsonc");
+    const original = `{
+  // top-of-file comment
+  "theme": "opencode-dark",
+  /* trailing block comment */
+}
+`;
+    fs.writeFileSync(configPath, original);
+
+    adapter.write(configPath, getMcpEntry());
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// top-of-file comment");
+    expect(after).toContain("/* trailing block comment */");
+    expect(after).toContain('"theme": "opencode-dark"');
+
+    const parsed = readJsoncFile(configPath);
+    const servers = parsed.mcp as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    expect((servers.argent as Record<string, unknown>).type).toBe("local");
   });
 });
 

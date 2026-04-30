@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tool-server",
-  "version": "0.5.3",
+  "version": "0.6.0-next.1",
   "description": "Framework-agnostic tool registry for iOS simulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -16,6 +16,7 @@
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@clack/prompts": "^1.1.0",
     "express": "^4.19.2",
+    "semver": "^7.7.4",
     "source-map-js": "^1.2.1",
     "tree-sitter": "^0.21.1",
     "tree-sitter-typescript": "^0.23.2",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",
+    "@types/semver": "^7.7.1",
     "@types/supertest": "^7.2.0",
     "@types/ws": "^8.5.10",
     "supertest": "^7.2.2",
