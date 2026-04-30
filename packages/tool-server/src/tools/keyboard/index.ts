@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -181,7 +182,7 @@ Provide text, key, or both. Use instead of paste when paste is unreliable or uns
   zodSchema,
   capability,
   services: (params) => ({
-    simulatorServer: `SimulatorServer:${params.udid}`,
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;

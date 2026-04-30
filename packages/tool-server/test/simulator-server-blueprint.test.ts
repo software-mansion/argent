@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
+import type { DeviceInfo } from "@argent/registry";
 
 // ─── Mocks ───────────────────────────────────────────────────────────
 //
@@ -55,7 +56,15 @@ function signalReady(proc: ReturnType<typeof makeFakeProc>, port: number) {
   });
 }
 
-describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
+function iosDevice(udid: string): DeviceInfo {
+  return { id: udid, platform: "ios", kind: "simulator" };
+}
+
+function androidDevice(serial: string): DeviceInfo {
+  return { id: serial, platform: "android", kind: "emulator" };
+}
+
+describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(() => {
     spawnMock.mockReset();
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
@@ -65,7 +74,7 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     vi.clearAllMocks();
   });
 
-  it("spawns the `ios` subcommand and warms the AX automation flag for a UUID udid", async () => {
+  it("spawns the `ios` subcommand and warms the AX automation flag for an iOS device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
 
@@ -73,7 +82,8 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
 
     const udid = "11111111-2222-3333-4444-555555555555";
-    const factoryPromise = simulatorServerBlueprint.factory({}, udid);
+    const device = iosDevice(udid);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     signalReady(fakeProc, 55555);
     const instance = await factoryPromise;
 
@@ -97,14 +107,15 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
   });
 
-  it("spawns the `android` subcommand and skips the iOS AX automation flag for an adb serial", async () => {
+  it("spawns the `android` subcommand and skips the iOS AX automation flag for an Android device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
 
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
 
     const serial = "emulator-5554";
-    const factoryPromise = simulatorServerBlueprint.factory({}, serial);
+    const device = androidDevice(serial);
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     signalReady(fakeProc, 55556);
     await factoryPromise;
 
@@ -115,23 +126,22 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
-  it("does NOT route the iOS-17 physical-device short UUID form to `ios` (simctl cannot drive physical devices)", async () => {
-    // Review issue #8: the 8-16 hex form is physical-device-only. Routing it
-    // to `ios` surfaced an opaque "Invalid device" error from simctl. With
-    // list-based classify, an id that isn't in simctl's list falls back to
-    // the android subcommand — the caller gets "device not found" from adb,
-    // which at least correctly signals "this tool stack does not drive that
-    // target" rather than pretending simctl might work.
+  it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
+    // Single-source-of-truth: the blueprint must not run resolveDevice itself.
+    // If a caller passes an Android device whose id happens to look like an
+    // iOS UDID, the factory honors the platform on the DeviceInfo and routes
+    // to the `android` subcommand — not the `ios` one a shape heuristic would
+    // have picked.
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
 
-    const shortForm = "00008030-001C25120C22802E";
-    const factoryPromise = simulatorServerBlueprint.factory({}, shortForm);
+    const idShapedLikeIos = "11111111-2222-3333-4444-555555555555";
+    const device: DeviceInfo = { id: idShapedLikeIos, platform: "android", kind: "emulator" };
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     signalReady(fakeProc, 55557);
     await factoryPromise;
 
-    // No longer routed to `ios` (was a regression in the shape-heuristic world).
     expect(spawnMock.mock.calls[0]![1]![0]).toBe("android");
     expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
@@ -141,7 +151,8 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     spawnMock.mockReturnValue(fakeProc);
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
 
-    const factoryPromise = simulatorServerBlueprint.factory({}, "emulator-5554");
+    const device = androidDevice("emulator-5554");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     signalReady(fakeProc, 55558);
     const instance = await factoryPromise;
 
@@ -161,13 +172,23 @@ describe("simulatorServerBlueprint.factory — dispatch on udid shape", () => {
     spawnMock.mockReturnValue(fakeProc);
     const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
 
-    const factoryPromise = simulatorServerBlueprint.factory(
-      {},
-      "22222222-3333-4444-5555-666666666666"
-    );
+    const device = iosDevice("22222222-3333-4444-5555-666666666666");
+    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
     signalReady(fakeProc, 55559);
     const instance = await factoryPromise;
 
     expect(instance.api.apiUrl).toBe("http://127.0.0.1:55559");
+  });
+
+  it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
+    // Defensive: without a device, the factory has no way to decide ios vs
+    // android (and that's intentional — the SOT now lives upstream). Surface a
+    // clear actionable error instead of silently using a default.
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    const stub: DeviceInfo = { id: "ignored", platform: "ios", kind: "simulator" };
+
+    await expect(simulatorServerBlueprint.factory({}, stub)).rejects.toThrow(
+      /requires a resolved DeviceInfo via options\.device/
+    );
   });
 });

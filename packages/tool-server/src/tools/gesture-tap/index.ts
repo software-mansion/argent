@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -32,13 +33,13 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point.
 Use when you need to tap a button, link, or any tappable element on the simulator screen.
 Returns { tapped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.
-Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`simulator-interact\` skill`,
+Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element simulator touch down up",
   zodSchema,
   capability,
   services: (params) => ({
-    simulatorServer: `SimulatorServer:${params.udid}`,
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;

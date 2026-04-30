@@ -2,15 +2,37 @@ import { spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import {
   TypedEventEmitter,
+  type DeviceInfo,
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
-import { resolveDevice } from "../utils/device-info";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
+
+// The registry's `ServiceRef.options` is typed as `Record<string, unknown>`,
+// so the factory options must be assignable to it (intersection adds the
+// implicit string index signature that an `interface { device: DeviceInfo }`
+// alone wouldn't satisfy).
+type SimulatorServerFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+/**
+ * Build the `ServiceRef` for the simulator-server keyed by an already-resolved
+ * `DeviceInfo`. Tool `services()` callbacks should call this rather than
+ * hand-building the URN string, so the blueprint factory always receives the
+ * device through the registry's `options` channel and never has to reclassify.
+ */
+export function simulatorServerRef(device: DeviceInfo): {
+  urn: string;
+  options: SimulatorServerFactoryOptions;
+} {
+  return {
+    urn: `${SIMULATOR_SERVER_NAMESPACE}:${device.id}`,
+    options: { device },
+  };
+}
 
 const getPaths = () => {
   const BINARY_PATH = simulatorServerBinaryPath();
@@ -123,18 +145,29 @@ function spawnSimulatorServerProcess(
   });
 }
 
-export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, string> = {
+export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, DeviceInfo> = {
   namespace: SIMULATOR_SERVER_NAMESPACE,
-  getURN(udid: string) {
-    return `${SIMULATOR_SERVER_NAMESPACE}:${udid}`;
+  getURN(device: DeviceInfo) {
+    return `${SIMULATOR_SERVER_NAMESPACE}:${device.id}`;
   },
-  async factory(_deps, payload) {
-    const device = resolveDevice(payload);
+  // The registry parses URNs into string payloads, so the typed `DeviceInfo`
+  // travels through the third `options` arg (see `simulatorServerRef`). The
+  // blueprint never reclassifies — single source of truth lives in the caller.
+  async factory(_deps, _payload, options) {
+    const opts = options as unknown as SimulatorServerFactoryOptions | undefined;
+    if (!opts?.device) {
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
+          `Use simulatorServerRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
+      );
+    }
+    const { device } = opts;
     // iOS accessibility automation flag — no-op equivalent on Android so skip
     // the xcrun call entirely there.
     if (device.platform === "ios") {
       await ensureAutomationEnabled(device.id).catch(() => {});
     }
+
     const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
       device.id,
       device.platform

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
@@ -45,9 +46,7 @@ Fails if the simulator server is not running or the screenshot request times out
   outputHint: "image",
   capability,
   services: (params) => ({
-    simulatorServer: {
-      urn: `SimulatorServer:${params.udid}`,
-    },
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params, options) {
     const api = services.simulatorServer as SimulatorServerApi;

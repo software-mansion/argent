@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import type { SimulatorServerApi } from "../../blueprints/simulator-server";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -36,7 +37,7 @@ Fails if the simulator server is not running for the given UDID.`,
   zodSchema,
   capability,
   services: (params) => ({
-    simulatorServer: `SimulatorServer:${params.udid}`,
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.simulatorServer as SimulatorServerApi;

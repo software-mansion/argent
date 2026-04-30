@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import { simulatorServerRef } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -109,12 +109,9 @@ Stops on the first error and returns partial results.`,
     zodSchema,
     capability,
     services: (params) => ({
-      simulatorServer: `SimulatorServer:${params.udid}`,
+      simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
     }),
     async execute(_services, params) {
-      const device = resolveDevice(params.udid);
-      assertSupported("run-sequence", capability, device);
-
       const { udid, steps } = params;
       const results: StepResult[] = [];
 
