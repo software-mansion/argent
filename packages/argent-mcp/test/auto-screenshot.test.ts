@@ -83,8 +83,8 @@ describe("shouldAutoScreenshot", () => {
   });
 
   it("returns false for excluded tools", () => {
-    expect(shouldAutoScreenshot("list-simulators")).toBe(false);
-    expect(shouldAutoScreenshot("boot-simulator")).toBe(false);
+    expect(shouldAutoScreenshot("list-devices")).toBe(false);
+    expect(shouldAutoScreenshot("boot-device")).toBe(false);
     expect(shouldAutoScreenshot("simulator-server")).toBe(false);
     expect(shouldAutoScreenshot("activate-sso")).toBe(false);
   });
@@ -180,18 +180,33 @@ describe("getAutoScreenshotDelayMs", () => {
 });
 
 // ---------------------------------------------------------------------------
-// AUTO_SCREENSHOT_TOOLS consistency
+// shouldAutoScreenshot — unified tools trigger one screenshot regardless of platform
 // ---------------------------------------------------------------------------
-describe("AUTO_SCREENSHOT_TOOLS and delay map consistency", () => {
-  it("every tool in the allow-list has a corresponding delay", () => {
-    for (const tool of AUTO_SCREENSHOT_TOOLS) {
-      expect(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL).toHaveProperty(tool);
+describe("shouldAutoScreenshot — unified surface", () => {
+  it("returns false for the screenshot tool itself (prevents recursion)", () => {
+    expect(shouldAutoScreenshot("screenshot")).toBe(false);
+    expect(shouldAutoScreenshot("mcp__argent__screenshot")).toBe(false);
+  });
+
+  it("returns true for unified interaction tools", () => {
+    for (const t of [
+      "gesture-tap",
+      "gesture-swipe",
+      "button",
+      "keyboard",
+      "rotate",
+      "launch-app",
+      "restart-app",
+      "open-url",
+      "describe",
+      "run-sequence",
+    ]) {
+      expect(shouldAutoScreenshot(t)).toBe(true);
     }
   });
 
-  it("every tool in the delay map is in the allow-list", () => {
-    for (const tool of Object.keys(AUTO_SCREENSHOT_DELAY_MS_BY_TOOL)) {
-      expect(AUTO_SCREENSHOT_TOOLS.has(tool)).toBe(true);
-    }
+  it("normalizes MCP-prefixed names before looking up the allow-list", () => {
+    expect(shouldAutoScreenshot("mcp__argent__gesture-tap")).toBe(true);
+    expect(shouldAutoScreenshot("mcp__argent__launch-app")).toBe(true);
   });
 });

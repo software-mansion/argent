@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import { simulatorServerRef } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { assertSupported } from "../../utils/capability";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,7 +17,12 @@ const ALLOWED_TOOLS = new Set([
 ]);
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID (shared across all steps)"),
+  udid: z
+    .string()
+    .min(1)
+    .describe(
+      "Target device id from `list-devices` (iOS UDID or Android serial) — shared across all steps."
+    ),
   steps: z
     .array(
       z.object({
@@ -50,11 +55,13 @@ type RunSequenceResult = {
 };
 
 // run-sequence is platform-neutral by construction: every step is dispatched
-// through `registry.invokeTool`, which routes each step's tool by classifyDevice.
-// The capability here just gates the *outer* invocation, mirroring the inner tools'
-// support matrix so the failure mode is consistent.
+// through `registry.invokeTool`, and each step's tool runs its own
+// `dispatchByPlatform` against `params.udid`. The capability here just gates
+// the *outer* invocation, mirroring the inner tools' support matrix so the
+// failure mode is consistent.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
 };
 
 export function createRunSequenceTool(
@@ -102,12 +109,9 @@ Stops on the first error and returns partial results.`,
     zodSchema,
     capability,
     services: (params) => ({
-      simulatorServer: `SimulatorServer:${params.udid}`,
+      simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
     }),
     async execute(_services, params) {
-      const device = resolveDevice(params.udid);
-      assertSupported("run-sequence", capability, device);
-
       const { udid, steps } = params;
       const results: StepResult[] = [];
 

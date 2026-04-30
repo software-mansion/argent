@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 function makeAXServiceApi(response: AXDescribeResponse): AXServiceApi {
   return {
@@ -66,6 +67,15 @@ function makeMockRegistry(options: {
 }
 
 describe("describe tool", () => {
+  beforeEach(() => {
+    // `describe` dispatches by udid shape (classifyDevice). The tests pass
+    // iOS-shape udids that route to the iOS branch, whose `requires:["xcrun"]`
+    // would shell out to probe PATH on Linux CI without xcrun. Prime the dep
+    // cache so neither branch probes — handlers run with mock services.
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
   it("returns elements from ax-service daemon", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,

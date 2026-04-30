@@ -1,23 +1,9 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { NativeDevtoolsApi } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import type { RestartAppParams, RestartAppResult, RestartAppServices } from "../types";
 
 const execFileAsync = promisify(execFile);
-
-export interface RestartAppParams {
-  udid: string;
-  bundleId: string;
-}
-
-export interface RestartAppResult {
-  restarted: boolean;
-  bundleId: string;
-}
-
-export interface RestartAppServices {
-  nativeDevtools: NativeDevtoolsApi;
-}
 
 export const iosImpl: PlatformImpl<RestartAppServices, RestartAppParams, RestartAppResult> = {
   requires: ["xcrun"],

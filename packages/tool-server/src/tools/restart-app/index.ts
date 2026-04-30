@@ -1,32 +1,47 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type RestartAppResult, type RestartAppServices } from "./platforms/ios";
+import { resolveDevice } from "../../utils/device-info";
+import type { RestartAppResult, RestartAppServices } from "./types";
+import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
+const BUNDLE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
-  bundleId: z.string().describe("App bundle identifier (e.g. com.apple.MobileSMS)"),
+  udid: z
+    .string()
+    .min(1)
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  bundleId: z
+    .string()
+    .min(1)
+    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
+    .describe("App identifier. iOS: bundle id. Android: package name."),
 });
 
 type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
 };
 
 export const restartAppTool: ToolDefinition<Params, RestartAppResult> = {
   id: "restart-app",
-  description: `Restart an app on the simulator by terminating then relaunching it by bundle ID.
-Use when you need a clean in-memory state without a full reinstall. Also refreshes native-devtools launch injection before the relaunch. Returns { restarted, bundleId }. Fails if the bundle ID is not installed on the simulator.`,
+  description: `Terminate then relaunch an app by bundle id / package name.
+Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection on iOS before the relaunch.
+Returns { restarted, bundleId }. Fails if the app is not installed.`,
   alwaysLoad: true,
-  searchHint: "terminate relaunch restart reset app bundle id simulator",
+  searchHint: "terminate relaunch restart reset app bundle id package simulator emulator",
   zodSchema,
   capability,
-  services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
-  }),
+  // Only iOS needs the native-devtools service for relaunch injection.
+  services: (params): Record<string, ServiceRef> =>
+    resolveDevice(params.udid).platform === "ios"
+      ? { nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}` }
+      : {},
   execute: dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({
     toolId: "restart-app",
     capability,

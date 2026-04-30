@@ -19,10 +19,16 @@ export class DependencyMissingError extends Error {
   }
 }
 
+// Cache for CACHE_TTL_MS so a burst of tool calls pays at most one `command -v`
+// per dep, but an install mid-session (e.g. the user runs `xcode-select
+// --install` after a missing-dep error) recovers on its own within a minute
+// without needing a tool-server restart.
 const CACHE_TTL_MS = 60_000;
 type CacheEntry = { available: boolean; checkedAt: number };
 const cache = new Map<ToolDependency, CacheEntry>();
 
+// Short per-dep hints — the message is what the LLM sees on a missing-dep
+// error, so it should tell it how to unblock the user.
 const INSTALL_HINTS: Record<ToolDependency, string> = {
   xcrun:
     "Xcode command-line tools are not installed. Run `xcode-select --install` (or install Xcode from the App Store) and retry. Only required for iOS simulators.",
@@ -31,6 +37,10 @@ const INSTALL_HINTS: Record<ToolDependency, string> = {
 
 async function probe(dep: ToolDependency): Promise<boolean> {
   try {
+    // `command -v` via `/bin/sh` is POSIX-portable and doesn't invoke the dep
+    // itself — a bare `adb` or `xcrun` call would fork the tool just to check
+    // existence, which is both slower and (for xcrun) can prompt the license
+    // agreement dialog on first use.
     await execFileAsync("/bin/sh", ["-c", `command -v ${dep}`], { timeout: 2_000 });
     return true;
   } catch {
@@ -50,7 +60,8 @@ async function isAvailable(dep: ToolDependency): Promise<boolean> {
 /**
  * Throws DependencyMissingError if any declared dep isn't on PATH. All deps
  * are probed in parallel; the error message lists every missing one so the
- * agent sees the complete picture on the first failure.
+ * agent sees the complete picture on the first failure instead of being
+ * prompted twice for the same tool.
  */
 export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void> {
   if (deps.length === 0) return;
@@ -61,17 +72,27 @@ export async function ensureDeps(deps: readonly ToolDependency[]): Promise<void>
   throw new DependencyMissingError(missing, message);
 }
 
-/** Single-dep helper for tools that branch on `classifyDevice`. */
+/**
+ * Single-dep convenience over `ensureDeps`. `dispatchByPlatform` already
+ * preflights the matched branch's `requires`; this is for tools that pick
+ * a platform path internally (e.g. `boot-device`, where there is no udid to
+ * classify yet) and want the same 424-with-install-hint failure mode.
+ */
 export async function ensureDep(dep: ToolDependency): Promise<void> {
   return ensureDeps([dep]);
 }
 
-/** Test-only: clear the cache. */
+/** Test-only: clear the availability cache between tests. */
 export function __resetDepCacheForTests(): void {
   cache.clear();
 }
 
-/** Test-only: pre-populate the cache so probe() is a no-op. */
+/**
+ * Test-only: pre-populate the cache so `ensureDep(dep)` is a no-op without
+ * shelling out. Needed by tool dispatch tests that assert on `execFile` call
+ * shapes / counts — without this, the `command -v <dep>` probe appears as an
+ * extra first call and breaks `mock.calls[0]` expectations.
+ */
 export function __primeDepCacheForTests(deps: ToolDependency[]): void {
   const now = Date.now();
   for (const d of deps) cache.set(d, { available: true, checkedAt: now });

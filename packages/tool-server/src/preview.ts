@@ -3,8 +3,9 @@ import path from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
 import type { Registry } from "@argent/registry";
-import { SIMULATOR_SERVER_NAMESPACE, type SimulatorServerApi } from "./blueprints/simulator-server";
-import { listSimulatorsTool } from "./tools/simulator/list-simulators";
+import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
+import { resolveDevice } from "./utils/device-info";
+import { listDevicesTool } from "./tools/devices/list-devices";
 
 function findUiHtml(): string | null {
   // Candidate paths (first match wins):
@@ -34,15 +35,21 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/simulators", async (_req: Request, res: Response) => {
     try {
       const data = await registry.invokeTool<{
-        simulators: Array<{
-          udid: string;
-          name: string;
-          state: string;
-          runtime: string;
-          isAvailable: boolean;
-        }>;
-      }>(listSimulatorsTool.id);
-      res.json(data);
+        devices: Array<
+          | { platform: "ios"; udid: string; name: string; state: string; runtime: string }
+          | { platform: "android" }
+        >;
+      }>(listDevicesTool.id);
+      const simulators = data.devices
+        .filter((d): d is Extract<typeof d, { platform: "ios" }> => d.platform === "ios")
+        .map(({ udid, name, state, runtime }) => ({
+          udid,
+          name,
+          state,
+          runtime,
+          isAvailable: true,
+        }));
+      res.json({ simulators });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -51,9 +58,8 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/simulator-server/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
     try {
-      const api = await registry.resolveService<SimulatorServerApi>(
-        `${SIMULATOR_SERVER_NAMESPACE}:${udid}`
-      );
+      const { urn, options } = simulatorServerRef(resolveDevice(udid));
+      const api = await registry.resolveService<SimulatorServerApi>(urn, options);
       res.json({
         udid,
         apiUrl: api.apiUrl,

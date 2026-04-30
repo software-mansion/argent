@@ -1,17 +1,20 @@
-import { NotImplementedOnPlatformError } from "../../../utils/capability";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import type { RestartAppParams, RestartAppResult } from "./ios";
+import { adbShell } from "../../../utils/adb";
+import type { RestartAppParams, RestartAppResult, RestartAppServices } from "../types";
 
-export const androidImpl: PlatformImpl<unknown, RestartAppParams, RestartAppResult> = {
+export const androidImpl: PlatformImpl<RestartAppServices, RestartAppParams, RestartAppResult> = {
   requires: ["adb"],
-  handler: async () => {
-    throw new NotImplementedOnPlatformError({
-      toolId: "restart-app",
-      platform: "android",
-      hint:
-        "Use `adb shell am force-stop <pkg>` then `adb shell am start -W -n " +
-        "<pkg>/<.Activity>`. Resolve the launcher activity via " +
-        "`cmd package resolve-activity --brief <pkg>` when none is provided.",
-    });
+  handler: async (_services, params) => {
+    const { udid, bundleId } = params;
+    await adbShell(udid, `am force-stop ${bundleId}`, { timeoutMs: 15_000 });
+    const out = await adbShell(
+      udid,
+      `monkey -p ${bundleId} -c android.intent.category.LAUNCHER 1`,
+      { timeoutMs: 30_000 }
+    );
+    if (/No activities found|Error:/i.test(out)) {
+      throw new Error(`relaunch failed: ${out.trim()}`);
+    }
+    return { restarted: true, bundleId };
   },
 };
