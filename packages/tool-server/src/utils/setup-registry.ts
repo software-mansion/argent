@@ -26,6 +26,7 @@ import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { keyboardTool } from "../tools/keyboard";
+import { pasteTool } from "../tools/paste";
 import { rotateTool } from "../tools/rotate";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
@@ -93,6 +94,7 @@ export function createRegistry(): Registry {
   registry.registerTool(gestureRotateTool);
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
+  registry.registerTool(pasteTool);
   registry.registerTool(rotateTool);
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);

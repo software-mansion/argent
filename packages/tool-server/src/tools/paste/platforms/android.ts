@@ -1,17 +1,14 @@
-import { NotImplementedOnPlatformError } from "../../../utils/capability";
+import { sendCommand } from "../../../utils/simulator-client";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import type { PasteParams, PasteResult, PasteServices } from "./ios";
 
+// Identical to iOS: the simulator-server's `cmd: "paste"` variant seeds the
+// device pasteboard via `EmulatorController.setClipboard` and dispatches
+// Ctrl+V through the same gRPC `sendKey` HID path Android Studio uses.
 export const androidImpl: PlatformImpl<PasteServices, PasteParams, PasteResult> = {
-  requires: ["adb"],
-  handler: async () => {
-    throw new NotImplementedOnPlatformError({
-      toolId: "paste",
-      platform: "android",
-      hint:
-        'Use `adb shell input text "<text>"` for direct text injection, or write to ' +
-        "the clipboard via `cmd clipboard` and dispatch KEYCODE_PASTE (279) into the " +
-        "focused field.",
-    });
+  handler: async (services, params) => {
+    const api = services.simulatorServer;
+    sendCommand(api, { cmd: "paste", text: params.text });
+    return { pasted: true };
   },
 };
