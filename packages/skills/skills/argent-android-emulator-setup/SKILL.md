@@ -19,7 +19,7 @@ Verify with `adb version` and `emulator -list-avds`.
 
 ## 3. Using the device
 
-Pass the Android serial as `udid` to the unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc. Dispatch is automatic based on the id shape. See `argent-simulator-interact` (platform-neutral interaction) and `argent-android-emulator-interact` (Android-specific gotchas).
+Pass the Android serial as `udid` to the unified interaction tools — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, `keyboard`, etc. Dispatch is automatic based on the id shape. See `argent-device-interact` for platform-neutral interaction tooling and the Android-specific gotchas section at the bottom of that skill.
 
 ## 4. Notes
 

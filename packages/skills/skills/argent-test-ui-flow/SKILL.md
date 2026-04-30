@@ -88,8 +88,7 @@ Steps:
 
 | Skill                              | When to use                                                |
 | ---------------------------------- | ---------------------------------------------------------- |
-| `argent-simulator-interact`        | Detailed tool usage for tapping, swiping, typing (iOS)     |
-| `argent-android-emulator-interact` | Detailed tool usage for tapping, swiping, typing (Android) |
+| `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS + Android)    |
 | `argent-simulator-setup`           | Booting and connecting an iOS simulator                    |
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator                 |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                      |

@@ -260,7 +260,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Skill                          | When to use                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------------- |
 | `argent-simulator-setup`       | Initial simulator boot and connection setup                                     |
-| `argent-simulator-interact`    | Tapping, swiping, typing, hardware buttons, gestures on the simulator           |
+| `argent-device-interact`       | Tapping, swiping, typing, hardware buttons, gestures on the simulator/emulator  |
 | `argent-metro-debugger`        | Full Metro CDP debugging: component inspection, console logs, JS evaluation     |
 | `argent-react-native-profiler` | Profiling performance, finding re-render issues, CPU hotspots                   |
 | `argent-test-ui-flow`          | Interactive UI testing with automatic screenshot verification after each action |

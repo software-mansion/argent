@@ -1,5 +1,5 @@
 ---
-name: argent-simulator-interact
+name: argent-device-interact
 description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
 ---
 
@@ -7,7 +7,7 @@ description: Interact with an iOS simulator or Android emulator using argent MCP
 
 All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs Android based on its shape (UUID → iOS simulator, anything else → Android adb serial). You use the same tool names on both platforms.
 
-For Android-specific caveats (gestures that only exist on iOS, Android-only buttons, Metro `adb reverse`, locked-screen describe errors) see `argent-android-emulator-interact`.
+For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
 
 ## 1. Before You Start
 
@@ -277,3 +277,18 @@ Tap a known button, then scroll down:
 ```
 
 Stops on the first error and returns partial results.
+
+---
+
+## 9. Platform-specific notes
+
+### Android
+
+- **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts.
+- **First-launch permission prompts**: pass `grantPermissions: true` to `reinstall-app` on Android so the app skips the runtime-permission dialogs.
+- **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
+- **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
+
+### iOS
+
+_(no iOS-only gotchas collected here yet — add them as they come up)_

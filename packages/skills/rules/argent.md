@@ -31,9 +31,9 @@ Whenever something changed YOU MUST first call `describe`, or another appropriat
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 
-If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android) to choose the correct next action.
+If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-device-interact` to choose the correct next action.
 
-Before starting to interact with the app, read the `argent-simulator-interact` (iOS) or `argent-android-emulator-interact` (Android) skill first.
+Before starting to interact with the app, read the `argent-device-interact` skill first.
 </tapping_rule>
 
 <skill_reading_rule>
@@ -48,7 +48,7 @@ Before starting to interact with the app, read the `argent-simulator-interact` (
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
+- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers` for iOS targets.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
@@ -78,8 +78,8 @@ Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
-Skill: `argent-simulator-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots. Interaction tools are unified across iOS and Android — pair with `argent-android-emulator-interact` when driving an Android target for the platform-specific gotchas (Metro reverse, grantPermissions, locked-screen describe, logcat).
+Skill: `argent-device-interact`
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots. Interaction tools are unified across iOS and Android — see the Platform-specific notes section in the skill for Android gotchas (Metro reverse, grantPermissions, locked-screen describe).
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
