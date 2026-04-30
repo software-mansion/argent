@@ -681,11 +681,8 @@ const hermesAdapter: McpConfigAdapter = {
 
 const OPENCODE_BINARY = "opencode";
 const OPENCODE_ALLOWLIST_PATTERN = "argent*";
-// Filename candidates opencode's own loader recognizes, in the order it picks
-// a write target. Global mirrors upstream's `globalConfigFile()` (.jsonc wins
-// over .json, with config.json kept last as the legacy/migrated fallback).
-// Project picks .jsonc first because opencode deep-merges it on top of
-// opencode.json at read time, so writes there survive the merge.
+
+// Same filename prioritization order that's used by opencode CLI
 const OPENCODE_PROJECT_FILES = ["opencode.jsonc", "opencode.json"] as const;
 const OPENCODE_GLOBAL_FILES = ["opencode.jsonc", "opencode.json", "config.json"] as const;
 
