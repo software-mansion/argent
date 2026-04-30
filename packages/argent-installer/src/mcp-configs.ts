@@ -721,46 +721,36 @@ const openCodeAdapter: McpConfigAdapter = {
   },
 
   write(configPath: string, entry: McpServerEntry): void {
-    const config = readJson(configPath);
-    const servers = (config.mcp ?? {}) as Record<string, unknown>;
-    servers[MCP_SERVER_KEY] = {
+    editJsoncFile(configPath, ["mcp", MCP_SERVER_KEY], {
       type: "local",
       command: [entry.command, ...entry.args],
       enabled: true,
       environment: entry.env,
-    };
-    config.mcp = servers;
-    writeJson(configPath, config);
+    });
   },
 
   remove(configPath: string): boolean {
     if (!fs.existsSync(configPath)) return false;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const servers = config.mcp as Record<string, unknown> | undefined;
     if (!servers?.[MCP_SERVER_KEY]) return false;
-    delete servers[MCP_SERVER_KEY];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["mcp", MCP_SERVER_KEY], undefined);
     return true;
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
-    const config = readJson(configPath);
-    const tools = (config.tools ?? {}) as Record<string, unknown>;
-    tools[OPENCODE_ALLOWLIST_PATTERN] = true;
-    config.tools = tools;
-    writeJson(configPath, config);
+    editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], true);
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath || !fs.existsSync(configPath)) return;
-    const config = readJson(configPath);
+    const config = readJsonc(configPath);
     const tools = config.tools as Record<string, unknown> | undefined;
     if (!tools || !(OPENCODE_ALLOWLIST_PATTERN in tools)) return;
-    delete tools[OPENCODE_ALLOWLIST_PATTERN];
-    writeJsonOrRemove(configPath, config);
+    editJsoncFile(configPath, ["tools", OPENCODE_ALLOWLIST_PATTERN], undefined);
   },
 };
 

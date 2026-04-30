@@ -980,6 +980,32 @@ describe("opencode adapter", () => {
     expect(tools.write).toBe("ask");
     expect(tools["argent*"]).toBe(true);
   });
+
+  // opencode supports both opencode.json (strict JSON) and opencode.jsonc
+  // (with comments + trailing commas). Going through editJsoncFile means
+  // user-authored comments survive write/remove the same way they do for Zed.
+  it("preserves user comments when writing into opencode.jsonc", () => {
+    const configPath = path.join(tmpDir, "opencode.jsonc");
+    const original = `{
+  // top-of-file comment
+  "theme": "opencode-dark",
+  /* trailing block comment */
+}
+`;
+    fs.writeFileSync(configPath, original);
+
+    adapter.write(configPath, getMcpEntry());
+
+    const after = fs.readFileSync(configPath, "utf8");
+    expect(after).toContain("// top-of-file comment");
+    expect(after).toContain("/* trailing block comment */");
+    expect(after).toContain('"theme": "opencode-dark"');
+
+    const parsed = readJsoncFile(configPath);
+    const servers = parsed.mcp as Record<string, unknown>;
+    expect(servers).toHaveProperty("argent");
+    expect((servers.argent as Record<string, unknown>).type).toBe("local");
+  });
 });
 
 // ── Claude permissions ────────────────────────────────────────────────────────
