@@ -38,7 +38,10 @@ vi.mock("../src/utils/adb", async () => {
   };
 });
 
-import { createBootDeviceTool } from "../src/tools/devices/boot-device";
+import {
+  __resetInFlightBootsForTesting,
+  createBootDeviceTool,
+} from "../src/tools/devices/boot-device";
 
 const registry: Registry = { resolveService: async () => ({}) } as unknown as Registry;
 
@@ -64,6 +67,10 @@ beforeEach(() => {
   hasSnapshotMock.mockReset();
   probeMock.mockReset();
   spawnMock.mockImplementation(() => fakeChild());
+  // Per-AVD in-flight coalescing carries leaked promises across tests; reset
+  // so each test starts with an empty boot map. (See note in adjacent
+  // boot-device-hardening.test.ts.)
+  __resetInFlightBootsForTesting();
 });
 
 /**

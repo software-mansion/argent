@@ -367,7 +367,55 @@ async function attemptBoot(params: {
   return { serial };
 }
 
+// In-flight boot per AVD. Two `bootAndroid` calls for the same AVD would each
+// pass the "already running" fast-path (the emulator hasn't registered yet)
+// and both spawn QEMU — the second collides on the AVD's exclusive on-disk
+// lock and bails after the boot deadline with a confusing "Running multiple
+// emulators" error. Coalescing in-flight calls per AVD makes a duplicate call
+// reuse the result of the first one (or its eventual error).
+const inFlightBoots = new Map<
+  string,
+  Promise<{
+    platform: "android";
+    serial: string;
+    avdName: string;
+    booted: true;
+    coldBoot: boolean;
+  }>
+>();
+
+/**
+ * Clear the in-flight boot map. Exposed for tests that intentionally abandon
+ * a half-started boot to assert orphan-cleanup behavior — without this hook
+ * the leaked promise would coalesce into the next test that targets the same
+ * AVD and starve it of a real spawn.
+ */
+export function __resetInFlightBootsForTesting(): void {
+  inFlightBoots.clear();
+}
+
 async function bootAndroid(params: {
+  avdName: string;
+  coldBoot: boolean;
+  noWindow: boolean;
+  bootTimeoutMs: number;
+}): Promise<{
+  platform: "android";
+  serial: string;
+  avdName: string;
+  booted: true;
+  coldBoot: boolean;
+}> {
+  const existing = inFlightBoots.get(params.avdName);
+  if (existing) return existing;
+  const promise = bootAndroidImpl(params).finally(() => {
+    inFlightBoots.delete(params.avdName);
+  });
+  inFlightBoots.set(params.avdName, promise);
+  return promise;
+}
+
+async function bootAndroidImpl(params: {
   avdName: string;
   coldBoot: boolean;
   noWindow: boolean;

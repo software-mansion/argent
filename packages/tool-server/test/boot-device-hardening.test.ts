@@ -25,13 +25,21 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { createBootDeviceTool } from "../src/tools/devices/boot-device";
+import {
+  __resetInFlightBootsForTesting,
+  createBootDeviceTool,
+} from "../src/tools/devices/boot-device";
 
 const registry: Registry = { resolveService: async () => ({}) } as unknown as Registry;
 
 beforeEach(() => {
   execFileMock.mockReset();
   spawnMock.mockReset();
+  // Tests in this file intentionally abandon some bootAndroid promises
+  // (kick them off, attach .catch, move on). Without this reset the in-flight
+  // coalescing map would hand the leaked promise to the next test that boots
+  // the same AVD, causing cascade timeouts.
+  __resetInFlightBootsForTesting();
   // Default: every spawned emulator process is a well-behaved child that
   // never exits on its own. Individual tests override as needed.
   spawnMock.mockImplementation(() => {
@@ -169,6 +177,84 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
     setTimeout(() => proc.emit("exit", 1), 600);
 
     await expect(promise).rejects.toThrow(/emulator binary exited with code 1/);
+  }, 10_000);
+
+  it("coalesces concurrent boot calls for the same AVD onto a single spawn", async () => {
+    // Two callers race in for the same AVD before either emulator registers.
+    // Without the in-flight coalescing both would spawn QEMU; the second
+    // collides on the AVD lock and bails after the deadline. Verify that
+    // exactly one spawn fires and both callers see the same result.
+    const serial = "emulator-5554";
+    let devicesPolls = 0;
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "emulator" && args[0] === "-list-avds") {
+        return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "version") return { stdout: "ok\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+      if (cmd === "adb" && args[0] === "devices") {
+        devicesPolls++;
+        // First poll: empty. Subsequent polls: emulator visible.
+        if (devicesPolls <= 1) return { stdout: "List of devices attached\n", stderr: "" };
+        return { stdout: `List of devices attached\n${serial}\tdevice\n`, stderr: "" };
+      }
+      if (cmd === "adb" && args.includes("wait-for-device")) {
+        return { stdout: "", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        return { stdout: "1\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const tool = createBootDeviceTool(registry);
+    const [a, b] = await Promise.all([
+      tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }),
+      tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }),
+    ]);
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+  }, 15_000);
+
+  it("reports a signal-terminated emulator (e.g. QEMU SIGSEGV) as a crash, not a hang", async () => {
+    // Regression for the "sometimes silently crashes" complaint: when QEMU
+    // segfaults on a bad ram.bin restore the child exits with `code === null,
+    // signal !== null`. The previous `code !== null` guard treated this as a
+    // normal exit so the outer wait blocked for the full per-stage budget.
+    const serial = "emulator-5554";
+    const proc = new EventEmitter() as EventEmitter & { unref: () => void };
+    proc.unref = () => {};
+    spawnMock.mockReturnValue(proc);
+
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "emulator") return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "version") return { stdout: "adb ok\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+      if (cmd === "adb" && args[0] === "devices") {
+        return { stdout: `List of devices attached\n${serial}\tdevice\n`, stderr: "" };
+      }
+      if (cmd === "adb" && args.includes("wait-for-device")) {
+        return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        return { stdout: "\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+        return { stdout: "OK\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const tool = createBootDeviceTool(registry);
+    const promise = tool.execute!(
+      {},
+      { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
+    );
+
+    setTimeout(() => proc.emit("exit", null, "SIGSEGV"), 600);
+
+    await expect(promise).rejects.toThrow(/terminated by signal SIGSEGV/);
   }, 10_000);
 });
 
