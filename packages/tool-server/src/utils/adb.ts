@@ -206,10 +206,32 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
   return enriched;
 }
 
+// Errors from `adb shell` that mean the device is in a state no boot wait can
+// fix. Returning generically and timing out wastes the full budget and hides
+// the actionable cause. These substrings appear in adb stderr (now surfaced
+// through runAdb's rewrapped errors) for the named conditions.
+const TERMINAL_ADB_ERRORS = [
+  "device unauthorized",
+  "device not found",
+  "no devices/emulators found",
+  "device offline",
+];
+
+function isTerminalAdbError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return TERMINAL_ADB_ERRORS.some((needle) => lower.includes(needle));
+}
+
 /**
  * Block until a device is fully booted. `adb wait-for-device` only waits for the
  * daemon connection; `sys.boot_completed=1` is the Android-canonical "fully booted"
  * signal that package manager + activity manager are ready to receive commands.
+ *
+ * Mid-boot getprop failures (the device is still coming up, the shell isn't
+ * ready, the daemon is reconnecting) are swallowed and retried. Terminal
+ * errors (device unauthorized, offline, not found) are NOT — they mean the
+ * caller needs to take action, and waiting another 2 minutes only hides
+ * what's wrong.
  */
 export async function waitForBootCompleted(
   serial: string,
@@ -225,8 +247,15 @@ export async function waitForBootCompleted(
     try {
       const out = await adbShell(serial, "getprop sys.boot_completed", { timeoutMs: 3_000 });
       if (out.trim() === "1") return;
-    } catch {
-      // Device may be mid-boot; swallow and retry
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isTerminalAdbError(message)) {
+        throw new Error(
+          `Cannot wait for ${serial} to boot — adb reports the device is in a terminal state: ${message}.` +
+            ` Authorise the device, reconnect it, or pick a different target.`
+        );
+      }
+      // Otherwise: device may be mid-boot; swallow and retry.
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
