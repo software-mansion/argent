@@ -131,9 +131,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // "unsupported on android" error, not a misleading "xcrun missing".
       // Cross-platform tools double-check inside their dispatch helper, so
       // non-HTTP callers (run-sequence, flow-run) are also covered.
-      if (def.capability && parsedData && typeof parsedData.udid === "string") {
+      //
+      // Tools spell the device parameter two ways — `udid` (legacy iOS-only
+      // tools and gestures) and `device_id` (debugger / profiler / network
+      // tools). Honour both so an Android serial reaching an iOS-only
+      // device_id-tool is rejected at the gate instead of falling through
+      // to the deeper blueprint error (which surfaces as a generic 500).
+      const deviceArg =
+        typeof parsedData?.udid === "string"
+          ? parsedData.udid
+          : typeof parsedData?.device_id === "string"
+            ? parsedData.device_id
+            : null;
+      if (def.capability && deviceArg) {
         try {
-          const device = resolveDevice(parsedData.udid);
+          const device = resolveDevice(deviceArg);
           assertSupported(def.id, def.capability, device);
         } catch (err) {
           if (err instanceof UnsupportedOperationError) {
