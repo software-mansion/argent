@@ -45,7 +45,7 @@ but required by the main agent, fill it in by manual inspection of the project.
    - `expo` in dependencies or `app.json` with `expo` key → Expo project
    - `pubspec.yaml` present → Flutter project
    - `ios/*.xcodeproj` or `ios/*.xcworkspace` without `react-native` → native iOS
-   - `android/build.gradle` without `react-native` → native Android
+   - `android/build.gradle` or `android/build.gradle.kts` without `react-native` → native Android
    - None of the above → classify based on what you find (web app, library, etc.)
 
 3. **Explore beyond the snapshot.** Use Read, Glob, Grep, and Bash to fill
@@ -64,7 +64,7 @@ but required by the main agent, fill it in by manual inspection of the project.
      flows (`.maestro/`).
    - For Flutter: `pubspec.yaml`, `analysis_options.yaml`, `lib/` structure.
    - For native iOS: Xcode project/workspace, schemes, `Podfile`, `Package.swift`.
-   - For native Android: `build.gradle`, `settings.gradle`, flavor configs.
+   - For native Android: `build.gradle` / `build.gradle.kts`, `settings.gradle` / `settings.gradle.kts`, flavor configs. Modern AGP templates use Kotlin DSL by default — both Groovy and Kotlin variants need to be considered.
 
 4. **Populate every field** in the output schema below. Use `null` for
    genuinely unknown values or fields that do not apply to this project type.
