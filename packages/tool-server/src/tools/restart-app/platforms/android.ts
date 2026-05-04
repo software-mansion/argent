@@ -4,9 +4,13 @@ import {
   assertAmStartOk,
   resolveLauncherActivity,
 } from "../../launch-app/platforms/android";
-import type { RestartAppParams, RestartAppResult, RestartAppServices } from "../types";
+import type { RestartAppAndroidServices, RestartAppParams, RestartAppResult } from "../types";
 
-export const androidImpl: PlatformImpl<RestartAppServices, RestartAppParams, RestartAppResult> = {
+export const androidImpl: PlatformImpl<
+  RestartAppAndroidServices,
+  RestartAppParams,
+  RestartAppResult
+> = {
   requires: ["adb"],
   handler: async (_services, params) => {
     const { udid, bundleId, activity } = params;

@@ -3,7 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import type { LaunchAppResult, LaunchAppServices } from "./types";
+import type { LaunchAppAndroidServices, LaunchAppIosServices, LaunchAppResult } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
@@ -64,7 +64,7 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     const device = resolveDevice(params.udid);
     return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
   },
-  execute: dispatchByPlatform<LaunchAppServices, Params, LaunchAppResult>({
+  execute: dispatchByPlatform<LaunchAppIosServices, LaunchAppAndroidServices, Params, LaunchAppResult>({
     toolId: "launch-app",
     capability,
     ios: iosImpl,

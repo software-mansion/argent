@@ -11,10 +11,10 @@ export interface RestartAppResult {
   bundleId: string;
 }
 
-// Even though only iOS reads `nativeDevtools` (Android's `services()` returns
-// `{}`), `dispatchByPlatform` requires both branches share a Services generic.
-// Declaring the iOS-shaped service here lets the Android branch type against
-// the same shape and ignore the field at runtime.
-export interface RestartAppServices {
+// iOS gets the native-devtools service so restart-app can refresh the DYLD env
+// before the relaunch. Android's `services()` returns `{}` so its handler types
+// against an empty shape — `dispatchByPlatform` keeps the two generics separate.
+export interface RestartAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
+export type RestartAppAndroidServices = Record<string, never>;

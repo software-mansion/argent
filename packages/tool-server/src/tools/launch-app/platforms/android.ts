@@ -1,6 +1,6 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
-import type { LaunchAppParams, LaunchAppResult, LaunchAppServices } from "../types";
+import type { LaunchAppAndroidServices, LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner. A positive-match check on
 // `Status: ok` is more robust than scanning for keywords like "Error": the old
@@ -39,7 +39,11 @@ export async function resolveLauncherActivity(udid: string, bundleId: string): P
   return last;
 }
 
-export const androidImpl: PlatformImpl<LaunchAppServices, LaunchAppParams, LaunchAppResult> = {
+export const androidImpl: PlatformImpl<
+  LaunchAppAndroidServices,
+  LaunchAppParams,
+  LaunchAppResult
+> = {
   requires: ["adb"],
   handler: async (_services, params) => {
     // Resolve a concrete pkg/Activity component for every code path so we

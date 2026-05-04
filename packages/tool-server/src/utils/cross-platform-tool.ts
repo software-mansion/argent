@@ -47,11 +47,16 @@ export interface PlatformImpl<Services, Params, Result> {
  * see real names (e.g. `services.simulatorServer`) instead of the raw
  * `Record<string, unknown>` the registry hands in.
  */
-export function dispatchByPlatform<Services, Params extends { udid: string }, Result>(opts: {
+export function dispatchByPlatform<
+  IosServices,
+  AndroidServices,
+  Params extends { udid: string },
+  Result,
+>(opts: {
   toolId: string;
   capability: ToolCapability;
-  ios: PlatformImpl<Services, Params, Result>;
-  android: PlatformImpl<Services, Params, Result>;
+  ios: PlatformImpl<IosServices, Params, Result>;
+  android: PlatformImpl<AndroidServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -60,11 +65,25 @@ export function dispatchByPlatform<Services, Params extends { udid: string }, Re
   return async (services, params, invokeOptions) => {
     const device = resolveDevice(params.udid);
     assertSupported(opts.toolId, opts.capability, device);
-    const impl = device.platform === "ios" ? opts.ios : opts.android;
-    if (impl.requires?.length) {
-      await ensureDeps(impl.requires);
+    if (device.platform === "ios") {
+      if (opts.ios.requires?.length) {
+        await ensureDeps(opts.ios.requires);
+      }
+      return opts.ios.handler(
+        services as unknown as IosServices,
+        params,
+        device,
+        invokeOptions
+      );
     }
-    const typedServices = services as unknown as Services;
-    return impl.handler(typedServices, params, device, invokeOptions);
+    if (opts.android.requires?.length) {
+      await ensureDeps(opts.android.requires);
+    }
+    return opts.android.handler(
+      services as unknown as AndroidServices,
+      params,
+      device,
+      invokeOptions
+    );
   };
 }

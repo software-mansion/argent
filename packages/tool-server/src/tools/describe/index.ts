@@ -56,7 +56,12 @@ For React Native apps, debugger-component-tree returns React component names wit
     zodSchema,
     capability,
     services: () => ({}),
-    execute: dispatchByPlatform<Record<string, unknown>, Params, DescribeResult>({
+    execute: dispatchByPlatform<
+      Record<string, unknown>,
+      Record<string, unknown>,
+      Params,
+      DescribeResult
+    >({
       toolId: "describe",
       capability,
       ios: {

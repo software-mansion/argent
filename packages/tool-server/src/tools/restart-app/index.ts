@@ -3,7 +3,11 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import type { RestartAppResult, RestartAppServices } from "./types";
+import type {
+  RestartAppAndroidServices,
+  RestartAppIosServices,
+  RestartAppResult,
+} from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
@@ -55,7 +59,12 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
     const device = resolveDevice(params.udid);
     return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
   },
-  execute: dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({
+  execute: dispatchByPlatform<
+    RestartAppIosServices,
+    RestartAppAndroidServices,
+    Params,
+    RestartAppResult
+  >({
     toolId: "restart-app",
     capability,
     ios: iosImpl,

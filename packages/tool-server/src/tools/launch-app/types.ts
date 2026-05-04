@@ -12,10 +12,10 @@ export interface LaunchAppResult {
   bundleId: string;
 }
 
-// Even though only iOS reads `nativeDevtools` (Android's `services()` returns
-// `{}`), `dispatchByPlatform` requires both branches share a Services generic.
-// Declaring the iOS-shaped service here lets the Android branch type against
-// the same shape and ignore the field at runtime.
-export interface LaunchAppServices {
+// iOS gets the native-devtools service so launch-app can warm DYLD env before
+// the app starts. Android's `services()` returns `{}` so its handler typechecks
+// against an empty shape — `dispatchByPlatform` keeps the two generics separate.
+export interface LaunchAppIosServices {
   nativeDevtools: NativeDevtoolsApi;
 }
+export type LaunchAppAndroidServices = Record<string, never>;

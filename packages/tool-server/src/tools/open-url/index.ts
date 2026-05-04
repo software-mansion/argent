@@ -33,7 +33,7 @@ Returns { opened, url }. Fails if no app is registered to handle the URI.`,
   zodSchema,
   capability,
   services: () => ({}),
-  execute: dispatchByPlatform<OpenUrlServices, Params, OpenUrlResult>({
+  execute: dispatchByPlatform<OpenUrlServices, OpenUrlServices, Params, OpenUrlResult>({
     toolId: "open-url",
     capability,
     ios: iosImpl,

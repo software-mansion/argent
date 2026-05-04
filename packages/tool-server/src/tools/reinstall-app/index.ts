@@ -37,7 +37,12 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
   zodSchema,
   capability,
   services: () => ({}),
-  execute: dispatchByPlatform<ReinstallAppServices, Params, ReinstallAppResult>({
+  execute: dispatchByPlatform<
+    ReinstallAppServices,
+    ReinstallAppServices,
+    Params,
+    ReinstallAppResult
+  >({
     toolId: "reinstall-app",
     capability,
     ios: iosImpl,
