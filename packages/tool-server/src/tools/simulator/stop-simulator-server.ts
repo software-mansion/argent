@@ -4,7 +4,9 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 
 const zodSchema = z.object({
-  udid: z.string().describe("The UDID of the simulator whose server to stop"),
+  udid: z
+    .string()
+    .describe("Target device id (iOS UDID or Android serial) whose simulator-server to stop"),
 });
 
 export function createStopSimulatorServerTool(
@@ -12,8 +14,7 @@ export function createStopSimulatorServerTool(
 ): ToolDefinition<{ udid: string }, { stopped: boolean; udid: string }> {
   return {
     id: "stop-simulator-server",
-    requires: ["xcrun"],
-    description: `Stop the simulator-server process for a specific simulator UDID and free its resources. Use when you are done interacting with one simulator but want to keep others running. Returns { stopped, udid }. Fails silently if no server is running for the given UDID.`,
+    description: `Stop the simulator-server process for a specific device (iOS UDID or Android serial) and free its resources. Use when you are done interacting with one device but want to keep others running. Returns { stopped, udid }. Fails silently if no server is running for the given UDID.`,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
