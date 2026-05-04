@@ -176,8 +176,13 @@ function spawnDaemon(udid: string, socketPath: string): Promise<ChildProcess> {
       }
     });
 
+    // Defense-in-depth: a missing udid here would crash the process —
+    // throwing inside an async listener bypasses promise rejection and
+    // bubbles up as `uncaughtException`, which the tool-server treats as
+    // fatal. Tag with "?" instead of dereferencing.
+    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     proc.stderr?.on("data", (data: string) => {
-      process.stderr.write(`[ax-service ${udid.slice(0, 8)}] ${data}`);
+      process.stderr.write(`[ax-service ${udidTag}] ${data}`);
     });
 
     proc.on("exit", (code) => {
@@ -218,6 +223,15 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     if (device.platform !== "ios") {
       throw new Error(
         `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — describe falls back to uiautomator on Android, which does not need this service.`
+      );
+    }
+    // Reject before spawning. An undefined `device.id` slips through when an
+    // inner tool is invoked via a wrapper that doesn't re-validate the inner
+    // schema. Without this guard `getSocketPath(undefined).slice` would crash
+    // and `udid.slice` in the stderr handler below would later be fatal.
+    if (typeof device.id !== "string" || device.id.length === 0) {
+      throw new Error(
+        `${AX_SERVICE_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
       );
     }
 

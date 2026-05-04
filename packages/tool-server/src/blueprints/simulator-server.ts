@@ -115,8 +115,13 @@ function spawnSimulatorServerProcess(
       }
     });
 
+    // Defense-in-depth: a missing udid here would crash the process —
+    // throwing inside an async listener bypasses promise rejection and
+    // bubbles up as `uncaughtException`, which the tool-server treats as
+    // fatal. Tag with "?" instead of dereferencing.
+    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     proc.stderr?.on("data", (data: Buffer) => {
-      process.stderr.write(`[sim ${udid.slice(0, 8)}] ${data}`);
+      process.stderr.write(`[sim ${udidTag}] ${data}`);
     });
 
     proc.on("exit", () => {
@@ -150,6 +155,15 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
     const { device } = opts;
+    // Reject before spawning. An undefined `device.id` slips through when an
+    // inner tool is invoked via a wrapper that doesn't re-validate the inner
+    // schema (e.g. flow-add-step). Without this guard we'd spawn `--id
+    // undefined` and crash on `udid.slice` in the stderr handler.
+    if (typeof device.id !== "string" || device.id.length === 0) {
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
+      );
+    }
     // iOS accessibility automation flag — no-op equivalent on Android so skip
     // the xcrun call entirely there. Android also needs an `adb` preflight
     // because the simulator-server binary shells out to adb internally; without
