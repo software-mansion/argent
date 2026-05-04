@@ -49,7 +49,7 @@ Before starting to interact with the app, read the `argent-device-interact` skil
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
-- When the session ends or the user says they are done: call `stop-all-simulator-servers`. It tears down both iOS simulator-servers and the Android emulator-backed servers spawned during the session.
+- When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
 - If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
@@ -70,7 +70,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 iOS SIMULATOR SETUP
-Skill: `argent-simulator-setup`
+Skill: `argent-ios-simulator-setup`
 When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
 
 ANDROID EMULATOR SETUP
@@ -79,7 +79,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots. Interaction tools are unified across iOS and Android — see the Platform-specific notes section in the skill for Android gotchas (Metro reverse, locked-screen describe).
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
