@@ -1,4 +1,54 @@
 /**
+ * Coerce a fetch() body (BodyInit | null | undefined) into a string suitable
+ * for capture in the network log.
+ *
+ * - Plain strings (including JSON.stringify output) pass through unchanged.
+ * - URLSearchParams is rendered as its form-urlencoded string ("a=1&b=2").
+ * - Binary / streaming types (FormData, Blob, ArrayBuffer, typed arrays,
+ *   ReadableStream) return a sentinel like "[FormData]" so the agent at
+ *   least knows a body was sent — silently dropping them caused agents
+ *   debugging POSTs to wrongly conclude "no postData".
+ *
+ * Defined both as a TS export (for unit tests) and inlined into the
+ * runtime-injected interceptor script below. Keep the two implementations
+ * in sync.
+ */
+export function coerceBody(body: unknown): string | undefined {
+  if (body === null || body === undefined) return undefined;
+  if (typeof body === "string") return body;
+  if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+    return body.toString();
+  }
+  if (typeof FormData !== "undefined" && body instanceof FormData) {
+    return "[FormData]";
+  }
+  if (typeof Blob !== "undefined" && body instanceof Blob) {
+    return "[Blob " + body.size + "B" + (body.type ? " " + body.type : "") + "]";
+  }
+  if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) {
+    return "[ArrayBuffer " + body.byteLength + "B]";
+  }
+  if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) {
+    const view = body as ArrayBufferView;
+    return (
+      "[" +
+      (view.constructor && view.constructor.name ? view.constructor.name : "ArrayBufferView") +
+      " " +
+      view.byteLength +
+      "B]"
+    );
+  }
+  if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) {
+    return "[ReadableStream]";
+  }
+  // Fall back to the constructor name so the agent has a useful sentinel
+  // rather than nothing at all.
+  const ctor = (body as { constructor?: { name?: string } }).constructor;
+  const name = ctor && ctor.name ? ctor.name : "Object";
+  return "[" + name + "]";
+}
+
+/**
  * JS script injected via Runtime.evaluate to intercept network requests.
  * Monkey-patches globalThis.fetch and XMLHttpRequest to capture request/response
  * metadata and store them in globalThis.__argent_network_log.
@@ -20,6 +70,33 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
   var MAX_ENTRIES = 2000;
   function genId() { return 'rn-net-' + (nextReqId++); }
   function ts() { return Date.now() / 1000; }
+
+  // Mirrors coerceBody() in network-interceptor.ts. Keep in sync.
+  function coerceBody(body) {
+    if (body === null || body === undefined) return undefined;
+    if (typeof body === 'string') return body;
+    if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+      return body.toString();
+    }
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+      return '[FormData]';
+    }
+    if (typeof Blob !== 'undefined' && body instanceof Blob) {
+      return '[Blob ' + body.size + 'B' + (body.type ? ' ' + body.type : '') + ']';
+    }
+    if (typeof ArrayBuffer !== 'undefined' && body instanceof ArrayBuffer) {
+      return '[ArrayBuffer ' + body.byteLength + 'B]';
+    }
+    if (typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(body)) {
+      var name = (body.constructor && body.constructor.name) ? body.constructor.name : 'ArrayBufferView';
+      return '[' + name + ' ' + body.byteLength + 'B]';
+    }
+    if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
+      return '[ReadableStream]';
+    }
+    var ctorName = (body.constructor && body.constructor.name) ? body.constructor.name : 'Object';
+    return '[' + ctorName + ']';
+  }
 
   function getOrCreate(reqId) {
     if (byId[reqId]) return byId[reqId];
@@ -55,7 +132,7 @@ export const NETWORK_INTERCEPTOR_SCRIPT = `(function() {
           for (var i = 0; i < ks.length; i++) { headers[ks[i]] = String(init.headers[ks[i]]); }
         }
       }
-      var postData = (init && init.body && typeof init.body === 'string') ? init.body : undefined;
+      var postData = (init && init.body !== undefined && init.body !== null) ? coerceBody(init.body) : undefined;
       var t = ts();
 
       var entry = getOrCreate(reqId);
