@@ -22,6 +22,7 @@ export const nativeProfilerStopTool: ToolDefinition<
 > = {
   id: "native-profiler-stop",
   requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Stop native profiling and export trace data to XML files.
 iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks data. Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.

@@ -35,6 +35,7 @@ type Result =
 export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   id: "native-describe-screen",
   requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:

@@ -20,6 +20,7 @@ type Result = {
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
   requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
 Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
 

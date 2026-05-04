@@ -94,6 +94,7 @@ export const nativeProfilerStartTool: ToolDefinition<
 > = {
   id: "native-profiler-start",
   requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: not yet supported.
 Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.

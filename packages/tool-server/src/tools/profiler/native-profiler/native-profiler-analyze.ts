@@ -19,6 +19,7 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
 > = {
   id: "native-profiler-analyze",
   requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
 iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
 Returns a structured markdown report with severity indicators, tables, and actionable suggestions.
