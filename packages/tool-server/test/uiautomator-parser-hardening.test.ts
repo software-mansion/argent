@@ -136,3 +136,52 @@ describe("uiautomator deeply-nested tree (review #6)", () => {
     expect(() => convertUiAutomatorNode(topNode, 100, 100)).not.toThrow();
   });
 });
+
+describe("parseUiAutomatorXml — tolerates raw `>` inside attribute values", () => {
+  // XML §2.4: only `<` and `&` MUST be escaped. `>` MAY appear unescaped, and
+  // real Android dumps do emit it that way (e.g. text="A > B" comparison
+  // strings, breadcrumb dividers). The previous tag regex used `[^<>]*?` for
+  // the attribute block, so any node with a raw `>` got dropped entirely and
+  // its subtree silently reparented onto the document root.
+  it("preserves a node whose `text` attribute contains a raw `>`", () => {
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.TextView" bounds="[0,0][100,50]"
+        text="A > B" content-desc="" resource-id="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    expect(tree.children).toHaveLength(1);
+    expect(tree.children[0]!.label).toBe("A > B");
+  });
+});
+
+describe("parseUiAutomatorXml — robust against malformed structure", () => {
+  it("ignores a stray closing tag without dropping subsequent siblings", () => {
+    // A leftover `</node>` with no matching opener used to pop a real parent
+    // off the stack; the next opening tag then became a second `root`,
+    // overwriting the first. Now: pop is guarded, and root is set only once.
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.LinearLayout" bounds="[0,0][1000,1000]"
+        text="" resource-id="" content-desc="" package="com.x">
+    <node class="android.widget.TextView" bounds="[0,0][100,50]"
+          text="first" resource-id="" content-desc="" package="com.x" />
+  </node>
+  </node>
+  <node class="android.widget.TextView" bounds="[0,200][100,250]"
+        text="second" resource-id="" content-desc="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    // Both top-level child nodes should survive under the synthetic Screen root.
+    const labels = tree.children.flatMap((c) => collectLabels(c));
+    expect(labels).toContain("first");
+    expect(labels).toContain("second");
+  });
+});
+
+function collectLabels(n: { label?: string; children: { label?: string; children: unknown[] }[] }): string[] {
+  const out: string[] = [];
+  if (n.label) out.push(n.label);
+  for (const c of n.children) out.push(...collectLabels(c as Parameters<typeof collectLabels>[0]));
+  return out;
+}

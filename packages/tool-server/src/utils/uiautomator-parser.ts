@@ -13,23 +13,34 @@ interface ParsedXmlNode {
  */
 export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
   const body = xml.replace(/^\s*<\?xml[^?]*\?>\s*/, "");
-  // `s` flag so attribute lists can contain newlines; some Android builds wrap
-  // `uiautomator dump` output at ~1 KB boundaries.
-  const tagRe = /<(\/?)([A-Za-z_][\w.-]*)([^<>]*?)(\/?)>/gs;
+  // The attr block must allow `>` inside quoted attribute values: XML §2.4
+  // requires only `<` and `&` to be escaped, so `text="A > B"` is legal and
+  // does occur in real uiautomator dumps. The previous `[^<>]*?` rejected
+  // those tags entirely and silently reparented the dropped subtree onto the
+  // root. Match either a complete quoted string or any non-quote non-`>`
+  // character. `s` flag keeps newline tolerance for builds that wrap dumps
+  // at ~1 KB boundaries.
+  const tagRe = /<(\/?)([A-Za-z_][\w.-]*)((?:"[^"]*"|'[^']*'|[^"'<>])*)(\/?)>/gs;
   const stack: ParsedXmlNode[] = [];
   let root: ParsedXmlNode | null = null;
   let match: RegExpExecArray | null;
   while ((match = tagRe.exec(body)) !== null) {
     const [, closing, tag, rawAttrs, selfClose] = match;
     if (closing) {
-      stack.pop();
+      // Guard against a stray `</node>` with no matching opener: an unguarded
+      // pop on an empty stack returns undefined, but worse — it leaves the
+      // next opening tag treated as a root candidate. The root-once guard
+      // below also handles the related case where a malformed dump emits
+      // multiple top-level elements.
+      if (stack.length > 0) stack.pop();
       continue;
     }
     const attrs = parseAttributes(rawAttrs ?? "");
     const node: ParsedXmlNode = { tag: tag!, attrs, children: [] };
     const parent = stack[stack.length - 1];
     if (parent) parent.children.push(node);
-    else root = node;
+    else if (root === null) root = node;
+    // else: malformed input emitted a second top-level element; first root wins.
     if (!selfClose) stack.push(node);
   }
   return root;
