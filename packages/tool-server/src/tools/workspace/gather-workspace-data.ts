@@ -16,8 +16,7 @@ export const gatherWorkspaceDataTool: ToolDefinition<
   description: `Fetch a structured snapshot of a mobile app project's workspace.
 
 Returns package.json contents, metro/babel config text, app.json, eas.json, tsconfig,
-platform directory presence (ios/, android/), Android applicationId parsed from
-android/app/build.gradle(.kts), presence of android/gradlew (android_has_gradle),
+platform directory presence (ios/, android/), presence of android/gradlew (android_has_gradle),
 iOS .xcworkspace name and Podfile presence, lockfile type, .env file keys (no values),
 installed CLI tool versions, scripts/ directory listing, husky hooks, CI config type,
 Makefile targets, lint-staged config, and a list of detected config files.

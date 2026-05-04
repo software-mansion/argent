@@ -75,7 +75,7 @@ Then, using the argent MCP tools (note: the interaction tools are unified — pa
 
 1. `list-devices` — pick a ready Android serial (or boot one via `boot-device` with `avdName`). See the `argent-android-emulator-setup` skill.
 2. `reinstall-app` with `udid=<serial>`, `bundleId=<applicationId>`, absolute `appPath=<path to .apk>`. Set `grantPermissions: true` to skip runtime permission prompts on first launch.
-3. `launch-app` with `udid=<serial>` and `bundleId=<applicationId>` (from `android/app/build.gradle` — the environment inspector surfaces this as `android_application_id`).
+3. `launch-app` with `udid=<serial>` and `bundleId=<applicationId>` (read it from `android/app/build.gradle` — look for the `applicationId "..."` line).
 4. **Metro reachability**: run `adb -s <serial> reverse tcp:8081 tcp:8081` so the app on the device can reach Metro on your host. Repeat if the device restarts or adb drops. See the `argent-metro-debugger` skill.
 
 Alternative one-shot: `npx react-native run-android` builds, installs, and launches in a single step. Use this when you don't need explicit control over the emulator serial.
