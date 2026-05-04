@@ -154,23 +154,19 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
           `Use simulatorServerRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
       );
     }
+
     const { device } = opts;
-    // Reject before spawning. An undefined `device.id` slips through when an
-    // inner tool is invoked via a wrapper that doesn't re-validate the inner
-    // schema (e.g. flow-add-step). Without this guard we'd spawn `--id
-    // undefined` and crash on `udid.slice` in the stderr handler.
     if (typeof device.id !== "string" || device.id.length === 0) {
       throw new Error(
         `${SIMULATOR_SERVER_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
       );
     }
-    // iOS accessibility automation flag — no-op equivalent on Android so skip
-    // the xcrun call entirely there. Android also needs an `adb` preflight
-    // because the simulator-server binary shells out to adb internally; without
-    // this check, a host without android-platform-tools surfaces the failure
-    // as a `Timed out waiting for simulator-server to become ready` instead of
-    // the structured 424 DependencyMissingError that other Android tools emit.
+
     if (device.platform === "ios") {
+      // Enable accessibility automation before any app is launched so that apps
+      // start with their AX server running. If this is called after apps are already
+      // running (e.g. a pre-booted simulator), those apps won't pick up the flag
+      // until restarted — but new launches will work correctly.
       await ensureAutomationEnabled(device.id).catch(() => {});
     } else {
       await ensureDep("adb");
