@@ -11,9 +11,13 @@ export interface DescribeIosParams {
   bundleId?: string;
 }
 
-// describe on iOS goes through ax-service / native-devtools, both of which
-// resolve via Registry — no direct xcrun shell-out, so no `requires` here.
-export const iosRequires: ToolDependency[] = [];
+// describe on iOS resolves the ax-service via Registry; the blueprint factory
+// shells out to `xcrun simctl spawn` (ensureAutomationEnabled + spawnDaemon).
+// Without xcrun on PATH the spawn ENOENTs deep inside the factory and the
+// HTTP layer returns a 500 with a raw "spawn xcrun ENOENT" message — declare
+// the dep here so the preflight emits a 424 with the install hint instead,
+// matching launch-app / restart-app / open-url / reinstall-app.
+export const iosRequires: ToolDependency[] = ["xcrun"];
 
 export async function describeIos(
   registry: Registry,
