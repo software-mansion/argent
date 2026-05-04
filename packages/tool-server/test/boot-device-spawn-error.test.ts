@@ -84,10 +84,7 @@ describe("boot-device — spawn error handling", () => {
 
     const registry: Registry = { resolveService: async () => ({}) } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
-    const promise = tool.execute!(
-      {},
-      { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
-    );
+    const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
     promise.catch(() => {}); // detach so the test doesn't hang after assertion
 
     // Give the impl one tick to subscribe to the proc.
@@ -127,10 +124,7 @@ describe("boot-device — spawn error handling", () => {
 
     const registry: Registry = { resolveService: async () => ({}) } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
-    const promise = tool.execute!(
-      {},
-      { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
-    );
+    const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
 
     // Let attemptBoot subscribe to the proc.
     await new Promise((r) => setTimeout(r, 50));
@@ -160,10 +154,7 @@ describe("boot-device — spawn error handling", () => {
     secondProc.signalCode = null;
     spawnMock.mockReturnValue(secondProc);
 
-    const second = tool.execute!(
-      {},
-      { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
-    );
+    const second = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
     second.catch(() => {}); // detach
 
     // Give the second call a tick to reach spawn.

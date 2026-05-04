@@ -115,7 +115,6 @@ describe("boot-device Android — serialsBefore snapshot ordering (review #2)", 
       {
         avdName: "Pixel_7_API_34",
         bootTimeoutMs: 30_000, // hits min bound; the real wait is capped by adb-register budget
-        noWindow: true,
       }
     );
 
@@ -166,10 +165,7 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
     });
 
     const tool = createBootDeviceTool(registry);
-    const promise = tool.execute!(
-      {},
-      { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
-    );
+    const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
 
     // Let the tool get past pre-flight into wait-for-device, then crash the
     // emulator. waitForEarlyExit polls every 500 ms so the error should surface
@@ -209,8 +205,8 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
 
     const tool = createBootDeviceTool(registry);
     const [a, b] = await Promise.all([
-      tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }),
-      tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }),
+      tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 }),
+      tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 }),
     ]);
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -247,10 +243,7 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
     });
 
     const tool = createBootDeviceTool(registry);
-    const promise = tool.execute!(
-      {},
-      { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
-    );
+    const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
 
     setTimeout(() => proc.emit("exit", null, "SIGSEGV"), 600);
 
@@ -306,10 +299,7 @@ describe("boot-device Android — orphan protection on stage-2 timeout (review f
       const tool = createBootDeviceTool(registry);
       // bootTimeoutMs floor is 30_000 (zod). Burn that in fake time so the
       // test completes in milliseconds of real time.
-      const promise = tool.execute!(
-        {},
-        { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000, noWindow: true }
-      );
+      const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
       promise.catch(() => {});
       await vi.advanceTimersByTimeAsync(31_000);
 
@@ -332,7 +322,7 @@ describe("boot-device Android — missing AVD (existing guard)", () => {
     });
 
     const tool = createBootDeviceTool(registry);
-    await expect(tool.execute!({}, { avdName: "Does_Not_Exist", noWindow: true })).rejects.toThrow(
+    await expect(tool.execute!({}, { avdName: "Does_Not_Exist" })).rejects.toThrow(
       /AVD "Does_Not_Exist" not found.*Pixel_3a_API_29.*Pixel_7_API_34/
     );
   });

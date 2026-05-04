@@ -119,7 +119,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     mockHappyBootChain();
 
     const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34", noWindow: true });
+    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
     expect(result).toMatchObject({
       platform: "android",
@@ -134,7 +134,8 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(hotArgs).toContain("-force-snapshot-load");
     expect(hotArgs).toContain("-no-snapshot-save");
     expect(hotArgs).not.toContain("-no-snapshot-load");
-    expect(hotArgs).toContain("-no-window");
+    // Window is always visible — `-no-window` must never appear in spawn args.
+    expect(hotArgs).not.toContain("-no-window");
   });
 
   it("skips the hot-boot attempt and cold-boots when no snapshot exists on disk", async () => {
@@ -142,13 +143,14 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     mockHappyBootChain();
 
     const tool = createBootDeviceTool(registry);
-    await tool.execute!({}, { avdName: "Pixel_7_API_34", noWindow: true });
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
     expect(probeMock).not.toHaveBeenCalled();
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const args = spawnMock.mock.calls[0]![1];
     expect(args).toContain("-no-snapshot-load");
     expect(args).not.toContain("-force-snapshot-load");
+    expect(args).not.toContain("-no-window");
   });
 
   it("skips the hot-boot attempt and cold-boots when -check-snapshot-loadable rejects", async () => {
@@ -157,7 +159,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     mockHappyBootChain();
 
     const tool = createBootDeviceTool(registry);
-    await tool.execute!({}, { avdName: "Pixel_7_API_34", noWindow: true });
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
     // One spawn, and it is cold-boot args (no -force-snapshot-load).
     expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -208,7 +210,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     });
 
     const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34", noWindow: true });
+    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock.mock.calls[0]![1]).toContain("-force-snapshot-load");
@@ -261,7 +263,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     });
 
     const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34", noWindow: true });
+    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
     expect(spawnMock).toHaveBeenCalledTimes(2);
     expect(spawnMock.mock.calls[0]![1]).toContain("-force-snapshot-load");
@@ -269,9 +271,10 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(result).toMatchObject({ serial: "emulator-5556" });
   });
 
-  it("returns the already-running emulator without spawning when the AVD is live", async () => {
+  it("returns the already-running emulator without spawning when the AVD is live and its framebuffer is healthy", async () => {
     // adb devices reports the AVD already attached; getprop answers with the
-    // matching AVD name. No snapshot probe, no filesystem check, no spawn.
+    // matching AVD name. screencap returns a healthy frame ("1") so the
+    // wedged-framebuffer guard passes. No snapshot probe, no spawn.
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "adb" && args[0] === "version")
         return { stdout: "Android Debug Bridge\n", stderr: "" };
@@ -286,12 +289,13 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
         if (shellCmd === "getprop ro.boot.qemu.avd_name")
           return { stdout: "Pixel_7_API_34\n", stderr: "" };
         if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+        if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
       }
       return { stdout: "", stderr: "" };
     });
 
     const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34", noWindow: true });
+    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
     expect(result).toMatchObject({
       platform: "android",
@@ -302,5 +306,65 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(spawnMock).not.toHaveBeenCalled();
     expect(hasSnapshotMock).not.toHaveBeenCalled();
     expect(probeMock).not.toHaveBeenCalled();
+  });
+
+  it("kills the running AVD and respawns when its framebuffer is wedged on the reuse path", async () => {
+    // The fast-path's BUG GUARD: if a long-running emulator drifts into the
+    // sticky-blank screencap state, returning that serial unchanged would
+    // hand the caller a device whose screenshots are silently all-zero.
+    // The guard kills the wedged emulator and falls through to a fresh boot.
+    hasSnapshotMock.mockResolvedValue(false); // force the cold-boot path post-kill
+    let killed = false;
+    let spawned = false;
+    spawnMock.mockImplementation(() => {
+      spawned = true;
+      return fakeChild();
+    });
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "adb" && args[0] === "version")
+        return { stdout: "Android Debug Bridge\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+      if (cmd === "emulator" && args[0] === "-list-avds")
+        return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "devices") {
+        // Pre-kill: wedged emulator-5554 is listed. After kill but before
+        // the cold-boot spawn registers: empty (so emulator-5556 is *new*
+        // when it appears). Post-spawn: emulator-5556 is listed.
+        let line = "";
+        if (!killed) line = "emulator-5554\tdevice\n";
+        else if (spawned) line = "emulator-5556\tdevice\n";
+        return { stdout: `List of devices attached\n${line}`, stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+        return { stdout: "", stderr: "" };
+      if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+        killed = true;
+        return { stdout: "OK\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const serial = args[1];
+        const shellCmd = args[3] ?? "";
+        if (shellCmd === "getprop ro.boot.qemu.avd_name")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (shellCmd.startsWith("getprop sys.boot_completed")) return { stdout: "1\n", stderr: "" };
+        if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+        if (shellCmd === "pm path android")
+          return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+        if (shellCmd.startsWith("screencap")) {
+          // Wedged frame on the original serial; healthy on the respawn.
+          return { stdout: serial === "emulator-5554" ? "0\n" : "1\n", stderr: "" };
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const tool = createBootDeviceTool(registry);
+    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(killed).toBe(true);
+    // Exactly one fresh spawn (the cold-boot fallback after the kill).
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]![1]).toContain("-no-snapshot-load");
+    expect(result).toMatchObject({ serial: "emulator-5556" });
   });
 });
