@@ -30,7 +30,7 @@ export const gestureTapTool: ToolDefinition<Params, Result> = {
 Sends a Down event followed by an Up event at the same point.
 Use when you need to tap a button, link, or any tappable element on the simulator screen.
 Returns { tapped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.
-Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`device-interact\` skill`,
+Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
   searchHint: "tap press button element simulator touch down up",
   zodSchema,
