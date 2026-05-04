@@ -49,16 +49,6 @@ export interface SimulatorServerApi {
   pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
-/**
- * Spawn `simulator-server <ios|android> --id <id>`.
- *
- * Android mode uses the gRPC EmulatorController to drive the AVD, iOS mode uses
- * Apple's private simctl APIs. From the tool-server's perspective both expose
- * the same HTTP + WebSocket + stdin protocol, so every caller is platform-neutral.
- *
- * stdin MUST stay open — the server treats EOF on stdin as a shutdown signal.
- * `stdio: ["pipe", "pipe", "pipe"]` below provides that.
- */
 function spawnSimulatorServerProcess(
   udid: string,
   platform: "ios" | "android"
@@ -150,9 +140,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
   getURN(device: DeviceInfo) {
     return `${SIMULATOR_SERVER_NAMESPACE}:${device.id}`;
   },
-  // The registry parses URNs into string payloads, so the typed `DeviceInfo`
-  // travels through the third `options` arg (see `simulatorServerRef`). The
-  // blueprint never reclassifies — single source of truth lives in the caller.
   async factory(_deps, _payload, options) {
     const opts = options as unknown as SimulatorServerFactoryOptions | undefined;
     if (!opts?.device) {
