@@ -77,7 +77,7 @@ Steps:
 
 ## Tips
 
-- **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
+- **Use `paste` for text entry on iOS** — faster and more reliable than key-by-key `keyboard`. `paste` is iOS-only; on Android use `keyboard` instead.
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
