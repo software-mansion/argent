@@ -78,10 +78,10 @@ argent init
 | Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                       |
 | Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)            |
 | VS Code     | `.vscode/mcp.json`                                                       |
-| Windsurf    | `.windsurf/mcp.json`                                                     |
+| Windsurf    | `~/.codeium/windsurf/mcp_config.json`                                    |
 | Zed         | `.zed/settings.json`                                                     |
 | Gemini CLI  | `.gemini/settings.json`                                                  |
-| Codex CLI   | `.codex/config.yaml`                                                     |
+| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)        |
 | opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
 
 ## Privacy
