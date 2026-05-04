@@ -1,15 +1,16 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
 import * as path from "path";
-import type { ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import {
   cacheProfilerPaths,
   type ProfilerSessionPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
-  NATIVE_PROFILER_SESSION_NAMESPACE,
+  nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -316,9 +317,9 @@ Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or required XML files are missing from disk.`,
   zodSchema,
   services: (params) => {
-    const svcs: Record<string, string> = {};
+    const svcs: Record<string, ServiceRef> = {};
     if (params.mode === "load_native") {
-      svcs.session = `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`;
+      svcs.session = nativeProfilerSessionRef(resolveDevice(params.device_id));
     }
     return svcs;
   },

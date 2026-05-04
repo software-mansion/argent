@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  NATIVE_PROFILER_SESSION_NAMESPACE,
+  nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import { exportIosTraceData } from "../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 
@@ -28,7 +29,7 @@ Returns { traceFile, exportedFiles, exportDiagnostics } with paths to the export
 Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
   services: (params) => ({
-    session: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services) {
     const api = services.session as NativeProfilerSessionApi;

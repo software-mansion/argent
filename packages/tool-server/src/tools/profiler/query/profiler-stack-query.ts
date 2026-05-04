@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  NATIVE_PROFILER_SESSION_NAMESPACE,
+  nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import type { CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../../../utils/ios-profiler/types";
 import {
   findDominantFunction,
@@ -326,7 +327,7 @@ Returns a markdown report with native call stacks, thread weights, or leak detai
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
   services: (params) => ({
-    session: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;

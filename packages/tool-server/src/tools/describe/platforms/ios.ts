@@ -1,8 +1,6 @@
-import type { Registry, ToolDependency } from "@argent/registry";
-import type { AXServiceApi } from "../../../blueprints/ax-service";
-import { AX_SERVICE_NAMESPACE } from "../../../blueprints/ax-service";
-import type { NativeDevtoolsApi } from "../../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../../blueprints/native-devtools";
+import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
+import { axServiceRef, type AXServiceApi } from "../../../blueprints/ax-service";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../../blueprints/native-devtools";
 import type { DescribeResult } from "../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
@@ -10,7 +8,6 @@ import { parseNativeDescribeScreenResult } from "../../native-devtools/native-de
 import { resolveNativeTargetApp } from "../../../utils/native-target-app";
 
 export interface DescribeIosParams {
-  udid: string;
   bundleId?: string;
 }
 
@@ -20,11 +17,11 @@ export const iosRequires: ToolDependency[] = [];
 
 export async function describeIos(
   registry: Registry,
+  device: DeviceInfo,
   params: DescribeIosParams
 ): Promise<DescribeResult> {
-  const axApi = await registry.resolveService<AXServiceApi>(
-    `${AX_SERVICE_NAMESPACE}:${params.udid}`
-  );
+  const axRef = axServiceRef(device);
+  const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
   const response = await axApi.describe();
   const tree = adaptAXDescribeToDescribeResult(response);
 
@@ -34,9 +31,8 @@ export async function describeIos(
 
   // AX returned zero elements — attempt native-devtools fallback
   try {
-    const nativeApi = await registry.resolveService<NativeDevtoolsApi>(
-      `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`
-    );
+    const ndRef = nativeDevtoolsRef(device);
+    const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
 
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
 

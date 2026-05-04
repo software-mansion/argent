@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -203,7 +203,8 @@ async function bootIos(
   });
   // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
-  await registry.resolveService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
+  const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
+  await registry.resolveService(ndRef.urn, ndRef.options);
   await execFileAsync("defaults", [
     "write",
     "com.apple.iphonesimulator",

@@ -2,9 +2,10 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import {
-  NATIVE_PROFILER_SESSION_NAMESPACE,
+  nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import {
   buildReactAnchor,
   buildIosAnchor,
@@ -44,7 +45,7 @@ Returns a markdown report correlating hangs with React commits, memory leaks, an
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
   services: (params) => ({
-    nativeSession: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    nativeSession: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
     const nativeApi = services.nativeSession as NativeProfilerSessionApi;

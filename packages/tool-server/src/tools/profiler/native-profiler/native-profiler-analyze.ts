@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  NATIVE_PROFILER_SESSION_NAMESPACE,
+  nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import type { IosProfilerAnalyzeResult } from "../../../utils/ios-profiler/types";
 import { renderIosProfilerReport } from "../../../utils/ios-profiler/render";
@@ -28,7 +29,7 @@ Use when you need to interpret a completed native profiling recording.
 Fails if native-profiler-stop has not been called first to export trace data.`,
   zodSchema,
   services: (params) => ({
-    session: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services) {
     const api = services.session as NativeProfilerSessionApi;

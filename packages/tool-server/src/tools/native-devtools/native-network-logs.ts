@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi, NetworkEvent } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import {
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NetworkEvent,
+} from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -29,7 +33,7 @@ Returns { status, count, events } where each event contains URL, method, status 
 Fails if native devtools are not connected or the app is not running.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;

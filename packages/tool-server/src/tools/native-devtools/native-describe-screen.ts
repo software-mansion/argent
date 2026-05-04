@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
@@ -51,7 +51,7 @@ Useful for evaluating or debugging the lower-level native data that powers the p
 If status is restart_required: call restart-app then retry.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;

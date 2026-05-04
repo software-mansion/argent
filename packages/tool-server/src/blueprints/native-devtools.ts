@@ -4,13 +4,29 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import {
+  TypedEventEmitter,
+  type DeviceInfo,
+  type ServiceBlueprint,
+  type ServiceEvents,
+} from "@argent/registry";
 import { bootstrapDylibPath } from "@argent/native-devtools-ios";
-import { resolveDevice } from "../utils/device-info";
 
 const execFileAsync = promisify(execFile);
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
+
+type NativeDevtoolsFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+export function nativeDevtoolsRef(device: DeviceInfo): {
+  urn: string;
+  options: NativeDevtoolsFactoryOptions;
+} {
+  return {
+    urn: `${NATIVE_DEVTOOLS_NAMESPACE}:${device.id}`,
+    options: { device },
+  };
+}
 
 export interface NetworkEvent {
   method: string;
@@ -208,23 +224,30 @@ async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<s
   return bundleIds;
 }
 
-export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, string> = {
+export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, DeviceInfo> = {
   namespace: NATIVE_DEVTOOLS_NAMESPACE,
 
-  getURN(udid: string) {
-    return `${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`;
+  getURN(device: DeviceInfo) {
+    return `${NATIVE_DEVTOOLS_NAMESPACE}:${device.id}`;
   },
 
-  async factory(_deps, udid) {
-    // iOS-only. `list-devices` surfaces Android serials too, so it's easy for
-    // an agent to feed one of those to a native-devtools tool and get a
-    // cryptic simctl/launchctl failure from deeper in the stack. Gate here so
-    // the error says the right thing up front.
-    if (resolveDevice(udid).platform !== "ios") {
+  async factory(_deps, _payload, options) {
+    const opts = options as unknown as NativeDevtoolsFactoryOptions | undefined;
+    if (!opts?.device) {
       throw new Error(
-        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${udid}' classifies as Android — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
+        `${NATIVE_DEVTOOLS_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
+          `Use nativeDevtoolsRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
       );
     }
+
+    const { device } = opts;
+    if (device.platform !== "ios") {
+      throw new Error(
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
+      );
+    }
+
+    const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
     const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();

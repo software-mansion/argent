@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import type { LaunchAppResult, LaunchAppServices } from "./types";
@@ -55,10 +55,10 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
   capability,
   // Only iOS needs the native-devtools service for launch-time injection.
   // Resolving it on Android would force the iOS-only blueprint to spin up.
-  services: (params): Record<string, ServiceRef> =>
-    resolveDevice(params.udid).platform === "ios"
-      ? { nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}` }
-      : {},
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
+  },
   execute: dispatchByPlatform<LaunchAppServices, Params, LaunchAppResult>({
     toolId: "launch-app",
     capability,

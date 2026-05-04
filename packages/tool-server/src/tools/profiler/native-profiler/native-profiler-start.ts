@@ -3,9 +3,10 @@ import { spawn, execSync } from "child_process";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  NATIVE_PROFILER_SESSION_NAMESPACE,
+  nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
@@ -101,7 +102,7 @@ Returns { status, pid, traceFile } confirming the recording has started.
 Fails if no app is running on the device, the platform is not supported yet, or the profiler cannot attach to the process.`,
   zodSchema,
   services: (params) => ({
-    session: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
     const api = services.session as NativeProfilerSessionApi;

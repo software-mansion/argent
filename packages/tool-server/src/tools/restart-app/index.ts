@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
 import type { RestartAppResult, RestartAppServices } from "./types";
@@ -35,10 +35,10 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
   zodSchema,
   capability,
   // Only iOS needs the native-devtools service for relaunch injection.
-  services: (params): Record<string, ServiceRef> =>
-    resolveDevice(params.udid).platform === "ios"
-      ? { nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}` }
-      : {},
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
+  },
   execute: dispatchByPlatform<RestartAppServices, Params, RestartAppResult>({
     toolId: "restart-app",
     capability,

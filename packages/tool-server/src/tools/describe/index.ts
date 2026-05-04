@@ -58,7 +58,7 @@ For React Native apps, debugger-component-tree returns React component names wit
       capability,
       ios: {
         requires: iosRequires,
-        handler: (_services, params) => describeIos(registry, params),
+        handler: (_services, params, device) => describeIos(registry, device, params),
       },
       android: {
         requires: androidRequires,

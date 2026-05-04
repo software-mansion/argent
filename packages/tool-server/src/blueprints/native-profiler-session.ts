@@ -1,13 +1,30 @@
-import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import {
+  ServiceRef,
+  TypedEventEmitter,
+  type DeviceInfo,
+  type ServiceBlueprint,
+  type ServiceEvents,
+} from "@argent/registry";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
-import { resolveDevice } from "../utils/device-info";
 
 // The tools that consume this session are cross-platform in name
 // (`native-profiler-*`), but today the only backend is xctrace on iOS. When
 // Perfetto / simpleperf land, this namespace keeps the same URN shape —
 // `NativeProfilerSession:<deviceId>` — and the factory branches on
-// `resolveDevice(...).platform` to build either the iOS or Android backend.
+// the caller-provided `device.platform` to build either the iOS or Android
+// backend without reclassifying.
 export const NATIVE_PROFILER_SESSION_NAMESPACE = "NativeProfilerSession";
+
+// Same shape as the other DeviceInfo-routed blueprints: caller threads through
+// `options.device`, registry-side URN payload is just `device.id`.
+type NativeProfilerSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+export function nativeProfilerSessionRef(device: DeviceInfo): ServiceRef {
+  return {
+    urn: `${NATIVE_PROFILER_SESSION_NAMESPACE}:${device.id}`,
+    options: { device },
+  };
+}
 
 export interface NativeProfilerParsedData {
   cpuSamples: CpuSample[];
@@ -28,26 +45,38 @@ export interface NativeProfilerSessionApi {
   recordingTimeout: NodeJS.Timeout | null;
 }
 
-export const nativeProfilerSessionBlueprint: ServiceBlueprint<NativeProfilerSessionApi, string> = {
+export const nativeProfilerSessionBlueprint: ServiceBlueprint<
+  NativeProfilerSessionApi,
+  DeviceInfo
+> = {
   namespace: NATIVE_PROFILER_SESSION_NAMESPACE,
 
-  getURN(deviceId: string) {
-    return `${NATIVE_PROFILER_SESSION_NAMESPACE}:${deviceId}`;
+  getURN(device: DeviceInfo) {
+    return `${NATIVE_PROFILER_SESSION_NAMESPACE}:${device.id}`;
   },
 
-  async factory(_deps, _payload) {
+  // DeviceInfo travels via options (registry URN-payload channel is string-only).
+  async factory(_deps, _payload, options) {
+    const opts = options as unknown as NativeProfilerSessionFactoryOptions | undefined;
+    if (!opts?.device) {
+      throw new Error(
+        `${NATIVE_PROFILER_SESSION_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
+          `Use nativeProfilerSessionRef(device) when registering the service ref.`
+      );
+    }
+    const { device } = opts;
     // Android backend (Perfetto / simpleperf) is not implemented yet; reject
     // early so an Android serial gets a clear "not yet" message instead of an
     // opaque xctrace failure deeper in.
-    if (resolveDevice(_payload).platform !== "ios") {
+    if (device.platform !== "ios") {
       throw new Error(
         `${NATIVE_PROFILER_SESSION_NAMESPACE} currently supports iOS only (xctrace-backed). ` +
-          `The target '${_payload}' classifies as Android — Android profiling (Perfetto/simpleperf) is on the roadmap. ` +
+          `The target '${device.id}' classifies as Android — Android profiling (Perfetto/simpleperf) is on the roadmap. ` +
           `Pick an iOS udid from list-devices for now.`
       );
     }
     const state: NativeProfilerSessionApi = {
-      deviceId: _payload,
+      deviceId: device.id,
       appProcess: null,
       xctracePid: null,
       traceFile: null,
