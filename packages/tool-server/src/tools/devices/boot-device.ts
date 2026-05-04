@@ -246,7 +246,19 @@ async function attemptBoot(params: {
   child.unref();
 
   let earlyExitError: Error | null = null;
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
+    // A QEMU SIGSEGV/SIGABRT comes through as `code === null, signal !== null`.
+    // The previous `code !== null` guard treated those as a normal exit, so a
+    // hot-boot child that segfaulted on a bad ram.bin restore would hang the
+    // outer wait until the per-stage budget elapsed instead of failing fast.
+    if (signal) {
+      earlyExitError = new Error(
+        `emulator binary terminated by signal ${signal} before the device booted. ` +
+          `Common causes: ram.bin corruption on hot-boot restore, hypervisor crash, host OOM. ` +
+          `Try \`emulator -avd ${params.avdName} -verbose\` from a terminal to see the exact error.`
+      );
+      return;
+    }
     if (code !== 0 && code !== null) {
       earlyExitError = new Error(
         `emulator binary exited with code ${code} before the device booted. ` +
@@ -293,6 +305,7 @@ async function attemptBoot(params: {
   }
 
   // Stage 3: wait-for-device (tcp socket up).
+  const stage3Racer = createEarlyExitRacer(() => earlyExitError);
   try {
     await Promise.race([
       runAdb(["-s", serial, "wait-for-device"], {
@@ -301,13 +314,15 @@ async function attemptBoot(params: {
           Math.max(1_000, params.attemptDeadline - Date.now())
         ),
       }),
-      waitForEarlyExit(() => earlyExitError),
+      stage3Racer.promise,
     ]);
   } catch (err) {
     await killEmulatorQuietly(serial, child);
     throw err instanceof Error
       ? err
       : new Error(`adb wait-for-device failed for ${serial}: ${String(err)}.`);
+  } finally {
+    stage3Racer.cancel();
   }
 
   // Stage 4: sys.boot_completed = 1.
@@ -324,14 +339,25 @@ async function attemptBoot(params: {
 
   // Stage 5: PackageManager sanity — a snapshot restore preserves
   // sys.boot_completed=1 so this is the first real proof the guest is live.
+  // Race against earlyExitError so a crash here surfaces with the actual
+  // signal/exit-code error, not a misleading "PackageManager did not respond".
+  const stage5Racer = createEarlyExitRacer(() => earlyExitError);
   try {
-    await adbShell(serial, "pm path android", { timeoutMs: 10_000 });
-  } catch {
+    await Promise.race([
+      adbShell(serial, "pm path android", { timeoutMs: 10_000 }),
+      stage5Racer.promise,
+    ]);
+  } catch (err) {
     await killEmulatorQuietly(serial, child);
+    if (err instanceof Error && /^emulator binary (exited|terminated)/.test(err.message)) {
+      throw err;
+    }
     throw new Error(
       `PackageManager did not respond on ${serial} after boot_completed. ` +
         `Emulator has been terminated.`
     );
+  } finally {
+    stage5Racer.cancel();
   }
 
   return { serial };
@@ -507,19 +533,40 @@ async function bootAndroid(params: {
  * Poll an exit-state getter and reject as soon as it returns non-null.
  * Used to race against a blocking adb call so a detached-emulator crash
  * surfaces as its specific error instead of a generic adb timeout.
+ *
+ * Returns `{ promise, cancel }`: the caller must call `cancel()` once the
+ * race resolves, otherwise the recursive `setTimeout` chain keeps firing
+ * for the life of the process — a real handle leak across many boot/restart
+ * cycles. Always invoke `cancel()` in a `finally` block.
  */
-function waitForEarlyExit(getExit: () => Error | null): Promise<never> {
-  return new Promise((_resolve, reject) => {
+function createEarlyExitRacer(getExit: () => Error | null): {
+  promise: Promise<never>;
+  cancel: () => void;
+} {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let cancelled = false;
+  const promise = new Promise<never>((_resolve, reject) => {
     const tick = () => {
+      if (cancelled) return;
       const err = getExit();
       if (err) {
         reject(err);
         return;
       }
-      setTimeout(tick, 500);
+      timer = setTimeout(tick, 500);
     };
-    setTimeout(tick, 500);
+    timer = setTimeout(tick, 500);
   });
+  return {
+    promise,
+    cancel: () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    },
+  };
 }
 
 // boot-device dispatches internally on `udid` vs `avdName` rather than via
