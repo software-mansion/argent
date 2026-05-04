@@ -23,7 +23,7 @@ export const stopMetroTool: ToolDefinition<
   async execute(_services, params) {
     const port = (params as { port: number }).port;
     try {
-      const output = execSync(`lsof -ti tcp:${port}`, {
+      const output = execSync(`lsof -ti -sTCP:LISTEN -i tcp:${port}`, {
         encoding: "utf-8",
         timeout: 5_000,
       }).trim();
