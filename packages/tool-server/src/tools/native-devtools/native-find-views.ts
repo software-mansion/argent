@@ -51,6 +51,18 @@ Fails if native devtools are not connected, the app is not running, or status is
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
+    if (
+      params.className === undefined &&
+      params.identifier === undefined &&
+      params.label === undefined &&
+      params.tag === undefined &&
+      params.nativeID === undefined
+    ) {
+      throw new Error(
+        "native-find-views requires at least one of className, identifier, label, tag, or nativeID to be provided."
+      );
+    }
+
     if (await api.requiresAppRestart(params.bundleId)) {
       return {
         status: "restart_required",
