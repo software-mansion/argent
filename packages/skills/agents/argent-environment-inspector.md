@@ -64,7 +64,7 @@ but required by the main agent, fill it in by manual inspection of the project.
      flows (`.maestro/`).
    - For Flutter: `pubspec.yaml`, `analysis_options.yaml`, `lib/` structure.
    - For native iOS: Xcode project/workspace, schemes, `Podfile`, `Package.swift`.
-   - For native Android: `build.gradle` / `build.gradle.kts`, `settings.gradle` / `settings.gradle.kts`, flavor configs. Modern AGP templates use Kotlin DSL by default — both Groovy and Kotlin variants need to be considered.
+   - For native Android: `build.gradle` / `build.gradle.kts`, `settings.gradle` / `settings.gradle.kts`, flavor configs.
 
 4. **Populate every field** in the output schema below. Use `null` for
    genuinely unknown values or fields that do not apply to this project type.
