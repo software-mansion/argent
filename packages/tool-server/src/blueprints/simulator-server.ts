@@ -9,6 +9,7 @@ import {
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
+import { ensureDep } from "../utils/check-deps";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -150,9 +151,15 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     }
     const { device } = opts;
     // iOS accessibility automation flag — no-op equivalent on Android so skip
-    // the xcrun call entirely there.
+    // the xcrun call entirely there. Android also needs an `adb` preflight
+    // because the simulator-server binary shells out to adb internally; without
+    // this check, a host without android-platform-tools surfaces the failure
+    // as a `Timed out waiting for simulator-server to become ready` instead of
+    // the structured 424 DependencyMissingError that other Android tools emit.
     if (device.platform === "ios") {
       await ensureAutomationEnabled(device.id).catch(() => {});
+    } else {
+      await ensureDep("adb");
     }
 
     const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
