@@ -4,7 +4,7 @@ import * as dns from "node:dns";
 import * as os from "node:os";
 import { execSync } from "node:child_process";
 import semver from "semver";
-import { PACKAGE_NAME, NPM_REGISTRY } from "./constants.js";
+import { PACKAGE_NAME, NPM_REGISTRY, MCP_BINARY_NAME } from "./constants.js";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { Document, parseDocument } from "yaml";
 import {
@@ -350,6 +350,44 @@ export function getLatestVersion(): string {
 export function isNewerVersion(candidate: string, current: string): boolean {
   if (!semver.valid(candidate) || !semver.valid(current)) return false;
   return semver.gt(candidate, current);
+}
+
+// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
+// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
+// so `which argent` succeeds even though argent is not permanently installed globally.
+const TEMP_RUNNER_MARKERS = [
+  "_npx",
+  "/dlx-",
+  "\\dlx-",
+  "bun/install/cache",
+  ".bun\\install\\cache",
+];
+
+export function isTempRunnerPath(binaryPath: string): boolean {
+  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
+}
+
+/**
+ * True iff argent is permanently installed on the user's PATH (not just being
+ * executed transiently from an npx / dlx / bunx cache). On Windows `where`
+ * returns every match, on Unix `which -a` does — we inspect each line so a
+ * concurrent npx invocation does not mask a real global install.
+ */
+export function isGloballyInstalled(): boolean {
+  try {
+    const cmd = process.platform === "win32" ? "where" : "which -a";
+    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .some((line) => !isTempRunnerPath(line));
+  } catch {
+    return false;
+  }
 }
 
 export function isSkillsCliAvailable(): boolean {
