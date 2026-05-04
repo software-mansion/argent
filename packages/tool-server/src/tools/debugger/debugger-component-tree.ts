@@ -521,7 +521,7 @@ full-screen transparent wrappers, and implementation-detail components are prune
 Each visible component is listed with its name, text content, and normalized
 tap coordinates in [0,1] space (fractions of the screen, not pixels—same space as tap/swipe/gesture and simulator-server touch).
 
-This is the preferred element discovery tool for React Native apps. More information in react-native-app-workflow skill.
+This is the preferred element discovery tool for React Native apps. More information in argent-react-native-app-workflow skill.
 
 Workflow:
   1. Call this tool to get the component tree.
