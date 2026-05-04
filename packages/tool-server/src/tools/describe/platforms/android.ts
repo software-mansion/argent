@@ -33,5 +33,5 @@ export async function describeAndroid(udid: string, _bundleId?: string): Promise
     );
   }
   const tree = parseUiAutomatorDump(raw, size.width, size.height);
-  return { tree, source: "native-devtools" };
+  return { tree, source: "uiautomator" };
 }
