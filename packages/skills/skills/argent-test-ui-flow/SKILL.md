@@ -11,7 +11,7 @@ Get a `udid` via:
 
 | Platform | Setup skill                     | Find devices with                                           |
 | -------- | ------------------------------- | ----------------------------------------------------------- |
-| iOS      | `argent-simulator-setup`        | `list-devices` → `boot-device` with `udid` if none booted   |
+| iOS      | `argent-ios-simulator-setup`    | `list-devices` → `boot-device` with `udid` if none booted   |
 | Android  | `argent-android-emulator-setup` | `list-devices` → `boot-device` with `avdName` if none ready |
 
 ## 1. Workflow
@@ -89,7 +89,7 @@ Steps:
 | Skill                              | When to use                                             |
 | ---------------------------------- | ------------------------------------------------------- |
 | `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS + Android) |
-| `argent-simulator-setup`           | Booting and connecting an iOS simulator                 |
+| `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                 |
 | `argent-android-emulator-setup`    | Booting and connecting an Android emulator              |
 | `argent-react-native-app-workflow` | Starting the app, Metro, build issues                   |
 | `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                |

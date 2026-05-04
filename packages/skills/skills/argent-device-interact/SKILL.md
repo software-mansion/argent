@@ -13,7 +13,7 @@ For platform-specific caveats (Metro `adb reverse`, locked-screen describe error
 
 If you delegate simulator tasks to sub-agents, make sure they have MCP permissions.
 
-Use `list-devices` to get a target id. Results are tagged with `platform` (`ios` or `android`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS) or `avdName` (Android). See `argent-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
+Use `list-devices` to get a target id. Results are tagged with `platform` (`ios` or `android`); booted/ready devices come first. Pick the first entry that matches the platform you need — if none are ready, call `boot-device` with `udid` (iOS) or `avdName` (Android). See `argent-ios-simulator-setup` / `argent-android-emulator-setup` for full setup flow.
 
 **Load tool schemas before first use.** Gesture tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`) may be deferred — their parameter schemas are not loaded until fetched. Always use ToolSearch to load the schemas of all gesture tools you plan to use **before** calling any of them. If you skip this step, parameters may be coerced to strings instead of numbers, causing validation errors.
 

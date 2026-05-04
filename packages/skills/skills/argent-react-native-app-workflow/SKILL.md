@@ -55,7 +55,7 @@ Optional: specify device or simulator, e.g. `npx react-native run-ios --simulato
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If simulator not booted: use `boot-device` with the iOS `udid`. Refer to the `argent-simulator-setup` skill.
+- [ ] If simulator not booted: use `boot-device` with the iOS `udid`. Refer to the `argent-ios-simulator-setup` skill.
 
 ### 1.4 Run the Android App
 
@@ -175,7 +175,7 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device) |
 | Stop all simulator servers | `stop-all-simulator-servers` tool (iOS + Android)                      |
 
-For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
+For full simulator setup workflow, refer to the `argent-ios-simulator-setup` skill.
 
 ---
 
@@ -261,7 +261,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 
 | Skill                          | When to use                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------------- |
-| `argent-simulator-setup`       | Initial simulator boot and connection setup                                     |
+| `argent-ios-simulator-setup`   | Initial simulator boot and connection setup                                     |
 | `argent-device-interact`       | Tapping, swiping, typing, hardware buttons, gestures on the simulator/emulator  |
 | `argent-metro-debugger`        | Full Metro CDP debugging: component inspection, console logs, JS evaluation     |
 | `argent-react-native-profiler` | Profiling performance, finding re-render issues, CPU hotspots                   |
