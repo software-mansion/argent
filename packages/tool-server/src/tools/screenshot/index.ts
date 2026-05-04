@@ -5,10 +5,7 @@ import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()

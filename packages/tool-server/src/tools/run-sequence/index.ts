@@ -19,7 +19,6 @@ const ALLOWED_TOOLS = new Set([
 const zodSchema = z.object({
   udid: z
     .string()
-    .min(1)
     .describe(
       "Target device id from `list-devices` (iOS UDID or Android serial) — shared across all steps."
     ),
@@ -40,7 +39,6 @@ const zodSchema = z.object({
           .describe("Wait time in ms after this step before the next (default 100)"),
       })
     )
-    .min(1)
     .describe("Ordered list of interaction steps to execute sequentially"),
 });
 

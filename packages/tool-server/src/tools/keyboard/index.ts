@@ -140,10 +140,7 @@ const NAMED_KEYS: Record<string, number> = {
 };
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   text: z
     .string()
     .optional()

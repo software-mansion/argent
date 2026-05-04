@@ -18,20 +18,15 @@ const BUNDLE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const ACTIVITY_PATTERN = /^[A-Za-z0-9._/-]+$/;
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
-    .min(1)
     .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
     .describe(
       "App identifier. iOS: bundle id (e.g. com.apple.MobileSMS). Android: package name from build.gradle `applicationId` (e.g. com.android.settings)."
     ),
   activity: z
     .string()
-    .min(1)
     .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
     .optional()
     .describe(
