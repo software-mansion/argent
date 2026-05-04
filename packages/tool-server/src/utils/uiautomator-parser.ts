@@ -17,10 +17,13 @@ export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
   // requires only `<` and `&` to be escaped, so `text="A > B"` is legal and
   // does occur in real uiautomator dumps. The previous `[^<>]*?` rejected
   // those tags entirely and silently reparented the dropped subtree onto the
-  // root. Match either a complete quoted string or any non-quote non-`>`
-  // character. `s` flag keeps newline tolerance for builds that wrap dumps
-  // at ~1 KB boundaries.
-  const tagRe = /<(\/?)([A-Za-z_][\w.-]*)((?:"[^"]*"|'[^']*'|[^"'<>])*)(\/?)>/gs;
+  // root. The unquoted-character class also excludes `/` so the trailing
+  // `\s*(\/?)` still recognises self-closing tags (`<node ... />`); without
+  // that exclusion the `/` was consumed into the attr block and self-closing
+  // tags were mistaken for openers, leaking unbalanced nesting downstream.
+  // `s` flag keeps newline tolerance for builds that wrap dumps at ~1 KB
+  // boundaries.
+  const tagRe = /<(\/?)([A-Za-z_][\w.-]*)((?:"[^"]*"|'[^']*'|[^"'/<>])*?)\s*(\/?)>/gs;
   const stack: ParsedXmlNode[] = [];
   let root: ParsedXmlNode | null = null;
   let match: RegExpExecArray | null;
@@ -38,9 +41,16 @@ export function parseUiAutomatorXml(xml: string): ParsedXmlNode | null {
     const attrs = parseAttributes(rawAttrs ?? "");
     const node: ParsedXmlNode = { tag: tag!, attrs, children: [] };
     const parent = stack[stack.length - 1];
-    if (parent) parent.children.push(node);
-    else if (root === null) root = node;
-    // else: malformed input emitted a second top-level element; first root wins.
+    if (parent) {
+      parent.children.push(node);
+    } else if (root === null) {
+      root = node;
+    } else {
+      // Malformed input lost its stack context (typically: an extra `</node>`
+      // popped the real parent). Re-attach the orphan to the existing root so
+      // subsequent siblings stay reachable instead of being silently dropped.
+      root.children.push(node);
+    }
     if (!selfClose) stack.push(node);
   }
   return root;
