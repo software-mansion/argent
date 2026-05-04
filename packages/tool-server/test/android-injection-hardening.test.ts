@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { launchAppTool } from "../src/tools/launch-app";
 import { restartAppTool } from "../src/tools/restart-app";
+import { openUrlTool } from "../src/tools/open-url";
+import { reinstallAppTool } from "../src/tools/reinstall-app";
+import { createDescribeTool } from "../src/tools/describe";
+import { Registry } from "@argent/registry";
 
 /**
  * Regressions for the command-injection review finding (#1) and the
@@ -102,6 +106,17 @@ describe('empty-udid guard (#7) — cross-platform tools reject `udid: ""`', () 
   }> = [
     { name: "launch-app", schema: launchAppTool.zodSchema, extra: { bundleId: "com.x" } },
     { name: "restart-app", schema: restartAppTool.zodSchema, extra: { bundleId: "com.x" } },
+    { name: "open-url", schema: openUrlTool.zodSchema, extra: { url: "https://example.com" } },
+    {
+      name: "reinstall-app",
+      schema: reinstallAppTool.zodSchema,
+      extra: { bundleId: "com.x", appPath: "/tmp/x.apk" },
+    },
+    {
+      name: "describe",
+      schema: createDescribeTool(new Registry()).zodSchema,
+      extra: {},
+    },
   ];
 
   for (const { name, schema, extra } of toolCases) {
