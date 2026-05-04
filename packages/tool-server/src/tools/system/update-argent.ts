@@ -35,21 +35,6 @@ export const updateArgentTool: ToolDefinition<void> = {
         detached: true,
         stdio: "ignore",
       });
-      // Observe the detached child long enough to release the lock if the
-      // update never actually starts (binary missing on PATH) or exits with
-      // a failure code. Without this, `updateScheduled` would stay true for
-      // the lifetime of the tool-server and every retry would return the
-      // "already in progress" lockout.
-      child.on("error", (err) => {
-        process.stderr.write(`[update-argent] spawn failed: ${err.message}\n`);
-        updateScheduled = false;
-      });
-      child.on("exit", (code) => {
-        if (code !== 0) {
-          process.stderr.write(`[update-argent] argent update exited with code ${code}\n`);
-          updateScheduled = false;
-        }
-      });
       child.unref();
     }, 2000);
 

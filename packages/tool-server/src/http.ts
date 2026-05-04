@@ -103,14 +103,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   app.post(
     "/tools/:name",
-    (_req, res, next) => {
-      // Track the request as in flight so the idle timer cannot fire
-      // mid-execution for long-running tools (xctrace export, RN build,
-      // etc.). Release on response finish OR connection close so an
-      // aborted request doesn't leak a permanent +1.
-      const release = idleTimer.beginRequest();
-      res.on("close", release);
-      res.on("finish", release);
+    (req, _res, next) => {
+      idleTimer.touch();
       next();
     },
     async (req: Request, res: Response) => {

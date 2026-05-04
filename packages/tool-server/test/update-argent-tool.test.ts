@@ -16,7 +16,7 @@ const mockSpawn = vi.mocked(spawn);
 const mockGetUpdateState = vi.mocked(getUpdateState);
 
 function makeChild() {
-  return { unref: vi.fn(), on: vi.fn() } as unknown as ReturnType<typeof spawn>;
+  return { unref: vi.fn() } as unknown as ReturnType<typeof spawn>;
 }
 
 function stateWithUpdate(latestVersion = "99.0.0") {
