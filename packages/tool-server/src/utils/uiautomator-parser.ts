@@ -110,6 +110,25 @@ export function parseUiAutomatorBounds(
   return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
 }
 
+/**
+ * Intersect a uiautomator-pixel rect with the screen rect. `parseUiAutomatorBounds`
+ * preserves negative origins and out-of-range corners so callers can detect
+ * partially-off-screen views; this helper produces the visible portion only,
+ * which is what `describe` needs to normalise into the [0,1] contract.
+ */
+export function clipBoundsToScreen(
+  b: { x: number; y: number; w: number; h: number },
+  screenW: number,
+  screenH: number
+): { x: number; y: number; w: number; h: number } {
+  if (screenW <= 0 || screenH <= 0) return { x: 0, y: 0, w: 0, h: 0 };
+  const x1 = Math.max(0, Math.min(b.x, screenW));
+  const y1 = Math.max(0, Math.min(b.y, screenH));
+  const x2 = Math.max(0, Math.min(b.x + b.w, screenW));
+  const y2 = Math.max(0, Math.min(b.y + b.h, screenH));
+  return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+}
+
 export function deriveUiAutomatorRole(className: string): string {
   const short = className.split(".").pop() ?? className;
   const lower = short.toLowerCase();
@@ -182,11 +201,18 @@ export function convertUiAutomatorNode(
       continue;
     }
 
+    // Clip the rectangle against the screen BEFORE normalising. Independently
+    // clamping `x` and `width` to [0,1] lets `x + width` exceed 1 (e.g. an
+    // off-screen item at bounds=[1090,0][1280,200] on a 1080-wide screen
+    // produces x=1, width≈0.176 → tap centre lands off-screen). Clipping the
+    // edges first guarantees the visible portion is what we normalise and the
+    // rect always satisfies the describe-frame contract.
+    const clipped = clipBoundsToScreen(bounds, screenW, screenH);
     const frame = {
-      x: screenW > 0 ? Math.max(0, Math.min(1, bounds.x / screenW)) : 0,
-      y: screenH > 0 ? Math.max(0, Math.min(1, bounds.y / screenH)) : 0,
-      width: screenW > 0 ? Math.max(0, Math.min(1, bounds.w / screenW)) : 0,
-      height: screenH > 0 ? Math.max(0, Math.min(1, bounds.h / screenH)) : 0,
+      x: screenW > 0 ? clipped.x / screenW : 0,
+      y: screenH > 0 ? clipped.y / screenH : 0,
+      width: screenW > 0 ? clipped.w / screenW : 0,
+      height: screenH > 0 ? clipped.h / screenH : 0,
     };
     const out: DescribeNode = {
       role: deriveUiAutomatorRole(attrs.class ?? ""),

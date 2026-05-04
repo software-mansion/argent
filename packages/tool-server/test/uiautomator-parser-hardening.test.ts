@@ -185,3 +185,26 @@ function collectLabels(n: { label?: string; children: { label?: string; children
   for (const c of n.children) out.push(...collectLabels(c as Parameters<typeof collectLabels>[0]));
   return out;
 }
+
+describe("convertUiAutomatorNode — clips off-screen rects to the screen", () => {
+  it("never produces a frame whose x + width exceeds 1", () => {
+    // Rail/badge at the right edge that uiautomator reports past the screen
+    // edge (real on tablets / foldables / drawer-overlay states). Without
+    // clipping, x clamped to 1 and width=190/1080≈0.176 made the tap centre
+    // land at 1.088 — off-screen.
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="android.widget.Button" bounds="[1090,0][1280,200]"
+        text="X" content-desc="" resource-id="" package="com.x" />
+  <node class="android.widget.Button" bounds="[-100,0][50,100]"
+        text="Y" content-desc="" resource-id="" package="com.x" />
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1080, 1920);
+    for (const child of tree.children) {
+      expect(child.frame.x + child.frame.width).toBeLessThanOrEqual(1);
+      expect(child.frame.y + child.frame.height).toBeLessThanOrEqual(1);
+      expect(child.frame.x).toBeGreaterThanOrEqual(0);
+      expect(child.frame.y).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
