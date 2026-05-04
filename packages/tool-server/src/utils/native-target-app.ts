@@ -32,7 +32,12 @@ export async function inspectConnectedNativeApps(
   api: NativeDevtoolsApi
 ): Promise<NativeAppState[]> {
   const bundleIds = api.listConnectedBundleIds();
-  const appStates = await Promise.all(bundleIds.map((bundleId) => api.getAppState(bundleId)));
+  const settled = await Promise.allSettled(bundleIds.map((bundleId) => api.getAppState(bundleId)));
+  const appStates = settled
+    .filter(
+      (result): result is PromiseFulfilledResult<NativeAppState> => result.status === "fulfilled"
+    )
+    .map((result) => result.value);
   return appStates.sort((a, b) => a.bundleId.localeCompare(b.bundleId));
 }
 
@@ -44,6 +49,7 @@ export async function resolveNativeTargetApp(
     return { bundleId, source: "explicit" };
   }
 
+  const connectedBundleCount = api.listConnectedBundleIds().length;
   const connectedApps = await inspectConnectedNativeApps(api);
   if (connectedApps.length === 0) {
     throw new Error(
@@ -53,7 +59,7 @@ export async function resolveNativeTargetApp(
   }
 
   const frontmost = chooseFrontmostConnectedApp(connectedApps);
-  if (connectedApps.length === 1) {
+  if (connectedBundleCount === 1 && connectedApps.length === 1) {
     if (frontmost) {
       return {
         bundleId: connectedApps[0].bundleId,
