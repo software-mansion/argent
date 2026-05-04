@@ -74,15 +74,3 @@ export function toSimulatorNetworkError(
       `Verify the simulator is booted. ${recovery}${suffix}`
   );
 }
-
-/**
- * Wrap an `execFile`-style child-process rejection with a verb-prefixed
- * message — the same shape Android's `adb …` calls use ("am start failed: …",
- * "adb install failed: …"). Without this, iOS xcrun rejections bubble up as
- * raw "Command failed: xcrun simctl …\n…" and MCP clients keying off
- * `err.message.startsWith("launch failed:")` work on Android but not iOS.
- */
-export function wrapXcrunError(verb: string, err: unknown): Error {
-  const detail = err instanceof Error ? err.message : String(err);
-  return new Error(`${verb} failed: ${detail}`);
-}

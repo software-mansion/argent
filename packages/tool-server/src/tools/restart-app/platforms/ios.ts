@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { wrapXcrunError } from "../../../utils/format-error";
 import type { RestartAppIosServices, RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -16,11 +15,7 @@ export const iosImpl: PlatformImpl<RestartAppIosServices, RestartAppParams, Rest
     } catch {
       // App may not be running — ignore
     }
-    try {
-      await execFileAsync("xcrun", ["simctl", "launch", udid, bundleId]);
-    } catch (err) {
-      throw wrapXcrunError("relaunch", err);
-    }
+    await execFileAsync("xcrun", ["simctl", "launch", udid, bundleId]);
     return { restarted: true, bundleId };
   },
 };
