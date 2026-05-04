@@ -154,10 +154,14 @@ async function assertScreencapAlive(serial: string): Promise<void> {
   const out = await adbShell(serial, "screencap | tail -c +17 | tr -d '\\0' | head -c 1 | wc -c", {
     timeoutMs: 10_000,
   });
-  if (out.trim() === "0") {
+  // Match success on "1" specifically: empty output (screencap binary missing,
+  // exec-out drained nothing) used to trim to "" which !== "0" and silently
+  // returned success — i.e. a broken capture path was reported as healthy.
+  // Any non-"1" reading (zero pixels OR no output at all) is a failure.
+  if (out.trim() !== "1") {
     await killEmulatorQuietly(serial);
     throw new Error(
-      "hot-boot composite not restored: `screencap` returned an all-zero frame. " +
+      "hot-boot composite not restored: `screencap` returned an all-zero or empty frame. " +
         "Falling back to cold boot so screenshots are usable."
     );
   }
