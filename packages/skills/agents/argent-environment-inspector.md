@@ -89,7 +89,8 @@ Return a JSON object with these top-level fields:
 | `startup_commands`                    | array        | `[{ command, context }]` — concrete dev server start commands                                 |
 | `build_commands`                      | array        | `[{ command, platform, context }]` — build commands per platform                              |
 | `argent_workflow`                     | object       | `{ start_dev_server, build_ios, build_android, notes }` — exact commands for Argent           |
-| `android_has_gradle`                  | bool         | True when `android/gradlew` exists; implies the Android build is invokable via `./gradlew`    |
+| `ios_has_podfile`                     | bool         | True when `ios/Podfile` exists                                                                |
+| `android_has_gradle`                  | bool         | True when `android/gradlew` exists                                                            |
 | `configs`                             | object       | Paths to metro, babel, app, tsconfig, pubspec, xcode, gradle configs (`null` if absent)       |
 | `metro_port`                          | number\|null | From config or default 8081; `null` for non-RN                                                |
 | `env_resolution`                      | object       | `{ env_files, strategy, notes }`                                                              |

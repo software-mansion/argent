@@ -187,7 +187,7 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.metro_config_raw).toContain("getDefaultConfig");
     expect(snap.has_ios_dir).toBe(true);
     expect(snap.has_android_dir).toBe(true);
-    expect(snap.has_podfile).toBe(true);
+    expect(snap.ios_has_podfile).toBe(true);
     expect(snap.lockfile).toBe("yarn.lock");
     expect(snap.config_files_found).toContain("metro.config.js");
   });
@@ -224,7 +224,7 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.has_ios_dir).toBe(false);
     expect(snap.has_android_dir).toBe(false);
     expect(snap.ios_workspace).toBeNull();
-    expect(snap.has_podfile).toBe(false);
+    expect(snap.ios_has_podfile).toBe(false);
     expect(snap.android_has_gradle).toBe(false);
     expect(snap.lockfile).toBeNull();
     expect(snap.env_files).toEqual([]);
