@@ -64,7 +64,12 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     const device = resolveDevice(params.udid);
     return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
   },
-  execute: dispatchByPlatform<LaunchAppIosServices, LaunchAppAndroidServices, Params, LaunchAppResult>({
+  execute: dispatchByPlatform<
+    LaunchAppIosServices,
+    LaunchAppAndroidServices,
+    Params,
+    LaunchAppResult
+  >({
     toolId: "launch-app",
     capability,
     ios: iosImpl,

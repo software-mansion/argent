@@ -69,12 +69,7 @@ export function dispatchByPlatform<
       if (opts.ios.requires?.length) {
         await ensureDeps(opts.ios.requires);
       }
-      return opts.ios.handler(
-        services as unknown as IosServices,
-        params,
-        device,
-        invokeOptions
-      );
+      return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }
     if (opts.android.requires?.length) {
       await ensureDeps(opts.android.requires);

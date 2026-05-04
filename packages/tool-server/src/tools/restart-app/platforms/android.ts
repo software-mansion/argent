@@ -1,9 +1,6 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell } from "../../../utils/adb";
-import {
-  assertAmStartOk,
-  resolveLauncherActivity,
-} from "../../launch-app/platforms/android";
+import { assertAmStartOk, resolveLauncherActivity } from "../../launch-app/platforms/android";
 import type { RestartAppAndroidServices, RestartAppParams, RestartAppResult } from "../types";
 
 export const androidImpl: PlatformImpl<

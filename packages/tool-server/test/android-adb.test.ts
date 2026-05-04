@@ -54,11 +54,9 @@ describe("parseAdbDevices", () => {
     // Defensive: anything that isn't in the canonical adb state set must not
     // become a phantom device. Catches future adb versions adding garbage
     // fields and protects against a subtly-malformed banner the * filter misses.
-    const stdout = [
-      "List of devices attached",
-      "emulator-5554\tdevice",
-      "junk\tnotastate",
-    ].join("\n");
+    const stdout = ["List of devices attached", "emulator-5554\tdevice", "junk\tnotastate"].join(
+      "\n"
+    );
     expect(parseAdbDevices(stdout)).toEqual([{ serial: "emulator-5554", state: "device" }]);
   });
 });

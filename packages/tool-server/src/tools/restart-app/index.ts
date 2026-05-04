@@ -3,11 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import type {
-  RestartAppAndroidServices,
-  RestartAppIosServices,
-  RestartAppResult,
-} from "./types";
+import type { RestartAppAndroidServices, RestartAppIosServices, RestartAppResult } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 

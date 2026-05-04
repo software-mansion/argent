@@ -179,7 +179,10 @@ describe("parseUiAutomatorXml — robust against malformed structure", () => {
   });
 });
 
-function collectLabels(n: { label?: string; children: { label?: string; children: unknown[] }[] }): string[] {
+function collectLabels(n: {
+  label?: string;
+  children: { label?: string; children: unknown[] }[];
+}): string[] {
   const out: string[] = [];
   if (n.label) out.push(n.label);
   for (const c of n.children) out.push(...collectLabels(c as Parameters<typeof collectLabels>[0]));

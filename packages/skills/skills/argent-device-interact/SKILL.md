@@ -48,35 +48,35 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action           | Tool             | Notes                                                     |
-| ---------------- | ---------------- | --------------------------------------------------------- |
-| Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)     |
-| Open an app      | `launch-app`     | **Always — never tap home-screen icons**                  |
-| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                       |
-| Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                        |
-| Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                |
-| Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                             |
-| Long press       | `gesture-custom` | Context menus, drag start                                 |
-| Drag & drop      | `gesture-custom` | Complex drag interactions                                 |
-| Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                  |
-| Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation               |
-| Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation         |
-| Hardware key     | `button`         | Home, back, power, volume, appSwitch, actionButton        |
-| Type text (fast) | `paste`          | iOS only. Form fields — uses clipboard                    |
+| Action           | Tool             | Notes                                                                  |
+| ---------------- | ---------------- | ---------------------------------------------------------------------- |
+| Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)                  |
+| Open an app      | `launch-app`     | **Always — never tap home-screen icons**                               |
+| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                                    |
+| Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                                     |
+| Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                             |
+| Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                                          |
+| Long press       | `gesture-custom` | Context menus, drag start                                              |
+| Drag & drop      | `gesture-custom` | Complex drag interactions                                              |
+| Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                               |
+| Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation                            |
+| Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation                      |
+| Hardware key     | `button`         | Home, back, power, volume, appSwitch, actionButton                     |
+| Type text (fast) | `paste`          | iOS only. Form fields — uses clipboard                                 |
 | Type text        | `keyboard`       | iOS+Android. Fallback when paste fails; supports Enter, Escape, arrows |
-| Rotate device    | `rotate`         | Orientation changes                                       |
+| Rotate device    | `rotate`         | Orientation changes                                                    |
 
 ## 5. Finding Tap Targets
 
 IMPORTANT. When moved to a different screen after an action or do not know the coordinates of component, **always** perform proper discovery first.
 
-| App type                          | Discovery tool            | What it returns                                                                                                                                                                          |
-| --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| App type                          | Discovery tool            | What it returns                                                                                                                                                                                                               |
+| --------------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Target app discovery              | `describe`                | Accessibility element tree for the current device screen (iOS AX-service or Android uiautomator) with normalized frame coordinates. Works on any app, system dialogs, and Home screen — no app restart or `bundleId` required |
-| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                            |
-| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                     |
-| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls               |
-| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                   |
+| React Native                      | `debugger-component-tree` | React component tree with names, text, testID, and (tap: x,y)                                                                                                                                                                 |
+| App-scoped native                 | `native-describe-screen`  | Low-level app-scoped accessibility elements with normalized and raw coordinates; requires `bundleId`                                                                                                                          |
+| Permission / system modal overlay | `describe`                | `describe` detects system dialogs automatically and returns dialog buttons with tap coordinates. Fall back to `screenshot` only if `describe` does not expose the controls                                                    |
+| Final visual fallback             | `screenshot`              | Use only when discovery tools cannot inspect the current UI reliably. Do not derive routine in-app navigation targets from screenshots                                                                                        |
 
 Point follow-up native diagnostics after you already have a candidate point:
 

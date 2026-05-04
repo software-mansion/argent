@@ -39,45 +39,42 @@ export async function resolveLauncherActivity(udid: string, bundleId: string): P
   return last;
 }
 
-export const androidImpl: PlatformImpl<
-  LaunchAppAndroidServices,
-  LaunchAppParams,
-  LaunchAppResult
-> = {
-  requires: ["adb"],
-  handler: async (_services, params) => {
-    // Resolve a concrete pkg/Activity component for every code path so we
-    // can always use `am start -W`, which blocks until the activity is
-    // drawn. The previous `monkey … LAUNCHER 1` fallback returned as soon
-    // as the intent was injected, leaving a window where describe/tap
-    // could race a still-forking process.
-    let component: string;
-    if (params.activity) {
-      // Three accepted shapes:
-      //   ".MainActivity"            → ${pkg}/.MainActivity (relative)
-      //   "pkg/.X" or "pkg/full.X"   → use as-is
-      //   "com.fully.Qualified"      → ${pkg}/com.fully.Qualified (FQCN)
-      // A bare class name like "MainActivity" (no dot, no slash) used to be
-      // emitted as `${pkg}/MainActivity`, which `am start` rejects because
-      // an unqualified class is treated as default-package — i.e. no match.
-      // Resolve the obvious intent by treating it as relative-to-bundleId.
-      const a = params.activity;
-      if (a.includes("/")) {
-        component = a;
-      } else if (a.startsWith(".")) {
-        component = `${params.bundleId}/${a}`;
-      } else if (a.includes(".")) {
-        component = `${params.bundleId}/${a}`;
+export const androidImpl: PlatformImpl<LaunchAppAndroidServices, LaunchAppParams, LaunchAppResult> =
+  {
+    requires: ["adb"],
+    handler: async (_services, params) => {
+      // Resolve a concrete pkg/Activity component for every code path so we
+      // can always use `am start -W`, which blocks until the activity is
+      // drawn. The previous `monkey … LAUNCHER 1` fallback returned as soon
+      // as the intent was injected, leaving a window where describe/tap
+      // could race a still-forking process.
+      let component: string;
+      if (params.activity) {
+        // Three accepted shapes:
+        //   ".MainActivity"            → ${pkg}/.MainActivity (relative)
+        //   "pkg/.X" or "pkg/full.X"   → use as-is
+        //   "com.fully.Qualified"      → ${pkg}/com.fully.Qualified (FQCN)
+        // A bare class name like "MainActivity" (no dot, no slash) used to be
+        // emitted as `${pkg}/MainActivity`, which `am start` rejects because
+        // an unqualified class is treated as default-package — i.e. no match.
+        // Resolve the obvious intent by treating it as relative-to-bundleId.
+        const a = params.activity;
+        if (a.includes("/")) {
+          component = a;
+        } else if (a.startsWith(".")) {
+          component = `${params.bundleId}/${a}`;
+        } else if (a.includes(".")) {
+          component = `${params.bundleId}/${a}`;
+        } else {
+          component = `${params.bundleId}/.${a}`;
+        }
       } else {
-        component = `${params.bundleId}/.${a}`;
+        component = await resolveLauncherActivity(params.udid, params.bundleId);
       }
-    } else {
-      component = await resolveLauncherActivity(params.udid, params.bundleId);
-    }
-    const out = await adbShell(params.udid, `am start -W -n ${component}`, {
-      timeoutMs: 30_000,
-    });
-    assertAmStartOk(out);
-    return { launched: true, bundleId: params.bundleId };
-  },
-};
+      const out = await adbShell(params.udid, `am start -W -n ${component}`, {
+        timeoutMs: 30_000,
+      });
+      assertAmStartOk(out);
+      return { launched: true, bundleId: params.bundleId };
+    },
+  };
