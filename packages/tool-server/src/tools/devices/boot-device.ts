@@ -640,6 +640,8 @@ Pick the platform by which argument you pass: 'udid' for an iOS simulator from l
 Use at the start of a session once you have picked a target.
 Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, coldBoot }.
 Android boots take 2–10 minutes depending on machine and cold/warm state; if any boot stage fails, the tool terminates the emulator it spawned so the next retry starts clean.`,
+    alwaysLoad: true,
+    searchHint: "boot start launch simulator emulator avd device session ios android cold hot",
     zodSchema,
     capability,
     services: () => ({}),

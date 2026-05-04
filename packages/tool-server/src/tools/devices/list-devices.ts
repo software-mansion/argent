@@ -46,6 +46,8 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios' or 'android'), and 'avds' lists Android AVDs that can be booted via boot-device.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select or Android platform-tools is not installed.`,
+  alwaysLoad: true,
+  searchHint: "list devices simulators emulators avd serial udid ios android session start",
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
