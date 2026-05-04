@@ -14,7 +14,7 @@ Verify with `adb version` and `emulator -list-avds`.
 ## 2. Setup
 
 1. **Find a ready device** — call `list-devices`. Filter for entries with `platform: "android"`. Ready devices (`state: "device"`) come first. Pick the first `serial` (e.g. `emulator-5554`) unless the user specified one.
-2. **Boot if needed** — if nothing Android is ready, call `boot-device` with `avdName: <name>` from the same call's `avds` list. Cold boot by default (reliability over speed — 2–5 min typical). On any stage failure the tool kills the emulator process it started so your next call starts from a clean state.
+2. **Boot if needed** — if nothing Android is ready, call `boot-device` with `avdName: <name>` from the same call's `avds` list. Hot-boot by default — the tool probes the AVD's `default_boot` snapshot, restores it under a tight deadline, and falls back to a cold boot on any hot-boot failure. Hot path is typically ~30s; cold path takes 2–10 min. Pass `coldBoot: true` to force a full cold boot. On any stage failure the tool kills the emulator process it started so your next call starts from a clean state.
 3. **Metro (for React Native)** — once a device is up, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the device can reach Metro on your host. Repeat if the device restarts. See the `argent-metro-debugger` skill.
 
 ## 3. Using the device
