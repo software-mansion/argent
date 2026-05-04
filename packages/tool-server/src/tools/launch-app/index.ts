@@ -9,13 +9,15 @@ import { androidImpl } from "./platforms/android";
 
 // Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;
 // iOS bundle ids use the same reverse-DNS shape with dashes allowed. The union
-// of both platforms is letters, digits, underscore, dot, hyphen — and explicitly
-// nothing else so shell metacharacters can't land in an `adb shell` template.
-const BUNDLE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+// is letters, digits, underscore, dot, hyphen — but the head must be a letter
+// or underscore so a bundleId like `--user` can't masquerade as a flag inside
+// `am start -n …` / `cmd package resolve-activity …`.
+const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 // Activity names can be `.Foo`, `com.x.y/.Foo`, or `com.x/com.x.Foo`. Same alphabet
 // plus `/` as the package/activity separator. `$` and other shell metacharacters
-// are deliberately excluded.
-const ACTIVITY_PATTERN = /^[A-Za-z0-9._/-]+$/;
+// are deliberately excluded. Leading `-` is also forbidden for flag-injection
+// reasons; `.` is allowed as the head so dot-prefixed activities still work.
+const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
 const zodSchema = z.object({
   udid: z

