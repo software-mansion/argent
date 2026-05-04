@@ -176,8 +176,16 @@ function spawnDaemon(udid: string, socketPath: string): Promise<ChildProcess> {
       }
     });
 
+    // Defense-in-depth: udid is validated at the factory entry, but a missing
+    // value here would crash the whole tool-server. The handler runs inside
+    // an async event listener, so a `udid.slice(0, 8)` against `undefined`
+    // throws synchronously and propagates to the process-wide
+    // `uncaughtException` handler — which the tool-server treats as fatal
+    // and exits on. Tag with "?" if udid is ever empty rather than blowing
+    // up the process.
+    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     proc.stderr?.on("data", (data: string) => {
-      process.stderr.write(`[ax-service ${udid.slice(0, 8)}] ${data}`);
+      process.stderr.write(`[ax-service ${udidTag}] ${data}`);
     });
 
     proc.on("exit", (code) => {
@@ -218,6 +226,19 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     if (device.platform !== "ios") {
       throw new Error(
         `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — describe falls back to uiautomator on Android, which does not need this service.`
+      );
+    }
+    // device.id must be a non-empty string. A tool that resolves the device
+    // from a missing `udid` argument can land here with `device.id ===
+    // undefined`. Without this guard, `getSocketPath(undefined).slice` would
+    // crash synchronously in the awaited factory (caught by the registry as
+    // a service error), and `udid.slice(0, 8)` inside the spawned process'
+    // stderr handler would crash inside an async event listener — which the
+    // tool-server treats as fatal via `uncaughtException`.
+    if (typeof device.id !== "string" || device.id.length === 0) {
+      throw new Error(
+        `${AX_SERVICE_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}. ` +
+          `This usually means a tool invocation reached the ax-service blueprint without a 'udid' argument.`
       );
     }
 

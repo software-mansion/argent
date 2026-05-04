@@ -115,8 +115,16 @@ function spawnSimulatorServerProcess(
       }
     });
 
+    // Defense-in-depth: udid is validated at the factory entry, but a missing
+    // value here would crash the whole tool-server. The handler runs inside
+    // an async event listener, so a `udid.slice(0, 8)` against `undefined`
+    // throws synchronously and propagates to the process-wide
+    // `uncaughtException` handler — which the tool-server treats as fatal
+    // and exits on. Tag with "?" if udid is ever empty rather than blowing
+    // up the process.
+    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     proc.stderr?.on("data", (data: Buffer) => {
-      process.stderr.write(`[sim ${udid.slice(0, 8)}] ${data}`);
+      process.stderr.write(`[sim ${udidTag}] ${data}`);
     });
 
     proc.on("exit", () => {
@@ -150,6 +158,20 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
     const { device } = opts;
+    // device.id must be a non-empty string. A tool that resolves the device
+    // from a missing `udid` argument can land here with `device.id ===
+    // undefined` (TypeScript's compile-time check is bypassed when the inner
+    // tool is invoked through a wrapper like flow-add-step that doesn't
+    // re-validate the inner schema). Without this guard, we end up spawning
+    // `simulator-server <platform> --id undefined` — the spawned binary
+    // exits, writes to stderr, and the stderr handler then dereferences
+    // `undefined.slice` which fires inside an event listener and is fatal.
+    if (typeof device.id !== "string" || device.id.length === 0) {
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}. ` +
+          `This usually means a tool invocation reached the simulator-server blueprint without a 'udid' argument.`
+      );
+    }
     // iOS accessibility automation flag — no-op equivalent on Android so skip
     // the xcrun call entirely there. Android also needs an `adb` preflight
     // because the simulator-server binary shells out to adb internally; without
