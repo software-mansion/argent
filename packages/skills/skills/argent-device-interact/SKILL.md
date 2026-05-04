@@ -285,7 +285,7 @@ Stops on the first error and returns partial results.
 ### Android
 
 - **Metro reachability**: run `adb reverse tcp:8081 tcp:8081` on the device before the RN app starts, or Metro won't be reachable from the device. See `argent-metro-debugger` for the full workflow. Re-run if the device restarts.
-- **First-launch permission prompts**: pass `grantPermissions: true` to `reinstall-app` on Android so the app skips the runtime-permission dialogs.
+- **First-launch permission prompts**: `reinstall-app` on Android always installs with `-g` so runtime permissions are pre-granted on first launch — no flag to pass.
 - **Locked screen / secure surfaces**: `describe` throws a clear error if it can't capture (keyguard, DRM, Play Integrity). Unlock the device or fall back to `screenshot`.
 - **APK vs .app in `reinstall-app`**: pass `.apk` absolute path on Android; `.app` directory on iOS.
 

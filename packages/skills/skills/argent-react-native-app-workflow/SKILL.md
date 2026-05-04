@@ -74,7 +74,7 @@ cd android && ./gradlew :app:assembleDebug && cd ..
 Then, using the argent MCP tools (note: the interaction tools are unified — pass the Android serial as `udid`):
 
 1. `list-devices` — pick a ready Android serial (or boot one via `boot-device` with `avdName`). See the `argent-android-emulator-setup` skill.
-2. `reinstall-app` with `udid=<serial>`, `bundleId=<applicationId>`, absolute `appPath=<path to .apk>`. Set `grantPermissions: true` to skip runtime permission prompts on first launch.
+2. `reinstall-app` with `udid=<serial>`, `bundleId=<applicationId>`, absolute `appPath=<path to .apk>`. Runtime permissions are pre-granted automatically (`-g`) so first-launch dialogs are skipped.
 3. `launch-app` with `udid=<serial>` and `bundleId=<applicationId>` (read it from `android/app/build.gradle` — look for the `applicationId "..."` line).
 4. **Metro reachability**: run `adb -s <serial> reverse tcp:8081 tcp:8081` so the app on the device can reach Metro on your host. Repeat if the device restarts or adb drops. See the `argent-metro-debugger` skill.
 

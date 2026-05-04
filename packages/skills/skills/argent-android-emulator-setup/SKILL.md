@@ -25,5 +25,5 @@ Pass the Android serial as `udid` to the unified interaction tools — `gesture-
 
 - Serials are the adb device id. iOS UDIDs and Android serials are not interchangeable, but you do NOT need to tell the tools which platform — dispatch is automatic.
 - `describe` on Android returns a shallower tree than iOS (no accessibility-service equivalent), but covers most tap-target discovery.
-- For first-launch permission prompts, pass `grantPermissions: true` to `reinstall-app`.
+- `reinstall-app` on Android always installs with `-g` so first-launch runtime permissions are pre-granted.
 - To kill the emulator when you're done, run `adb -s <serial> emu kill` from a shell.

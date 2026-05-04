@@ -79,7 +79,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots. Interaction tools are unified across iOS and Android — see the Platform-specific notes section in the skill for Android gotchas (Metro reverse, grantPermissions, locked-screen describe).
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots. Interaction tools are unified across iOS and Android — see the Platform-specific notes section in the skill for Android gotchas (Metro reverse, locked-screen describe).
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
