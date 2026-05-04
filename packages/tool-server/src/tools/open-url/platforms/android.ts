@@ -11,7 +11,14 @@ export const androidImpl: PlatformImpl<OpenUrlServices, OpenUrlParams, OpenUrlRe
     const out = await adbShell(params.udid, `am start -a android.intent.action.VIEW -d ${quoted}`, {
       timeoutMs: 15_000,
     });
-    if (/Error:|No Activity found/i.test(out)) {
+    // `am start` reports failures via several shapes that don't share an
+    // `Error:` prefix. Without these, a deep link to a permission-protected
+    // intent silently returned `{ opened: true }` while nothing happened.
+    if (
+      /Error:|No Activity found|Permission Denial|SecurityException|requires permission|denied/i.test(
+        out
+      )
+    ) {
       throw new Error(`open-url failed: ${out.trim()}`);
     }
     return { opened: true, url: params.url };
