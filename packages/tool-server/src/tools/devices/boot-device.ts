@@ -271,6 +271,18 @@ async function attemptBoot(params: {
       );
     }
   });
+  // `spawn` itself can fail (ENOENT — emulator binary missing/EACCES, transient
+  // FS hiccup) by emitting an `error` event on the child. EventEmitter
+  // convention is that an unhandled `error` escapes as an uncaught exception
+  // that would crash the tool-server. Funnel it into the same earlyExitError
+  // race so the boot promise rejects with the actual cause and the in-flight
+  // Map entry (cleared by `bootAndroid`'s `finally`) doesn't leak.
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    earlyExitError = new Error(
+      `Failed to spawn emulator binary (${err.code ?? "unknown"}): ${err.message}. ` +
+        `Verify Android SDK Emulator is installed and on PATH, then retry.`
+    );
+  });
 
   // Stage 2: wait for adb to see the new emulator.
   let serial: string | null = null;
