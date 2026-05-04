@@ -10,6 +10,10 @@ import { androidImpl } from "./platforms/android";
 // Bundle id / package name. Head must be letter or underscore so a bundleId
 // like `--user` can't masquerade as a flag inside `am force-stop …`.
 const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
+// Same alphabet as launch-app's ACTIVITY_PATTERN. Leading `.` is allowed so
+// shorthand activities like `.MainActivity` work; leading `-` is forbidden
+// for flag-injection reasons.
+const ACTIVITY_PATTERN = /^[A-Za-z_.][A-Za-z0-9._/-]*$/;
 
 const zodSchema = z.object({
   udid: z
@@ -21,6 +25,13 @@ const zodSchema = z.object({
     .min(1)
     .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
     .describe("App identifier. iOS: bundle id. Android: package name."),
+  activity: z
+    .string()
+    .regex(ACTIVITY_PATTERN, "activity may only contain letters, digits, '.', '_', '-' and '/'")
+    .optional()
+    .describe(
+      "Android-only: relaunch a non-launcher Activity (e.g. `.SettingsActivity` or `com.example/com.example.SettingsActivity`). If omitted, the app's default launcher activity is used. Ignored on iOS."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;

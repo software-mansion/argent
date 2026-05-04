@@ -3,6 +3,7 @@ import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
 export interface RestartAppParams {
   udid: string;
   bundleId: string;
+  activity?: string;
 }
 
 export interface RestartAppResult {
