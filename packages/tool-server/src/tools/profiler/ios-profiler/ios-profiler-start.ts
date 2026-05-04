@@ -17,9 +17,8 @@ const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
 const RECORDING_CAP_MS = 10 * 60 * 1000;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
-// Verbatim stderr prefix emitted by xctrace's own process resolver when the
-// `--attach <name>` lookup misses. Stable upstream signal — see
-// IOS_PROFILER_DETECTION_ANALYSIS.md for the cold-launch race this guards.
+// stderr prefix emitted by xctrace's own process resolver when the
+// `--attach <name>` lookup misses.
 const COLD_START_SIGNATURE = "Cannot find process matching name:";
 
 const zodSchema = z.object({
