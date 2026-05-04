@@ -196,8 +196,31 @@ export function convertUiAutomatorNode(
     }
 
     if (!bounds) {
-      // No bounds: collapse to the sole child (pass-through wrapper) or drop.
-      converted.set(parsed, childNodes.length === 1 ? childNodes[0]! : null);
+      // No bounds: drop empty wrappers and pass through single-child wrappers.
+      // For 2+ children, replacing the whole subtree with `null` silently
+      // dropped every child — common on Compose hierarchies that emit
+      // bounds-less group containers. Synthesise a frame that unions the
+      // children's frames so the entire branch survives in the tree.
+      if (childNodes.length === 0) {
+        converted.set(parsed, null);
+      } else if (childNodes.length === 1) {
+        converted.set(parsed, childNodes[0]!);
+      } else {
+        const x1 = Math.min(...childNodes.map((c) => c.frame.x));
+        const y1 = Math.min(...childNodes.map((c) => c.frame.y));
+        const x2 = Math.max(...childNodes.map((c) => c.frame.x + c.frame.width));
+        const y2 = Math.max(...childNodes.map((c) => c.frame.y + c.frame.height));
+        converted.set(parsed, {
+          role: deriveUiAutomatorRole(parsed.attrs.class ?? ""),
+          frame: {
+            x: x1,
+            y: y1,
+            width: Math.max(0, x2 - x1),
+            height: Math.max(0, y2 - y1),
+          },
+          children: childNodes,
+        });
+      }
       continue;
     }
 

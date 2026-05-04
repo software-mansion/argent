@@ -186,6 +186,29 @@ function collectLabels(n: { label?: string; children: { label?: string; children
   return out;
 }
 
+describe("convertUiAutomatorNode — preserves siblings under a bounds-less wrapper", () => {
+  it("does not drop multiple children when the parent has no bounds", () => {
+    // Compose hierarchies emit bounds-less wrappers with multiple children
+    // routinely. The previous "collapse to sole child or drop" rule silently
+    // dropped every child whenever there were 2+, so the agent never saw
+    // them. Now the wrapper is replaced with a synthetic node whose frame is
+    // the union of the children, and the children remain reachable.
+    const xml = `<?xml version='1.0' ?>
+<hierarchy rotation="0">
+  <node class="androidx.compose.ui.platform.ComposeView">
+    <node class="android.widget.Button" bounds="[0,0][100,50]"
+          text="left" content-desc="" resource-id="" package="com.x" />
+    <node class="android.widget.Button" bounds="[200,0][300,50]"
+          text="right" content-desc="" resource-id="" package="com.x" />
+  </node>
+</hierarchy>`;
+    const tree = parseUiAutomatorDump(xml, 1000, 1000);
+    const labels = tree.children.flatMap((c) => collectLabels(c));
+    expect(labels).toContain("left");
+    expect(labels).toContain("right");
+  });
+});
+
 describe("convertUiAutomatorNode — clips off-screen rects to the screen", () => {
   it("never produces a frame whose x + width exceeds 1", () => {
     // Rail/badge at the right edge that uiautomator reports past the screen
