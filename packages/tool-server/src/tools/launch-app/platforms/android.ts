@@ -49,11 +49,24 @@ export const androidImpl: PlatformImpl<LaunchAppServices, LaunchAppParams, Launc
     // could race a still-forking process.
     let component: string;
     if (params.activity) {
-      component = params.activity.startsWith(".")
-        ? `${params.bundleId}/${params.activity}`
-        : params.activity.includes("/")
-          ? params.activity
-          : `${params.bundleId}/${params.activity}`;
+      // Three accepted shapes:
+      //   ".MainActivity"            → ${pkg}/.MainActivity (relative)
+      //   "pkg/.X" or "pkg/full.X"   → use as-is
+      //   "com.fully.Qualified"      → ${pkg}/com.fully.Qualified (FQCN)
+      // A bare class name like "MainActivity" (no dot, no slash) used to be
+      // emitted as `${pkg}/MainActivity`, which `am start` rejects because
+      // an unqualified class is treated as default-package — i.e. no match.
+      // Resolve the obvious intent by treating it as relative-to-bundleId.
+      const a = params.activity;
+      if (a.includes("/")) {
+        component = a;
+      } else if (a.startsWith(".")) {
+        component = `${params.bundleId}/${a}`;
+      } else if (a.includes(".")) {
+        component = `${params.bundleId}/${a}`;
+      } else {
+        component = `${params.bundleId}/.${a}`;
+      }
     } else {
       component = await resolveLauncherActivity(params.udid, params.bundleId);
     }
