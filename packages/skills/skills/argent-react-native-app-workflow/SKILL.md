@@ -172,8 +172,8 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | Restart an app             | `restart-app` tool (pass device id + bundle id / package name) |
 | Open a URL / deep link     | `open-url` tool (pass device id + URL)                         |
 | Rotate device              | `rotate` tool                                                  |
-| Stop simulator server      | `stop-simulator-server` tool (iOS only — for a specific UDID)  |
-| Stop all simulator servers | `stop-all-simulator-servers` tool (iOS only)                   |
+| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device) |
+| Stop all simulator servers | `stop-all-simulator-servers` tool (iOS + Android)              |
 
 For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
 
@@ -241,6 +241,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Start Metro                  | `npx react-native start`                                                                                                                 |
 | Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
 | Run iOS app                  | `npx react-native run-ios`                                                                                                               |
+| Run Android app              | `npx react-native run-android`                                                                                                           |
 | List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
 | Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
@@ -251,6 +252,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Inspect React component tree | `debugger-component-tree` tool                                                                                                           |
 | Run JS in app                | `debugger-evaluate` tool                                                                                                                 |
 | iOS native logs              | `npx react-native log-ios`                                                                                                               |
+| Android native logs          | `npx react-native log-android` or `adb -s <serial> logcat`                                                                               |
 | Clean + reinstall (nuclear)  | See §3.1 step 3                                                                                                                          |
 
 ---
