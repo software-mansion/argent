@@ -43,7 +43,7 @@ describe("native-devtools-status tool", () => {
     await expect(
       nativeDevtoolsStatusTool.execute(
         { nativeDevtools: api },
-        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.example.app" }
+        { udid: "SIM-1", bundleId: "com.example.app" }
       )
     ).resolves.toEqual({
       envSetup: true,
@@ -62,7 +62,7 @@ describe("native-devtools-status tool", () => {
     await expect(
       nativeDevtoolsStatusTool.execute(
         { nativeDevtools: api },
-        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.example.app" }
+        { udid: "SIM-1", bundleId: "com.example.app" }
       )
     ).resolves.toEqual({
       envSetup: true,
