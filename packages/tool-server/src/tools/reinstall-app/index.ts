@@ -13,7 +13,7 @@ const zodSchema = z.object({
   bundleId: z
     .string()
     .describe(
-      "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first so data is cleared). Android: package name (used only in the return payload — the install identifies the app from the APK)."
+      "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first). Android: package name (used to uninstall first; the install itself identifies the app from the APK)."
     ),
   appPath: z
     .string()
@@ -31,8 +31,8 @@ const capability: ToolCapability = {
 
 export const reinstallAppTool: ToolDefinition<Params, ReinstallAppResult> = {
   id: "reinstall-app",
-  description: `Install or reinstall an app on the device.
-Use for a full reinstall after rebuilding, or to clear app data (iOS clears data on every reinstall; Android preserves data unless the caller wipes it).
+  description: `Install or reinstall an app on the device. The previous installation (if any) is uninstalled first so app data and runtime permissions are cleared on both platforms.
+Use for a full reinstall after rebuilding, or to start from a clean app state.
 Returns { reinstalled, bundleId }. Fails if the app path does not exist or the package does not match the platform (.app for iOS, .apk for Android).`,
   zodSchema,
   capability,
