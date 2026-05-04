@@ -8,21 +8,49 @@ export interface AdbRunResult {
   stderr: string;
 }
 
+// On timeout, Node's execFile default kill signal is SIGTERM, which an `adb`
+// process blocked on a hung daemon can ignore — leaving the parent waiting
+// past the deadline. SIGKILL guarantees the child is reaped at the timeout
+// boundary so callers' overall budgets actually hold.
+const ADB_KILL_SIGNAL = "SIGKILL" as const;
+
+function describeAdbFailure(args: string[], err: unknown): Error {
+  // execFileAsync rejection carries `stdout`/`stderr` on the error object;
+  // surfacing them turns the generic "Command failed" into the actual ADB
+  // diagnostic ("device offline", "more than one device", "no devices/emulators
+  // found", etc.) so callers don't have to repro the hang to learn what failed.
+  const e = err as { code?: string | number; stderr?: string; stdout?: string; message?: string };
+  const argv = args.join(" ");
+  const stderrText = (e.stderr ?? "").trim();
+  const stdoutText = (e.stdout ?? "").trim();
+  const baseMsg = e.message ?? String(err);
+  const detail = stderrText || stdoutText || baseMsg;
+  return new Error(`adb ${argv} failed: ${detail}`);
+}
+
 /**
  * Run `adb` directly. Callers that target a single device must pass `-s <serial>`
  * themselves via `args` — `runAdb` does not inject it, so a serial-less call
  * will hit whichever device `ANDROID_SERIAL` / the default heuristic picks.
+ *
+ * On non-zero exit or timeout, throws an Error whose message includes the
+ * actual `adb` stderr (or stdout) instead of the bare "Command failed".
  */
 export async function runAdb(
   args: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<AdbRunResult> {
-  const { stdout, stderr } = await execFileAsync("adb", args, {
-    timeout: options.timeoutMs ?? 30_000,
-    maxBuffer: 64 * 1024 * 1024,
-    encoding: "utf-8",
-  });
-  return { stdout, stderr };
+  try {
+    const { stdout, stderr } = await execFileAsync("adb", args, {
+      timeout: options.timeoutMs ?? 30_000,
+      killSignal: ADB_KILL_SIGNAL,
+      maxBuffer: 64 * 1024 * 1024,
+      encoding: "utf-8",
+    });
+    return { stdout, stderr };
+  } catch (err) {
+    throw describeAdbFailure(args, err);
+  }
 }
 
 /**
@@ -31,12 +59,17 @@ export async function runAdb(
  * the stream.
  */
 async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}): Promise<Buffer> {
-  const { stdout } = await execFileAsync("adb", args, {
-    timeout: options.timeoutMs ?? 30_000,
-    maxBuffer: 64 * 1024 * 1024,
-    encoding: "buffer",
-  });
-  return stdout as unknown as Buffer;
+  try {
+    const { stdout } = await execFileAsync("adb", args, {
+      timeout: options.timeoutMs ?? 30_000,
+      killSignal: ADB_KILL_SIGNAL,
+      maxBuffer: 64 * 1024 * 1024,
+      encoding: "buffer",
+    });
+    return stdout as unknown as Buffer;
+  } catch (err) {
+    throw describeAdbFailure(args, err);
+  }
 }
 
 /** `adb -s <serial> shell <shellCommand>` with the shell command passed as a single argv entry. */
