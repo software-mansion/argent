@@ -100,21 +100,45 @@ export interface AndroidDevice {
   sdkLevel: number | null;
 }
 
+// Set of states `adb devices` actually emits — filtering to this set rejects
+// daemon-startup banner lines like `* daemon not running; starting now …` /
+// `* daemon started successfully *`, which the loose `\S+ \s+ \S+` regex
+// otherwise parses as `serial="*", state="daemon"` (or similar) and feeds
+// into downstream loops as a phantom device.
+const ADB_DEVICE_STATES = new Set([
+  "device",
+  "offline",
+  "unauthorized",
+  "authorizing",
+  "connecting",
+  "no",
+  "recovery",
+  "sideload",
+  "bootloader",
+  "host",
+  "rescue",
+]);
+
 /**
- * Parse the tab-separated output of `adb devices -l` into a list. Unauthorized
- * and offline entries are kept in the list so the caller can surface them to the
- * user — filter by `state === "device"` for ready-to-use devices.
+ * Parse the tab-separated output of `adb devices` (or `adb devices -l`) into a
+ * list. Unauthorized and offline entries are kept in the list so the caller
+ * can surface them to the user — filter by `state === "device"` for
+ * ready-to-use devices. Daemon-startup banner lines (the `* daemon …` ones
+ * adb prints to the same stream when it had to spawn its background server)
+ * are skipped.
  */
 export function parseAdbDevices(stdout: string): Array<{ serial: string; state: string }> {
   const devices: Array<{ serial: string; state: string }> = [];
   const lines = stdout.split("\n");
   for (const raw of lines) {
     const line = raw.trim();
-    if (!line || line.startsWith("List of devices")) continue;
+    if (!line || line.startsWith("List of devices") || line.startsWith("*")) continue;
     // Format: "<serial>\t<state>" optionally followed by key:value pairs
     const match = line.match(/^(\S+)\s+(\S+)/);
     if (!match) continue;
-    devices.push({ serial: match[1]!, state: match[2]! });
+    const state = match[2]!;
+    if (!ADB_DEVICE_STATES.has(state)) continue;
+    devices.push({ serial: match[1]!, state });
   }
   return devices;
 }
