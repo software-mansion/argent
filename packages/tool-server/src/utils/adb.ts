@@ -223,18 +223,23 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
 
 // Errors from `adb shell` that mean the device is in a state no boot wait can
 // fix. Returning generically and timing out wastes the full budget and hides
-// the actionable cause. These substrings appear in adb stderr (now surfaced
-// through runAdb's rewrapped errors) for the named conditions.
-const TERMINAL_ADB_ERRORS = [
-  "device unauthorized",
-  "device not found",
-  "no devices/emulators found",
-  "device offline",
+// the actionable cause. These patterns match adb stderr (now surfaced through
+// runAdb's rewrapped errors) for the named conditions.
+//
+// adb's real format includes the offending serial in single quotes between
+// `device` and the verdict, e.g. `error: device 'emulator-5554' not found` or
+// `error: device 'emulator-5554' offline`. The optional `(?: '[^']*')?` group
+// tolerates that quoted serial without requiring it, so both adb's real output
+// and serial-less paraphrases match.
+const TERMINAL_ADB_ERROR_PATTERNS: RegExp[] = [
+  /device(?: '[^']*')? unauthorized/i,
+  /device(?: '[^']*')? not found/i,
+  /no devices\/emulators found/i,
+  /device(?: '[^']*')? offline/i,
 ];
 
 function isTerminalAdbError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return TERMINAL_ADB_ERRORS.some((needle) => lower.includes(needle));
+  return TERMINAL_ADB_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 /**
