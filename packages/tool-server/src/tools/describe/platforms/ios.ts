@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, type AXServiceApi } from "../../../blueprints/ax-service";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../../blueprints/native-devtools";
 import type { DescribeResult } from "../contract";
+import { compressDescribeTree } from "../compress";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 import { parseNativeDescribeScreenResult } from "../../native-devtools/native-describe-contract";
@@ -27,7 +28,7 @@ export async function describeIos(
   const axRef = axServiceRef(device);
   const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
   const response = await axApi.describe();
-  const tree = adaptAXDescribeToDescribeResult(response);
+  const tree = compressDescribeTree(adaptAXDescribeToDescribeResult(response));
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service" };
@@ -54,7 +55,7 @@ export async function describeIos(
     }
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
-    const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
+    const nativeTree = compressDescribeTree(adaptNativeDescribeToDescribeResult(parsed));
     return { tree: nativeTree, source: "native-devtools" };
   } catch {
     // Native devtools unavailable or no connected app — return the empty AX result
