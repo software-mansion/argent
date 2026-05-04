@@ -6,7 +6,6 @@ export type {
   ServiceBlueprint,
   ServiceNode,
   ToolDefinition,
-  ToolDependency,
   ToolRecord,
   RegistryEvents,
   URN,
@@ -16,6 +15,7 @@ export type {
   DeviceKind,
   DeviceInfo,
   ToolCapability,
+  ToolDependency,
 } from "./types";
 export { parseURN } from "./urn";
 export {
