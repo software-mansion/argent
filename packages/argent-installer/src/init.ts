@@ -2,7 +2,7 @@ import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { execSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   detectAdapters,
   ALL_ADAPTERS,
@@ -16,6 +16,7 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  isGloballyInstalled,
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
@@ -26,31 +27,7 @@ import {
   type ShellCommand,
 } from "./utils.js";
 import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
-import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
-
-// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
-// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
-// so `which argent` succeeds even though argent is not permanently installed globally.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
-];
-
-function isGloballyInstalled(): boolean {
-  try {
-    const cmd = process.platform === "win32" ? "where" : "which";
-    const binaryPath = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return !TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
-  } catch {
-    return false;
-  }
-}
+import { PACKAGE_NAME } from "./constants.js";
 
 function runShellCommand(cmd: ShellCommand): Promise<void> {
   return new Promise((resolve, reject) => {

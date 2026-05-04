@@ -5,6 +5,7 @@ import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.j
 import {
   getInstalledVersion,
   getLatestVersion,
+  isGloballyInstalled,
   isNewerVersion,
   detectPackageManager,
   globalInstallCommand,
@@ -22,8 +23,16 @@ export async function update(args: string[]): Promise<void> {
 
   p.intro(pc.bgCyan(pc.black(" argent update ")));
 
-  const installed = getInstalledVersion();
-  if (!installed) {
+  // When invoked via `npx @swmansion/argent update`, getInstalledVersion()
+  // reads the npx-cached package.json — which is always the latest, so a
+  // straight version compare would falsely report "already on the latest"
+  // even after the user uninstalled the global package. Detect that we're
+  // running transiently and treat the missing global install as a fresh-
+  // install path instead.
+  const globallyInstalled = isGloballyInstalled();
+  const installed = globallyInstalled ? getInstalledVersion() : null;
+
+  if (globallyInstalled && !installed) {
     p.log.error("Could not determine installed version.");
     process.exit(1);
   }
@@ -42,11 +51,19 @@ export async function update(args: string[]): Promise<void> {
 
   spinner.stop("Version check complete.");
 
-  p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
+  if (installed) {
+    p.log.info(`Installed: ${pc.cyan(`v${installed}`)}`);
+  } else {
+    p.log.warn(`${PACKAGE_NAME} is not installed globally.`);
+  }
   p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
 
-  if (isNewerVersion(latest, installed)) {
-    p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
+  const needsInstall = !installed || isNewerVersion(latest, installed);
+
+  if (needsInstall) {
+    if (installed) {
+      p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
+    }
 
     const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
@@ -56,12 +73,14 @@ export async function update(args: string[]): Promise<void> {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const proceed = await p.confirm({
-        message: `Update to v${latest}?`,
+        message: installed
+          ? `Update to v${latest}?`
+          : `Install ${PACKAGE_NAME}@${latest} globally?`,
         initialValue: true,
       });
 
       if (p.isCancel(proceed) || !proceed) {
-        p.cancel("Update cancelled.");
+        p.cancel(installed ? "Update cancelled." : "Install cancelled.");
         process.exit(0);
       }
     }
@@ -76,7 +95,7 @@ export async function update(args: string[]): Promise<void> {
         env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
       });
     } catch (err) {
-      p.log.error(`Update failed: ${err}`);
+      p.log.error(`${installed ? "Update" : "Install"} failed: ${err}`);
       process.exit(1);
     }
   } else {

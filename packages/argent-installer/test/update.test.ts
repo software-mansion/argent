@@ -4,6 +4,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  isTempRunnerPath,
 } from "../src/utils.js";
 import { PACKAGE_NAME, NPM_REGISTRY } from "../src/constants.js";
 
@@ -51,6 +52,33 @@ describe("update — constants are correct", () => {
 
   it("NPM_REGISTRY is the npm registry", () => {
     expect(NPM_REGISTRY).toContain("registry.npmjs.org");
+  });
+});
+
+describe("update — temp runner detection", () => {
+  // npx-cached argent shares the latest version, so without this filter the
+  // version compare would falsely match latest after the user uninstalled the
+  // global package via `npx @swmansion/argent uninstall`.
+  it("flags npx cache paths as transient", () => {
+    expect(isTempRunnerPath("/Users/me/.npm/_npx/abc123/node_modules/.bin/argent")).toBe(true);
+  });
+
+  it("flags pnpm dlx cache paths as transient", () => {
+    expect(isTempRunnerPath("/Users/me/.pnpm-store/dlx-1234/node_modules/.bin/argent")).toBe(true);
+  });
+
+  it("flags bun install cache paths as transient", () => {
+    expect(isTempRunnerPath("/Users/me/.bun/install/cache/argent")).toBe(true);
+  });
+
+  it("flags Windows dlx cache paths as transient", () => {
+    expect(isTempRunnerPath("C:\\Users\\me\\AppData\\Local\\dlx-abc\\argent.cmd")).toBe(true);
+  });
+
+  it("treats real global install paths as permanent", () => {
+    expect(isTempRunnerPath("/usr/local/bin/argent")).toBe(false);
+    expect(isTempRunnerPath("/opt/homebrew/bin/argent")).toBe(false);
+    expect(isTempRunnerPath("C:\\Users\\me\\AppData\\Roaming\\npm\\argent.cmd")).toBe(false);
   });
 });
 
