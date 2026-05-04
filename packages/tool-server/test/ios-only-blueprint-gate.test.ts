@@ -13,6 +13,7 @@ vi.mock("@argent/native-devtools-ios", () => ({
 
 import { nativeDevtoolsBlueprint } from "../src/blueprints/native-devtools";
 import { nativeProfilerSessionBlueprint } from "../src/blueprints/native-profiler-session";
+import { axServiceBlueprint } from "../src/blueprints/ax-service";
 
 function iosDevice(udid: string): DeviceInfo {
   return { id: udid, platform: "ios", kind: "simulator" };
@@ -78,6 +79,20 @@ describe("iOS-only blueprints reject Android targets up-front", () => {
   it("native-profiler-session blueprint rejects when caller forgets options.device", async () => {
     const stub = iosDevice("ignored");
     await expect(nativeProfilerSessionBlueprint.factory({}, stub)).rejects.toThrow(
+      /requires a resolved DeviceInfo via options\.device/
+    );
+  });
+
+  it("ax-service blueprint rejects an Android device with a targeted error", async () => {
+    const device = androidDevice("emulator-5554");
+    await expect(axServiceBlueprint.factory({}, device, { device })).rejects.toThrow(
+      /AXService is iOS-only.*Android.*uiautomator/
+    );
+  });
+
+  it("ax-service blueprint rejects when caller forgets options.device", async () => {
+    const stub = iosDevice("ignored");
+    await expect(axServiceBlueprint.factory({}, stub)).rejects.toThrow(
       /requires a resolved DeviceInfo via options\.device/
     );
   });
