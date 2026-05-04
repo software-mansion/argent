@@ -368,19 +368,14 @@ export async function readWorkspaceSnapshot(workspacePath: string): Promise<Work
 
   const iosDir = join(workspacePath, "ios");
   const androidDir = join(workspacePath, "android");
-  const [
-    iosWorkspace,
-    hasPodfile,
-    makefileText,
-    lintStagedConfig,
-    androidHasGradle,
-  ] = await Promise.all([
-    hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
-    exists(join(workspacePath, "ios", "Podfile")),
-    readTextFile(join(workspacePath, "Makefile")),
-    detectLintStagedConfig(workspacePath, packageJson),
-    hasAndroidDir ? exists(join(androidDir, "gradlew")) : Promise.resolve(false),
-  ]);
+  const [iosWorkspace, hasPodfile, makefileText, lintStagedConfig, androidHasGradle] =
+    await Promise.all([
+      hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
+      exists(join(workspacePath, "ios", "Podfile")),
+      readTextFile(join(workspacePath, "Makefile")),
+      detectLintStagedConfig(workspacePath, packageJson),
+      hasAndroidDir ? exists(join(androidDir, "gradlew")) : Promise.resolve(false),
+    ]);
 
   const metroPort = metroConfigRaw ? extractMetroPort(metroConfigRaw) : null;
 
