@@ -39,53 +39,27 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 1. **Projects with flavors or custom configs**: Use project-specific start script if present (e.g. `npm run start:local`), and start Metro **before** running the app.
 
-### 1.3 Run the iOS App
+### 1.3 Run the App
 
 In a **separate** terminal (Metro keeps running in the first):
 
-**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `yarn ios:debug`). Only fall back to the default if no custom scripts are defined:
+**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`). Only fall back to the default if no custom scripts are defined:
 
 ```bash
-npx react-native run-ios
+npx react-native run-ios       # iOS
+npx react-native run-android   # Android
 ```
 
-Optional: specify device or simulator, e.g. `npx react-native run-ios --simulator="iPhone 16"`.
+Optional: specify the target device, e.g. `npx react-native run-ios --simulator="iPhone 16"` or `npx react-native run-android --deviceId=<serial>`.
+
+**Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops.
 
 **Agent checklist:**
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If simulator not booted: use `boot-device` with the iOS `udid`. Refer to the `argent-ios-simulator-setup` skill.
-
-### 1.4 Run the Android App
-
-In a **separate** terminal:
-
-**Use the project's custom script if one exists** (e.g. `npm run android`, `yarn android:debug`). Otherwise build and install via Gradle + the Android tools:
-
-```bash
-# Build the debug APK from the android/ directory
-cd android && ./gradlew :app:assembleDebug && cd ..
-
-# Resulting APK is typically at:
-#   android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-Then, using the argent MCP tools (note: the interaction tools are unified — pass the Android serial as `udid`):
-
-1. `list-devices` — pick a ready Android serial (or boot one via `boot-device` with `avdName`). See the `argent-android-emulator-setup` skill.
-2. `reinstall-app` with `udid=<serial>`, `bundleId=<applicationId>`, absolute `appPath=<path to .apk>`. Runtime permissions are pre-granted automatically (`-g`) so first-launch dialogs are skipped.
-3. `launch-app` with `udid=<serial>` and `bundleId=<applicationId>` (read it from `android/app/build.gradle` — look for the `applicationId "..."` line).
-4. **Metro reachability**: run `adb -s <serial> reverse tcp:8081 tcp:8081` so the app on the device can reach Metro on your host. Repeat if the device restarts or adb drops. See the `argent-metro-debugger` skill.
-
-Alternative one-shot: `npx react-native run-android` builds, installs, and launches in a single step. Use this when you don't need explicit control over the emulator serial.
-
-**Agent checklist:**
-
-- [ ] Metro is running
-- [ ] `adb -s <serial> reverse tcp:8081 tcp:8081` done
-- [ ] Command run from project root (or `./gradlew` from `android/`)
-- [ ] If emulator not booted: call `boot-device` with an `avdName` from `list-devices`.avds
+- [ ] If the device isn't booted: use `boot-device` with the iOS `udid` or Android `avdName`. Refer to the `argent-ios-simulator-setup` / `argent-android-emulator-setup` skill.
+- [ ] Android: `adb -s <serial> reverse tcp:8081 tcp:8081` done.
 
 ---
 
