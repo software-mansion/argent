@@ -199,6 +199,72 @@ describe("compressDescribeTree — same-frame single-child wrapper collapse", ()
     expect(out.children[0]?.identifier).toBe("id/footer");
     expect(out.children[0]?.children[0]?.label).toBe("OK");
   });
+
+  it("refuses to collapse when wrapper and child carry conflicting labels", () => {
+    // Two real semantic layers stacked at the same bounds. Folding into the
+    // child would silently drop "Calendar widget" — keep both layers visible.
+    const child: DescribeNode = {
+      role: "AXButton",
+      frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      children: [],
+      label: "Open",
+    };
+    const wrapper: DescribeNode = {
+      role: "AXGroup",
+      frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      children: [child],
+      label: "Calendar widget",
+    };
+    const out = compressDescribeTree(wrap("Screen", [wrapper]));
+    expect(out.children[0]?.role).toBe("AXGroup");
+    expect(out.children[0]?.label).toBe("Calendar widget");
+    expect(out.children[0]?.children[0]?.label).toBe("Open");
+  });
+
+  it("collapses when wrapper and child have differing identifiers, keeping the child's", () => {
+    // resource-id stacks like `id/content → id/launcher → id/drag_layer` are
+    // platform-internal noise — collapse them aggressively so agents reach
+    // the actionable child without crawling five layers. The child's id wins
+    // since it's the closest to the actual rendered element.
+    const child: DescribeNode = {
+      role: "Button",
+      frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      children: [],
+      identifier: "id/inner",
+      label: "Submit",
+    };
+    const wrapper: DescribeNode = {
+      role: "FrameLayout",
+      frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      children: [child],
+      identifier: "id/outer",
+    };
+    const out = compressDescribeTree(wrap("Screen", [wrapper]));
+    expect(out.children).toHaveLength(1);
+    expect(out.children[0]?.role).toBe("Button");
+    expect(out.children[0]?.identifier).toBe("id/inner");
+    expect(out.children[0]?.label).toBe("Submit");
+  });
+
+  it("still collapses when the wrapper's label matches the child's exactly", () => {
+    // No information lost — fold the redundant layer.
+    const child: DescribeNode = {
+      role: "Button",
+      frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      children: [],
+      label: "Submit",
+    };
+    const wrapper: DescribeNode = {
+      role: "FrameLayout",
+      frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.4 },
+      children: [child],
+      label: "Submit",
+    };
+    const out = compressDescribeTree(wrap("Screen", [wrapper]));
+    expect(out.children).toHaveLength(1);
+    expect(out.children[0]?.role).toBe("Button");
+    expect(out.children[0]?.label).toBe("Submit");
+  });
 });
 
 describe("compressDescribeTree — sibling deduplication", () => {
@@ -357,5 +423,61 @@ describe("compressDescribeTree — does not strip undefined optional fields", ()
     expect("label" in sv).toBe(false);
     expect("identifier" in sv).toBe(false);
     expect("value" in sv).toBe(false);
+  });
+});
+
+describe("compressDescribeTree — input safety & no-op shapes", () => {
+  it("does not mutate the input tree", () => {
+    const input: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        wrap("FrameLayout", [
+          wrap("LinearLayout", [
+            {
+              role: "Button",
+              frame: { x: 0.07960199005, y: 0.180778032037, width: 0.3, height: 0.05 },
+              children: [],
+              label: "Submit",
+              identifier: "id/submit",
+            },
+          ]),
+        ]),
+      ],
+    };
+    const snapshot = JSON.parse(JSON.stringify(input));
+    compressDescribeTree(input);
+    expect(input).toEqual(snapshot);
+  });
+
+  it("handles a root with empty children", () => {
+    const input: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [],
+    };
+    const out = compressDescribeTree(input);
+    expect(out.role).toBe("Screen");
+    expect(out.children).toEqual([]);
+  });
+
+  it("returns an equivalent tree when no node is compressible", () => {
+    const input = wrap("Screen", [
+      {
+        role: "Button",
+        frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 },
+        children: [],
+        label: "Yes",
+      },
+      {
+        role: "Button",
+        frame: { x: 0.4, y: 0.1, width: 0.2, height: 0.05 },
+        children: [],
+        label: "No",
+      },
+    ]);
+    const out = compressDescribeTree(input);
+    expect(out.children).toHaveLength(2);
+    expect(out.children.map((c) => c.label)).toEqual(["Yes", "No"]);
   });
 });

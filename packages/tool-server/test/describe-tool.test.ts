@@ -317,6 +317,54 @@ describe("describe tool", () => {
     );
   });
 
+  it("falls back to native-devtools when AX returns only labelless trait-less elements", async () => {
+    // describeIos passes the AX response through compressDescribeTree before
+    // checking children.length. Trait-less + labelless elements adapt to
+    // `AXGroup` (the ios-native-adapter fallback) with no label / value /
+    // identifier — pure noise wrappers that compression drops, leaving an
+    // empty tree. The tool then enters the native-devtools fallback path,
+    // matching the behavior we want for screens that AX can describe only
+    // structurally.
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          frame: { x: 0.1, y: 0.1, width: 0.2, height: 0.05 },
+          traits: [],
+        },
+        {
+          frame: { x: 0.4, y: 0.1, width: 0.2, height: 0.05 },
+          traits: [],
+        },
+      ],
+    });
+
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: ["com.example.app"],
+      describeScreenResult: {
+        screenFrame: { x: 0, y: 0, width: 440, height: 956 },
+        elements: [
+          {
+            frame: { x: 10, y: 100, width: 420, height: 40 },
+            tapPoint: { x: 220, y: 120 },
+            normalizedFrame: { x: 0.023, y: 0.105, width: 0.955, height: 0.042 },
+            normalizedTapPoint: { x: 0.5, y: 0.126 },
+            traits: ["staticText"],
+            label: "Real label from native devtools",
+          },
+        ],
+      },
+    });
+
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.source).toBe("native-devtools");
+    expect(result.tree.children[0]?.label).toBe("Real label from native devtools");
+  });
+
   it("returns empty AX result when native queryViewHierarchy returns an error", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,

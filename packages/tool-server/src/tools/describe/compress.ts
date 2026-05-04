@@ -72,9 +72,26 @@ function framesEqual(a: DescribeFrame, b: DescribeFrame): boolean {
 // Targeting info (label / identifier) on the wrapper is forwarded to the
 // surviving child if the child has none, so e.g. `id/launcher → unnamed View`
 // becomes a single `View id=launcher` instead of vanishing the id entirely.
+//
+// Refuse to collapse only when both layers carry differing *labels* or
+// *values*: an `AXGroup label="Calendar widget" → AXButton label="Open"`
+// stack at the same bounds describes two semantically distinct entities and
+// folding it to just the button would silently lose the widget context.
+// Identifier conflicts between layers are common platform-internal noise —
+// the launcher chain `id/content → id/launcher → id/drag_layer` carries a
+// distinct resource-id at every level even though no agent would target the
+// outer two. We tolerate that by keeping the child's identifier and dropping
+// the wrapper's; the merge function below preserves the wrapper's id only
+// when the child has none.
 function shouldCollapseSingleChildWrapper(node: DescribeNode, only: DescribeNode): boolean {
   if (!STRUCTURAL_ROLES.has(node.role)) return false;
   if (!framesEqual(node.frame, only.frame)) return false;
+  if (node.label !== undefined && only.label !== undefined && node.label !== only.label) {
+    return false;
+  }
+  if (node.value !== undefined && only.value !== undefined && node.value !== only.value) {
+    return false;
+  }
   return true;
 }
 
