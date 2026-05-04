@@ -312,7 +312,8 @@ describe("describe tool", () => {
 
     await tool.execute({}, { udid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB" });
     expect(registry.resolveService).toHaveBeenCalledWith(
-      "AXService:BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+      "AXService:BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+      { device: { id: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", platform: "ios", kind: "simulator" } }
     );
   });
 
