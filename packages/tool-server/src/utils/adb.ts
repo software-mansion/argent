@@ -154,6 +154,13 @@ async function listAndroidSerials(): Promise<Array<{ serial: string; state: stri
   return parseAdbDevices(stdout);
 }
 
+// Short timeout for enrichment getprops. The default (30 s) is fine for an
+// interactive call against a healthy device, but `listAndroidDevices` is on
+// the hot path of the boot loop — a single mid-attach device can stall the
+// stage budget for 30 s × 3 getprops = the entire adb-register window. 5 s
+// is plenty for a getprop on any responsive device.
+const ENRICH_TIMEOUT_MS = 5_000;
+
 /**
  * Resolve the AVD name of a running emulator. The property moved from
  * `ro.kernel.qemu.avd_name` to `ro.boot.qemu.avd_name` in emulator release 30
@@ -161,9 +168,13 @@ async function listAndroidSerials(): Promise<Array<{ serial: string; state: stri
  * name so both old and new images work.
  */
 async function readAvdName(serial: string): Promise<string | null> {
-  const modern = await adbShell(serial, "getprop ro.boot.qemu.avd_name").catch(() => "");
+  const modern = await adbShell(serial, "getprop ro.boot.qemu.avd_name", {
+    timeoutMs: ENRICH_TIMEOUT_MS,
+  }).catch(() => "");
   if (modern.trim()) return modern.trim();
-  const legacy = await adbShell(serial, "getprop ro.kernel.qemu.avd_name").catch(() => "");
+  const legacy = await adbShell(serial, "getprop ro.kernel.qemu.avd_name", {
+    timeoutMs: ENRICH_TIMEOUT_MS,
+  }).catch(() => "");
   return legacy.trim() || null;
 }
 
@@ -188,8 +199,12 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
         };
       }
       const [model, sdk, avd] = await Promise.all([
-        adbShell(d.serial, "getprop ro.product.model").catch(() => ""),
-        adbShell(d.serial, "getprop ro.build.version.sdk").catch(() => ""),
+        adbShell(d.serial, "getprop ro.product.model", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+          () => ""
+        ),
+        adbShell(d.serial, "getprop ro.build.version.sdk", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
+          () => ""
+        ),
         readAvdName(d.serial),
       ]);
       const sdkLevel = parseInt(sdk.trim(), 10);
