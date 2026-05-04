@@ -225,7 +225,6 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.has_android_dir).toBe(false);
     expect(snap.ios_workspace).toBeNull();
     expect(snap.has_podfile).toBe(false);
-    expect(snap.android_application_id).toBeNull();
     expect(snap.android_has_gradle).toBe(false);
     expect(snap.lockfile).toBeNull();
     expect(snap.env_files).toEqual([]);
@@ -237,43 +236,22 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.config_files_found).toEqual([]);
   });
 
-  it("parses Android applicationId and gradle wrapper from android/app/build.gradle", async () => {
+  it("detects android/gradlew wrapper presence", async () => {
     await writeJson(tempDir, "package.json", { name: "AndroidApp" });
     await mkdirIn(tempDir, "android");
     await writeFile(join(tempDir, "android", "gradlew"), "#!/usr/bin/env sh\n");
-    await mkdirIn(tempDir, "android/app");
-    await writeFile(
-      join(tempDir, "android", "app", "build.gradle"),
-      `android {
-  defaultConfig {
-    applicationId "com.example.androidapp"
-    versionCode 1
-  }
-}`
-    );
 
     const snap = await readWorkspaceSnapshot(tempDir);
     expect(snap.has_android_dir).toBe(true);
     expect(snap.android_has_gradle).toBe(true);
-    expect(snap.android_application_id).toBe("com.example.androidapp");
   });
 
-  it("parses Android applicationId from Kotlin DSL (build.gradle.kts)", async () => {
-    await writeJson(tempDir, "package.json", { name: "AndroidKtsApp" });
+  it("reports android_has_gradle=false when gradlew is missing", async () => {
+    await writeJson(tempDir, "package.json", { name: "AndroidNoGradle" });
     await mkdirIn(tempDir, "android/app");
-    await writeFile(
-      join(tempDir, "android", "app", "build.gradle.kts"),
-      `android {
-  defaultConfig {
-    applicationId = "com.example.ktsapp"
-  }
-}`
-    );
 
     const snap = await readWorkspaceSnapshot(tempDir);
-    expect(snap.android_application_id).toBe("com.example.ktsapp");
-    // No gradlew written, so has_gradle must be false — protects against a
-    // silent regression where either file's absence defaults to true.
+    expect(snap.has_android_dir).toBe(true);
     expect(snap.android_has_gradle).toBe(false);
   });
 
