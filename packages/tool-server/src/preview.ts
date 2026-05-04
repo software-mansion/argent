@@ -37,18 +37,40 @@ export function createPreviewRouter(registry: Registry): Router {
       const data = await registry.invokeTool<{
         devices: Array<
           | { platform: "ios"; udid: string; name: string; state: string; runtime: string }
-          | { platform: "android" }
+          | {
+              platform: "android";
+              serial: string;
+              state: string;
+              avdName?: string;
+              model?: string;
+              sdkLevel?: number | null;
+            }
         >;
       }>(listDevicesTool.id);
-      const simulators = data.devices
-        .filter((d): d is Extract<typeof d, { platform: "ios" }> => d.platform === "ios")
-        .map(({ udid, name, state, runtime }) => ({
-          udid,
-          name,
-          state,
-          runtime,
+      // The preview UI keys off `udid` and `state === "Booted"`, which are
+      // iOS terminology. Map Android serials to the same shape so the same
+      // dropdown can target both platforms — `simulator-server/:udid` already
+      // accepts Android serials via `resolveDevice(udid)`.
+      const simulators = data.devices.map((d) => {
+        if (d.platform === "ios") {
+          return {
+            udid: d.udid,
+            name: d.name,
+            state: d.state,
+            runtime: d.runtime,
+            isAvailable: true,
+            platform: "ios" as const,
+          };
+        }
+        return {
+          udid: d.serial,
+          name: d.avdName ?? d.model ?? d.serial,
+          state: d.state === "device" ? "Booted" : d.state,
+          runtime: d.sdkLevel != null ? `Android API ${d.sdkLevel}` : "Android",
           isAvailable: true,
-        }));
+          platform: "android" as const,
+        };
+      });
       res.json({ simulators });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
