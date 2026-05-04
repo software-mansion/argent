@@ -100,7 +100,7 @@ Each bottleneck type indicates a different class of problem:
 ## 6. Important Caveats
 
 - **Simulator vs device**: Simulator profiling reflects host Mac performance, not real device hardware. Use device profiling for accurate CPU timings and memory behavior.
-- **xctrace availability (iOS)**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`. If `xcrun` is missing on PATH, the tool returns a pretty install-hint error before the recording starts.
+- **xctrace availability (iOS)**: Requires Xcode command-line tools installed. Verify with `xcrun xctrace version`.
 - **Profiler overhead**: xctrace instrumentation adds CPU load. If `JSLexer`, `JSONEmitter`, or Hermes runtime internals dominate the JS thread in CPU hotspot results, those reflect profiler overhead — not app work. Discount those entries when evaluating findings.
 - **Run-to-run variance**: Small fluctuations in CPU percentages between runs are normal. Treat only consistent directional changes (across 2+ runs or >15% delta) as actionable signal.
 - **Live data variability**: If the app fetches live API data, different responses between runs change rendering workload independently of code changes. Note when data-dependent screens show variance.
