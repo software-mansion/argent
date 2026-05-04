@@ -62,6 +62,9 @@ export function start(): void {
 
   // ── Config ────────────────────────────────────────────────────────
   const PORT = parseInt(process.env.PORT ?? "3001", 10);
+  // HOST defaults to loopback so the local auto-spawn path stays safe.
+  // `argent server start --host 0.0.0.0` is the opt-in for remote exposure.
+  const HOST = process.env.HOST ?? "127.0.0.1";
   const idleMinutes = parseInt(
     process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? String(DEFAULT_IDLE_TIMEOUT_MINUTES),
     10
@@ -103,15 +106,24 @@ export function start(): void {
   // simulators before any agent tool call (e.g. launch-app) can arrive.
   watcherReady
     .then(() => {
-      server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
+      server = httpHandle.app.listen(PORT, HOST, () => {
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
-        process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
-        process.stderr.write(`  GET  http://127.0.0.1:${boundPort}/tools\n`);
-        process.stderr.write(`  POST http://127.0.0.1:${boundPort}/tools/:name\n`);
+        process.stdout.write(`Tools server listening on http://${HOST}:${boundPort}\n`);
+        process.stderr.write(`  GET  http://${HOST}:${boundPort}/tools\n`);
+        process.stderr.write(`  POST http://${HOST}:${boundPort}/tools/:name\n`);
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
+      });
+      // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
+      // clean exit instead of routing through uncaughtException → crashShutdown.
+      server.on("error", (err: NodeJS.ErrnoException) => {
+        const code = err.code ? `${err.code}: ` : "";
+        process.stderr.write(
+          `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
+        );
+        process.exit(1);
       });
     })
     .catch((err) => {

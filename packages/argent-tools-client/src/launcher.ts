@@ -24,17 +24,30 @@ export interface ToolsServerPaths {
   nativeDevtoolsDir: string;
 }
 
+export interface BuildToolsServerEnvOptions {
+  /** Bind host. Omit to inherit the tool-server default (127.0.0.1). */
+  host?: string;
+  /** Idle-timeout minutes (0 disables). Omit to inherit the tool-server default. */
+  idleTimeoutMinutes?: number;
+}
+
 export function buildToolsServerEnv(
   paths: ToolsServerPaths,
   port: number,
-  baseEnv: NodeJS.ProcessEnv = process.env
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  options: BuildToolsServerEnvOptions = {}
 ): NodeJS.ProcessEnv {
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...baseEnv,
     PORT: String(port),
     ARGENT_SIMULATOR_SERVER_DIR: paths.simulatorServerDir,
     ARGENT_NATIVE_DEVTOOLS_DIR: paths.nativeDevtoolsDir,
   };
+  if (options.host !== undefined) env.HOST = options.host;
+  if (options.idleTimeoutMinutes !== undefined) {
+    env.ARGENT_IDLE_TIMEOUT_MINUTES = String(options.idleTimeoutMinutes);
+  }
+  return env;
 }
 
 interface ToolsServerState {
@@ -42,9 +55,11 @@ interface ToolsServerState {
   pid: number;
   startedAt: string;
   bundlePath: string;
+  /** Bind host. Optional for backward-compat with state files written by older versions. */
+  host?: string;
 }
 
-function findFreePort(): Promise<number> {
+export function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.listen(0, "127.0.0.1", () => {
@@ -72,11 +87,32 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function isHealthy(port: number): Promise<boolean> {
+/**
+ * The wildcard hosts (`0.0.0.0`, `::`) accept connections on every interface
+ * including loopback, but you cannot _connect_ to them — for the health check
+ * we have to use a routable address.
+ */
+function healthCheckHost(host: string): string {
+  if (host === "0.0.0.0" || host === "") return "127.0.0.1";
+  if (host === "::" || host === "::0") return "::1";
+  return host;
+}
+
+function formatUrl(host: string, port: number): string {
+  // Bracket IPv6 literals in URLs.
+  const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${h}:${port}`;
+}
+
+export async function isToolsServerHealthy(
+  port: number,
+  host: string = "127.0.0.1",
+  timeoutMs = 2000
+): Promise<boolean> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/tools`, {
+    const res = await fetch(`${formatUrl(healthCheckHost(host), port)}/tools`, {
       signal: controller.signal,
     });
     return res.ok;
@@ -87,9 +123,16 @@ async function isHealthy(port: number): Promise<boolean> {
   }
 }
 
-function spawnToolsServer(
+export function isToolsServerProcessAlive(pid: number): boolean {
+  return isProcessAlive(pid);
+}
+
+export interface SpawnToolsServerOptions extends BuildToolsServerEnvOptions {}
+
+export function spawnToolsServer(
   paths: ToolsServerPaths,
-  port: number
+  port: number,
+  options: SpawnToolsServerOptions = {}
 ): Promise<{ port: number; pid: number }> {
   return new Promise((resolve, reject) => {
     let logFd: number;
@@ -103,7 +146,7 @@ function spawnToolsServer(
     const child = spawn("node", [paths.bundlePath, "start"], {
       detached: true,
       stdio: ["ignore", "pipe", logFd],
-      env: buildToolsServerEnv(paths, port),
+      env: buildToolsServerEnv(paths, port, process.env, options),
     });
 
     child.unref();
@@ -124,8 +167,10 @@ function spawnToolsServer(
     const rl = readline.createInterface({ input: child.stdout! });
 
     rl.on("line", (line) => {
-      // Match: "Tools server listening on http://127.0.0.1:<port>"
-      const match = line.match(/Tools server listening on http:\/\/127\.0\.0\.1:(\d+)/);
+      // Match: "Tools server listening on http://<host>:<port>"
+      // Greedy `.+` then `:digits` backtracks to the trailing port, so this
+      // works for hostnames, IPv4 (`127.0.0.1`), and bracketed IPv6 (`[::1]`).
+      const match = line.match(/Tools server listening on http:\/\/.+:(\d+)/);
       if (match) {
         const actualPort = parseInt(match[1]!, 10);
         rl.close();
@@ -155,7 +200,7 @@ function spawnToolsServer(
   });
 }
 
-async function readState(): Promise<ToolsServerState | null> {
+export async function readToolsServerState(): Promise<ToolsServerState | null> {
   try {
     const raw = await readFile(STATE_FILE, "utf8");
     return JSON.parse(raw) as ToolsServerState;
@@ -164,18 +209,22 @@ async function readState(): Promise<ToolsServerState | null> {
   }
 }
 
-async function writeState(state: ToolsServerState): Promise<void> {
+export async function writeToolsServerState(state: ToolsServerState): Promise<void> {
   await mkdir(STATE_DIR, { recursive: true });
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
-async function clearState(): Promise<void> {
+export async function clearToolsServerState(): Promise<void> {
   try {
     await unlink(STATE_FILE);
   } catch {
     // already gone
   }
 }
+
+const readState = readToolsServerState;
+const writeState = writeToolsServerState;
+const clearState = clearToolsServerState;
 
 export async function killToolServer(): Promise<void> {
   const state = await readState();
@@ -194,9 +243,9 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<string
   if (state) {
     const alive = isProcessAlive(state.pid);
     if (alive) {
-      const healthy = await isHealthy(state.port);
+      const healthy = await isToolsServerHealthy(state.port, state.host ?? "127.0.0.1");
       if (healthy) {
-        return `http://127.0.0.1:${state.port}`;
+        return formatUrl(healthCheckHost(state.host ?? "127.0.0.1"), state.port);
       }
     }
     await clearState();
@@ -211,9 +260,13 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<string
     pid,
     startedAt: new Date().toISOString(),
     bundlePath: paths.bundlePath,
+    host: "127.0.0.1",
   });
 
-  return `http://127.0.0.1:${actualPort}`;
+  return formatUrl("127.0.0.1", actualPort);
 }
 
 export const STATE_PATHS = { STATE_DIR, STATE_FILE, LOG_FILE };
+
+export { type ToolsServerState };
+export { formatUrl as formatToolsServerUrl };
