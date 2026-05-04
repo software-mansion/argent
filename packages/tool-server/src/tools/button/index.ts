@@ -26,11 +26,11 @@ const capability: ToolCapability = {
 
 export const buttonTool: ToolDefinition<Params, Result> = {
   id: "button",
-  description: `Press a simulator hardware button. Sends Down then Up events automatically.
-Supported buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton.
-Use when you need to trigger a hardware button events.
+  description: `Press a device hardware button (iOS simulator or Android emulator). Sends Down then Up events automatically.
+Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform are rejected with a clear error from the backend.
+Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
-Fails if the simulator server is not running for the given UDID.`,
+Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
   services: (params) => ({

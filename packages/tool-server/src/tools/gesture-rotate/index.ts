@@ -48,7 +48,7 @@ export const gestureRotateTool: ToolDefinition<Params, Result> = {
 endAngle > startAngle = clockwise rotation. Typical values: radius 0.15, startAngle 0, endAngle 90 for a 90° clockwise turn.
 Auto-generates interpolated frames at ~60fps.
 Unlike gesture-pinch which moves fingers linearly to zoom, this orbits fingers in an arc to change orientation.
-Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
+Use when you need to rotate a map, image picker, or any rotateable UI element. Returns { rotated: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
   services: (params) => ({

@@ -32,13 +32,13 @@ const capability: ToolCapability = {
 
 export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
-  description: `Execute a smooth swipe gesture between two points. All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
+  description: `Execute a smooth swipe gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
 Swipe down (fromY < toY) to scroll content up.
-Use when you need to scroll a list, dismiss a modal, or navigate between pages. Returns { swiped: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
+Use when you need to scroll a list, dismiss a modal, or navigate between pages. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
-  searchHint: "swipe scroll drag pan gesture simulator touch move",
+  searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
   capability,
   services: (params) => ({

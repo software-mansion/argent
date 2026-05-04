@@ -67,7 +67,7 @@ export function createRunSequenceTool(
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute multiple simulator interaction steps in a single call.
+    description: `Execute multiple device interaction steps in a single call (iOS simulator or Android emulator).
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).

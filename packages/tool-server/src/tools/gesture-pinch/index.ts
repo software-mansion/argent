@@ -58,7 +58,7 @@ export const gesturePinchTool: ToolDefinition<Params, Result> = {
 startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
 Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical).
-Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
   services: (params) => ({

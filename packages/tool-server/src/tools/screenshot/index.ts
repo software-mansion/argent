@@ -34,11 +34,11 @@ const capability: ToolCapability = {
 
 export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
-  description: `Capture a screenshot of the simulator screen. Returns { url, path } and the MCP adapter renders it as a visible image.
+  description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path } and the MCP adapter renders it as a visible image.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the simulator server is not running or the screenshot request times out.`,
+Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
-  searchHint: "simulator screen image capture baseline",
+  searchHint: "device simulator emulator screen image capture baseline",
   zodSchema,
   outputHint: "image",
   capability,
