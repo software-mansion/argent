@@ -37,12 +37,6 @@ const zodSchema = z.object({
     .describe(
       "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid` or `avdName`."
     ),
-  coldBoot: z
-    .boolean()
-    .optional()
-    .describe(
-      "Android-only: force a full cold boot and skip the AVD snapshot. Defaults to false — the tool first probes the default_boot snapshot with `-check-snapshot-loadable`, hot-boots with `-force-snapshot-load` and a tight deadline, and falls back to a cold boot on any hot-boot failure. Pass true to skip the hot-boot attempt entirely. Ignored on iOS."
-    ),
   noWindow: z
     .boolean()
     .optional()
@@ -64,7 +58,7 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
-  | { platform: "android"; serial: string; avdName: string; booted: true; coldBoot: boolean };
+  | { platform: "android"; serial: string; avdName: string; booted: true };
 
 // Each stage has its own sub-budget so a hang in one stage cannot consume the
 // entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
@@ -392,7 +386,6 @@ const inFlightBoots = new Map<
     serial: string;
     avdName: string;
     booted: true;
-    coldBoot: boolean;
   }>
 >();
 
@@ -408,7 +401,6 @@ export function __resetInFlightBootsForTesting(): void {
 
 async function bootAndroid(params: {
   avdName: string;
-  coldBoot: boolean;
   noWindow: boolean;
   bootTimeoutMs: number;
 }): Promise<{
@@ -416,7 +408,6 @@ async function bootAndroid(params: {
   serial: string;
   avdName: string;
   booted: true;
-  coldBoot: boolean;
 }> {
   const existing = inFlightBoots.get(params.avdName);
   if (existing) return existing;
@@ -429,7 +420,6 @@ async function bootAndroid(params: {
 
 async function bootAndroidImpl(params: {
   avdName: string;
-  coldBoot: boolean;
   noWindow: boolean;
   bootTimeoutMs: number;
 }): Promise<{
@@ -437,7 +427,6 @@ async function bootAndroidImpl(params: {
   serial: string;
   avdName: string;
   booted: true;
-  coldBoot: boolean;
 }> {
   await ensureDep("adb");
   const overallDeadline = Date.now() + params.bootTimeoutMs;
@@ -478,88 +467,78 @@ async function bootAndroidImpl(params: {
   // instead of spawning a second emulator that would collide on AVD locks,
   // burn the full 90 s hot-boot budget in the probe + spawn failure, and
   // surface a misleading "Running multiple emulators" error.
-  if (!params.coldBoot) {
-    const alreadyRunning = existingDevices.find(
-      (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
-    );
-    if (alreadyRunning) {
-      return {
-        platform: "android",
-        serial: alreadyRunning.serial,
-        avdName: params.avdName,
-        booted: true,
-        coldBoot: false,
-      };
-    }
+  const alreadyRunning = existingDevices.find(
+    (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
+  );
+  if (alreadyRunning) {
+    return {
+      platform: "android",
+      serial: alreadyRunning.serial,
+      avdName: params.avdName,
+      booted: true,
+    };
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
 
-  // Decide whether to try a hot boot. The user can force cold boot explicitly;
-  // otherwise we try hot-boot iff a default_boot snapshot exists on disk AND
-  // the emulator's own `-check-snapshot-loadable` probe says the metadata is
-  // valid. Probe takes ~1-2 s and catches the two most common silent-hang
-  // causes: renderer/GPU config drift and `snapshot.pb` metadata corruption.
-  let usedColdBoot = params.coldBoot;
+  // Decide whether to try a hot boot: only if a default_boot snapshot exists
+  // on disk AND the emulator's own `-check-snapshot-loadable` probe says the
+  // metadata is valid. Probe takes ~1-2 s and catches the two most common
+  // silent-hang causes: renderer/GPU config drift and `snapshot.pb` metadata
+  // corruption. On any hot-boot failure we fall back to cold boot below.
   let hotBootFailureReason: string | null = null;
-  if (!params.coldBoot) {
-    const hasSnapshot = await hasDefaultBootSnapshot(params.avdName);
-    if (!hasSnapshot) {
-      hotBootFailureReason = "no default_boot snapshot exists";
-      usedColdBoot = true;
+  const hasSnapshot = await hasDefaultBootSnapshot(params.avdName);
+  if (!hasSnapshot) {
+    hotBootFailureReason = "no default_boot snapshot exists";
+  } else {
+    const probe = await checkSnapshotLoadable(params.avdName, "default_boot");
+    if (!probe.loadable) {
+      hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
     } else {
-      const probe = await checkSnapshotLoadable(params.avdName, "default_boot");
-      if (!probe.loadable) {
-        hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
-        usedColdBoot = true;
-      } else {
-        // Hot boot attempt. `-force-snapshot-load` flips the emulator's default
-        // "silent fallback to cold boot on load failure" into a loud early exit
-        // so ram.bin corruption (which the probe misses) surfaces in seconds
-        // rather than hanging for the full overall budget. `-no-snapshot-save`
-        // avoids overwriting a working snapshot with state captured after we
-        // later force-kill the child from a failure path.
-        const hotArgs = ["-avd", params.avdName, "-force-snapshot-load", "-no-snapshot-save"];
-        if (params.noWindow) hotArgs.push("-no-window");
-        const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
-        try {
-          const result = await attemptBoot({
-            avdName: params.avdName,
-            emulatorArgs: hotArgs,
-            attemptDeadline: hotAttemptDeadline,
-            serialsBefore,
-            // Snapshot restores register with adb within a couple of seconds;
-            // a minute-long register wait on the hot path would mask the
-            // scenario where load fails and the child silently cold-boots.
-            adbRegisterBudgetMs: 30_000,
-            deviceReadyBudgetMs: 30_000,
-            bootCompletedBudgetMs: 30_000,
-          });
-          await assertScreencapAlive(result.serial);
-          return {
-            platform: "android",
-            serial: result.serial,
-            avdName: params.avdName,
-            booted: true,
-            coldBoot: false,
-          };
-        } catch (err) {
-          hotBootFailureReason = err instanceof Error ? err.message : String(err);
-          usedColdBoot = true;
-          // Best-effort: if the hot-boot child registered a serial before
-          // failing, it's already been killed inside attemptBoot. If it didn't
-          // register, any detached child was reaped there too. Refresh the
-          // before-set so the cold-boot attempt doesn't misidentify a zombie
-          // serial that has not yet disappeared from `adb devices` as "new".
-          const refreshed = new Set(
-            (await listAndroidDevices().catch(() => [])).map((d) => d.serial)
-          );
-          for (const s of refreshed) serialsBefore.add(s);
-        }
+      // Hot boot attempt. `-force-snapshot-load` flips the emulator's default
+      // "silent fallback to cold boot on load failure" into a loud early exit
+      // so ram.bin corruption (which the probe misses) surfaces in seconds
+      // rather than hanging for the full overall budget. `-no-snapshot-save`
+      // avoids overwriting a working snapshot with state captured after we
+      // later force-kill the child from a failure path.
+      const hotArgs = ["-avd", params.avdName, "-force-snapshot-load", "-no-snapshot-save"];
+      if (params.noWindow) hotArgs.push("-no-window");
+      const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
+      try {
+        const result = await attemptBoot({
+          avdName: params.avdName,
+          emulatorArgs: hotArgs,
+          attemptDeadline: hotAttemptDeadline,
+          serialsBefore,
+          // Snapshot restores register with adb within a couple of seconds;
+          // a minute-long register wait on the hot path would mask the
+          // scenario where load fails and the child silently cold-boots.
+          adbRegisterBudgetMs: 30_000,
+          deviceReadyBudgetMs: 30_000,
+          bootCompletedBudgetMs: 30_000,
+        });
+        await assertScreencapAlive(result.serial);
+        return {
+          platform: "android",
+          serial: result.serial,
+          avdName: params.avdName,
+          booted: true,
+        };
+      } catch (err) {
+        hotBootFailureReason = err instanceof Error ? err.message : String(err);
+        // Best-effort: if the hot-boot child registered a serial before
+        // failing, it's already been killed inside attemptBoot. If it didn't
+        // register, any detached child was reaped there too. Refresh the
+        // before-set so the cold-boot attempt doesn't misidentify a zombie
+        // serial that has not yet disappeared from `adb devices` as "new".
+        const refreshed = new Set(
+          (await listAndroidDevices().catch(() => [])).map((d) => d.serial)
+        );
+        for (const s of refreshed) serialsBefore.add(s);
       }
     }
   }
 
-  // Cold boot (either forced by param, or hot-boot fell back).
+  // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
   const coldArgs = ["-avd", params.avdName, "-no-snapshot-load"];
   if (params.noWindow) coldArgs.push("-no-window");
   let coldResult: { serial: string };
@@ -589,7 +568,6 @@ async function bootAndroidImpl(params: {
     serial: coldResult.serial,
     avdName: params.avdName,
     booted: true,
-    coldBoot: usedColdBoot,
   };
 }
 
@@ -650,8 +628,8 @@ export function createBootDeviceTool(
     description: `Start an iOS simulator or launch an Android emulator and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, or 'avdName' for an Android AVD (a serial is assigned automatically).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted, coldBoot }.
-Android boots take 2–10 minutes depending on machine and cold/warm state; if any boot stage fails, the tool terminates the emulator it spawned so the next retry starts clean.`,
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted }.
+Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. If any boot stage fails, the tool terminates the emulator it spawned so the next retry starts clean.`,
     alwaysLoad: true,
     searchHint: "boot start launch simulator emulator avd device session ios android cold hot",
     zodSchema,
@@ -668,7 +646,6 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; if a
       }
       return bootAndroid({
         avdName: params.avdName!,
-        coldBoot: params.coldBoot ?? false,
         noWindow: params.noWindow ?? false,
         bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
       });
