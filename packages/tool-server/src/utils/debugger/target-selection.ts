@@ -25,11 +25,31 @@ export function selectTarget(
 
   if (options?.deviceId) {
     const filtered = candidates.filter((t) => t.reactNative?.logicalDeviceId === options.deviceId);
-    if (filtered.length) candidates = filtered;
+    if (!filtered.length) {
+      const available = candidates
+        .map((t) => t.reactNative?.logicalDeviceId)
+        .filter((id): id is string => Boolean(id));
+      throw new Error(
+        `No CDP target matches deviceId=${JSON.stringify(options.deviceId)}. Available logicalDeviceIds: ${
+          available.length ? available.map((id) => JSON.stringify(id)).join(", ") : "(none)"
+        }.`
+      );
+    }
+    candidates = filtered;
   }
   if (options?.deviceName) {
     const filtered = candidates.filter((t) => t.deviceName === options.deviceName);
-    if (filtered.length) candidates = filtered;
+    if (!filtered.length) {
+      const available = candidates
+        .map((t) => t.deviceName)
+        .filter((name): name is string => Boolean(name));
+      throw new Error(
+        `No CDP target matches deviceName=${JSON.stringify(options.deviceName)}. Available deviceNames: ${
+          available.length ? available.map((name) => JSON.stringify(name)).join(", ") : "(none)"
+        }.`
+      );
+    }
+    candidates = filtered;
   }
 
   const fusebox = candidates.find(

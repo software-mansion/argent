@@ -128,6 +128,7 @@ beforeAll(async () => {
               webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=0&page=1`,
               deviceName: "MockDevice",
               reactNative: {
+                logicalDeviceId: "mock-device",
                 capabilities: { prefersFuseboxFrontend: true },
               },
             },
@@ -172,6 +173,7 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
   it("debugger-connect discovers, connects, and returns info", async () => {
     const result = (await registry.invokeTool("debugger-connect", {
       port: mockPort,
+      device_id: "mock-device",
     })) as Record<string, unknown>;
 
     expect(result.connected).toBe(true);
@@ -183,6 +185,7 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
   it("debugger-status returns connection info and loaded scripts", async () => {
     const result = (await registry.invokeTool("debugger-status", {
       port: mockPort,
+      device_id: "mock-device",
     })) as Record<string, unknown>;
 
     expect(result.connected).toBe(true);
@@ -194,6 +197,7 @@ describe("JsRuntimeDebugger integration (mock server)", () => {
   it("debugger-evaluate executes JS and returns result", async () => {
     const result = (await registry.invokeTool("debugger-evaluate", {
       port: mockPort,
+      device_id: "mock-device",
       expression: "1 + 1",
     })) as { result: unknown };
 

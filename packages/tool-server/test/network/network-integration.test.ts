@@ -300,6 +300,7 @@ beforeAll(async () => {
               webSocketDebuggerUrl: `ws://localhost:${mockPort}/inspector/debug?device=0&page=1`,
               deviceName: "MockDevice",
               reactNative: {
+                logicalDeviceId: "mock-device",
                 capabilities: { prefersFuseboxFrontend: true },
               },
             },
@@ -359,6 +360,7 @@ describe("NetworkInspector integration (mock server)", () => {
   it("view-network-logs returns paginated network entries", async () => {
     const result = (await registry.invokeTool("view-network-logs", {
       port: mockPort,
+      device_id: "mock-device",
     })) as string;
 
     expect(result).toContain("NETWORK LOGS");
@@ -375,6 +377,7 @@ describe("NetworkInspector integration (mock server)", () => {
     try {
       const result = (await registry.invokeTool("view-network-logs", {
         port: mockPort,
+        device_id: "mock-device",
       })) as string;
 
       expect(result).toContain("No network traffic captured");
@@ -387,6 +390,7 @@ describe("NetworkInspector integration (mock server)", () => {
   it("view-network-request-details returns full details for a known requestId", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
+      device_id: "mock-device",
       requestId: "rn-net-1",
     })) as Record<string, unknown>;
 
@@ -410,6 +414,7 @@ describe("NetworkInspector integration (mock server)", () => {
   it("view-network-request-details returns response body when includeBody is true", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
+      device_id: "mock-device",
       requestId: "rn-net-1",
       includeBody: true,
     })) as Record<string, unknown>;
@@ -423,6 +428,7 @@ describe("NetworkInspector integration (mock server)", () => {
   it("view-network-request-details returns error for unknown requestId", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
+      device_id: "mock-device",
       requestId: "rn-net-999",
     })) as string;
 
@@ -471,6 +477,7 @@ describe("NetworkInspector integration (mock server)", () => {
     try {
       const result = (await registry.invokeTool("view-network-logs", {
         port: mockPort,
+        device_id: "mock-device",
       })) as string;
 
       // The Metro request should be filtered out
@@ -488,6 +495,7 @@ describe("NetworkInspector integration (mock server)", () => {
   it("view-network-logs returns page index out-of-range error", async () => {
     const result = (await registry.invokeTool("view-network-logs", {
       port: mockPort,
+      device_id: "mock-device",
       pageIndex: 999,
     })) as string;
 
@@ -497,6 +505,7 @@ describe("NetworkInspector integration (mock server)", () => {
   it("view-network-request-details omits body when includeBody is false", async () => {
     const result = (await registry.invokeTool("view-network-request-details", {
       port: mockPort,
+      device_id: "mock-device",
       requestId: "rn-net-1",
       includeBody: false,
     })) as Record<string, unknown>;
@@ -538,6 +547,7 @@ describe("NetworkInspector integration (mock server)", () => {
     try {
       const result = (await registry.invokeTool("view-network-request-details", {
         port: mockPort,
+        device_id: "mock-device",
         requestId: "rn-net-large",
         includeBody: true,
       })) as Record<string, unknown>;
