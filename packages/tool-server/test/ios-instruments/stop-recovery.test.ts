@@ -111,10 +111,9 @@ describe("ios-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 0, signal: null };
 
-    const result = await iosInstrumentsStopTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID" }
-    );
+    const result = await iosInstrumentsStopTool.execute({ session: api } as never, {
+      device_id: "DEVICE-UDID",
+    });
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
     expect(result.traceFile).toBe(FAKE_TRACE);
@@ -131,10 +130,9 @@ describe("ios-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
 
-    const result = await iosInstrumentsStopTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID" }
-    );
+    const result = await iosInstrumentsStopTool.execute({ session: api } as never, {
+      device_id: "DEVICE-UDID",
+    });
 
     expect(result.warning).toContain("code=137");
     expect(result.warning).toContain("signal=SIGKILL");
@@ -146,10 +144,9 @@ describe("ios-profiler-stop recovery branch", () => {
     api.recordingTimedOut = true;
     api.recordingExitedUnexpectedly = false;
 
-    const result = await iosInstrumentsStopTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID" }
-    );
+    const result = await iosInstrumentsStopTool.execute({ session: api } as never, {
+      device_id: "DEVICE-UDID",
+    });
 
     expect(result.warning).toContain("Recording timed out at 10 min cap");
     expect(result.warning).not.toContain("xctrace exited before stop");
@@ -192,10 +189,9 @@ describe("ios-profiler-stop recovery branch", () => {
     api.xctraceProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
-    const promise = iosInstrumentsStopTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID" }
-    );
+    const promise = iosInstrumentsStopTool.execute({ session: api } as never, {
+      device_id: "DEVICE-UDID",
+    });
     await vi.advanceTimersByTimeAsync(10);
     const result = await promise;
 
@@ -250,9 +246,8 @@ describe("ios-profiler-start fresh-start reset", () => {
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
 
-    const { iosInstrumentsStartTool: startTool } = await import(
-      "../../src/tools/profiler/ios-profiler/ios-profiler-start"
-    );
+    const { iosInstrumentsStartTool: startTool } =
+      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
 
     const api = await buildSession();
     // Pre-populate stale state from a prior aborted run.
@@ -260,10 +255,10 @@ describe("ios-profiler-start fresh-start reset", () => {
     api.lastExitInfo = { code: 1, signal: null };
     api.recordingTimedOut = true;
 
-    const result = await startTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID", app_process: "MyApp" }
-    );
+    const result = await startTool.execute({ session: api } as never, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+    });
 
     expect(result.status).toBe("recording");
     expect(api.recordingExitedUnexpectedly).toBe(false);

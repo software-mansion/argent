@@ -62,15 +62,14 @@ describe("ios-profiler-start cold-start retry", () => {
       waitForXctraceReady: waitForReady,
     }));
 
-    const { iosInstrumentsStartTool: startTool } = await import(
-      "../../src/tools/profiler/ios-profiler/ios-profiler-start"
-    );
+    const { iosInstrumentsStartTool: startTool } =
+      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
 
     const api = await buildSession();
-    const promise = startTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID", app_process: "MyApp" }
-    );
+    const promise = startTool.execute({ session: api } as never, {
+      device_id: "DEVICE-UDID",
+      app_process: "MyApp",
+    });
 
     // Drain the retry sleep (1.2s) so the second attempt can run.
     await vi.advanceTimersByTimeAsync(1_200);
@@ -104,15 +103,13 @@ describe("ios-profiler-start cold-start retry", () => {
       waitForXctraceReady: waitForReady,
     }));
 
-    const { iosInstrumentsStartTool: startTool } = await import(
-      "../../src/tools/profiler/ios-profiler/ios-profiler-start"
-    );
+    const { iosInstrumentsStartTool: startTool } =
+      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
 
     const api = await buildSession();
-    const promise = startTool.execute(
-      { session: api } as never,
-      { device_id: "DEVICE-UDID", app_process: "MyApp" }
-    ).catch((e) => e);
+    const promise = startTool
+      .execute({ session: api } as never, { device_id: "DEVICE-UDID", app_process: "MyApp" })
+      .catch((e) => e);
 
     await vi.advanceTimersByTimeAsync(1_200);
 
@@ -152,16 +149,15 @@ describe("ios-profiler-start cold-start retry", () => {
       waitForXctraceReady: waitForReady,
     }));
 
-    const { iosInstrumentsStartTool: startTool } = await import(
-      "../../src/tools/profiler/ios-profiler/ios-profiler-start"
-    );
+    const { iosInstrumentsStartTool: startTool } =
+      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
 
     const api = await buildSession();
     await expect(
-      startTool.execute(
-        { session: api } as never,
-        { device_id: "DEVICE-UDID", app_process: "MyApp" }
-      )
+      startTool.execute({ session: api } as never, {
+        device_id: "DEVICE-UDID",
+        app_process: "MyApp",
+      })
     ).rejects.toThrow("device not found");
 
     expect(waitForReady).toHaveBeenCalledTimes(1);
