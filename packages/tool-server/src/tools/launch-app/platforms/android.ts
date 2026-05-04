@@ -7,7 +7,7 @@ import type { LaunchAppParams, LaunchAppResult, LaunchAppServices } from "../typ
 // /Error|Exception/ matcher false-failed on benign class names such as
 // `com.example.ErrorReportingActivity` in the "Activity:" line, and
 // false-succeeded on `Status: null` when the activity failed in onCreate.
-function assertAmStartOk(out: string): void {
+export function assertAmStartOk(out: string): void {
   if (!/Status:\s*ok/i.test(out)) {
     throw new Error(`am start failed: ${out.trim()}`);
   }
@@ -20,7 +20,7 @@ function assertAmStartOk(out: string): void {
 // Output of `--brief` is one component per line; the last non-empty line is
 // `pkg/fully.Qualified.Activity`. This lets the default (no-activity) branch
 // use `am start -W` for a proper blocking launch instead of `monkey 1`.
-async function resolveLauncherActivity(udid: string, bundleId: string): Promise<string> {
+export async function resolveLauncherActivity(udid: string, bundleId: string): Promise<string> {
   const raw = await adbShell(udid, `cmd package resolve-activity --brief ${bundleId}`, {
     timeoutMs: 10_000,
   });
