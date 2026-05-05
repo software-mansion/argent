@@ -157,6 +157,48 @@ export function deriveUiAutomatorRole(className: string): string {
   return short || "View";
 }
 
+// Roles produced by deriveUiAutomatorRole that carry no semantic meaning of
+// their own — they're pure layout containers. These are the only roles that
+// the clickable/scrollable promotion below is allowed to overwrite, so an
+// explicit `<Button class="...Button">` keeps its role even if uiautomator
+// also marks it `clickable=true`.
+const GENERIC_CONTAINER_ROLES = new Set([
+  "LinearLayout",
+  "FrameLayout",
+  "RelativeLayout",
+  "ConstraintLayout",
+  "ViewGroup",
+  "View",
+]);
+
+// Roles representing already-recognised tap targets. When hoisting
+// descendant text into a clickable container's label, we stop at any
+// descendant whose role is in this set so nested tappables stay distinct
+// elements rather than getting their text absorbed into the ancestor.
+const TAP_TARGET_ROLES = new Set([
+  "Button",
+  "Switch",
+  "CheckBox",
+  "RadioButton",
+  "TextField",
+  "Link",
+]);
+
+function collectDescendantText(nodes: DescribeNode[]): string | undefined {
+  const parts: string[] = [];
+  const queue: DescribeNode[] = [...nodes];
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    if (node.label) parts.push(node.label);
+    else if (node.value) parts.push(node.value);
+    // Stop at recognised tap targets so e.g. a nested checkbox doesn't get its
+    // own label folded into the row's label.
+    if (TAP_TARGET_ROLES.has(node.role)) continue;
+    for (const c of node.children) queue.push(c);
+  }
+  return parts.length > 0 ? parts.join(" — ") : undefined;
+}
+
 /**
  * Convert a parsed `<node>` element into a `DescribeNode` with normalized frame
  * coordinates. Returns `null` when the node has no bounds AND no useful children.
@@ -247,12 +289,35 @@ export function convertUiAutomatorNode(
       width: screenW > 0 ? clipped.w / screenW : 0,
       height: screenH > 0 ? clipped.h / screenH : 0,
     };
-    const out: DescribeNode = {
-      role: deriveUiAutomatorRole(attrs.class ?? ""),
-      frame,
-      children: childNodes,
-    };
-    const label = attrs["content-desc"] || attrs.text || undefined;
+    const isClickable = attrs.clickable === "true";
+    const isCheckable = attrs.checkable === "true";
+    const isScrollable = attrs.scrollable === "true";
+
+    // Class-derived role first; then promote based on interaction attributes.
+    // uiautomator emits the semantic flags (clickable, checkable, scrollable)
+    // on whichever node owns the gesture — usually a generic LinearLayout /
+    // FrameLayout / RelativeLayout wrapping the row's icon + title + summary.
+    // Without this promotion, every Settings row reads as a meaningless
+    // "LinearLayout" and the agent has no signal that it's tappable.
+    let role = deriveUiAutomatorRole(attrs.class ?? "");
+    if (isCheckable && GENERIC_CONTAINER_ROLES.has(role)) {
+      role = "Switch";
+    } else if (isClickable && GENERIC_CONTAINER_ROLES.has(role)) {
+      role = "Button";
+    } else if (isScrollable && GENERIC_CONTAINER_ROLES.has(role)) {
+      role = "ScrollView";
+    }
+
+    const out: DescribeNode = { role, frame, children: childNodes };
+
+    // Native label/text first; if a clickable container has neither, hoist
+    // visible text from descendants so the synthesized button carries the
+    // row's content (e.g. "Network & internet — Mobile, Wi-Fi, hotspot").
+    let label = attrs["content-desc"] || attrs.text || undefined;
+    if (!label && isClickable) {
+      const hoisted = collectDescendantText(childNodes);
+      if (hoisted) label = hoisted;
+    }
     if (label) out.label = label;
     const identifier = attrs["resource-id"] || undefined;
     if (identifier) out.identifier = identifier;
