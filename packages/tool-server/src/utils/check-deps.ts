@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolDependency } from "@argent/registry";
+import { resolveAndroidBinary } from "./android-binary";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,15 +33,27 @@ const cache = new Map<ToolDependency, CacheEntry>();
 const INSTALL_HINTS: Record<ToolDependency, string> = {
   xcrun:
     "Xcode command-line tools are not installed. Run `xcode-select --install` (or install Xcode from the App Store) and retry. Only required for iOS simulators.",
-  adb: "Android SDK Platform Tools are not installed (`adb` not on PATH). Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager, then retry. Only required for Android devices and emulators.",
+  adb: "Android SDK Platform Tools not found. Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager. If installed, ensure `adb` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/platform-tools/adb`). Only required for Android devices and emulators.",
+  emulator:
+    "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {
+  // Android binaries support an `$ANDROID_HOME` fallback in addition to PATH
+  // (Android Studio sets ANDROID_HOME but does NOT add `$ANDROID_HOME/emulator`
+  // to PATH on macOS — the most common state for users coming from Studio).
+  // Funnel the lookup through `resolveAndroidBinary` so the dep check sees an
+  // SDK install even when the binary is off PATH; otherwise a host with a
+  // working SDK would 424 with an "install adb"-style hint that doesn't
+  // describe the actual problem.
+  if (dep === "adb" || dep === "emulator") {
+    return (await resolveAndroidBinary(dep)) !== null;
+  }
   try {
     // `command -v` via `/bin/sh` is POSIX-portable and doesn't invoke the dep
-    // itself — a bare `adb` or `xcrun` call would fork the tool just to check
-    // existence, which is both slower and (for xcrun) can prompt the license
-    // agreement dialog on first use.
+    // itself — a bare `xcrun` call would fork the tool just to check existence,
+    // which is both slower and (for xcrun) can prompt the license agreement
+    // dialog on first use.
     await execFileAsync("/bin/sh", ["-c", `command -v ${dep}`], { timeout: 2_000 });
     return true;
   } catch {

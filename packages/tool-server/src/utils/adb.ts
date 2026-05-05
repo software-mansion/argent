@@ -1,7 +1,39 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { resolveAndroidBinary } from "./android-binary";
 
 const execFileAsync = promisify(execFile);
+
+// `runAdb` / `runAdbBinary` / `listAvds` / `checkSnapshotLoadable` all used to
+// call `execFileAsync("adb"|"emulator", ...)` directly, which only honors PATH.
+// Tools that declare `requires: ["adb"]` (or `["emulator"]`) preflight via
+// `ensureDep`, which now consults `resolveAndroidBinary` and surfaces a 424
+// with the install hint when neither PATH nor `$ANDROID_HOME` resolves the
+// binary — so by the time these helpers run, the resolver returns a real
+// path. The thrown messages here are a safety net for direct callers that
+// skipped the preflight (unit tests, internal scripts, future code paths)
+// rather than the primary user-facing diagnostic.
+async function resolveAdbOrThrow(): Promise<string> {
+  const path = await resolveAndroidBinary("adb");
+  if (!path) {
+    throw new Error(
+      "`adb` not found on PATH or under `$ANDROID_HOME/platform-tools`. " +
+        "Install Android SDK Platform Tools or set `$ANDROID_HOME` to your SDK root."
+    );
+  }
+  return path;
+}
+
+export async function resolveEmulatorOrThrow(): Promise<string> {
+  const path = await resolveAndroidBinary("emulator");
+  if (!path) {
+    throw new Error(
+      "`emulator` not found on PATH or under `$ANDROID_HOME/emulator`. " +
+        "Install the Android Emulator package or set `$ANDROID_HOME` to your SDK root."
+    );
+  }
+  return path;
+}
 
 export interface AdbRunResult {
   stdout: string;
@@ -40,8 +72,9 @@ export async function runAdb(
   args: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<AdbRunResult> {
+  const adbPath = await resolveAdbOrThrow();
   try {
-    const { stdout, stderr } = await execFileAsync("adb", args, {
+    const { stdout, stderr } = await execFileAsync(adbPath, args, {
       timeout: options.timeoutMs ?? 30_000,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
@@ -59,8 +92,9 @@ export async function runAdb(
  * the stream.
  */
 async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}): Promise<Buffer> {
+  const adbPath = await resolveAdbOrThrow();
   try {
-    const { stdout } = await execFileAsync("adb", args, {
+    const { stdout } = await execFileAsync(adbPath, args, {
       timeout: options.timeoutMs ?? 30_000,
       killSignal: ADB_KILL_SIGNAL,
       maxBuffer: 64 * 1024 * 1024,
@@ -294,10 +328,19 @@ export interface AvdInfo {
 // even if they happen to start with INFO or HAX.
 const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 
-/** List available AVDs via `emulator -list-avds`. Returns [] if emulator binary is unavailable. */
+/**
+ * List available AVDs via `emulator -list-avds`. Returns [] if the emulator
+ * binary is unavailable on the host. Callers that need to distinguish "no
+ * emulator binary" from "emulator binary present but zero AVDs" should
+ * preflight via `ensureDep("emulator")` first — that surfaces a 424 with the
+ * install hint when the resolver can't find the binary, while a genuinely
+ * empty AVD list still returns `[]`.
+ */
 export async function listAvds(): Promise<AvdInfo[]> {
+  const emulatorPath = await resolveAndroidBinary("emulator");
+  if (!emulatorPath) return [];
   try {
-    const { stdout } = await execFileAsync("emulator", ["-list-avds"], { timeout: 5_000 });
+    const { stdout } = await execFileAsync(emulatorPath, ["-list-avds"], { timeout: 5_000 });
     return stdout
       .split("\n")
       .map((l) => l.trim())
@@ -307,9 +350,6 @@ export async function listAvds(): Promise<AvdInfo[]> {
     return [];
   }
 }
-
-/** Name of the Android `emulator` binary we spawn when booting an AVD. Relies on `$PATH`. */
-export const EMULATOR_BINARY = "emulator";
 
 /**
  * Result of probing a named snapshot with `emulator -check-snapshot-loadable`.
@@ -334,8 +374,9 @@ export async function checkSnapshotLoadable(
   options: { timeoutMs?: number } = {}
 ): Promise<SnapshotProbeResult> {
   try {
+    const emulatorPath = await resolveEmulatorOrThrow();
     const { stdout } = await execFileAsync(
-      EMULATOR_BINARY,
+      emulatorPath,
       ["-avd", avdName, "-check-snapshot-loadable", snapshotName],
       { timeout: options.timeoutMs ?? 10_000, maxBuffer: 4 * 1024 * 1024 }
     );

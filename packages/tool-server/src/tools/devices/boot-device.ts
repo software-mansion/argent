@@ -6,10 +6,10 @@ import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import {
   adbShell,
   checkSnapshotLoadable,
-  EMULATOR_BINARY,
   hasDefaultBootSnapshot,
   listAndroidDevices,
   listAvds,
+  resolveEmulatorOrThrow,
   runAdb,
   waitForBootCompleted,
 } from "../../utils/adb";
@@ -224,6 +224,7 @@ const HOT_BOOT_BUDGET_MS = 90_000;
  */
 async function attemptBoot(params: {
   avdName: string;
+  emulatorBinary: string;
   emulatorArgs: string[];
   attemptDeadline: number;
   serialsBefore: Set<string>;
@@ -231,7 +232,7 @@ async function attemptBoot(params: {
   deviceReadyBudgetMs: number;
   bootCompletedBudgetMs: number;
 }): Promise<{ serial: string }> {
-  const child = spawn(EMULATOR_BINARY, params.emulatorArgs, {
+  const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
     stdio: "ignore",
   });
@@ -414,14 +415,22 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   avdName: string;
   booted: true;
 }> {
+  // Preflight both Android binaries up front so a missing emulator package
+  // surfaces as a 424 "install hint" — not a misleading "no AVDs" error from
+  // `listAvds()`'s empty result. `ensureDep("emulator")` consults the
+  // resolver, which honors `$ANDROID_HOME` in addition to PATH.
   await ensureDep("adb");
+  await ensureDep("emulator");
+  const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
-  // Stage 0: validate AVD exists.
+  // Stage 0: validate AVD exists. Past this point an empty AVD list really
+  // does mean "user has no AVDs" (the binary is present); the preflight ruled
+  // out the binary-missing case.
   const avds = await listAvds();
   if (avds.length === 0) {
     throw new Error(
-      "`emulator -list-avds` returned no AVDs. Install the Android Emulator package or create an AVD via Android Studio or `avdmanager create avd`."
+      "`emulator -list-avds` returned no AVDs. Create one via Android Studio or `avdmanager create avd`."
     );
   }
   if (!avds.some((a) => a.name === params.avdName)) {
@@ -514,6 +523,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       try {
         const result = await attemptBoot({
           avdName: params.avdName,
+          emulatorBinary,
           emulatorArgs: hotArgs,
           attemptDeadline: hotAttemptDeadline,
           serialsBefore,
@@ -552,6 +562,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   try {
     coldResult = await attemptBoot({
       avdName: params.avdName,
+      emulatorBinary,
       emulatorArgs: coldArgs,
       attemptDeadline: overallDeadline,
       serialsBefore,

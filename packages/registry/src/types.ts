@@ -119,7 +119,7 @@ export interface ToolCapability {
  * On a missing binary, the HTTP layer returns 424 Failed Dependency with an
  * install hint the agent can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun";
+export type ToolDependency = "adb" | "xcrun" | "emulator";
 
 // ── Tool Types ──
 
