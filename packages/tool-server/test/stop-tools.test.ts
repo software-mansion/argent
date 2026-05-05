@@ -98,6 +98,23 @@ describe("stop-all-simulator-servers", () => {
     expect(result).toEqual({ stopped: ["SimulatorServer:BBB"] });
     expect(registry.disposeService).toHaveBeenCalledOnce();
   });
+
+  it("disposes AXService daemons too — describe spawns one per simulator", async () => {
+    const services = new Map([
+      ["SimulatorServer:AAA", { state: ServiceState.RUNNING, dependents: [] }],
+      ["NativeDevtools:AAA", { state: ServiceState.RUNNING, dependents: [] }],
+      ["AXService:AAA", { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, undefined);
+
+    expect(new Set(result.stopped)).toEqual(
+      new Set(["SimulatorServer:AAA", "NativeDevtools:AAA", "AXService:AAA"])
+    );
+    expect(registry.disposeService).toHaveBeenCalledWith("AXService:AAA");
+  });
 });
 
 describe("stop-metro", () => {

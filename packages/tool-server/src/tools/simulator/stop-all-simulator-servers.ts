@@ -2,8 +2,13 @@ import { ServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { AX_SERVICE_NAMESPACE } from "../../blueprints/ax-service";
 
-const PREFIXES = [`${SIMULATOR_SERVER_NAMESPACE}:`, `${NATIVE_DEVTOOLS_NAMESPACE}:`];
+const PREFIXES = [
+  `${SIMULATOR_SERVER_NAMESPACE}:`,
+  `${NATIVE_DEVTOOLS_NAMESPACE}:`,
+  `${AX_SERVICE_NAMESPACE}:`,
+];
 
 export function createStopAllSimulatorServersTool(
   registry: Registry
