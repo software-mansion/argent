@@ -2,7 +2,6 @@ import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, type AXServiceApi } from "../../../blueprints/ax-service";
 import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../../blueprints/native-devtools";
 import type { DescribeResult } from "../contract";
-import { filterDescribeTree, formatDescribeTreeAsText } from "../format";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 import { parseNativeDescribeScreenResult } from "../../native-devtools/native-describe-contract";
@@ -28,11 +27,10 @@ export async function describeIos(
   const axRef = axServiceRef(device);
   const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
   const response = await axApi.describe();
-  const node = adaptAXDescribeToDescribeResult(response);
-  const formatted = formatDescribeTreeAsText(filterDescribeTree(node));
+  const tree = adaptAXDescribeToDescribeResult(response);
 
-  if (node.children.length > 0) {
-    return { tree: formatted, source: "ax-service" };
+  if (tree.children.length > 0) {
+    return { tree, source: "ax-service" };
   }
 
   // AX returned zero elements — attempt native-devtools fallback
@@ -43,7 +41,7 @@ export async function describeIos(
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
 
     if (await nativeApi.requiresAppRestart(target.bundleId)) {
-      return { tree: formatted, source: "ax-service", should_restart: true };
+      return { tree, source: "ax-service", should_restart: true };
     }
 
     const rawResult = (await nativeApi.queryViewHierarchy(
@@ -52,15 +50,14 @@ export async function describeIos(
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (rawResult.error) {
-      return { tree: formatted, source: "ax-service" };
+      return { tree, source: "ax-service" };
     }
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
-    const nativeNode = adaptNativeDescribeToDescribeResult(parsed);
-    const nativeTree = formatDescribeTreeAsText(filterDescribeTree(nativeNode));
+    const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
     return { tree: nativeTree, source: "native-devtools" };
   } catch {
     // Native devtools unavailable or no connected app — return the empty AX result
-    return { tree: formatted, source: "ax-service" };
+    return { tree, source: "ax-service" };
   }
 }

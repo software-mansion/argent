@@ -94,10 +94,9 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    // tree is a pretty-printed text outline (one node per line). The synthetic
-    // AXGroup root drops out because it's a noise container with no label.
-    expect(result.tree).toContain("AXButton");
-    expect(result.tree).toContain("label='General'");
+    expect(result.tree.role).toBe("AXGroup");
+    expect(result.tree.children[0]?.label).toBe("General");
+    expect(result.tree.children[0]?.role).toBe("AXButton");
   });
 
   it("returns dialog elements when alertVisible is true", async () => {
@@ -123,10 +122,10 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    const lines = result.tree.split("\n");
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toMatch(/^AXButton .* label='Allow Once'$/);
-    expect(lines[1]).toContain("label='Don\u2019t Allow'");
+    expect(result.tree.children).toHaveLength(2);
+    expect(result.tree.children[0]?.label).toBe("Allow Once");
+    expect(result.tree.children[0]?.role).toBe("AXButton");
+    expect(result.tree.children[1]?.label).toBe("Don\u2019t Allow");
   });
 
   it("returns empty root when no elements and no native fallback", async () => {
@@ -140,9 +139,8 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    // Empty tree renders as a literal "(no elements)" sentinel rather than
-    // an empty string, so the agent's tool-result is never blank.
-    expect(result.tree).toBe("(no elements)");
+    expect(result.tree.role).toBe("AXGroup");
+    expect(result.tree.children).toHaveLength(0);
   });
 
   it("uses bundleId for native-devtools fallback when AX returns empty", async () => {
@@ -176,8 +174,8 @@ describe("describe tool", () => {
       { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
     );
     expect(result.source).toBe("native-devtools");
-    expect(result.tree).toContain("AXButton");
-    expect(result.tree).toContain("label='General'");
+    expect(result.tree.children[0]?.label).toBe("General");
+    expect(result.tree.children[0]?.role).toBe("AXButton");
   });
 
   it("falls back to native-devtools with auto-target when AX returns empty", async () => {
@@ -208,7 +206,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("native-devtools");
-    expect(result.tree).toContain("label='Hello World'");
+    expect(result.tree.children[0]?.label).toBe("Hello World");
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -232,7 +230,7 @@ describe("describe tool", () => {
     );
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
-    expect(result.tree).toBe("(no elements)");
+    expect(result.tree.children).toHaveLength(0);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {
@@ -247,7 +245,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree).toBe("(no elements)");
+    expect(result.tree.children).toHaveLength(0);
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -289,15 +287,11 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    const lines = result.tree.split("\n");
-    expect(lines).toHaveLength(3);
-    expect(lines[0]).toContain("AXTextField");
-    // value renders only when distinct from label; here label === value === "Search"
-    // so value is omitted from the line and label carries the text.
-    expect(lines[0]).toContain("label='Search'");
-    expect(lines[0]).not.toContain("value=");
-    expect(lines[1]).toContain("AXButton");
-    expect(lines[2]).toContain("label='Accessibility'");
+    expect(result.tree.children).toHaveLength(3);
+    expect(result.tree.children[0]?.role).toBe("AXTextField");
+    expect(result.tree.children[0]?.value).toBe("Search");
+    expect(result.tree.children[1]?.role).toBe("AXButton");
+    expect(result.tree.children[2]?.label).toBe("Accessibility");
   });
 
   it("resolves ax-service with the correct URN", async () => {
@@ -342,6 +336,6 @@ describe("describe tool", () => {
       { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
     );
     expect(result.source).toBe("ax-service");
-    expect(result.tree).toBe("(no elements)");
+    expect(result.tree.children).toHaveLength(0);
   });
 });
