@@ -22,7 +22,7 @@ export interface NotifyHandle {
  *
  * `notifyutil -v` only writes to stdout when the notification fires, so we
  * cannot detect the registration boundary by reading bytes. We use a fixed
- * delay matching the timing proven in `ios-profiler-repro/05-notify-tracing-started.sh`.
+ * delay tuned empirically against `xctrace record` startup.
  * If `notifyutil` fails to spawn at all, `ready` rejects so callers can fall back.
  */
 export function listenForDarwinNotification(name: string): NotifyHandle {

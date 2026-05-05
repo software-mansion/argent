@@ -159,12 +159,10 @@ export function deriveUiAutomatorRole(className: string): string {
 
 // ---------- v2 interactables-only trim ------------------------------------
 //
-// Mirrors research/android-ui-inspection/artifacts/13_trim_dump_v2.py. On the
-// Bluesky post-thread screen the trimmer cuts the parsed tree from 64 nodes
-// (`uiautomator dump --compressed`) to ~41 actionable / labelled nodes while
-// preserving every clickable, every text label, every content-desc, and every
-// resource-id we care about. Rationale and verified sanity checks live in
-// research/android-ui-inspection/README.md.
+// On the Bluesky post-thread screen the trimmer cuts the parsed tree from 64
+// nodes (`uiautomator dump --compressed`) to ~41 actionable / labelled nodes
+// while preserving every clickable, every text label, every content-desc, and
+// every resource-id we care about.
 
 const NOISY_CLASSES = new Set([
   // React Native Skia/SVG icon internals: never tappable, parent already
@@ -603,8 +601,7 @@ function finalizeUiNode(
 /**
  * Parse a full `uiautomator dump` output into a DescribeNode tree matching the
  * iOS describe contract, so the same agent guidance about frames + tap points
- * applies. Applies the v2 interactables-only trim — see the
- * research/android-ui-inspection/README.md for the rules and verification.
+ * applies. Applies the v2 interactables-only trim defined above.
  *
  * `includeSystem` defaults to false: status bar / nav bar / SystemUI chrome
  * is dropped because it's noise on app-level tasks. Pass `true` when working

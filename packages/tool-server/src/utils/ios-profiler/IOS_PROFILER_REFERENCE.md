@@ -2,7 +2,7 @@
 
 A concise overview of how Argent's iOS profiling works: what native machinery is invoked, what gets captured, how the data is processed, and what comes back to the agent.
 
-For the deeper "why" of each pipeline decision, see `PIPELINE_DESIGN.md`. For day-to-day workflow, see the `argent-ios-profiler` skill.
+For the deeper "why" of each pipeline decision, see `PIPELINE_DESIGN.md`. For day-to-day workflow, see the `argent-native-profiler` skill.
 
 ---
 
@@ -204,7 +204,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | UI hang     | `microhang`                             | YELLOW       |
 | Memory leak | any                                     | RED          |
 
-> Note: `argent-ios-profiler/SKILL.md` currently documents the YELLOW band as 5–15 %. The implementation uses 3–15 % (`MIN_WEIGHT_PERCENTAGE = 3` in `02-aggregate.ts`). The code is the source of truth.
+> Note: `argent-native-profiler/SKILL.md` currently documents the YELLOW band as 5–15 %. The implementation uses 3–15 % (`MIN_WEIGHT_PERCENTAGE = 3` in `02-aggregate.ts`). The code is the source of truth.
 
 ---
 
@@ -234,4 +234,4 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | RN/system filter signatures  | `utils/ios-profiler/config.ts`                                                |
 | Cross-tool time alignment    | `utils/profiler-shared/time-align.ts`                                         |
 | Design rationale             | `utils/ios-profiler/PIPELINE_DESIGN.md`                                       |
-| User-facing workflow         | `packages/argent/skills/argent-ios-profiler/SKILL.md`                         |
+| User-facing workflow         | `packages/skills/skills/argent-native-profiler/SKILL.md`                      |
