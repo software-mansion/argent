@@ -1,11 +1,7 @@
-// Inline-XML coverage for the v2 interactables-only trim added in
-// commit 0128919 (PR #190). The fixture-based "Bluesky thread" sanity
-// suite from #190 isn't ported here because the dump it depends on
-// (`research/android-ui-inspection/artifacts/02_uiautomator_compressed.xml`)
-// doesn't ship in this repo. The inline-XML cases below cover every trim
-// rule the fixture suite exercises — duplicate-wrapper collapse, password
+// Inline-XML coverage for the v2 interactables-only trim. Each trim rule
+// has a dedicated case below — duplicate-wrapper collapse, password
 // redaction, WebView opacity, descendant aggregation, scroll-clip, system
-// chrome — without needing an external artifact.
+// chrome — so the suite stays runnable without an external dump fixture.
 import { describe, it, expect } from "vitest";
 import {
   parseUiAutomatorDump,

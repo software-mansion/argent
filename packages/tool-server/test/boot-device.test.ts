@@ -24,7 +24,7 @@ vi.mock("node:child_process", async () => {
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
-describe("boot-device — iOS path (previously boot-simulator)", () => {
+describe("boot-device — iOS path", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Pre-warm the dep cache so `ensureDep('xcrun')` doesn't probe PATH and

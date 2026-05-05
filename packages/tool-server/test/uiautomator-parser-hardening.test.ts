@@ -112,8 +112,8 @@ describe("uiautomator deeply-nested tree (review #6)", () => {
     for (let i = 0; i < depth; i++) xml += `</node>\n`;
     xml += `</hierarchy>\n`;
 
-    // This is the assertion that caught the recursion bug: recursive
-    // convertUiAutomatorNode throws `Maximum call stack size exceeded`.
+    // This is the assertion that caught the recursion bug: a recursive
+    // tree converter throws `Maximum call stack size exceeded` on this depth.
     expect(() => parseUiAutomatorDump(xml, depth, depth)).not.toThrow();
   });
 
@@ -186,7 +186,7 @@ function collectLabels(n: {
   return out;
 }
 
-describe("convertUiAutomatorNode — preserves siblings under a bounds-less wrapper", () => {
+describe("parseUiAutomatorDump — preserves siblings under a bounds-less wrapper", () => {
   it("does not drop multiple children when the parent has no bounds", () => {
     // Compose hierarchies emit bounds-less wrappers with multiple children
     // routinely. The previous "collapse to sole child or drop" rule silently
@@ -209,7 +209,7 @@ describe("convertUiAutomatorNode — preserves siblings under a bounds-less wrap
   });
 });
 
-describe("convertUiAutomatorNode — clips off-screen rects to the screen", () => {
+describe("parseUiAutomatorDump — clips off-screen rects to the screen", () => {
   it("never produces a frame whose x + width exceeds 1", () => {
     // Rail/badge at the right edge that uiautomator reports past the screen
     // edge (real on tablets / foldables / drawer-overlay states). Without
