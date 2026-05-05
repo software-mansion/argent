@@ -1,5 +1,6 @@
 import type { ToolDependency } from "@argent/registry";
 import type { DescribeResult } from "../contract";
+import { filterDescribeTree, formatDescribeTreeAsText } from "../format";
 import { adbExecOutBinary } from "../../../utils/adb";
 import { getAndroidScreenSize } from "../../../utils/android-screen";
 import { parseUiAutomatorDump } from "../../../utils/uiautomator-parser";
@@ -32,6 +33,7 @@ export async function describeAndroid(udid: string, _bundleId?: string): Promise
         `Unlock the device or take a screenshot as a fallback.`
     );
   }
-  const tree = parseUiAutomatorDump(raw, size.width, size.height);
+  const node = parseUiAutomatorDump(raw, size.width, size.height);
+  const tree = formatDescribeTreeAsText(filterDescribeTree(node));
   return { tree, source: "uiautomator" };
 }

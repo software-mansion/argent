@@ -32,7 +32,14 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 );
 
 export interface DescribeResult {
-  tree: DescribeNode;
+  // Pretty-printed text outline of the visible accessibility tree, one node
+  // per line in the form `Role [x,y wxh] label='…' id='…' value='…'`.
+  // Returning text rather than a JSON DescribeNode tree keeps the agent's
+  // tool-result legible: the prior nested-JSON shape required scrolling past
+  // ~10 layout-wrapper levels to find the actual tap targets, and the noise
+  // dwarfed the signal on Android. Layout-only containers and decorative
+  // leaves are filtered out by `formatDescribeTreeAsText` before rendering.
+  tree: string;
   // "ax-service" / "native-devtools" come from iOS; "uiautomator" is the
   // Android branch's underlying provider. Agents that branch on `source`
   // (e.g. to decide whether to also call `native-find-views` for a richer
