@@ -21,6 +21,15 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// `runAdb` and `listAvds` resolve adb / emulator to an absolute path before
+// spawning, so a bare `cmd === "adb" / "emulator"` matcher would never fire
+// on real hosts. Stub the resolver to return the bare name so existing test
+// mocks keep working regardless of host SDK install state.
+vi.mock("../src/utils/android-binary", () => ({
+  resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => name),
+  __resetAndroidBinaryCacheForTesting: () => {},
+}));
+
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 
 function simctlJson(): string {

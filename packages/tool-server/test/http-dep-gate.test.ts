@@ -9,6 +9,16 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
 });
 
+// `probe()` special-cases adb/emulator to use `resolveAndroidBinary`
+// (which adds an `$ANDROID_HOME` fallback to PATH). Mock the resolver so
+// each test controls availability per-dep instead of fighting the host's
+// real $ANDROID_HOME.
+const resolveAndroidBinaryMock = vi.fn();
+vi.mock("../src/utils/android-binary", () => ({
+  resolveAndroidBinary: (name: "adb" | "emulator") => resolveAndroidBinaryMock(name),
+  __resetAndroidBinaryCacheForTesting: () => {},
+}));
+
 import { createHttpApp } from "../src/http";
 import {
   DependencyMissingError,
@@ -30,12 +40,16 @@ function stubProbe(missing: readonly string[]): void {
       else cb(null, `/usr/bin/${dep}\n`, "");
     }
   );
+  resolveAndroidBinaryMock.mockImplementation(async (name: string) => {
+    return missing.includes(name) ? null : `/usr/bin/${name}`;
+  });
 }
 
 describe("http dependency gate", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     execFileMock.mockReset();
+    resolveAndroidBinaryMock.mockReset();
   });
 
   it("returns 424 with a pretty message when a pre-flight dep is missing", async () => {

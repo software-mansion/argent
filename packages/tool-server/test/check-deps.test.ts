@@ -6,6 +6,17 @@ vi.mock("node:child_process", async () => {
   return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
 });
 
+// `probe()` now special-cases adb / emulator to use `resolveAndroidBinary`
+// (which adds an `$ANDROID_HOME` fallback on top of PATH). Mock the resolver
+// so each test controls availability per-dep instead of fighting the host's
+// real $ANDROID_HOME — otherwise a dev machine with the SDK installed would
+// always report adb/emulator as available regardless of `stubProbe`.
+const resolveAndroidBinaryMock = vi.fn();
+vi.mock("../src/utils/android-binary", () => ({
+  resolveAndroidBinary: (name: "adb" | "emulator") => resolveAndroidBinaryMock(name),
+  __resetAndroidBinaryCacheForTesting: () => {},
+}));
+
 import {
   DependencyMissingError,
   __resetDepCacheForTests,
@@ -20,6 +31,7 @@ import {
  * Error. This matches how `promisify(execFile)` sees the result.
  */
 function stubProbe(missing: readonly string[]): void {
+  // PATH probe (used for xcrun and any non-Android dep): mock /bin/sh `command -v <dep>`
   execFileMock.mockImplementation(
     (
       _cmd: string,
@@ -33,12 +45,18 @@ function stubProbe(missing: readonly string[]): void {
       else cb(null, `/usr/bin/${dep}\n`, "");
     }
   );
+  // Android resolver path (used for adb / emulator): return null when the
+  // caller wants the dep treated as missing, otherwise an absolute path.
+  resolveAndroidBinaryMock.mockImplementation(async (name: string) => {
+    return missing.includes(name) ? null : `/usr/bin/${name}`;
+  });
 }
 
 describe("check-deps", () => {
   beforeEach(() => {
     __resetDepCacheForTests();
     execFileMock.mockReset();
+    resolveAndroidBinaryMock.mockReset();
   });
 
   it("returns without throwing when all deps are on PATH", async () => {

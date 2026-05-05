@@ -38,6 +38,15 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// `boot-device` now goes through `resolveAndroidBinary` for both ensureDep
+// and the spawn path. Stub the resolver to return the bare name so existing
+// `cmd === "adb" / "emulator"` and `spawnMock("emulator", ...)` matchers fire
+// regardless of host SDK install state.
+vi.mock("../src/utils/android-binary", () => ({
+  resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => name),
+  __resetAndroidBinaryCacheForTesting: () => {},
+}));
+
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 import {
   __resetInFlightBootsForTesting,

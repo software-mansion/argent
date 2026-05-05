@@ -25,6 +25,13 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// `runAdb` resolves adb to an absolute path before spawning. Stub the
+// resolver to return the bare name so existing `cmd === "adb"` mocks fire.
+vi.mock("../src/utils/android-binary", () => ({
+  resolveAndroidBinary: vi.fn(async (name: "adb" | "emulator") => name),
+  __resetAndroidBinaryCacheForTesting: () => {},
+}));
+
 import { waitForBootCompleted } from "../src/utils/adb";
 
 beforeEach(() => {

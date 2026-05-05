@@ -57,34 +57,37 @@ describe("parseUiAutomatorDump", () => {
 <hierarchy rotation="0">
   <node index="0" text="" resource-id="" class="android.widget.FrameLayout" package="com.example.app" content-desc="" bounds="[0,0][1080,1920]">
     <node index="0" text="Sign in" resource-id="com.example.app:id/title" class="android.widget.TextView" package="com.example.app" content-desc="" bounds="[100,200][980,280]" />
-    <node index="1" text="" resource-id="com.example.app:id/email" class="android.widget.EditText" package="com.example.app" content-desc="Email address" bounds="[100,400][980,500]" />
-    <node index="2" text="Submit" resource-id="com.example.app:id/submit" class="android.widget.Button" package="com.example.app" content-desc="" bounds="[100,800][980,900]" />
+    <node index="1" text="" resource-id="com.example.app:id/email" class="android.widget.EditText" package="com.example.app" content-desc="Email address" focusable="true" clickable="true" bounds="[100,400][980,500]" />
+    <node index="2" text="Submit" resource-id="com.example.app:id/submit" class="android.widget.Button" package="com.example.app" content-desc="" clickable="true" bounds="[100,800][980,900]" />
   </node>
 </hierarchy>`;
+
+  // The v2 trim flattens layout-only wrappers (FrameLayout with no own
+  // info) so the inner widgets surface directly under the Screen root —
+  // tree.children = [TextView, EditText, Button]. The TextView/EditText/Button
+  // path now lives at tree.children[0], not tree.children[0].children[0].
 
   it("returns a synthetic Screen root with full-screen frame", () => {
     const tree = parseUiAutomatorDump(sampleXml, 1080, 1920);
     expect(tree.role).toBe("Screen");
     expect(tree.frame).toEqual({ x: 0, y: 0, width: 1, height: 1 });
-    expect(tree.children).toHaveLength(1); // FrameLayout root
+    // FrameLayout passthrough → 3 leaf widgets surface as Screen children.
+    expect(tree.children).toHaveLength(3);
   });
 
   it("normalizes pixel bounds to 0–1 using the provided screen size", () => {
     const tree = parseUiAutomatorDump(sampleXml, 1080, 1920);
-    // Dive into the FrameLayout → first child (the TextView with "Sign in")
-    const frame = tree.children[0]!.children[0]!.frame;
-    expect(frame.x).toBeCloseTo(100 / 1080, 3);
-    expect(frame.y).toBeCloseTo(200 / 1920, 3);
-    expect(frame.width).toBeCloseTo((980 - 100) / 1080, 3);
-    expect(frame.height).toBeCloseTo((280 - 200) / 1920, 3);
+    const title = tree.children[0]!;
+    expect(title.label).toBe("Sign in");
+    expect(title.frame.x).toBeCloseTo(100 / 1080, 3);
+    expect(title.frame.y).toBeCloseTo(200 / 1920, 3);
+    expect(title.frame.width).toBeCloseTo((980 - 100) / 1080, 3);
+    expect(title.frame.height).toBeCloseTo((280 - 200) / 1920, 3);
   });
 
   it("maps class → role and populates label/identifier/value appropriately", () => {
     const tree = parseUiAutomatorDump(sampleXml, 1080, 1920);
-    const children = tree.children[0]!.children;
-    const title = children[0]!;
-    const email = children[1]!;
-    const submit = children[2]!;
+    const [title, email, submit] = tree.children as [typeof tree, typeof tree, typeof tree];
 
     expect(title.role).toBe("StaticText");
     expect(title.label).toBe("Sign in");
@@ -93,9 +96,11 @@ describe("parseUiAutomatorDump", () => {
     expect(email.role).toBe("TextField");
     expect(email.label).toBe("Email address"); // content-desc wins over empty text
     expect(email.value).toBeUndefined();
+    expect(email.clickable).toBe(true); // v2 surfaces interactivity flags
 
     expect(submit.role).toBe("Button");
     expect(submit.label).toBe("Submit"); // text is used when content-desc is empty
+    expect(submit.clickable).toBe(true);
   });
 
   it("produces output matching the shared DescribeNode schema", () => {
@@ -106,11 +111,16 @@ describe("parseUiAutomatorDump", () => {
   it("strips the trailing `UI hierchary dumped to:` status line from the raw dump", () => {
     const withTrailer = sampleXml + "\nUI hierchary dumped to: /dev/tty\n";
     const tree = parseUiAutomatorDump(withTrailer, 1080, 1920);
-    expect(tree.children).toHaveLength(1);
+    // Same flattened shape as the trim-free run.
+    expect(tree.children).toHaveLength(3);
   });
 
-  it("returns a zero-frame value when the screen size is zero (defensive)", () => {
+  it("drops every node when the screen size is zero (defensive)", () => {
+    // The v2 trim treats screen size 0×0 as "nothing on screen", so every
+    // node fails the visibility check and the tree empties out. Previous
+    // behaviour was to surface a zero-area frame; the trim's invariant is
+    // stronger and easier to reason about.
     const tree = parseUiAutomatorDump(sampleXml, 0, 0);
-    expect(tree.children[0]!.frame).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+    expect(tree.children).toHaveLength(0);
   });
 });

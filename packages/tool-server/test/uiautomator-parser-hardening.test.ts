@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  convertUiAutomatorNode,
-  parseUiAutomatorDump,
-  parseUiAutomatorXml,
-} from "../src/utils/uiautomator-parser";
+import { parseUiAutomatorDump, parseUiAutomatorXml } from "../src/utils/uiautomator-parser";
 
 describe("uiautomator numeric entities (review #5)", () => {
   it("decodes &#N; decimal character references in text / content-desc", () => {
@@ -121,7 +117,9 @@ describe("uiautomator deeply-nested tree (review #6)", () => {
     expect(() => parseUiAutomatorDump(xml, depth, depth)).not.toThrow();
   });
 
-  it("parseUiAutomatorXml + convertUiAutomatorNode together handle 10k deep trees", () => {
+  it("parses a 10k-deep tree to a usable XML AST without overflow", () => {
+    // Same defence as the previous test, but checking the XML-parser stage in
+    // isolation: a 10k-nested `<node>` chain must produce a walkable AST.
     const depth = 10_000;
     let xml = `<?xml version='1.0' ?>\n<hierarchy rotation="0">\n`;
     for (let i = 0; i < depth; i++) {
@@ -130,10 +128,9 @@ describe("uiautomator deeply-nested tree (review #6)", () => {
     for (let i = 0; i < depth; i++) xml += `</node>\n`;
     xml += `</hierarchy>\n`;
 
-    const parsed = parseUiAutomatorXml(xml)!;
-    // Navigate down to the single `<node>` child of the root and convert it.
-    const topNode = parsed.children[0]!;
-    expect(() => convertUiAutomatorNode(topNode, 100, 100)).not.toThrow();
+    const parsed = parseUiAutomatorXml(xml);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.children).toHaveLength(1);
   });
 });
 
