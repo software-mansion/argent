@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { spawn, execSync } from "child_process";
+import { spawn, execSync, type ChildProcess } from "child_process";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
@@ -8,8 +8,19 @@ import {
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+import { listenForDarwinNotification, type NotifyHandle } from "../../../utils/ios-profiler/notify";
+import { waitForXctraceReady } from "../../../utils/ios-profiler/startup";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
+const STARTUP_TIMEOUT_MS = 10_000;
+const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
+const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
+const RECORDING_CAP_MS = 10 * 60 * 1000;
+const MAX_START_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 1_200;
+// stderr prefix emitted by xctrace's own process resolver when the
+// `--attach <name>` lookup misses.
+const COLD_START_SIGNATURE = "Cannot find process matching name:";
 
 const zodSchema = z.object({
   device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
@@ -33,10 +44,19 @@ interface AppInfo {
 }
 
 function detectRunningApp(udid: string): string {
-  // 1. Get running UIKitApplication processes
-  const launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
-    encoding: "utf-8",
-  });
+  let launchctlOutput: string;
+  try {
+    launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+    );
+  }
 
   const runningBundleIds = new Set<string>();
   for (const line of launchctlOutput.split("\n")) {
@@ -52,14 +72,22 @@ function detectRunningApp(udid: string): string {
     );
   }
 
-  // 2. Get installed app metadata
-  const listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
-    encoding: "utf-8",
-  });
+  let listAppsOutput: string;
+  try {
+    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+    );
+  }
 
   const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
 
-  // 3. Cross-reference: running user apps
   const runningUserApps: AppInfo[] = [];
   for (const [, appInfo] of Object.entries(installedApps)) {
     if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
@@ -86,6 +114,65 @@ function detectRunningApp(udid: string): string {
   }
 
   return runningUserApps[0].CFBundleExecutable;
+}
+
+/**
+ * Subscribe-before-spawn for the locale-robust ready signal. Darwin
+ * notifications are not queued, so the listener must be registered before
+ * xctrace can fire `--notify-tracing-started`. Returns null if notifyutil
+ * fails to register in time — the caller falls back to the stdout substring
+ * match that `waitForXctraceReady` always listens for.
+ */
+async function registerStartupNotify(name: string): Promise<NotifyHandle | null> {
+  let handle: NotifyHandle;
+  try {
+    handle = listenForDarwinNotification(name);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[native-profiler] failed to spawn notifyutil (${msg}); falling back to stdout substring match.\n`
+    );
+    return null;
+  }
+
+  const ready = await Promise.race([
+    handle.ready.then(() => true as const),
+    new Promise<false>((r) => setTimeout(() => r(false), NOTIFY_REGISTER_TIMEOUT_MS)),
+  ]);
+  if (ready) return handle;
+
+  handle.cancel();
+  process.stderr.write(
+    `[native-profiler] notifyutil did not register within ${NOTIFY_REGISTER_TIMEOUT_MS} ms; ` +
+      `falling back to stdout substring match.\n`
+  );
+  return null;
+}
+
+function resetStartState(api: NativeProfilerSessionApi): void {
+  api.xctracePid = null;
+  api.xctraceProcess = null;
+  api.traceFile = null;
+  api.appProcess = null;
+}
+
+export function handleXctraceExit(
+  api: NativeProfilerSessionApi,
+  code: number | null,
+  signal: string | null
+): void {
+  if (!api.profilingActive) return;
+  if (api.recordingTimeout) {
+    clearTimeout(api.recordingTimeout);
+    api.recordingTimeout = null;
+  }
+  api.xctracePid = null;
+  api.xctraceProcess = null;
+  api.profilingActive = false;
+  if (!api.recordingTimedOut) {
+    api.recordingExitedUnexpectedly = true;
+  }
+  api.lastExitInfo = { code, signal };
 }
 
 export const nativeProfilerStartTool: ToolDefinition<
@@ -122,11 +209,18 @@ Fails if no app is running on the device, the platform is not supported yet, or 
       .slice(0, 15);
     const outputFile = path.join(debugDir, `native-profiler-${timestamp}.trace`);
 
-    api.appProcess = appProcess;
-    api.traceFile = outputFile;
+    api.recordingTimedOut = false;
+    api.recordingExitedUnexpectedly = false;
+    api.lastExitInfo = null;
 
-    return new Promise((resolve, reject) => {
-      const xctraceProcess = spawn("xctrace", [
+    const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
+      api.appProcess = appProcess;
+      api.traceFile = outputFile;
+
+      const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
+      const notify = await registerStartupNotify(notifyName);
+
+      const xctraceArgs = [
         "record",
         "--template",
         templatePath,
@@ -136,58 +230,92 @@ Fails if no app is running on the device, the platform is not supported yet, or 
         appProcess,
         "--output",
         outputFile,
-      ]);
+        "--no-prompt",
+      ];
+      if (notify) {
+        xctraceArgs.push("--notify-tracing-started", notifyName);
+      }
 
+      const xctraceProcess = spawn("xctrace", xctraceArgs, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       api.xctracePid = xctraceProcess.pid ?? null;
+      api.xctraceProcess = xctraceProcess;
 
-      xctraceProcess.stdout.on("data", (data: Buffer) => {
-        const output = data.toString();
+      try {
+        await waitForXctraceReady(xctraceProcess, { notify, timeoutMs: STARTUP_TIMEOUT_MS });
+      } catch (err) {
+        resetStartState(api);
+        throw err;
+      }
 
-        if (output.includes("Ctrl-C to stop") || output.includes("Starting recording")) {
-          api.profilingActive = true;
-          api.wallClockStartMs = Date.now();
-          if (api.xctracePid) {
-            api.recordingTimeout = setTimeout(
-              () => {
-                xctraceProcess.kill("SIGINT");
-                api.profilingActive = false;
-                api.xctracePid = null;
-                api.recordingTimeout = null;
-              },
-              10 * 60 * 1000
-            );
-            resolve({
-              status: "recording",
-              pid: api.xctracePid,
-              traceFile: outputFile,
-            });
-          }
+      if (!xctraceProcess.pid) {
+        // pid is set synchronously after spawn — guard so we never resolve
+        // with `pid: 0` if Node ever changes that contract.
+        try {
+          xctraceProcess.kill("SIGKILL");
+        } catch {
+          // already dead
         }
-      });
+        resetStartState(api);
+        throw new Error("xctrace process has no pid; cannot resolve start.");
+      }
 
-      xctraceProcess.stderr.on("data", (data: Buffer) => {
-        const errorOutput = data.toString();
-        if (
-          errorOutput.includes("Target failed to run") ||
-          errorOutput.includes("failed with errors")
-        ) {
-          api.xctracePid = null;
-          if (api.recordingTimeout) {
-            clearTimeout(api.recordingTimeout);
-            api.recordingTimeout = null;
-          }
-          reject(new Error(`Failed to attach to the target process: ${errorOutput}`));
-        }
-      });
+      return { child: xctraceProcess, pid: xctraceProcess.pid };
+    };
 
-      xctraceProcess.on("error", (err: Error) => {
-        api.xctracePid = null;
-        if (api.recordingTimeout) {
-          clearTimeout(api.recordingTimeout);
-          api.recordingTimeout = null;
+    // Bounded retry scoped to this single call: xctrace's process resolver can
+    // miss a freshly cold-launched app even after launchd has registered it.
+    // Same shape as fetchWithReconnect in packages/argent-mcp/src/mcp-server.ts.
+    const startMs = Date.now();
+    const startWithRetry = async (): Promise<{ child: ChildProcess; pid: number }> => {
+      for (let attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
+        try {
+          return await attemptStart();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const isColdStart = msg.includes(COLD_START_SIGNATURE);
+          if (!isColdStart) throw err;
+          if (attempt >= MAX_START_ATTEMPTS) break;
+          process.stderr.write(
+            `[native-profiler] xctrace could not find "${appProcess}" on attempt ${attempt}/${MAX_START_ATTEMPTS}; ` +
+              `waiting ${RETRY_DELAY_MS} ms for cold-start to settle, then retrying.\n`
+          );
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
         }
-        reject(new Error(`Failed to start xctrace: ${err.message}`));
-      });
-    });
+      }
+      const totalMs = Date.now() - startMs;
+      throw new Error(
+        `xctrace could not find process "${appProcess}" after ${MAX_START_ATTEMPTS} attempts within ${totalMs} ms. ` +
+          `The app appears to be cold-launching — its bundle is registered with launchd, but xctrace's process resolver hasn't seen it yet. ` +
+          `Wait 1–2 seconds for the app to finish launching and retry. ` +
+          `If the wrong app is being detected, pass app_process explicitly with the CFBundleExecutable.`
+      );
+    };
+
+    const { child: xctraceProcess, pid: xctracePid } = await startWithRetry();
+
+    api.profilingActive = true;
+    api.wallClockStartMs = Date.now();
+    api.recordingTimeout = setTimeout(() => {
+      try {
+        xctraceProcess.kill("SIGINT");
+      } catch {
+        // already dead
+      }
+      api.profilingActive = false;
+      api.xctracePid = null;
+      api.xctraceProcess = null;
+      api.recordingTimeout = null;
+      api.recordingTimedOut = true;
+    }, RECORDING_CAP_MS);
+
+    xctraceProcess.on("exit", (code, signal) => handleXctraceExit(api, code, signal));
+
+    return {
+      status: "recording",
+      pid: xctracePid,
+      traceFile: outputFile,
+    };
   },
 };

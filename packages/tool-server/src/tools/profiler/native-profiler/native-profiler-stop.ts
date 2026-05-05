@@ -7,19 +7,24 @@ import {
 import { resolveDevice } from "../../../utils/device-info";
 import { exportIosTraceData } from "../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
+import { shutdownChild } from "../../../utils/ios-profiler/lifecycle";
+
+const STOP_GRACE_MS = 30_000;
+const STOP_TERM_MS = 5_000;
+const STOP_KILL_MS = 5_000;
 
 const zodSchema = z.object({
   device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
 });
 
-export const nativeProfilerStopTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  {
-    traceFile: string;
-    exportedFiles: Record<string, string | null>;
-    exportDiagnostics: ExportDiagnostics;
-  }
-> = {
+interface StopResult {
+  traceFile: string;
+  exportedFiles: Record<string, string | null>;
+  exportDiagnostics: ExportDiagnostics;
+  warning?: string;
+}
+
+export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
   requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true } },
@@ -35,7 +40,33 @@ Fails if no active native-profiler-start session exists for the given device_id.
   async execute(services) {
     const api = services.session as NativeProfilerSessionApi;
 
-    if (!api.profilingActive || !api.xctracePid || !api.traceFile) {
+    // Recover a recording where xctrace is already gone but the trace bundle
+    // is on disk: either the in-process 10-min cap fired, or xctrace exited
+    // unexpectedly (attached app died, simulator daemon hiccup, etc).
+    if ((api.recordingTimedOut || api.recordingExitedUnexpectedly) && api.traceFile) {
+      const traceFile = api.traceFile;
+      const wasTimeout = api.recordingTimedOut;
+      const exitInfo = api.lastExitInfo;
+      api.recordingTimedOut = false;
+      api.recordingExitedUnexpectedly = false;
+      api.lastExitInfo = null;
+
+      const { files: exportedFiles, diagnostics } = exportIosTraceData(traceFile);
+      api.exportedFiles = exportedFiles;
+
+      const warning = wasTimeout
+        ? "Recording timed out at 10 min cap; exported the partial trace. " +
+          "Call native-profiler-start again for a fresh recording."
+        : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
+          `signal=${exitInfo?.signal ?? "?"}); exported the partial trace. ` +
+          "Common causes: attached app terminated, simulator daemon restart. " +
+          "Call native-profiler-start again for a fresh recording.";
+      process.stderr.write(`[native-profiler] ${warning}\n`);
+
+      return { traceFile, exportedFiles, exportDiagnostics: diagnostics, warning };
+    }
+
+    if (!api.profilingActive || !api.xctraceProcess || !api.traceFile) {
       throw new Error(
         "No active native profiling session found. Call native-profiler-start first."
       );
@@ -46,31 +77,35 @@ Fails if no active native-profiler-start session exists for the given device_id.
       api.recordingTimeout = null;
     }
 
-    const pidToKill = api.xctracePid;
-    process.kill(pidToKill, "SIGINT");
-
-    // Wait for xctrace process to finish packaging
-    await new Promise<void>((resolve) => {
-      const checkInterval = setInterval(() => {
-        try {
-          process.kill(pidToKill, 0);
-        } catch {
-          clearInterval(checkInterval);
-          resolve();
-        }
-      }, 1000);
+    const result = await shutdownChild(api.xctraceProcess, {
+      graceMs: STOP_GRACE_MS,
+      termMs: STOP_TERM_MS,
+      killMs: STOP_KILL_MS,
     });
+
+    let warning: string | undefined;
+    if (!result.clean) {
+      warning =
+        `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
+        `${result.signalUsed} was used. Trace bundle may be incomplete.`;
+      process.stderr.write(`[native-profiler] ${warning}\n`);
+    }
 
     api.profilingActive = false;
     api.xctracePid = null;
+    api.xctraceProcess = null;
+    api.recordingExitedUnexpectedly = false;
+    api.lastExitInfo = null;
 
     const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile);
     api.exportedFiles = exportedFiles;
 
-    return {
+    const stopResult: StopResult = {
       traceFile: api.traceFile,
       exportedFiles,
       exportDiagnostics: diagnostics,
     };
+    if (warning) stopResult.warning = warning;
+    return stopResult;
   },
 };
