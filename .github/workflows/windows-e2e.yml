@@ -85,32 +85,8 @@ jobs:
           node packages\argent\dist\tool-server.cjs --get-available-tools | Out-Null
 
       - name: Assert simulator-server resolver fails closed on Windows
-        # On Windows, `simulatorServerBinaryPath()` should throw because
-        # `simulator-server.exe` isn't shipped. Asserting the exact failure
-        # mode here means a future regression that silently re-introduced
-        # the vanilla binary would surface as a *passing* simulator path,
-        # not as silent feature drift.
         shell: pwsh
-        env:
-          ARGENT_SIMULATOR_SERVER_DIR: "${{ github.workspace }}\\packages\\argent\\bin"
-        run: |
-          $script = @"
-          try {
-            require('./packages/native-devtools-ios/dist/index.js').simulatorServerBinaryPath();
-            console.error('REGRESSION: simulatorServerBinaryPath() did not throw on Windows');
-            process.exit(1);
-          } catch (e) {
-            if (!String(e.message).includes('simulator-server')) {
-              console.error('unexpected error: ' + e.message);
-              process.exit(1);
-            }
-            console.log('OK fail-closed: ' + e.message);
-          }
-          "@
-          $tmp = New-TemporaryFile
-          Set-Content -Path $tmp.FullName -Value $script
-          node $tmp.FullName
-          if ($LASTEXITCODE -ne 0) { throw "fail-closed assertion failed" }
+        run: node scripts/assert-windows-fails-closed.cjs
 
   # Real Android emulator + drive a tool through the full tool-server
   # transport. Disabled today because:
