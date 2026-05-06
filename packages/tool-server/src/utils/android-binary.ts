@@ -75,10 +75,14 @@ async function probe(name: AndroidBinaryName): Promise<string | null> {
         timeout: 2_000,
       }));
     }
-    const trimmed = stdout.split(/\r?\n/)[0]?.trim();
     // `command -v` / `where` print nothing on miss but return non-zero, so we
-    // only get here on success — but defend against an empty stdout anyway
-    // in case a future shell quirk decouples the two.
+    // only get here on success. Pick the first non-empty line — `where` can
+    // emit a leading blank line in some shells, and command-v sometimes
+    // appends a trailing newline; both are tolerated by `.find(Boolean)`.
+    const trimmed = stdout
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .find(Boolean);
     if (trimmed) return trimmed;
   } catch {
     // fall through to SDK-root fallbacks

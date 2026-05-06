@@ -47,10 +47,12 @@ export const stopMetroTool: ToolDefinition<
  * process is listening on this TCP port" — `-t` returns just the PIDs, `-i`
  * filters to network sockets.
  *
- * On Windows: `netstat -ano` is the analogue. We grep its output for a
- * "LISTENING" line whose local-address column ends in `:<port>` — every
- * netstat row has the PID in the trailing column. (`-n` suppresses DNS
- * lookups, `-a` includes listening sockets, `-o` adds the PID column.)
+ * On Windows: PowerShell `Get-NetTCPConnection` is the resilient choice.
+ * `netstat -ano` would work, but its output is *localized* on non-English
+ * Windows installs ("ESCUCHANDO" / "ÉCOUTE" / "ABHÖREN" instead of
+ * "LISTENING"), so a regex on the English state name silently fails on every
+ * non-English locale. `Get-NetTCPConnection` returns structured objects
+ * keyed by enum values that don't change with locale.
  *
  * Returns an empty list on any failure (the lookup binary missing,
  * non-zero exit, parse failure) so callers don't have to distinguish
@@ -59,18 +61,22 @@ export const stopMetroTool: ToolDefinition<
 function findPidsListeningOnPort(port: number): number[] {
   try {
     if (process.platform === "win32") {
-      const output = execSync("netstat -ano -p TCP", {
+      // `Get-NetTCPConnection -State Listen` filters server sockets; we then
+      // pick the matching local port and emit OwningProcess as one PID per
+      // line. `-ErrorAction SilentlyContinue` so a no-match exits 0 instead
+      // of throwing. The regex on the integer port is bounded server-side,
+      // not from user input — but `port` is validated by zod above anyway.
+      const ps =
+        `Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue ` +
+        `| Select-Object -ExpandProperty OwningProcess`;
+      const output = execSync(`powershell.exe -NoProfile -Command "${ps}"`, {
         encoding: "utf-8",
         timeout: 5_000,
-      });
-      // Match a TCP row in the LISTENING state whose local address ends in
-      // `:<port>`. `\s+` separates columns; `(\d+)` at end-of-line is the
-      // PID. Address format is either `0.0.0.0:8081` (IPv4) or `[::]:8081`
-      // (IPv6) — both end in `:<port>`.
-      const re = new RegExp(String.raw`^\s*TCP\s+\S+:${port}\s+\S+\s+LISTENING\s+(\d+)\s*$`, "gm");
+      }).trim();
+      if (!output) return [];
       const seen = new Set<number>();
-      for (const m of output.matchAll(re)) {
-        const pid = parseInt(m[1]!, 10);
+      for (const line of output.split(/\r?\n/)) {
+        const pid = parseInt(line.trim(), 10);
         if (!Number.isNaN(pid)) seen.add(pid);
       }
       return [...seen];
@@ -85,8 +91,9 @@ function findPidsListeningOnPort(port: number): number[] {
       .map((s) => parseInt(s.trim(), 10))
       .filter((n) => !Number.isNaN(n));
   } catch {
-    // lsof / netstat exits non-zero when no process is found, or if the tool
-    // isn't installed. Either way we want "no PIDs found" semantics.
+    // lsof / Get-NetTCPConnection exits non-zero when no process is found,
+    // or if the tool isn't installed. Either way we want "no PIDs found"
+    // semantics.
     return [];
   }
 }

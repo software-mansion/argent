@@ -64,23 +64,32 @@ jobs:
 
       - name: Run argent CLI offline smoke
         shell: pwsh
+        timeout-minutes: 2
         run: |
-          # `argent --version` and `argent tools` must work without an MCP
-          # config or simulator booted — they exercise the dispatcher and the
-          # tool-server bundle, not the device path.
+          # `argent --version` exercises the dispatcher's argv parsing and
+          # version-string lookup. The tool-server bundle's `--get-available-tools`
+          # mode dumps the registry and exits, which proves the bundle loaded
+          # without crashing on Windows-only paths (no /bin/sh, /tmp, /dev/null
+          # at module load). Calling the tool-server bundle directly instead of
+          # `argent tools` because the CLI's `tools` subcommand starts a
+          # long-running server, not a one-shot lister.
           node packages\argent\dist\cli.js --version
-          node packages\argent\dist\cli.js tools --get-available-tools | Out-Null
+          node packages\argent\dist\tool-server.cjs --get-available-tools | Out-Null
 
   # Heavy pass: real Android emulator + drive a tool through the full
-  # tool-server transport. Gated to `workflow_dispatch` and the windows-support
-  # branches so PRs to main don't pay the boot cost on every push.
+  # tool-server transport. Gated to `workflow_dispatch` ONLY because the
+  # Android emulator on hosted `windows-latest` runners has WHPX available
+  # but graphics initialization frequently stalls past the 10-minute boot
+  # window — even with `-no-window -gpu swiftshader_indirect`. Hosted CI is
+  # not a reliable proxy for an actual user's Windows machine here. Run
+  # manually when validating a Windows-touching change end-to-end, or run
+  # the same `scripts/windows-e2e.cjs` against a local UTM/Parallels VM
+  # (see `docs/windows-support.md`).
   windows-android-e2e:
     name: Android emulator E2E (windows-latest)
-    if: |
-      github.event_name == 'workflow_dispatch'
-      || github.ref == 'refs/heads/feat/windows-support'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -145,20 +154,30 @@ jobs:
       - name: Launch Android emulator
         shell: pwsh
         run: |
-          # Headless boot. `-no-window` cuts ~30s off boot; `-no-snapshot`
-          # forces a cold boot so we test the full path. `-no-audio` and
-          # `-no-boot-anim` shave more time. Background the emulator and let
-          # the next step poll for boot completion.
+          # Headless boot. `-no-window` skips the GUI; `-no-snapshot` and
+          # `-no-snapshot-save` force a clean cold boot end-to-end (no AVD
+          # state mutation across runs). `-no-audio` / `-no-boot-anim`
+          # eliminate slow-path shaders. `-no-metrics` blocks a Google
+          # telemetry call that's been observed to add ~20s on Windows CI.
+          # `-accel on` is the safe form on windows-latest where WHPX is
+          # available; on a host without WHPX the emulator quietly falls
+          # back to TCG. Background the process — the next step polls for
+          # boot completion via adb.
           Start-Process -FilePath emulator -ArgumentList @(
             "-avd","argent_e2e",
-            "-no-window","-no-snapshot","-no-audio","-no-boot-anim","-gpu","swiftshader_indirect"
+            "-no-window","-no-snapshot","-no-snapshot-save","-no-audio","-no-boot-anim",
+            "-no-metrics","-accel","on","-gpu","swiftshader_indirect","-verbose"
           ) -RedirectStandardOutput emulator.log -RedirectStandardError emulator.err.log
 
       - name: Wait for emulator to fully boot
         shell: pwsh
-        timeout-minutes: 10
+        timeout-minutes: 25
         run: |
-          $deadline = (Get-Date).AddMinutes(10)
+          # 25-minute window: hosted Windows runners boot Android-34
+          # google_apis/x86_64 in 6-15 minutes when WHPX cooperates and as
+          # long as 20+ minutes when graphics init stalls. Aborting earlier
+          # would catch a slow-but-healthy boot as a failure.
+          $deadline = (Get-Date).AddMinutes(25)
           while ((Get-Date) -lt $deadline) {
             $serial = (& adb devices) -split "`n" `
               | Where-Object { $_ -match "^emulator-\d+\s+device" } `

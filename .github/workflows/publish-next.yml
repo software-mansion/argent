@@ -41,13 +41,13 @@ jobs:
           REF="${{ inputs.ref }}"
           echo "tag=argent-${REF//\//-}" >> $GITHUB_OUTPUT
 
-      - name: Download signed simulator-server binary
-        run: bash scripts/download-simulator-server.sh
+      - name: Download signed simulator-server binaries (all platforms)
+        run: node scripts/download-simulator-server.cjs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download signed native binaries (dylibs + ax-service)
-        run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        run: node scripts/download-native-binaries.cjs "${{ steps.binaries_tag.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

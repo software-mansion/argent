@@ -376,6 +376,12 @@ const zedAdapter: McpConfigAdapter = {
   name: "Zed",
 
   detect(): boolean {
+    // Mirror the platform branch in globalPath(): Zed's user data dir is
+    // `%APPDATA%\Zed` on Windows, not `~/.config/zed`.
+    if (process.platform === "win32") {
+      const appData = process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming");
+      return dirExists(path.join(appData, "Zed"));
+    }
     return dirExists(path.join(homedir(), ".config", "zed"));
   },
 
@@ -425,18 +431,17 @@ const zedAdapter: McpConfigAdapter = {
   // documented opt-in; built-in security rules still protect against
   // destructive operations.
   addAllowlist(root: string, scope: "local" | "global"): void {
+    // Re-use globalPath() for the global scope so the AppData branch on
+    // Windows is honored. Otherwise this would write the allowlist into
+    // `~/.config/zed/settings.json` on Windows — a file Zed doesn't read.
     const settingsPath =
-      scope === "global"
-        ? path.join(homedir(), ".config", "zed", "settings.json")
-        : path.join(root, ".zed", "settings.json");
+      scope === "global" ? zedAdapter.globalPath()! : path.join(root, ".zed", "settings.json");
     editJsoncFile(settingsPath, ["agent", "tool_permissions", "default"], "allow");
   },
 
   removeAllowlist(root: string, scope: "local" | "global"): void {
     const settingsPath =
-      scope === "global"
-        ? path.join(homedir(), ".config", "zed", "settings.json")
-        : path.join(root, ".zed", "settings.json");
+      scope === "global" ? zedAdapter.globalPath()! : path.join(root, ".zed", "settings.json");
     if (!fs.existsSync(settingsPath)) return;
     const config = readJsonc(settingsPath);
     const perms = (config.agent as Record<string, unknown>)?.tool_permissions as

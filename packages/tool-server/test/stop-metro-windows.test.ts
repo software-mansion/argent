@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Capture per-test execSync stub so each case can supply its own netstat output.
+// Capture per-test execSync stub so each case can supply its own
+// powershell / lsof output.
 const execSyncMock = vi.fn();
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -21,24 +22,11 @@ function restorePlatform() {
   Object.defineProperty(process, "platform", { value: ORIGINAL_PLATFORM, configurable: true });
 }
 
-// Real `netstat -ano -p TCP` output captured from a Windows host running Metro.
-// Includes IPv4, IPv6, established connections (must be ignored), a non-Metro
-// LISTENING row, and a duplicate PID across two address families.
-const NETSTAT_FIXTURE = [
-  "",
-  "Active Connections",
-  "",
-  "  Proto  Local Address          Foreign Address        State           PID",
-  "  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1024",
-  "  TCP    0.0.0.0:8081           0.0.0.0:0              LISTENING       4321",
-  "  TCP    0.0.0.0:49664          0.0.0.0:0              LISTENING       856",
-  "  TCP    127.0.0.1:8081         127.0.0.1:55321        ESTABLISHED     4321",
-  "  TCP    127.0.0.1:55321        127.0.0.1:8081         ESTABLISHED     9876",
-  "  TCP    [::]:135               [::]:0                 LISTENING       1024",
-  "  TCP    [::]:8081              [::]:0                 LISTENING       4321",
-  "  TCP    [::1]:8082             [::]:0                 LISTENING       7777",
-  "",
-].join("\r\n");
+// `Get-NetTCPConnection -State Listen -LocalPort <port> | Select-Object
+// -ExpandProperty OwningProcess` emits one PID per matching socket, one per
+// line. A Metro listener bound on both IPv4 and IPv6 produces two lines with
+// the same PID (we dedupe via Set in the resolver).
+const POWERSHELL_DUAL_STACK = "4321\r\n4321\r\n";
 
 describe("stop-metro findPidsListeningOnPort (Windows)", () => {
   let stopMetroTool: typeof import("../src/tools/simulator/stop-metro").stopMetroTool;
@@ -58,60 +46,57 @@ describe("stop-metro findPidsListeningOnPort (Windows)", () => {
     restorePlatform();
   });
 
-  it("invokes netstat -ano -p TCP on Windows", async () => {
+  it("invokes powershell Get-NetTCPConnection on Windows", async () => {
     execSyncMock.mockReturnValue("");
     await stopMetroTool.execute!({}, { port: 8081 });
     expect(execSyncMock).toHaveBeenCalledOnce();
-    expect(execSyncMock.mock.calls[0]![0]).toBe("netstat -ano -p TCP");
+    const cmd = execSyncMock.mock.calls[0]![0] as string;
+    // Locale-independent: we use Get-NetTCPConnection (returns enum-typed
+    // results) instead of netstat (whose state column is localized on
+    // non-English Windows — "ESCUCHANDO" / "ÉCOUTE" / etc., breaking any
+    // regex anchored on "LISTENING").
+    expect(cmd).toContain("powershell.exe");
+    expect(cmd).toContain("Get-NetTCPConnection");
+    expect(cmd).toContain("-State Listen");
+    expect(cmd).toContain("-LocalPort 8081");
+    expect(cmd).toContain("OwningProcess");
   });
 
-  it("extracts the unique PID for Metro on port 8081 (LISTENING only, IPv4+IPv6 collapsed)", async () => {
-    execSyncMock.mockReturnValue(NETSTAT_FIXTURE);
+  it("dedupes the PID when the listener appears on both IPv4 and IPv6", async () => {
+    execSyncMock.mockReturnValue(POWERSHELL_DUAL_STACK);
     const result = await stopMetroTool.execute!({}, { port: 8081 });
-    // Both `0.0.0.0:8081` and `[::]:8081` LISTENING rows share PID 4321.
-    // ESTABLISHED rows on :8081 (PID 9876 from the client side) must be
-    // ignored — we only want the bundler process, not its clients.
     expect(result).toEqual({ stopped: true, port: 8081, pids: [4321] });
     expect(killSpy).toHaveBeenCalledWith(4321, "SIGTERM");
     expect(killSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("returns stopped: false when no LISTENING row matches the port", async () => {
-    execSyncMock.mockReturnValue(NETSTAT_FIXTURE);
+  it("returns stopped: false when powershell prints nothing", async () => {
+    // -ErrorAction SilentlyContinue makes Get-NetTCPConnection print nothing
+    // when there's no match; the wrapper exits 0 with empty stdout.
+    execSyncMock.mockReturnValue("");
     const result = await stopMetroTool.execute!({}, { port: 9999 });
     expect(result).toEqual({ stopped: false, port: 9999, pids: [] });
     expect(killSpy).not.toHaveBeenCalled();
   });
 
-  it("does not match a substring (port 8081 must not match :80810 or :18081)", async () => {
-    const fixture = [
-      "  TCP    0.0.0.0:80810          0.0.0.0:0              LISTENING       1111",
-      "  TCP    0.0.0.0:18081          0.0.0.0:0              LISTENING       2222",
-      "",
-    ].join("\r\n");
-    execSyncMock.mockReturnValue(fixture);
-    const result = await stopMetroTool.execute!({}, { port: 8081 });
-    expect(result.pids).toEqual([]);
-    expect(result.stopped).toBe(false);
+  it("preserves the port number used in the powershell query", async () => {
+    execSyncMock.mockReturnValue("");
+    await stopMetroTool.execute!({}, { port: 19000 });
+    const cmd = execSyncMock.mock.calls[0]![0] as string;
+    // -LocalPort filtering happens server-side, so the port literal is what
+    // anchors the match. Substring port collisions (e.g. 8081 inside 80810)
+    // can't reach this layer because Get-NetTCPConnection already restricts
+    // to exact-equality port matching.
+    expect(cmd).toMatch(/-LocalPort 19000\b/);
   });
 
-  it("returns empty pids when netstat throws (binary missing / non-zero exit)", async () => {
+  it("returns empty pids when powershell throws (binary missing / non-zero exit)", async () => {
     execSyncMock.mockImplementation(() => {
-      throw new Error("'netstat' is not recognized");
+      throw new Error("'powershell.exe' is not recognized");
     });
     const result = await stopMetroTool.execute!({}, { port: 8081 });
     expect(result).toEqual({ stopped: false, port: 8081, pids: [] });
     expect(killSpy).not.toHaveBeenCalled();
-  });
-
-  it("ignores ESTABLISHED rows even when local port matches", async () => {
-    const fixture = [
-      "  TCP    127.0.0.1:8081         127.0.0.1:55321        ESTABLISHED     5555",
-      "",
-    ].join("\r\n");
-    execSyncMock.mockReturnValue(fixture);
-    const result = await stopMetroTool.execute!({}, { port: 8081 });
-    expect(result.pids).toEqual([]);
   });
 
   it("falls back to lsof on non-Windows platforms", async () => {
@@ -123,7 +108,7 @@ describe("stop-metro findPidsListeningOnPort (Windows)", () => {
     const { stopMetroTool: posixTool } = await import("../src/tools/simulator/stop-metro");
     await posixTool.execute!({}, { port: 8081 });
     expect(execSyncMock).toHaveBeenCalledOnce();
-    // On POSIX we use lsof, not netstat.
+    // On POSIX we still use lsof; the powershell branch is Windows-only.
     expect(execSyncMock.mock.calls[0]![0]).toBe("lsof -ti tcp:8081");
   });
 });

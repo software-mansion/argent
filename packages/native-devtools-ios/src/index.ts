@@ -20,14 +20,17 @@ export const keyboardPatchDylibPath = () => requireDylib("libKeyboardPatch.dylib
 
 const BIN_DIR = process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "bin");
 
-// Windows binaries carry the `.exe` extension; macOS/Linux use bare names.
-// The download/bundle pipeline writes the platform-specific filename into the
-// same `bin/` directory, so the only platform-aware piece is which name to
-// look up. The vanilla upstream `simulator-server-windows.exe` is sufficient
-// for Windows because Windows targets are Android-only — the iOS-specific
-// argent customizations only apply to the macOS build.
+// Each platform ships a separate filename inside `bin/` — the download +
+// bundle pipeline writes all three so the published npm package is
+// platform-agnostic. The vanilla upstream Windows / Linux builds suffice
+// because non-mac targets are Android-only; the iOS-specific argent
+// customizations only matter for the macOS build.
 const SIMULATOR_SERVER_FILENAME =
-  process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
+  process.platform === "win32"
+    ? "simulator-server.exe"
+    : process.platform === "linux"
+      ? "simulator-server-linux"
+      : "simulator-server";
 
 export function simulatorServerBinaryPath(): string {
   const p = path.join(BIN_DIR, SIMULATOR_SERVER_FILENAME);

@@ -40,4 +40,11 @@ if (result.error) {
   console.error(`argent-simulator-server: failed to spawn binary: ${result.error.message}`);
   process.exit(1);
 }
-process.exit(result.status ?? 0);
+// `status` is null when the child was killed by a signal — exit non-zero
+// instead of falsely reporting success. Windows can't forward arbitrary
+// kill signals back to the parent's shell, so a concrete code is what
+// callers (and the npm shim) actually inspect.
+if (typeof result.status === "number") {
+  process.exit(result.status);
+}
+process.exit(1);
