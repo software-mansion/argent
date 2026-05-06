@@ -322,8 +322,6 @@ async function runForeground(
     env,
   });
 
-  let stateWritten = false;
-
   // Forward signals so process supervisors can stop us cleanly. The child has
   // its own SIGINT/SIGTERM handlers that drain HTTP + dispose the registry.
   const forward = (signal: NodeJS.Signals) => () => {
@@ -338,27 +336,31 @@ async function runForeground(
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
 
+  // Register state synchronously so a fast child exit (e.g. EADDRINUSE) cannot
+  // race the write and leave a stale file pointing at a dead pid.
+  let stateWritten = false;
   const childPid = child.pid;
   if (childPid !== undefined) {
-    // Best-effort state-file registration so local `argent run` / `argent mcp`
-    // pick up this server. We can't reliably know when the child has actually
-    // bound the port without reading its stdout (which is inherited here, so
-    // the user sees it live), but the child writes its readiness banner before
-    // it serves any traffic, and the launcher's auto-spawn path is the only
-    // consumer that needs near-instant readiness.
-    writeToolsServerState({
-      port,
-      pid: childPid,
-      startedAt: new Date().toISOString(),
-      bundlePath: paths.bundlePath,
-      host,
-    })
-      .then(() => {
-        stateWritten = true;
-      })
-      .catch(() => {
-        /* non-fatal: foreground run still works without the state file */
-      });
+    try {
+      fs.writeFileSync(
+        STATE_FILE,
+        JSON.stringify(
+          {
+            port,
+            pid: childPid,
+            startedAt: new Date().toISOString(),
+            bundlePath: paths.bundlePath,
+            host,
+          },
+          null,
+          2
+        ) + "\n",
+        "utf8"
+      );
+      stateWritten = true;
+    } catch {
+      /* non-fatal: foreground run still works without the state file */
+    }
   }
 
   await new Promise<void>((resolve) => {
