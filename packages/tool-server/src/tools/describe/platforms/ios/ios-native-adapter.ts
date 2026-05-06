@@ -1,8 +1,8 @@
-import type {
+import {
   NativeDescribeElement,
   NativeDescribeScreenResult,
-} from "../../native-devtools/native-describe-contract";
-import { parseDescribeResult, type DescribeFrame, type DescribeNode } from "../contract";
+} from "../../../native-devtools/native-describe-contract";
+import { DescribeFrame, DescribeNode, parseDescribeResult } from "../../contract";
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
