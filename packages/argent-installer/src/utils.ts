@@ -334,6 +334,37 @@ export function getInstalledVersion(): string | null {
   }
 }
 
+/**
+ * Read the version of the globally-installed argent package — distinct from
+ * {@link getInstalledVersion}, which reads the package.json this code is
+ * currently executing from. When invoked via `npx @swmansion/argent`, the
+ * npx cache is always at the latest published version, so reading
+ * PACKAGE_ROOT/package.json masks an outdated global install and lets the
+ * update check report "already on the latest" incorrectly. This helper
+ * resolves the global binary via `which -a` / `where`, follows symlinks to
+ * the actual entrypoint, and walks up to the owning package.json instead.
+ *
+ * Returns null when argent is not permanently installed on PATH, or when
+ * the global package layout cannot be resolved (e.g., Windows wrapper
+ * scripts that aren't symlinks). Callers should treat null as "could not
+ * determine" — preferable to silently using the running package's version,
+ * which is the bug this guards against.
+ */
+export function getGloballyInstalledVersion(): string | null {
+  const binaryPath = getGlobalBinaryPath();
+  if (!binaryPath) return null;
+  try {
+    const realPath = fs.realpathSync(binaryPath);
+    const pkgRoot = resolvePackageRoot(path.dirname(realPath));
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")) as {
+      version?: string;
+    };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
@@ -368,26 +399,37 @@ export function isTempRunnerPath(binaryPath: string): boolean {
 }
 
 /**
- * True iff argent is permanently installed on the user's PATH (not just being
- * executed transiently from an npx / dlx / bunx cache). On Windows `where`
+ * Resolve the path of the globally-installed argent binary, ignoring
+ * temp-runner caches (npx / pnpm dlx / bunx / yarn dlx). On Windows `where`
  * returns every match, on Unix `which -a` does — we inspect each line so a
- * concurrent npx invocation does not mask a real global install.
+ * concurrent npx invocation does not mask a real global install. Returns
+ * null when argent is not permanently installed on PATH.
  */
-export function isGloballyInstalled(): boolean {
+function getGlobalBinaryPath(): string | null {
   try {
     const cmd = process.platform === "win32" ? "where" : "which -a";
     const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .some((line) => !isTempRunnerPath(line));
+    return (
+      output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .find((line) => !isTempRunnerPath(line)) ?? null
+    );
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * True iff argent is permanently installed on the user's PATH (not just being
+ * executed transiently from an npx / dlx / bunx cache).
+ */
+export function isGloballyInstalled(): boolean {
+  return getGlobalBinaryPath() !== null;
 }
 
 export function isSkillsCliAvailable(): boolean {
