@@ -12,11 +12,11 @@ skipped on non-mac packing hosts entirely.
 `npm run build -w @swmansion/argent` packs three simulator-server binaries
 under `bin/`:
 
-| File                       | Targets                                    |
-| -------------------------- | ------------------------------------------ |
-| `simulator-server`         | macOS (universal) — argent-customized iOS  |
-| `simulator-server.exe`     | Windows x64 — vanilla upstream, Android    |
-| `simulator-server-linux`   | Linux x64 — vanilla upstream (future use)  |
+| File                     | Targets                                   |
+| ------------------------ | ----------------------------------------- |
+| `simulator-server`       | macOS (universal) — argent-customized iOS |
+| `simulator-server.exe`   | Windows x64 — vanilla upstream, Android   |
+| `simulator-server-linux` | Linux x64 — vanilla upstream (future use) |
 
 The runtime resolver in `@argent/native-devtools-ios` picks the right filename
 per `process.platform`. macOS-only artifacts (`*.dylib`, `ax-service`) ship
@@ -27,11 +27,11 @@ Linux or Windows still works for Android-only consumers.
 
 ### Prerequisites
 
-| Tool          | Why                                                                    |
-| ------------- | ---------------------------------------------------------------------- |
-| Node.js 20+   | `argent` itself                                                        |
-| Android SDK   | `adb`, `emulator`, plus a `system-images;android-NN;...` for the AVD   |
-| `ANDROID_HOME`| Pointed at the SDK root — argent's Android-binary resolver checks it   |
+| Tool           | Why                                                                  |
+| -------------- | -------------------------------------------------------------------- |
+| Node.js 20+    | `argent` itself                                                      |
+| Android SDK    | `adb`, `emulator`, plus a `system-images;android-NN;...` for the AVD |
+| `ANDROID_HOME` | Pointed at the SDK root — argent's Android-binary resolver checks it |
 
 `ANDROID_HOME/platform-tools` and `ANDROID_HOME/emulator` need to be on PATH,
 or the resolver will fall back to `$ANDROID_HOME` lookups directly.
@@ -48,7 +48,7 @@ argent init
 - Cursor → `%USERPROFILE%\.cursor\mcp.json`
 - Claude Code → `%USERPROFILE%\.claude.json`
 - Windsurf → `%USERPROFILE%\.codeium\windsurf\mcp_config.json`
-- Zed → `%APPDATA%\Zed\settings.json` *(Windows uses AppData, not `~/.config`)*
+- Zed → `%APPDATA%\Zed\settings.json` _(Windows uses AppData, not `~/.config`)_
 - Gemini → `%USERPROFILE%\.gemini\settings.json`
 - Codex → `%USERPROFILE%\.codex\config.toml`
 - OpenCode → `%USERPROFILE%\.config\opencode\opencode.json`

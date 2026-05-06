@@ -105,11 +105,25 @@ jobs:
         with:
           packages: "platform-tools emulator system-images;android-34;google_apis;x86_64"
 
-      - name: Enable HAXM-equivalent acceleration
-        # windows-latest already has Hyper-V; the emulator picks WHPX
-        # automatically. No-op step kept as documentation.
+      - name: Add Android SDK binaries to PATH
+        # `setup-android` sets ANDROID_HOME but doesn't append `emulator/` or
+        # `platform-tools/` to PATH on Windows, so bare `emulator` /
+        # `avdmanager` calls below would fail with "not recognized as a
+        # cmdlet". Append both so the rest of the job can call them by name.
         shell: pwsh
-        run: emulator -accel-check
+        run: |
+          "$env:ANDROID_HOME\emulator" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          "$env:ANDROID_HOME\platform-tools" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+          "$env:ANDROID_HOME\cmdline-tools\latest\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Verify emulator acceleration
+        # WHPX (Windows Hypervisor Platform) ships with windows-latest.
+        # `accel-check` exits 0 when a hypervisor is usable; non-zero means
+        # the emulator will fall back to TCG (slow but functional). Don't
+        # fail the job on missing acceleration — the emulator still boots,
+        # it just takes longer.
+        shell: pwsh
+        run: emulator -accel-check; if ($LASTEXITCODE -ne 0) { Write-Warning "no hypervisor accel; falling back to TCG" }
 
       - name: Create AVD
         shell: pwsh

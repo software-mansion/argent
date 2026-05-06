@@ -38,7 +38,7 @@ describe("Log Registry (integration)", () => {
     const clusters = writer.getClusters(20);
 
     // Verify stats shape
-    expect(stats.file).toMatch(/\.argent\/tmp\/argent-logs-8081.*\.log$/);
+    expect(stats.file).toMatch(/\.argent[\\/]tmp[\\/]argent-logs-8081.*\.log$/);
     expect(stats.totalEntries).toBe(4);
     expect(stats.byLevel).toEqual({ log: 2, error: 1, warn: 1 });
     expect(stats.fileSizeBytes).toBeGreaterThan(0);

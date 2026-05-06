@@ -25,7 +25,9 @@ describe("LogFileWriter", () => {
 
   it("creates a flat log file in ~/.argent/tmp", () => {
     const filePath = writer.getFilePath();
-    expect(filePath).toMatch(/\.argent\/tmp\/argent-logs-9999-\d+\.log$/);
+    // path separator is platform-dependent (`/` on POSIX, `\` on Windows);
+    // a regex character class accepts either so the test stays portable.
+    expect(filePath).toMatch(/\.argent[\\/]tmp[\\/]argent-logs-9999-\d+\.log$/);
     expect(fs.existsSync(filePath)).toBe(true);
   });
 

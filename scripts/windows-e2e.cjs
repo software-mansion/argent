@@ -44,9 +44,7 @@ function fail(msg) {
 
 function getAdbSerial() {
   const out = execFileSync("adb", ["devices"], { encoding: "utf-8" });
-  const line = out
-    .split(/\r?\n/)
-    .find((l) => /^emulator-\d+\s+device/.test(l));
+  const line = out.split(/\r?\n/).find((l) => /^emulator-\d+\s+device/.test(l));
   if (!line) fail("no emulator visible to adb");
   return line.split(/\s+/)[0];
 }
@@ -131,7 +129,9 @@ async function waitForReady(port, deadlineMs) {
 
 async function main() {
   if (!fs.existsSync(TOOL_SERVER_BUNDLE)) {
-    fail(`tool-server bundle missing: ${TOOL_SERVER_BUNDLE} (run npm run build -w @swmansion/argent)`);
+    fail(
+      `tool-server bundle missing: ${TOOL_SERVER_BUNDLE} (run npm run build -w @swmansion/argent)`
+    );
   }
   const exeName = process.platform === "win32" ? "simulator-server.exe" : "simulator-server";
   const exePath = path.join(SIMULATOR_SERVER_DIR, exeName);
@@ -175,7 +175,9 @@ async function main() {
     const devices = listResult?.result?.devices ?? [];
     const ours = devices.find((d) => d.serial === adbSerial || d.id === adbSerial);
     if (!ours) {
-      fail(`list-devices did not return our emulator (${adbSerial}). got: ${JSON.stringify(devices)}`);
+      fail(
+        `list-devices did not return our emulator (${adbSerial}). got: ${JSON.stringify(devices)}`
+      );
     }
     if (ours.platform !== "android") fail(`expected platform=android, got ${ours.platform}`);
     log(`list-devices OK: ${ours.id ?? ours.serial} (${ours.platform})`);

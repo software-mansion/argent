@@ -4,7 +4,13 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDyldInsertLibraries } from "../src/blueprints/native-devtools";
 
-describe("buildDyldInsertLibraries", () => {
+// `buildDyldInsertLibraries` parses a colon-separated DYLD_INSERT_LIBRARIES
+// list — a macOS dyld concept that doesn't exist on Windows. The colon
+// separator collides with Windows drive letters (`C:\...`), so the assertions
+// here can't round-trip a Windows tmp path through the function. The
+// production code is gated to iOS device dispatch; skipping the suite on
+// non-darwin keeps CI honest without papering over a real iOS-side bug.
+describe.skipIf(process.platform === "win32")("buildDyldInsertLibraries", () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {

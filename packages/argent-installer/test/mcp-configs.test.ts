@@ -295,8 +295,19 @@ describe("Zed adapter", () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
-  it("globalPath returns ~/.config/zed/settings.json", () => {
-    expect(adapter.globalPath()).toBe(path.join(os.homedir(), ".config", "zed", "settings.json"));
+  it("globalPath returns the platform-correct settings path", () => {
+    // Zed uses XDG-style paths on macOS/Linux and AppData on Windows.
+    // The adapter switches on `process.platform`, so the expected path
+    // mirrors the same branch — anything else would only test one OS.
+    const expected =
+      process.platform === "win32"
+        ? path.join(
+            process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"),
+            "Zed",
+            "settings.json"
+          )
+        : path.join(os.homedir(), ".config", "zed", "settings.json");
+    expect(adapter.globalPath()).toBe(expected);
   });
 
   // Zed's settings.json is JSONC. The plain JSON.parse → mutate → JSON.stringify
@@ -1071,6 +1082,12 @@ describe("getManagedContentTargets", () => {
     homedirOverride = undefined;
   });
 
+  // Labels are produced via `path.join`, so they use native separators —
+  // `.claude/skills` on POSIX, `.claude\skills` on Windows. Normalising the
+  // expected values through `path.join` keeps the assertions portable.
+  const p = (...parts: string[]) => path.join(...parts);
+  const home = (...parts: string[]) => path.join("~", ...parts);
+
   it("derives local managed paths from adapter definitions", () => {
     const adapters = ALL_ADAPTERS.filter((a) =>
       ["Claude Code", "Cursor", "Gemini", "Codex"].includes(a.name)
@@ -1079,15 +1096,19 @@ describe("getManagedContentTargets", () => {
     const targets = getManagedContentTargets(adapters, tmpDir, "local");
 
     expect(targets.skillTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining([".claude/skills", ".cursor/skills", ".agents/skills"])
+      expect.arrayContaining([
+        p(".claude", "skills"),
+        p(".cursor", "skills"),
+        p(".agents", "skills"),
+      ])
     );
     expect(targets.ruleTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining([".claude/rules", ".cursor/rules", ".gemini/rules"])
+      expect.arrayContaining([p(".claude", "rules"), p(".cursor", "rules"), p(".gemini", "rules")])
     );
     expect(targets.agentTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining([".claude/agents", ".gemini/agents"])
+      expect.arrayContaining([p(".claude", "agents"), p(".gemini", "agents")])
     );
-    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual([".codex/config.toml"]);
+    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual([p(".codex", "config.toml")]);
     expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["skills-lock.json"]);
   });
 
@@ -1100,16 +1121,24 @@ describe("getManagedContentTargets", () => {
     const targets = getManagedContentTargets(adapters, tmpDir, "global");
 
     expect(targets.skillTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining(["~/.claude/skills", "~/.cursor/skills", "~/.agents/skills"])
+      expect.arrayContaining([
+        home(".claude", "skills"),
+        home(".cursor", "skills"),
+        home(".agents", "skills"),
+      ])
     );
     expect(targets.ruleTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining(["~/.claude/rules", "~/.cursor/rules", "~/.gemini/rules"])
+      expect.arrayContaining([
+        home(".claude", "rules"),
+        home(".cursor", "rules"),
+        home(".gemini", "rules"),
+      ])
     );
     expect(targets.agentTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining(["~/.claude/agents", "~/.gemini/agents"])
+      expect.arrayContaining([home(".claude", "agents"), home(".gemini", "agents")])
     );
-    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual(["~/.codex/config.toml"]);
-    expect(targets.skillsLockTargets.map((t) => t.label)).toEqual(["~/skills-lock.json"]);
+    expect(targets.codexConfigTargets.map((t) => t.label)).toEqual([home(".codex", "config.toml")]);
+    expect(targets.skillsLockTargets.map((t) => t.label)).toEqual([home("skills-lock.json")]);
   });
 
   it("routes opencode skills/agents under .opencode (local)", () => {
@@ -1117,9 +1146,9 @@ describe("getManagedContentTargets", () => {
     const targets = getManagedContentTargets(adapters, tmpDir, "local");
 
     expect(targets.skillTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining([".opencode/skills"])
+      expect.arrayContaining([p(".opencode", "skills")])
     );
-    expect(targets.agentTargets.map((t) => t.label)).toEqual([".opencode/agents"]);
+    expect(targets.agentTargets.map((t) => t.label)).toEqual([p(".opencode", "agents")]);
     expect(targets.ruleTargets).toEqual([]);
   });
 
@@ -1129,9 +1158,11 @@ describe("getManagedContentTargets", () => {
     const targets = getManagedContentTargets(adapters, tmpDir, "global");
 
     expect(targets.skillTargets.map((t) => t.label)).toEqual(
-      expect.arrayContaining(["~/.config/opencode/skills"])
+      expect.arrayContaining([home(".config", "opencode", "skills")])
     );
-    expect(targets.agentTargets.map((t) => t.label)).toEqual(["~/.config/opencode/agents"]);
+    expect(targets.agentTargets.map((t) => t.label)).toEqual([
+      home(".config", "opencode", "agents"),
+    ]);
   });
 });
 

@@ -386,7 +386,10 @@ describe("listBundledSkills", () => {
 
 describe("getProjectSkillLockPath", () => {
   it("resolves to skills-lock.json under the provided cwd", () => {
-    expect(getProjectSkillLockPath("/some/project")).toBe("/some/project/skills-lock.json");
+    // path.join uses native separators (`\` on Windows, `/` elsewhere); using
+    // path.join in the expected value keeps the assertion portable.
+    const cwd = path.join(path.sep, "some", "project");
+    expect(getProjectSkillLockPath(cwd)).toBe(path.join(cwd, "skills-lock.json"));
   });
 });
 
@@ -404,8 +407,9 @@ describe("getGlobalSkillLockPath", () => {
   });
 
   it("uses $XDG_STATE_HOME/skills/.skill-lock.json when set", () => {
-    process.env.XDG_STATE_HOME = "/tmp/xdg";
-    expect(getGlobalSkillLockPath()).toBe("/tmp/xdg/skills/.skill-lock.json");
+    const xdg = path.join(os.tmpdir(), "xdg");
+    process.env.XDG_STATE_HOME = xdg;
+    expect(getGlobalSkillLockPath()).toBe(path.join(xdg, "skills", ".skill-lock.json"));
   });
 });
 
