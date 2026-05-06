@@ -7,6 +7,12 @@ import { startUpdateChecker } from "./utils/update-checker";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 
+// Format an HTTP origin for display. Bracket IPv6 literals per RFC 3986 §3.2.2.
+function formatOrigin(host: string, port: number): string {
+  const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${h}:${port}`;
+}
+
 /**
  * Prepends an ISO timestamp to every line written to stdout/stderr.
  *
@@ -109,9 +115,10 @@ export function start(): void {
       server = httpHandle.app.listen(PORT, HOST, () => {
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
-        process.stdout.write(`Tools server listening on http://${HOST}:${boundPort}\n`);
-        process.stderr.write(`  GET  http://${HOST}:${boundPort}/tools\n`);
-        process.stderr.write(`  POST http://${HOST}:${boundPort}/tools/:name\n`);
+        const origin = formatOrigin(HOST, boundPort);
+        process.stdout.write(`Tools server listening on ${origin}\n`);
+        process.stderr.write(`  GET  ${origin}/tools\n`);
+        process.stderr.write(`  POST ${origin}/tools/:name\n`);
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
