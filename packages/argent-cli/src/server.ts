@@ -11,6 +11,7 @@ import {
   isToolsServerProcessAlive,
   readToolsServerState,
   writeToolsServerState,
+  writeToolsServerStateSync,
   clearToolsServerState,
   formatToolsServerUrl,
   type ToolsServerPaths,
@@ -310,8 +311,6 @@ async function runForeground(
   host: string,
   idleTimeoutMinutes: number
 ): Promise<void> {
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-
   const env = buildToolsServerEnv(paths, port, process.env, {
     host,
     idleTimeoutMinutes,
@@ -342,21 +341,13 @@ async function runForeground(
   const childPid = child.pid;
   if (childPid !== undefined) {
     try {
-      fs.writeFileSync(
-        STATE_FILE,
-        JSON.stringify(
-          {
-            port,
-            pid: childPid,
-            startedAt: new Date().toISOString(),
-            bundlePath: paths.bundlePath,
-            host,
-          },
-          null,
-          2
-        ) + "\n",
-        "utf8"
-      );
+      writeToolsServerStateSync({
+        port,
+        pid: childPid,
+        startedAt: new Date().toISOString(),
+        bundlePath: paths.bundlePath,
+        host,
+      });
       stateWritten = true;
     } catch {
       /* non-fatal: foreground run still works without the state file */

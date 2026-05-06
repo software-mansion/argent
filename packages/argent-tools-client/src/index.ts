@@ -8,6 +8,7 @@ export {
   isToolsServerProcessAlive,
   readToolsServerState,
   writeToolsServerState,
+  writeToolsServerStateSync,
   clearToolsServerState,
   formatToolsServerUrl,
   STATE_PATHS,

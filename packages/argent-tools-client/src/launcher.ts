@@ -214,6 +214,17 @@ export async function writeToolsServerState(state: ToolsServerState): Promise<vo
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
+/**
+ * Sync counterpart of {@link writeToolsServerState}. The CLI's foreground
+ * `server start` path uses this to land the state file before any async
+ * `child.on("exit")` event can fire, which would otherwise race the write
+ * and leave a stale file pointing at a dead pid.
+ */
+export function writeToolsServerStateSync(state: ToolsServerState): void {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2) + "\n", "utf8");
+}
+
 export async function clearToolsServerState(): Promise<void> {
   try {
     await unlink(STATE_FILE);
