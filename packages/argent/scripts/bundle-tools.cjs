@@ -50,16 +50,15 @@ const ESM_REQUIRE_BANNER = {
 };
 const NATIVE_BIN_DIR = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
 const BIN_DIR = path.resolve(__dirname, "../bin");
-// All simulator-server binaries we ship in the npm package. The runtime
-// resolver in `@argent/native-devtools-ios` picks the right filename per
-// `process.platform`, so every platform's binary needs to land in `bin/`.
-// Linux is downloaded for parity but not currently selected at runtime — keep
-// it for future Linux support without re-touching the bundle pipeline.
-const SIMULATOR_SERVER_BINARIES = [
-  "simulator-server",
-  "simulator-server.exe",
-  "simulator-server-linux",
-];
+// Only the macOS argent-stripped simulator-server is shipped today.
+// `download-simulator-server.cjs` documents why: upstream `radon-main`
+// publishes a `-argent-` variant (streaming removed) only for macOS;
+// shipping the vanilla Windows / Linux assets would expose a streaming
+// surface the macOS build deliberately suppresses. The runtime resolver
+// already has Windows / Linux branches so the moment upstream publishes
+// `simulator-server-argent-windows.exe` and `simulator-server-argent-linux`,
+// adding them to this list flips on those platforms.
+const SIMULATOR_SERVER_BINARIES = ["simulator-server"];
 const AX_BIN_SRC = path.resolve(NATIVE_BIN_DIR, "ax-service");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "ax-service");
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");

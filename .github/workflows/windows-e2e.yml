@@ -41,10 +41,10 @@ jobs:
         shell: pwsh
 
       - name: Pack the publishable @swmansion/argent
-        # Skip the upstream binary download for the smoke pass — `pack` would
-        # try to fetch from GitHub releases which needs `gh`, and we don't
-        # need the bundled artifact here. Run the build steps `pack` runs
-        # without the download step.
+        # Builds the workspace and runs the @swmansion/argent bundler. The
+        # download step pulls only `simulator-server-argent-macos` —
+        # see scripts/download-simulator-server.cjs for why we don't ship
+        # vanilla Windows / Linux variants.
         run: |
           node scripts/download-simulator-server.cjs
           npm run build
@@ -52,15 +52,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify simulator-server.exe is bundled and executable
+      - name: Assert the bundle does NOT contain a Windows simulator-server
+        # We deliberately do NOT ship `simulator-server.exe` in
+        # `@swmansion/argent` until upstream radon publishes
+        # `simulator-server-argent-windows.exe` (streaming-stripped). This
+        # step guards against an accidental regression that re-adds the
+        # vanilla binary to the bundle.
         shell: pwsh
         run: |
           $bin = "packages\argent\bin\simulator-server.exe"
-          if (-not (Test-Path $bin)) { throw "simulator-server.exe not found at $bin" }
-          # `--help` should exit 0 and print usage. Use `& $bin` so PowerShell
-          # treats the path as a command and respects PATHEXT semantics.
-          & $bin --help
-          if ($LASTEXITCODE -ne 0) { throw "simulator-server.exe --help exited $LASTEXITCODE" }
+          if (Test-Path $bin) {
+            throw "Regression: $bin must not ship until upstream argent-windows is published. See scripts/download-simulator-server.cjs for the rationale."
+          }
+          # The macOS argent binary IS expected — proves the bundle pipeline
+          # ran end-to-end.
+          if (-not (Test-Path "packages\argent\bin\simulator-server")) {
+            throw "Bundle missing the macOS simulator-server."
+          }
 
       - name: Run argent CLI offline smoke
         shell: pwsh
@@ -76,18 +84,50 @@ jobs:
           node packages\argent\dist\cli.js --version
           node packages\argent\dist\tool-server.cjs --get-available-tools | Out-Null
 
-  # Heavy pass: real Android emulator + drive a tool through the full
-  # tool-server transport. Gated to `workflow_dispatch` ONLY because the
-  # Android emulator on hosted `windows-latest` runners has WHPX available
-  # but graphics initialization frequently stalls past the 10-minute boot
-  # window — even with `-no-window -gpu swiftshader_indirect`. Hosted CI is
-  # not a reliable proxy for an actual user's Windows machine here. Run
-  # manually when validating a Windows-touching change end-to-end, or run
-  # the same `scripts/windows-e2e.cjs` against a local UTM/Parallels VM
-  # (see `docs/windows-support.md`).
+      - name: Assert simulator-server resolver fails closed on Windows
+        # On Windows, `simulatorServerBinaryPath()` should throw because
+        # `simulator-server.exe` isn't shipped. Asserting the exact failure
+        # mode here means a future regression that silently re-introduced
+        # the vanilla binary would surface as a *passing* simulator path,
+        # not as silent feature drift.
+        shell: pwsh
+        env:
+          ARGENT_SIMULATOR_SERVER_DIR: "${{ github.workspace }}\\packages\\argent\\bin"
+        run: |
+          $script = @"
+          try {
+            require('./packages/native-devtools-ios/dist/index.js').simulatorServerBinaryPath();
+            console.error('REGRESSION: simulatorServerBinaryPath() did not throw on Windows');
+            process.exit(1);
+          } catch (e) {
+            if (!String(e.message).includes('simulator-server')) {
+              console.error('unexpected error: ' + e.message);
+              process.exit(1);
+            }
+            console.log('OK fail-closed: ' + e.message);
+          }
+          "@
+          $tmp = New-TemporaryFile
+          Set-Content -Path $tmp.FullName -Value $script
+          node $tmp.FullName
+          if ($LASTEXITCODE -ne 0) { throw "fail-closed assertion failed" }
+
+  # Real Android emulator + drive a tool through the full tool-server
+  # transport. Disabled today because:
+  #   1. `@swmansion/argent` doesn't ship a Windows simulator-server (the
+  #      vanilla `simulator-server-windows.exe` retains the streaming
+  #      surface the macOS argent build deliberately strips). Until
+  #      upstream radon publishes `simulator-server-argent-windows.exe`,
+  #      the tool-server resolver fail-closes on Windows.
+  #   2. Hosted `windows-latest` runners with WHPX available still stall
+  #      Android-34 google_apis/x86_64 graphics init past 20 minutes —
+  #      the runner is not a reliable proxy for a real Windows machine.
+  # Re-enable by changing `if` to `github.event_name == 'workflow_dispatch'`
+  # once both blockers clear. Until then, drive `scripts/windows-e2e.cjs`
+  # against a local UTM/Parallels VM (see `docs/windows-support.md`).
   windows-android-e2e:
     name: Android emulator E2E (windows-latest)
-    if: github.event_name == 'workflow_dispatch'
+    if: false
     runs-on: windows-latest
     timeout-minutes: 60
     steps:

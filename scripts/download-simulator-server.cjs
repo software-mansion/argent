@@ -3,10 +3,31 @@
 "use strict";
 
 /**
- * Downloads the simulator-server binaries for every supported platform from
- * the public `simulator-server-releases` repo. Replaces the previous bash
- * version so the pipeline runs on Windows, Linux, and macOS without invoking
- * `bash` directly.
+ * Downloads the argent-stripped simulator-server binary from the public
+ * `simulator-server-releases` repo. Replaces the previous bash script so
+ * the pipeline runs on Windows, Linux, and macOS hosts without invoking
+ * `bash` directly — but the *bundled* artifact remains macOS-only.
+ *
+ * IMPORTANT — Why we only download the macOS variant
+ * --------------------------------------------------
+ * Upstream `radon-main` ships:
+ *   • simulator-server-argent-macos  — argent-stripped (no `stream_ready`)
+ *   • simulator-server-macos          — vanilla
+ *   • simulator-server-linux          — vanilla
+ *   • simulator-server-windows.exe    — vanilla
+ *
+ * Only the `-argent-` variant has streaming endpoints removed. Shipping
+ * the vanilla Windows / Linux binaries inside `@swmansion/argent` would
+ * give non-mac users a streaming surface the macOS build deliberately
+ * suppresses — feature-parity divergence and an IP/licensing concern.
+ *
+ * Until upstream publishes `simulator-server-argent-windows.exe` and
+ * `simulator-server-argent-linux`, `@swmansion/argent` ships only the
+ * macOS binary. The runtime resolver in `@argent/native-devtools-ios`
+ * still has Windows / Linux branches so the pipeline is ready to flip
+ * the moment the argent-stripped builds exist; today the resolver
+ * throws "binary not found" on those platforms, which is the correct
+ * fail-closed behavior.
  *
  * Usage: node scripts/download-simulator-server.cjs [release-tag]
  *   release-tag  Optional GitHub release tag. Defaults to `radon-main`.
@@ -22,18 +43,12 @@ const REPO = "software-mansion-labs/simulator-server-releases";
 const TAG = process.argv[2] ?? "radon-main";
 const DEST_DIR = path.resolve(__dirname, "..", "packages/native-devtools-ios/bin");
 
-// Platform → list of upstream asset names that should be downloaded into bin/.
 // Each entry's `to` is the on-disk filename the runtime resolver expects.
-//   - macOS uses the argent-customized build (`-argent-` suffix), required
-//     for iOS simulator features that depend on Argent's protocol additions.
-//   - Windows targets Android only, so the vanilla upstream build is enough.
-//   - Linux is built but unused at the moment; included so the same package
-//     can grow Linux support later without re-touching the download pipeline.
-const ASSETS = [
-  { from: "simulator-server-argent-macos", to: "simulator-server" },
-  { from: "simulator-server-windows.exe", to: "simulator-server.exe" },
-  { from: "simulator-server-linux", to: "simulator-server-linux" },
-];
+// New platforms get added here only once the upstream publishes a
+// `simulator-server-argent-<platform>` asset (i.e. with streaming
+// stripped). Do not add the vanilla `simulator-server-windows.exe` /
+// `simulator-server-linux` assets — see file header for the rationale.
+const ASSETS = [{ from: "simulator-server-argent-macos", to: "simulator-server" }];
 
 function run(cmd, args, opts = {}) {
   const result = spawnSync(cmd, args, { stdio: "inherit", ...opts });
@@ -59,7 +74,9 @@ function main() {
   ensureGh();
   fs.mkdirSync(DEST_DIR, { recursive: true });
 
-  console.log(`Downloading simulator-server assets from ${REPO} (tag: ${TAG}) → ${DEST_DIR}`);
+  console.log(
+    `Downloading argent simulator-server assets from ${REPO} (tag: ${TAG}) → ${DEST_DIR}`
+  );
 
   for (const { from, to } of ASSETS) {
     console.log(`  ${from} → ${to}`);
