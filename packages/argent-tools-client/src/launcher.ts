@@ -39,11 +39,11 @@ export function buildToolsServerEnv(
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...baseEnv,
-    PORT: String(port),
+    ARGENT_PORT: String(port),
     ARGENT_SIMULATOR_SERVER_DIR: paths.simulatorServerDir,
     ARGENT_NATIVE_DEVTOOLS_DIR: paths.nativeDevtoolsDir,
   };
-  if (options.host !== undefined) env.HOST = options.host;
+  if (options.host !== undefined) env.ARGENT_HOST = options.host;
   if (options.idleTimeoutMinutes !== undefined) {
     env.ARGENT_IDLE_TIMEOUT_MINUTES = String(options.idleTimeoutMinutes);
   }

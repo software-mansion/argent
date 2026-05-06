@@ -61,10 +61,10 @@ export function start(): void {
   });
 
   // ── Config ────────────────────────────────────────────────────────
-  const PORT = parseInt(process.env.PORT ?? "3001", 10);
-  // HOST defaults to loopback so the local auto-spawn path stays safe.
+  const PORT = parseInt(process.env.ARGENT_PORT ?? "3001", 10);
+  // ARGENT_HOST defaults to loopback so the local auto-spawn path stays safe.
   // `argent server start --host 0.0.0.0` is the opt-in for remote exposure.
-  const HOST = process.env.HOST ?? "127.0.0.1";
+  const HOST = process.env.ARGENT_HOST ?? "127.0.0.1";
   const idleMinutes = parseInt(
     process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? String(DEFAULT_IDLE_TIMEOUT_MINUTES),
     10
