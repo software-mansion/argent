@@ -1,8 +1,8 @@
 import type { ToolDependency } from "@argent/registry";
-import type { DescribeResult } from "../contract";
-import { adbExecOutBinary } from "../../../utils/adb";
-import { getAndroidScreenSize } from "../../../utils/android-screen";
-import { parseUiAutomatorDump } from "../../../utils/uiautomator-parser";
+import type { DescribeResult } from "../../contract";
+import { adbExecOutBinary } from "../../../../utils/adb";
+import { getAndroidScreenSize } from "../../../../utils/android-screen";
+import { parseUiAutomatorDump } from "./uiautomator-parser";
 
 export const androidRequires: ToolDependency[] = ["adb"];
 
