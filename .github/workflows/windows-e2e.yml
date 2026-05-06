@@ -1,0 +1,188 @@
+name: Windows E2E
+
+on:
+  push:
+    branches:
+      - feat/windows-support
+      - feat/android-emulator-support
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # Cheap-but-thorough first pass: build everything, run unit tests, exercise
+  # the CLI's offline surface (init, tools list, mcp dispatcher). Runs on
+  # every push so cross-platform regressions are caught immediately, without
+  # paying for a 6-minute Android-emulator boot every time.
+  windows-build-and-cli:
+    name: Build + unit + CLI smoke (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Patch rollup native bindings (Windows)
+        run: npm install @rollup/rollup-win32-x64-msvc --no-save
+
+      - name: Build workspace
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test --workspaces --if-present
+        shell: pwsh
+
+      - name: Pack the publishable @swmansion/argent
+        # Skip the upstream binary download for the smoke pass — `pack` would
+        # try to fetch from GitHub releases which needs `gh`, and we don't
+        # need the bundled artifact here. Run the build steps `pack` runs
+        # without the download step.
+        run: |
+          node scripts/download-simulator-server.cjs
+          npm run build
+          npm run build -w @swmansion/argent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify simulator-server.exe is bundled and executable
+        shell: pwsh
+        run: |
+          $bin = "packages\argent\bin\simulator-server.exe"
+          if (-not (Test-Path $bin)) { throw "simulator-server.exe not found at $bin" }
+          # `--help` should exit 0 and print usage. Use `& $bin` so PowerShell
+          # treats the path as a command and respects PATHEXT semantics.
+          & $bin --help
+          if ($LASTEXITCODE -ne 0) { throw "simulator-server.exe --help exited $LASTEXITCODE" }
+
+      - name: Run argent CLI offline smoke
+        shell: pwsh
+        run: |
+          # `argent --version` and `argent tools` must work without an MCP
+          # config or simulator booted — they exercise the dispatcher and the
+          # tool-server bundle, not the device path.
+          node packages\argent\dist\cli.js --version
+          node packages\argent\dist\cli.js tools --get-available-tools | Out-Null
+
+  # Heavy pass: real Android emulator + drive a tool through the full
+  # tool-server transport. Gated to `workflow_dispatch` and the windows-support
+  # branches so PRs to main don't pay the boot cost on every push.
+  windows-android-e2e:
+    name: Android emulator E2E (windows-latest)
+    if: |
+      github.event_name == 'workflow_dispatch'
+      || github.ref == 'refs/heads/feat/windows-support'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Patch rollup native bindings (Windows)
+        run: npm install @rollup/rollup-win32-x64-msvc --no-save
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platform-tools emulator system-images;android-34;google_apis;x86_64"
+
+      - name: Enable HAXM-equivalent acceleration
+        # windows-latest already has Hyper-V; the emulator picks WHPX
+        # automatically. No-op step kept as documentation.
+        shell: pwsh
+        run: emulator -accel-check
+
+      - name: Create AVD
+        shell: pwsh
+        run: |
+          # Pipe a literal "no" to the avdmanager prompt about custom hardware
+          # profiles. The `Write-Output` form is portable across PowerShell
+          # versions on windows-latest.
+          "no" | avdmanager create avd --force --name argent_e2e `
+            --abi google_apis/x86_64 --package "system-images;android-34;google_apis;x86_64"
+
+      - name: Build argent
+        run: |
+          node scripts/download-simulator-server.cjs
+          npm run build
+          npm run build -w @swmansion/argent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Launch Android emulator
+        shell: pwsh
+        run: |
+          # Headless boot. `-no-window` cuts ~30s off boot; `-no-snapshot`
+          # forces a cold boot so we test the full path. `-no-audio` and
+          # `-no-boot-anim` shave more time. Background the emulator and let
+          # the next step poll for boot completion.
+          Start-Process -FilePath emulator -ArgumentList @(
+            "-avd","argent_e2e",
+            "-no-window","-no-snapshot","-no-audio","-no-boot-anim","-gpu","swiftshader_indirect"
+          ) -RedirectStandardOutput emulator.log -RedirectStandardError emulator.err.log
+
+      - name: Wait for emulator to fully boot
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $deadline = (Get-Date).AddMinutes(10)
+          while ((Get-Date) -lt $deadline) {
+            $serial = (& adb devices) -split "`n" `
+              | Where-Object { $_ -match "^emulator-\d+\s+device" } `
+              | Select-Object -First 1
+            if ($serial) {
+              $serial = ($serial -split '\s+')[0]
+              $ready = & adb -s $serial shell getprop sys.boot_completed 2>$null
+              if ($ready.Trim() -eq "1") {
+                Write-Output "Emulator $serial fully booted"
+                exit 0
+              }
+            }
+            Start-Sleep -Seconds 5
+          }
+          Write-Error "Emulator never reported sys.boot_completed=1 within deadline"
+          Get-Content emulator.log -Tail 80
+          Get-Content emulator.err.log -Tail 80
+          exit 1
+
+      - name: Run argent E2E flow against emulator
+        shell: pwsh
+        env:
+          ARGENT_E2E: "1"
+        run: node scripts/windows-e2e.cjs
+
+      - name: Capture emulator logs on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          if (Test-Path emulator.log) { Get-Content emulator.log -Tail 200 }
+          if (Test-Path emulator.err.log) { Get-Content emulator.err.log -Tail 200 }
+
+      - name: Stop emulator
+        if: always()
+        shell: pwsh
+        run: |
+          $serial = (& adb devices) -split "`n" `
+            | Where-Object { $_ -match "^emulator-\d+\s+device" } `
+            | ForEach-Object { ($_ -split '\s+')[0] } `
+            | Select-Object -First 1
+          if ($serial) { & adb -s $serial emu kill }

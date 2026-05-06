@@ -65,24 +65,34 @@ async function probe(name: AndroidBinaryName): Promise<string | null> {
   // binary on PATH (e.g. Homebrew adb at /opt/homebrew/bin/adb), and means
   // a sysadmin override on PATH still wins over $ANDROID_HOME.
   try {
-    const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
-      timeout: 2_000,
-    });
-    const trimmed = stdout.trim();
-    // `command -v` prints nothing on miss but returns non-zero, so we only
-    // get here on success — but defend against an empty stdout anyway in
-    // case a future shell quirk decouples the two.
+    let stdout: string;
+    if (process.platform === "win32") {
+      // `where adb` resolves to `adb.exe` automatically. May print multiple
+      // lines (one per match) — take the first.
+      ({ stdout } = await execFileAsync("where", [name], { timeout: 2_000 }));
+    } else {
+      ({ stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
+        timeout: 2_000,
+      }));
+    }
+    const trimmed = stdout.split(/\r?\n/)[0]?.trim();
+    // `command -v` / `where` print nothing on miss but return non-zero, so we
+    // only get here on success — but defend against an empty stdout anyway
+    // in case a future shell quirk decouples the two.
     if (trimmed) return trimmed;
   } catch {
     // fall through to SDK-root fallbacks
   }
   for (const root of androidRoots()) {
-    const candidate = join(root, SUBDIR[name], name);
+    const candidate = join(root, SUBDIR[name], binaryFilename(name));
     try {
       // X_OK rather than F_OK: a non-executable file at the canonical path
       // means a corrupted/partial install, and falling back to the next root
       // (or returning null) is the right move — spawning a non-executable
-      // path would only produce an EACCES at run-time.
+      // path would only produce an EACCES at run-time. Note that on Windows
+      // X_OK degrades to F_OK in Node — Win32 has no exec bit — so a
+      // non-executable .exe still passes here, which is fine since spawn()
+      // surfaces the EACCES at run time anyway.
       await access(candidate, fsConstants.X_OK);
       return candidate;
     } catch {
@@ -90,6 +100,13 @@ async function probe(name: AndroidBinaryName): Promise<string | null> {
     }
   }
   return null;
+}
+
+function binaryFilename(name: AndroidBinaryName): string {
+  // Windows ships these as `adb.exe` / `emulator.exe`; on macOS and Linux
+  // they use the bare name. Note that PATH lookups via `where` already
+  // surface the `.exe`, so this only matters for the SDK-root fallback.
+  return process.platform === "win32" ? `${name}.exe` : name;
 }
 
 function androidRoots(): string[] {

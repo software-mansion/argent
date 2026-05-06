@@ -5,7 +5,7 @@
   "description": "Framework-agnostic tool registry for iOS simulator and Android emulator control",
   "main": "dist/index.js",
   "scripts": {
-    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc && cp src/utils/ios-profiler/Argent.tracetemplate dist/utils/ios-profiler/",
+    "build": "tsc -b --clean && tsc -b && node scripts/copy-trace-template.cjs",
     "start": "node dist/index.js start",
     "dev": "ts-node src/index.ts start",
     "test": "vitest run",

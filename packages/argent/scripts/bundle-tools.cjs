@@ -48,11 +48,20 @@ const MAIN_FIELDS = ["module", "main"];
 const ESM_REQUIRE_BANNER = {
   js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
 };
-const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
-const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
-const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
-const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
+const NATIVE_BIN_DIR = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
 const BIN_DIR = path.resolve(__dirname, "../bin");
+// All simulator-server binaries we ship in the npm package. The runtime
+// resolver in `@argent/native-devtools-ios` picks the right filename per
+// `process.platform`, so every platform's binary needs to land in `bin/`.
+// Linux is downloaded for parity but not currently selected at runtime — keep
+// it for future Linux support without re-touching the bundle pipeline.
+const SIMULATOR_SERVER_BINARIES = [
+  "simulator-server",
+  "simulator-server.exe",
+  "simulator-server-linux",
+];
+const AX_BIN_SRC = path.resolve(NATIVE_BIN_DIR, "ax-service");
+const AX_BIN_DEST = path.resolve(BIN_DIR, "ax-service");
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
@@ -136,22 +145,50 @@ esbuild.buildSync({
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
 
-// Copy simulator-server binary (downloaded via scripts/download-simulator-server.sh)
-if (fs.existsSync(BIN_SRC)) {
-  fs.copyFileSync(BIN_SRC, BIN_DEST);
-  fs.chmodSync(BIN_DEST, 0o755);
-  console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
-} else {
-  throw new Error(
-    `simulator-server binary not found at ${BIN_SRC}.\n` +
-      `Run: bash scripts/download-simulator-server.sh`
+// Copy every simulator-server binary (downloaded via download-simulator-server.cjs).
+// The macOS/Linux ones are missing the `.exe` extension and will be no-ops on
+// Windows; copying all of them on every build keeps the npm package
+// platform-agnostic — the runtime resolver picks the matching filename.
+{
+  let copied = 0;
+  for (const name of SIMULATOR_SERVER_BINARIES) {
+    const src = path.join(NATIVE_BIN_DIR, name);
+    const dest = path.join(BIN_DIR, name);
+    if (!fs.existsSync(src)) continue;
+    fs.copyFileSync(src, dest);
+    if (process.platform !== "win32") fs.chmodSync(dest, 0o755);
+    copied++;
+  }
+  if (copied === 0) {
+    throw new Error(
+      `No simulator-server binaries found in ${NATIVE_BIN_DIR}.\n` +
+        `Run: node scripts/download-simulator-server.cjs`
+    );
+  }
+  console.log(
+    `✓ Copied ${copied} simulator-server binary(ies) → ${path.relative(process.cwd(), BIN_DIR)}`
   );
 }
 
-// Copy ax-service binary
+// Drop the cross-platform wrapper alongside the native binaries — referenced
+// by the package.json `bin` field as `argent-simulator-server`. npm will
+// generate a shim that runs `node bin/argent-simulator-server.cjs`, which
+// then exec's the right native binary for the user's OS.
+{
+  const wrapperSrc = path.resolve(__dirname, "argent-simulator-server-wrapper.cjs");
+  const wrapperDest = path.join(BIN_DIR, "argent-simulator-server.cjs");
+  fs.copyFileSync(wrapperSrc, wrapperDest);
+  if (process.platform !== "win32") fs.chmodSync(wrapperDest, 0o755);
+  console.log(
+    `✓ Copied argent-simulator-server wrapper → ${path.relative(process.cwd(), wrapperDest)}`
+  );
+}
+
+// Copy ax-service binary. iOS-only daemon — only relevant on macOS, but
+// shipping it from non-mac packing hosts is fine; the binary just won't run.
 if (fs.existsSync(AX_BIN_SRC)) {
   fs.copyFileSync(AX_BIN_SRC, AX_BIN_DEST);
-  fs.chmodSync(AX_BIN_DEST, 0o755);
+  if (process.platform !== "win32") fs.chmodSync(AX_BIN_DEST, 0o755);
   console.log(`✓ Copied ax-service binary → ${path.relative(process.cwd(), AX_BIN_DEST)}`);
 } else {
   console.warn(`⚠ ax-service binary not found at ${AX_BIN_SRC} — skipping copy`);

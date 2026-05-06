@@ -31,9 +31,15 @@ export const updateArgentTool: ToolDefinition<void> = {
     // The update process calls killToolServer() which sends SIGTERM — we need
     // the response to reach the MCP server before that happens.
     setTimeout(() => {
-      const child = spawn("argent", ["update", "--yes"], {
+      // Windows resolves `argent` (an npm shim) as `argent.cmd`. Node's
+      // child_process.spawn doesn't do PATHEXT lookup unless `shell: true`,
+      // and bare-named cmd shims also need the shell to be invoked
+      // correctly — same workaround as the installer's `runShellCommand`.
+      const isWin = process.platform === "win32";
+      const child = spawn(isWin ? "argent.cmd" : "argent", ["update", "--yes"], {
         detached: true,
         stdio: "ignore",
+        shell: isWin,
       });
       child.unref();
     }, 2000);

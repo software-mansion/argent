@@ -50,11 +50,16 @@ async function probe(dep: ToolDependency): Promise<boolean> {
     return (await resolveAndroidBinary(dep)) !== null;
   }
   try {
-    // `command -v` via `/bin/sh` is POSIX-portable and doesn't invoke the dep
-    // itself — a bare `xcrun` call would fork the tool just to check existence,
-    // which is both slower and (for xcrun) can prompt the license agreement
-    // dialog on first use.
-    await execFileAsync("/bin/sh", ["-c", `command -v ${dep}`], { timeout: 2_000 });
+    // Probe for the binary without invoking it. We avoid a bare `${dep}` call
+    // because `xcrun` (and similar) can fork actual tool work / prompt the
+    // license agreement dialog on first use; `command -v` / `where` only do
+    // a PATH lookup. Windows uses `where`; POSIX uses `command -v` via
+    // `/bin/sh` (portable across bash/zsh/dash/etc).
+    if (process.platform === "win32") {
+      await execFileAsync("where", [dep], { timeout: 2_000 });
+    } else {
+      await execFileAsync("/bin/sh", ["-c", `command -v ${dep}`], { timeout: 2_000 });
+    }
     return true;
   } catch {
     return false;

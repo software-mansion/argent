@@ -7,7 +7,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build": "tsc -b --clean && tsc -b",
     "test": "vitest run"
   },
   "dependencies": {

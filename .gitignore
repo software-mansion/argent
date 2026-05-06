@@ -26,8 +26,10 @@ packages/*/node_modules/
 *.log
 1export
 
-# Downloaded signed binaries (fetched via scripts/download-*.sh)
+# Downloaded signed binaries (fetched via scripts/download-*.cjs)
 packages/native-devtools-ios/bin/simulator-server
+packages/native-devtools-ios/bin/simulator-server.exe
+packages/native-devtools-ios/bin/simulator-server-linux
 packages/native-devtools-ios/bin/ax-service
 packages/native-devtools-ios/dylibs/
 

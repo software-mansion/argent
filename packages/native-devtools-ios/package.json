@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build": "tsc -b --clean && tsc -b",
     "build:native": "bash scripts/build.sh",
     "build:native:dev": "bash scripts/build.sh dev"
   },

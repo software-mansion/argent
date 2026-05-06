@@ -384,6 +384,13 @@ const zedAdapter: McpConfigAdapter = {
   },
 
   globalPath(): string | null {
+    // Zed uses XDG-style paths on macOS/Linux and AppData on Windows. See
+    // zed-industries/zed `configuring-zed` docs: Windows users edit
+    // `%APPDATA%\Zed\settings.json`, not `~/.config/zed/settings.json`.
+    if (process.platform === "win32") {
+      const appData = process.env.APPDATA ?? path.join(homedir(), "AppData", "Roaming");
+      return path.join(appData, "Zed", "settings.json");
+    }
     return path.join(homedir(), ".config", "zed", "settings.json");
   },
 

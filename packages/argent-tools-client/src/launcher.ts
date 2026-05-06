@@ -97,7 +97,11 @@ function spawnToolsServer(
       fs.mkdirSync(STATE_DIR, { recursive: true });
       logFd = fs.openSync(LOG_FILE, "a");
     } catch {
-      logFd = fs.openSync("/dev/null", "w");
+      // Fall back to the OS bit-bucket. POSIX uses `/dev/null`; Windows
+      // exposes it as `nul` (unqualified — DOS-era device name resolved by
+      // the kernel, no path needed). Without this branch the spawn below
+      // would fail with ENOENT on Windows when the log dir wasn't writable.
+      logFd = fs.openSync(process.platform === "win32" ? "nul" : "/dev/null", "w");
     }
 
     const child = spawn("node", [paths.bundlePath, "start"], {

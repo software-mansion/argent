@@ -67,9 +67,14 @@ describe("update-argent tool", () => {
 
     vi.advanceTimersByTime(1);
     expect(mockSpawn).toHaveBeenCalledOnce();
-    expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes"], {
+    // On Windows, npm shims `argent` as `argent.cmd` and Node's spawn needs
+    // `shell: true` to follow PATHEXT lookup; everywhere else we spawn the
+    // bare binary directly. Assert the platform-appropriate shape.
+    const isWin = process.platform === "win32";
+    expect(mockSpawn).toHaveBeenCalledWith(isWin ? "argent.cmd" : "argent", ["update", "--yes"], {
       detached: true,
       stdio: "ignore",
+      shell: isWin,
     });
   });
 

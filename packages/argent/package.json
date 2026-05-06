@@ -10,11 +10,11 @@
   "type": "module",
   "bin": {
     "argent": "dist/cli.js",
-    "argent-simulator-server": "bin/simulator-server"
+    "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
   "scripts": {
     "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
-    "build:dispatcher": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "build:dispatcher": "tsc -b --clean && tsc -b",
     "build:bundles": "node scripts/bundle-tools.cjs",
     "sync-readme": "node scripts/sync-readme.cjs",
     "prepack": "node scripts/sync-readme.cjs",
