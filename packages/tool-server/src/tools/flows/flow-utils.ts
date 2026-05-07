@@ -39,8 +39,27 @@ export function getFlowsDir(): string {
   return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
 }
 
+const FLOW_NAME_PATTERN = /^[A-Za-z0-9_\-]+$/;
+
+export function assertSafeFlowName(name: string): void {
+  if (!FLOW_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `Invalid flow name "${name}". Flow names must match ${FLOW_NAME_PATTERN} ` +
+        `(letters, digits, underscore, hyphen — no path separators, no "..", no spaces).`
+    );
+  }
+}
+
 export function getFlowPath(name: string): string {
-  return path.join(getFlowsDir(), `${name}.yaml`);
+  assertSafeFlowName(name);
+  const filePath = path.join(getFlowsDir(), `${name}.yaml`);
+  // Defense-in-depth: ensure the resolved path stays inside the flows
+  // directory even if the regex above is ever weakened.
+  const rel = path.relative(getFlowsDir(), filePath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Invalid flow name "${name}": resolves outside the flows directory.`);
+  }
+  return filePath;
 }
 
 export function setActiveFlow(name: string): void {
