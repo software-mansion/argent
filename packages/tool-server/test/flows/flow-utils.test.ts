@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import * as path from "node:path";
 import {
   serializeFlow,
   parseFlow,
@@ -6,6 +7,9 @@ import {
   getActiveFlow,
   getActiveFlowOrNull,
   clearActiveFlow,
+  setActiveProjectRoot,
+  clearActiveProjectRoot,
+  getFlowPath,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
@@ -178,5 +182,40 @@ describe("active flow state", () => {
     setActiveFlow("my-flow");
     clearActiveFlow();
     expect(getActiveFlowOrNull()).toBeNull();
+  });
+});
+
+// ── getFlowPath name validation ──────────────────────────────────────
+
+describe("getFlowPath name validation", () => {
+  beforeEach(() => {
+    clearActiveProjectRoot();
+    setActiveProjectRoot("/tmp/argent-flow-name-test");
+  });
+
+  it("accepts plain alphanumeric names", () => {
+    expect(getFlowPath("my-flow_1")).toBe(
+      path.join("/tmp/argent-flow-name-test", ".argent", "flows", "my-flow_1.yaml")
+    );
+  });
+
+  it("rejects path-traversal segments", () => {
+    expect(() => getFlowPath("../../etc/passwd")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("../foo")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects path separators", () => {
+    expect(() => getFlowPath("foo/bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("/abs/path")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects names with spaces or shell metacharacters", () => {
+    expect(() => getFlowPath("foo bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("foo;bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("foo$(id)")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects empty names", () => {
+    expect(() => getFlowPath("")).toThrow(/Invalid flow name/);
   });
 });
