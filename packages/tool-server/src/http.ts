@@ -32,11 +32,53 @@ export interface HttpAppHandle {
   getLastActivityAt: () => number;
 }
 
+// Loopback hostnames the browser is allowed to address us by. The
+// tool-server binds to 127.0.0.1 only, but a public attacker page that
+// briefly DNS-rebinds its own hostname to 127.0.0.1 can still reach us
+// — the Host header is the only signal that distinguishes that traffic
+// from a legitimate same-origin request, so we gate on it.
+const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
+
+function extractHostname(host: string): string {
+  // IPv6 literals are bracketed: "[::1]:8080" → "::1"
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end === -1 ? host : host.slice(1, end);
+  }
+  const colon = host.indexOf(":");
+  return colon === -1 ? host : host.slice(0, colon);
+}
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   app.use(express.json());
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
+
+  // Reject requests whose Host header points to anything other than a
+  // loopback hostname. Closes the DNS-rebinding bypass, where a public
+  // origin's hostname briefly resolves to 127.0.0.1 and the browser dutifully
+  // forwards the rebound origin's cookies/CSRF state to us. Runs before CORS
+  // so a rebound preflight does not even see Access-Control-Allow-Origin.
+  app.use((req, res, next) => {
+    const host = req.headers.host;
+    if (!host) {
+      res.status(400).json({ error: "Missing Host header" });
+      return;
+    }
+    const hostname = extractHostname(host);
+    if (!ALLOWED_HOSTNAMES.has(hostname)) {
+      res.status(403).json({
+        error:
+          `Refusing request with Host "${host}". The tool-server only accepts ` +
+          `loopback hostnames (127.0.0.1, localhost, ::1) to defend against ` +
+          `DNS-rebinding. If you are reaching this from your own client, use ` +
+          `127.0.0.1 instead of a public hostname.`,
+      });
+      return;
+    }
+    next();
+  });
 
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
