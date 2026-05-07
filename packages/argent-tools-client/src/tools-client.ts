@@ -1,4 +1,9 @@
-import { ensureToolsServer, type ToolsServerPaths } from "./launcher.js";
+import {
+  ensureToolsServer,
+  AUTH_TOKEN_ENV,
+  type ToolsServerHandle,
+  type ToolsServerPaths,
+} from "./launcher.js";
 
 export interface ToolMeta {
   name: string;
@@ -23,8 +28,8 @@ export interface ToolsClient {
   fetchTools(): Promise<ToolMeta[]>;
   fetchTool(name: string): Promise<ToolMeta | null>;
   callTool(name: string, args: unknown): Promise<ToolInvocationResult>;
-  /** Returns the tool-server base URL, spawning it if not yet running. */
-  baseUrl(): Promise<string>;
+  /** Returns the tool-server base URL + auth token, spawning if needed. */
+  baseUrl(): Promise<ToolsServerHandle>;
 }
 
 export interface CreateToolsClientOptions {
@@ -32,11 +37,24 @@ export interface CreateToolsClientOptions {
   paths?: ToolsServerPaths;
 }
 
-export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
-  let cached: string | null = null;
+function authHeaders(token: string | undefined): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
-  async function baseUrl(): Promise<string> {
-    if (process.env.ARGENT_TOOLS_URL) return process.env.ARGENT_TOOLS_URL;
+export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
+  let cached: ToolsServerHandle | null = null;
+
+  async function baseUrl(): Promise<ToolsServerHandle> {
+    if (process.env.ARGENT_TOOLS_URL) {
+      // External clients pass the URL via env; the matching auth token comes
+      // from the same env var the tool-server reads (ARGENT_AUTH_TOKEN).
+      // Empty/unset means the caller is responsible for an unauthenticated
+      // server (legacy / dev).
+      return {
+        url: process.env.ARGENT_TOOLS_URL,
+        token: process.env[AUTH_TOKEN_ENV] ?? "",
+      };
+    }
     if (cached) return cached;
     if (!options.paths) {
       throw new Error(
@@ -48,8 +66,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   }
 
   async function fetchTools(): Promise<ToolMeta[]> {
-    const url = await baseUrl();
-    const res = await fetch(`${url}/tools`);
+    const { url, token } = await baseUrl();
+    const res = await fetch(`${url}/tools`, { headers: authHeaders(token) });
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
@@ -61,10 +79,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   }
 
   async function callTool(name: string, args: unknown): Promise<ToolInvocationResult> {
-    const url = await baseUrl();
+    const { url, token } = await baseUrl();
     const res = await fetch(`${url}/tools/${encodeURIComponent(name)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders(token) },
       body: JSON.stringify(args ?? {}),
     });
     const json = (await res.json().catch(() => ({}))) as {

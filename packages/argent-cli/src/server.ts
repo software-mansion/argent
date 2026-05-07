@@ -2,18 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import { killToolServer } from "@argent/tools-client";
+import { killToolServer, type ToolsServerState } from "@argent/tools-client";
 
 const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
-
-interface ToolsServerState {
-  port: number;
-  pid: number;
-  startedAt: string;
-  bundlePath: string;
-}
 
 function readState(): ToolsServerState | null {
   try {
@@ -32,11 +25,14 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-async function isHealthy(port: number, timeoutMs = 2000): Promise<boolean> {
+async function isHealthy(port: number, token: string, timeoutMs = 2000): Promise<boolean> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/tools`, { signal: controller.signal });
+    const res = await fetch(`http://127.0.0.1:${port}/tools`, {
+      signal: controller.signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
     return res.ok;
   } catch {
     return false;
@@ -56,9 +52,18 @@ async function statusCmd(json: boolean): Promise<void> {
     return;
   }
   const alive = isProcessAlive(state.pid);
-  const healthy = alive ? await isHealthy(state.port) : false;
+  const healthy = alive ? await isHealthy(state.port, state.token ?? "") : false;
   if (json) {
-    console.log(JSON.stringify({ running: alive && healthy, ...state, alive, healthy }, null, 2));
+    // Hide the token from JSON output — it's a secret. Surface its presence
+    // without leaking the value.
+    const { token, ...publicState } = state;
+    console.log(
+      JSON.stringify(
+        { running: alive && healthy, ...publicState, hasToken: !!token, alive, healthy },
+        null,
+        2
+      )
+    );
     return;
   }
   console.log(`tool-server:`);
