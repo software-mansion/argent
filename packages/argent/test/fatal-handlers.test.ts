@@ -1,10 +1,32 @@
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import * as esbuild from "esbuild";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-// Resolves to dist/fatal-handlers.js — the test runs the *built* artifact
-// inside child node processes so it exercises the same code that ships.
-const DIST_HANDLER = path.resolve(import.meta.dirname, "../dist/fatal-handlers.js");
+// Compile src/fatal-handlers.ts to a tmp .mjs once before all tests so the
+// spawned child node processes can `import` it without depending on a prior
+// `npm run build` step. Self-contained: no dist/ build dependency.
+let handlerUrl = "";
+let tmpDir = "";
+
+beforeAll(async () => {
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-fatal-handlers-"));
+  const srcPath = path.resolve(import.meta.dirname, "../src/fatal-handlers.ts");
+  const out = await esbuild.transform(fs.readFileSync(srcPath, "utf8"), {
+    loader: "ts",
+    format: "esm",
+    target: "node20",
+  });
+  const handlerPath = path.join(tmpDir, "fatal-handlers.mjs");
+  fs.writeFileSync(handlerPath, out.code);
+  handlerUrl = JSON.stringify(`file://${handlerPath}`);
+});
+
+afterAll(() => {
+  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+});
 
 interface RunResult {
   exitCode: number | null;
@@ -47,8 +69,6 @@ function runChild(scriptBody: string, timeoutMs = 3_000): Promise<RunResult> {
   });
 }
 
-const HANDLER_URL = JSON.stringify(`file://${DIST_HANDLER}`);
-
 describe("installFatalHandlers", () => {
   it("exits cleanly when stderr is broken (the orphaned-process loop scenario)", async () => {
     // Reproduces the production bug: an orphaned MCP process whose stderr
@@ -56,7 +76,7 @@ describe("installFatalHandlers", () => {
     // async 'error' event, which without a listener became another
     // uncaughtException, calling the handler again, ...
     const script = `
-      import { installFatalHandlers } from ${HANDLER_URL};
+      import { installFatalHandlers } from ${handlerUrl};
       const origWrite = process.stderr.write.bind(process.stderr);
       let writes = 0;
       process.stderr.write = (chunk, ...rest) => {
@@ -80,7 +100,7 @@ describe("installFatalHandlers", () => {
 
   it("exits with code 1 in non-mcp mode on uncaught exception", async () => {
     const script = `
-      import { installFatalHandlers } from ${HANDLER_URL};
+      import { installFatalHandlers } from ${handlerUrl};
       installFatalHandlers({ isMcpServer: false });
       throw new Error("boom");
     `;
@@ -95,7 +115,7 @@ describe("installFatalHandlers", () => {
     // keeps running on uncaught exceptions" semantics. After throwing once,
     // the process should still be alive and able to do work.
     const script = `
-      import { installFatalHandlers } from ${HANDLER_URL};
+      import { installFatalHandlers } from ${handlerUrl};
       installFatalHandlers({ isMcpServer: true });
       process.nextTick(() => { throw new Error("transient"); });
       setTimeout(() => {
@@ -112,7 +132,7 @@ describe("installFatalHandlers", () => {
 
   it("formats unhandled rejections", async () => {
     const script = `
-      import { installFatalHandlers } from ${HANDLER_URL};
+      import { installFatalHandlers } from ${handlerUrl};
       installFatalHandlers({ isMcpServer: false });
       Promise.reject(new Error("rejected-thing"));
     `;
@@ -128,7 +148,7 @@ describe("installFatalHandlers", () => {
     // wraps the formatter in a try/catch so a failing .stack does not start
     // the loop.
     const script = `
-      import { installFatalHandlers } from ${HANDLER_URL};
+      import { installFatalHandlers } from ${handlerUrl};
       installFatalHandlers({ isMcpServer: false });
       const err = new Error("boom");
       Object.defineProperty(err, "stack", { get() { throw new Error("stack-getter-blew-up"); } });
