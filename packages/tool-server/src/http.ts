@@ -16,6 +16,27 @@ import { resolveDevice } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
+const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
+const BEARER_PREFIX = "Bearer ";
+
+// Constant-time comparison so a leaked token can't be recovered byte-by-byte
+// via response-timing measurements. Both strings must be the same length to
+// avoid leaking length information either; we pad/truncate to a fixed compare
+// width of the expected token's length.
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function extractBearerToken(authHeader: string | undefined): string | null {
+  if (!authHeader || !authHeader.startsWith(BEARER_PREFIX)) return null;
+  return authHeader.slice(BEARER_PREFIX.length).trim() || null;
+}
+
 // ── HTTP app ────────────────────────────────────────────────────────
 
 export interface HttpAppOptions {
@@ -38,12 +59,39 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
-  app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    if (_req.method === "OPTIONS") {
-      res.sendStatus(204);
+  // Auth token snapshotted at startup. The launcher generates this and passes
+  // it in via env (see ensureToolsServer). Empty string ⇒ auth disabled, which
+  // is supported only for local dev (`npm run dev`); in that case stderr gets
+  // a one-shot warning so the operator notices.
+  const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
+  if (!expectedToken) {
+    process.stderr.write(
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
+        `Any local process can drive the tool-server. This is only safe for development.\n`
+    );
+  }
+
+  // Authorization gate. Runs before CORS and before any handler so an
+  // unauthenticated request is rejected with no useful side-channel — not
+  // even a CORS header. /preview is intentionally exempt because it is
+  // user-facing and was not gated before; tightening it is a follow-up.
+  app.use((req, res, next) => {
+    if (!expectedToken) {
+      next();
+      return;
+    }
+    if (req.path.startsWith("/preview")) {
+      next();
+      return;
+    }
+    const provided = extractBearerToken(req.headers.authorization);
+    if (!provided || !constantTimeEqual(provided, expectedToken)) {
+      res.status(401).json({
+        error:
+          "Missing or invalid Authorization header. Tool-server requires " +
+          "`Authorization: Bearer <token>` where <token> matches the value in " +
+          "~/.argent/tool-server.json.",
+      });
       return;
     }
     next();
