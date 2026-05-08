@@ -4,15 +4,7 @@ import * as path from "node:path";
 // Source extensions we are willing to read into a debug response. Anything
 // else (e.g., ~/.zshrc, /etc/passwd, an .env file inside the project) is
 // rejected even if the path passes the project-root containment check.
-const ALLOWED_SOURCE_EXTENSIONS = new Set([
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".mjs",
-  ".cjs",
-  ".json",
-]);
+const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json"]);
 
 function isInsideProject(absFile: string, projectRoot: string): boolean {
   const resolvedRoot = path.resolve(projectRoot);

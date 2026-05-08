@@ -83,18 +83,12 @@ describe("readSourceFragment containment + extension allowlist", () => {
   });
 
   it("reads a source file inside the project root", async () => {
-    const out = await resolver.readSourceFragment(
-      { file: "App.tsx", line: 3, column: 0 },
-      1
-    );
+    const out = await resolver.readSourceFragment({ file: "App.tsx", line: 3, column: 0 }, 1);
     expect(out).toContain("line3");
   });
 
   it("rejects an absolute path to a system file (~/.zshrc-style attack)", async () => {
-    const out = await resolver.readSourceFragment(
-      { file: "/etc/hosts", line: 1, column: 0 },
-      1
-    );
+    const out = await resolver.readSourceFragment({ file: "/etc/hosts", line: 1, column: 0 }, 1);
     expect(out).toBeNull();
   });
 
@@ -107,10 +101,7 @@ describe("readSourceFragment containment + extension allowlist", () => {
   });
 
   it("rejects an in-project file with a non-source extension (.env)", async () => {
-    const out = await resolver.readSourceFragment(
-      { file: "secret.env", line: 1, column: 0 },
-      1
-    );
+    const out = await resolver.readSourceFragment({ file: "secret.env", line: 1, column: 0 }, 1);
     expect(out).toBeNull();
   });
 
