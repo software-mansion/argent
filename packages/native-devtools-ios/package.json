@@ -1,6 +1,6 @@
 {
   "name": "@argent/native-devtools-ios",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
