@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { execFileSync } from "node:child_process";
 import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
-  getInstalledVersion,
+  getGloballyInstalledVersion,
   getLatestVersion,
   isGloballyInstalled,
   isNewerVersion,
@@ -23,14 +23,15 @@ export async function update(args: string[]): Promise<void> {
 
   p.intro(pc.bgCyan(pc.black(" argent update ")));
 
-  // When invoked via `npx @swmansion/argent update`, getInstalledVersion()
-  // reads the npx-cached package.json — which is always the latest, so a
-  // straight version compare would falsely report "already on the latest"
-  // even after the user uninstalled the global package. Detect that we're
-  // running transiently and treat the missing global install as a fresh-
-  // install path instead.
+  // When invoked via `npx @swmansion/argent update`, the running package is
+  // the npx cache and will always be at the latest published version. Reading the
+  // version from PACKAGE_ROOT would falsely report "already on the latest"
+  // both when no global install exists AND when the global install is
+  // outdated. getGloballyInstalledVersion() resolves the *real* global
+  // binary's package.json, so the compare reflects what the user has
+  // installed rather than what npx just downloaded.
   const globallyInstalled = isGloballyInstalled();
-  const installed = globallyInstalled ? getInstalledVersion() : null;
+  const installed = globallyInstalled ? getGloballyInstalledVersion() : null;
 
   if (globallyInstalled && !installed) {
     p.log.error("Could not determine installed version.");
