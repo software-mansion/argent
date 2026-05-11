@@ -1,6 +1,6 @@
+import { AXDescribeElement, AXDescribeResponse } from "../../../../blueprints/ax-service";
+import { DescribeNode, parseDescribeResult } from "../../contract";
 import { mapNativeTraitsToDescribeRole } from "./ios-native-adapter";
-import { parseDescribeResult, type DescribeNode } from "../contract";
-import type { AXDescribeResponse, AXDescribeElement } from "../../../blueprints/ax-service";
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));

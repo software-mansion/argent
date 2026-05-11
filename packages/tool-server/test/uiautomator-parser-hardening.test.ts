@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { parseUiAutomatorDump, parseUiAutomatorXml } from "../src/utils/uiautomator-parser";
+import {
+  parseUiAutomatorDump,
+  parseUiAutomatorXml,
+} from "../src/tools/describe/platforms/android/uiautomator-parser";
 
 describe("uiautomator numeric entities (review #5)", () => {
   it("decodes &#N; decimal character references in text / content-desc", () => {

@@ -2,8 +2,8 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import type { DescribeResult } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { describeIos, iosRequires } from "./platforms/ios";
 import { describeAndroid, androidRequires } from "./platforms/android";
+import { iosRequires, describeIos } from "./platforms/ios";
 
 const zodSchema = z.object({
   udid: z

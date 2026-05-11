@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tools-client",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Spawn-and-talk client for the argent tool-server (used by MCP and CLI)",
   "type": "module",
   "main": "dist/index.js",

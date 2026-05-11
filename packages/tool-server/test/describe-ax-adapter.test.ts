@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   adaptAXElement,
   adaptAXDescribeToDescribeResult,
-} from "../src/tools/describe/platforms/ios-ax-adapter";
+} from "../src/tools/describe/platforms/ios/ios-ax-adapter";
 import type { AXDescribeResponse } from "../src/blueprints/ax-service";
 
 describe("describe ax-service adapter", () => {

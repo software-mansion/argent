@@ -47,17 +47,28 @@ export interface AdbRunResult {
 const ADB_KILL_SIGNAL = "SIGKILL" as const;
 
 function describeAdbFailure(args: string[], err: unknown): Error {
-  // execFileAsync rejection carries `stdout`/`stderr` on the error object;
-  // surfacing them turns the generic "Command failed" into the actual ADB
-  // diagnostic ("device offline", "more than one device", "no devices/emulators
-  // found", etc.) so callers don't have to repro the hang to learn what failed.
-  const e = err as { code?: string | number; stderr?: string; stdout?: string; message?: string };
+  // Prefer adb's own stderr/stdout — that's the actionable diagnostic
+  // ("device offline", etc.). When both are empty (timeout-SIGKILL, daemon
+  // hang) fall back to the bare message + signal/killed/code so the failure
+  // mode is still identifiable instead of a tautological "Command failed".
+  const e = err as {
+    code?: string | number | null;
+    signal?: string | null;
+    killed?: boolean;
+    stderr?: string;
+    stdout?: string;
+    message?: string;
+  };
   const argv = args.join(" ");
-  const stderrText = (e.stderr ?? "").trim();
-  const stdoutText = (e.stdout ?? "").trim();
-  const baseMsg = e.message ?? String(err);
-  const detail = stderrText || stdoutText || baseMsg;
-  return new Error(`adb ${argv} failed: ${detail}`);
+  const ioDetail = (e.stderr ?? "").trim() || (e.stdout ?? "").trim();
+  if (ioDetail) return new Error(`adb ${argv} failed: ${ioDetail}`);
+  const meta: string[] = [];
+  if (e.killed) meta.push("killed=true");
+  if (e.signal) meta.push(`signal=${e.signal}`);
+  if (e.code) meta.push(`code=${e.code}`);
+  const baseMsg = (e.message ?? String(err)).trim();
+  const suffix = meta.length ? ` (${meta.join(" ")})` : "";
+  return new Error(`adb ${argv} failed: ${baseMsg}${suffix}`);
 }
 
 /**

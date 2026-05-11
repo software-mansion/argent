@@ -4,7 +4,7 @@ import {
   deriveUiAutomatorRole,
   parseUiAutomatorBounds,
   parseUiAutomatorDump,
-} from "../src/utils/uiautomator-parser";
+} from "../src/tools/describe/platforms/android/uiautomator-parser";
 
 describe("parseUiAutomatorBounds", () => {
   it("parses [x1,y1][x2,y2]", () => {

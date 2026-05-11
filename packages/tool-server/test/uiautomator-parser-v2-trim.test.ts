@@ -7,7 +7,7 @@ import {
   parseUiAutomatorDump,
   parseUiAutomatorXml,
   parseUiAutomatorBounds,
-} from "../src/utils/uiautomator-parser";
+} from "../src/tools/describe/platforms/android/uiautomator-parser";
 import { parseDescribeResult, type DescribeNode } from "../src/tools/describe/contract";
 
 function flatten(tree: DescribeNode): DescribeNode[] {
