@@ -237,14 +237,53 @@ const readState = readToolsServerState;
 const writeState = writeToolsServerState;
 const clearState = clearToolsServerState;
 
+// SIGTERM grace matches tool-server's own PROCESS_TIMEOUT_MS (5 s) plus a small
+// buffer so we let the server's graceful shutdown (HTTP drain + registry
+// dispose) finish before escalating. Without this wait, a fast restart can
+// race the OS releasing the listening port and the next spawn hits EADDRINUSE.
+const SIGTERM_GRACE_MS = 6_000;
+const SIGKILL_GRACE_MS = 1_000;
+const KILL_POLL_MS = 100;
+
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise<void>((r) => setTimeout(r, KILL_POLL_MS));
+  }
+  return !isProcessAlive(pid);
+}
+
 export async function killToolServer(): Promise<void> {
   const state = await readState();
   if (!state) return;
-  try {
-    process.kill(state.pid, "SIGTERM");
-  } catch {
-    // already gone
+
+  let exited = !isProcessAlive(state.pid);
+  if (!exited) {
+    try {
+      process.kill(state.pid, "SIGTERM");
+    } catch {
+      // Process disappeared between the alive check and the signal — fine.
+      exited = true;
+    }
   }
+
+  if (!exited) {
+    exited = await waitForExit(state.pid, SIGTERM_GRACE_MS);
+  }
+
+  if (!exited) {
+    // SIGTERM ignored or shutdown hung. Force.
+    try {
+      process.kill(state.pid, "SIGKILL");
+    } catch {
+      exited = true;
+    }
+    if (!exited) {
+      await waitForExit(state.pid, SIGKILL_GRACE_MS);
+    }
+  }
+
   await clearState();
 }
 
