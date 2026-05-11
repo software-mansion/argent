@@ -9,10 +9,10 @@ import type { DescribeFrame, DescribeNode } from "./contract";
 //
 // Two rendering modes are picked automatically:
 //   - "flat" trees (root → leaves, no grandchildren — what ax-service emits):
-//     sort nodes in reading order, then split into groups wherever a gap
-//     between consecutive nodes is large relative to the typical node size.
-//     The same algorithm runs whether the layout is dense / sparse, portrait
-//     / landscape, or contains horizontal strips, vertical strips, or both.
+//     emit one line per labeled / interactive node, sorted in reading order
+//     (top-to-bottom, then left-to-right). Spatial relationships are already
+//     fully described by each line's frame, so no grouping or section
+//     headers are added.
 //   - "nested" trees (uiautomator on Android, or native-devtools fallback):
 //     indented DFS so the parent / child structure is visible directly.
 // The chosen mode is reported at the top so a consumer that wants to re-parse
@@ -92,99 +92,12 @@ function isFlatTree(root: DescribeNode): boolean {
 
 // ---- flat renderer ----
 
-// Absolute gap (in normalized [0,1] coordinates) that separates two clusters.
-// A pair of nodes whose extents on an axis are farther apart than this counts
-// as a section break. 0.06 — 6% of screen — is large enough to not split
-// keyboard rows or list items that sit close together, and small enough to
-// split distinct UI regions like sidebar/content or status bar/body. Applied
-// to both axes equally so the algorithm has no horizontal/vertical bias.
-const CLUSTER_GAP_THRESHOLD = 0.06;
-
-/**
- * Split nodes along an axis wherever the empty band between consecutive
- * nodes exceeds CLUSTER_GAP_THRESHOLD. Nodes whose extents overlap on the
- * axis (negative gap) always stay together. Returns [nodes] unchanged when
- * no gap is large enough to split.
- */
-function partitionByAxisGap(nodes: DescribeNode[], axis: "x" | "y"): DescribeNode[][] {
-  if (nodes.length < 2) return [nodes];
-  const sizeKey = axis === "x" ? "width" : "height";
-  const items = nodes
-    .map((n) => ({
-      start: n.frame[axis],
-      end: n.frame[axis] + n.frame[sizeKey],
-      node: n,
-    }))
-    .sort((a, b) => a.start - b.start);
-
-  const runs: DescribeNode[][] = [];
-  let current: DescribeNode[] = [items[0]!.node];
-  let runEnd = items[0]!.end;
-  for (let i = 1; i < items.length; i++) {
-    const gap = items[i]!.start - runEnd;
-    if (gap > CLUSTER_GAP_THRESHOLD) {
-      runs.push(current);
-      current = [];
-    }
-    current.push(items[i]!.node);
-    runEnd = Math.max(runEnd, items[i]!.end);
-  }
-  if (current.length > 0) runs.push(current);
-  return runs;
-}
-
-/**
- * Cluster nodes by recursively splitting on whichever axis produces a real
- * separation. At each level we try both x and y, pick the one that breaks
- * the input into more partitions, and recurse into each piece. Recursion
- * stops once neither axis produces a split, so a single tight group (a
- * keyboard, a toolbar, a column) survives as one cluster regardless of
- * orientation.
- */
-function clusterNodes(nodes: DescribeNode[]): DescribeNode[][] {
-  if (nodes.length <= 1) return nodes.length === 0 ? [] : [nodes];
-
-  const byY = partitionByAxisGap(nodes, "y");
-  const byX = partitionByAxisGap(nodes, "x");
-
-  if (byY.length <= 1 && byX.length <= 1) return [nodes];
-
-  const partitions = byY.length >= byX.length ? byY : byX;
-  return partitions.flatMap(clusterNodes);
-}
-
-function readingOrder(nodes: DescribeNode[]): DescribeNode[] {
-  return [...nodes].sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
-}
-
-/** Sort clusters themselves in reading order using their top-left corner. */
-function clusterOrigin(c: DescribeNode[]): { y: number; x: number } {
-  let y = Infinity;
-  let x = Infinity;
-  for (const n of c) {
-    if (n.frame.y < y) y = n.frame.y;
-    if (n.frame.x < x) x = n.frame.x;
-  }
-  return { y, x };
-}
-
 function renderFlat(root: DescribeNode): string[] {
-  const interesting = root.children.filter(hasContent);
-  if (interesting.length === 0) return [];
-
-  const clusters = clusterNodes(interesting).sort((a, b) => {
-    const oa = clusterOrigin(a);
-    const ob = clusterOrigin(b);
-    return oa.y - ob.y || oa.x - ob.x;
-  });
-
-  const lines: string[] = [];
-  for (let i = 0; i < clusters.length; i++) {
-    if (clusters.length > 1) lines.push(`— Group ${i + 1} —`);
-    for (const n of readingOrder(clusters[i]!)) lines.push(formatLine(n, 1));
-    if (i < clusters.length - 1) lines.push("");
-  }
-  return lines;
+  return root.children
+    .filter(hasContent)
+    .slice()
+    .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
+    .map((n) => formatLine(n, 1));
 }
 
 // ---- nested renderer ----
