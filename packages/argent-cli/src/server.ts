@@ -90,7 +90,7 @@ function logsCmd(follow: boolean): void {
   child.on("exit", (code) => process.exit(code ?? 0));
 }
 
-interface StartFlags {
+export interface StartFlags {
   port: number | null;
   host: string;
   idleTimeoutMinutes: number;
@@ -99,9 +99,9 @@ interface StartFlags {
   help: boolean;
 }
 
-class StartFlagError extends Error {}
+export class StartFlagError extends Error {}
 
-function parseStartFlags(argv: string[]): StartFlags {
+export function parseStartFlags(argv: string[]): StartFlags {
   const flags: StartFlags = {
     port: null,
     host: "127.0.0.1",
@@ -166,14 +166,14 @@ function parseStartFlags(argv: string[]): StartFlags {
 // (e.g. `--port=123abc` parsing as 123).
 const NON_NEGATIVE_INT = /^\d+$/;
 
-function parsePort(raw: string): number {
+export function parsePort(raw: string): number {
   if (!NON_NEGATIVE_INT.test(raw) || Number(raw) > 65535) {
     throw new StartFlagError(`--port must be an integer 0..65535, got "${raw}"`);
   }
   return Number(raw);
 }
 
-function parseIdle(raw: string): number {
+export function parseIdle(raw: string): number {
   if (!NON_NEGATIVE_INT.test(raw)) {
     throw new StartFlagError(`--idle-timeout must be a non-negative integer, got "${raw}"`);
   }
