@@ -35,7 +35,7 @@ describe("zodObjectToJsonSchema", () => {
 
   it("emits number type for z.coerce.number().int().positive().default(100)", () => {
     const schema = zodObjectToJsonSchema(
-      z.object({ sample_interval_us: z.coerce.number().int().positive().default(100) }),
+      z.object({ sample_interval_us: z.coerce.number().int().positive().default(100) })
     );
     expect((schema.properties as any).sample_interval_us).toEqual({ type: "number", default: 100 });
     expect(schema.required).toBeUndefined();
@@ -48,7 +48,7 @@ describe("zodObjectToJsonSchema", () => {
         port: z.number().default(8081),
         force: z.boolean().default(false),
         label: z.string().optional(),
-      }),
+      })
     );
     expect(schema).toEqual({
       type: "object",
