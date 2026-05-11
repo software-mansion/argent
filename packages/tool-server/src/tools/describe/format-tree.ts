@@ -8,12 +8,13 @@ import type { DescribeFrame, DescribeNode } from "./contract";
 // already in the tree, never drops or merges nodes.
 //
 // Two rendering modes are picked automatically:
-//   - "flat" trees (AXGroup root with no grandchildren — what ax-service returns
-//     on iOS): bucket by y into screen zones, then split the bottom zone into
-//     keyboard rows by rounded y. This produces the same shape as the hand-
-//     formatted iOS output an agent gets used to seeing.
-//   - "nested" trees (uiautomator on Android, or native-devtools fallback that
-//     produces hierarchy): indented DFS, one labeled / interactive node per line.
+//   - "flat" trees (root → leaves, no grandchildren — what ax-service emits):
+//     sort nodes in reading order, then split into groups wherever a gap
+//     between consecutive nodes is large relative to the typical node size.
+//     The same algorithm runs whether the layout is dense / sparse, portrait
+//     / landscape, or contains horizontal strips, vertical strips, or both.
+//   - "nested" trees (uiautomator on Android, or native-devtools fallback):
+//     indented DFS so the parent / child structure is visible directly.
 // The chosen mode is reported at the top so a consumer that wants to re-parse
 // the formatted text can branch on it.
 
@@ -61,13 +62,13 @@ function formatFlags(n: DescribeNode): string {
 function hasContent(n: DescribeNode): boolean {
   return Boolean(
     n.label ||
-    n.value ||
-    n.identifier ||
-    n.clickable ||
-    n.longClickable ||
-    n.scrollable ||
-    n.checkable ||
-    (typeof n.scrollHidden === "number" && n.scrollHidden > 0)
+      n.value ||
+      n.identifier ||
+      n.clickable ||
+      n.longClickable ||
+      n.scrollable ||
+      n.checkable ||
+      (typeof n.scrollHidden === "number" && n.scrollHidden > 0)
   );
 }
 
@@ -82,113 +83,111 @@ function formatLine(n: DescribeNode, indent: number): string {
 }
 
 function isFlatTree(root: DescribeNode): boolean {
-  // A flat tree is one with only root → leaves. This is what the iOS
-  // ax-service adapter emits today; treating it as flat lets us use the
-  // zone-based layout, which is far more legible than a 50-item indented list.
+  // Root → leaves with no grandchildren. This is what the iOS ax-service
+  // adapter emits; the flat renderer relies on the assumption that every
+  // child is a positioned leaf.
   if (root.children.length === 0) return true;
   return root.children.every((c) => c.children.length === 0);
 }
 
-// ---- flat (iOS-style) renderer ----
+// ---- flat renderer ----
 
-// Zone boundaries are tuned for portrait phones with the standard iOS keyboard
-// surface (~y >= 0.66). On iPad / landscape, the formatter still renders — but
-// the section headers become "Body" / "Bottom" without further keyboard
-// splitting since the row-detection heuristic only fires for tight y clusters.
-const ZONE_TOP_MAX = 0.15;
-const ZONE_BODY_MAX = 0.5;
-// 0.66 ceiling so the iOS predictive bar (AXTabBar elements at y≈0.62) and any
-// other content sitting between the composer and the keyboard land in the action
-// zone rather than the catch-all "Other" section.
-const ZONE_ACTION_MAX = 0.66;
-const ZONE_KEYBOARD_MIN = 0.66;
+// Absolute gap (in normalized [0,1] coordinates) that separates two clusters.
+// A pair of nodes whose extents on an axis are farther apart than this counts
+// as a section break. 0.06 — 6% of screen — is large enough to not split
+// keyboard rows or list items that sit close together, and small enough to
+// split distinct UI regions like sidebar/content or status bar/body. Applied
+// to both axes equally so the algorithm has no horizontal/vertical bias.
+const CLUSTER_GAP_THRESHOLD = 0.06;
 
-type Zone = "top" | "body" | "action" | "keyboard" | "other";
+/**
+ * Split nodes along an axis wherever the empty band between consecutive
+ * nodes exceeds CLUSTER_GAP_THRESHOLD. Nodes whose extents overlap on the
+ * axis (negative gap) always stay together. Returns [nodes] unchanged when
+ * no gap is large enough to split.
+ */
+function partitionByAxisGap(nodes: DescribeNode[], axis: "x" | "y"): DescribeNode[][] {
+  if (nodes.length < 2) return [nodes];
+  const sizeKey = axis === "x" ? "width" : "height";
+  const items = nodes
+    .map((n) => ({
+      start: n.frame[axis],
+      end: n.frame[axis] + n.frame[sizeKey],
+      node: n,
+    }))
+    .sort((a, b) => a.start - b.start);
 
-function zoneOf(n: DescribeNode): Zone {
-  const y = n.frame.y;
-  if (y < ZONE_TOP_MAX) return "top";
-  if (y < ZONE_BODY_MAX) return "body";
-  if (y < ZONE_ACTION_MAX) return "action";
-  if (y >= ZONE_KEYBOARD_MIN) return "keyboard";
-  return "other";
+  const runs: DescribeNode[][] = [];
+  let current: DescribeNode[] = [items[0]!.node];
+  let runEnd = items[0]!.end;
+  for (let i = 1; i < items.length; i++) {
+    const gap = items[i]!.start - runEnd;
+    if (gap > CLUSTER_GAP_THRESHOLD) {
+      runs.push(current);
+      current = [];
+    }
+    current.push(items[i]!.node);
+    runEnd = Math.max(runEnd, items[i]!.end);
+  }
+  if (current.length > 0) runs.push(current);
+  return runs;
 }
 
-const ZONE_TITLES: Record<Zone, string> = {
-  top: "Top bar",
-  body: "Body / content",
-  action: "Composer / predictive / action bar",
-  keyboard: "Bottom / keyboard",
-  other: "Other",
-};
+/**
+ * Cluster nodes by recursively splitting on whichever axis produces a real
+ * separation. At each level we try both x and y, pick the one that breaks
+ * the input into more partitions, and recurse into each piece. Recursion
+ * stops once neither axis produces a split, so a single tight group (a
+ * keyboard, a toolbar, a column) survives as one cluster regardless of
+ * orientation.
+ */
+function clusterNodes(nodes: DescribeNode[]): DescribeNode[][] {
+  if (nodes.length <= 1) return nodes.length === 0 ? [] : [nodes];
 
-function classifyKeyboardRow(items: DescribeNode[]): string {
-  const labels = items.map((i) => i.label ?? "");
-  if (labels.some((l) => l === "Dictate" || l === "Next keyboard")) return "globe / dictate";
-  if (labels.some((l) => l === "return")) return "numbers / emoji / space / return";
-  if (labels.some((l) => l === "shift")) return "shift + letters + delete";
-  const onlyLetters = labels.filter((l) => l.length > 0).every((l) => l.length <= 2);
-  if (onlyLetters && labels.some((l) => l.length === 1)) return "letters";
-  return "row";
+  const byY = partitionByAxisGap(nodes, "y");
+  const byX = partitionByAxisGap(nodes, "x");
+
+  if (byY.length <= 1 && byX.length <= 1) return [nodes];
+
+  const partitions = byY.length >= byX.length ? byY : byX;
+  return partitions.flatMap(clusterNodes);
+}
+
+function readingOrder(nodes: DescribeNode[]): DescribeNode[] {
+  return [...nodes].sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
+}
+
+/** Sort clusters themselves in reading order using their top-left corner. */
+function clusterOrigin(c: DescribeNode[]): { y: number; x: number } {
+  let y = Infinity;
+  let x = Infinity;
+  for (const n of c) {
+    if (n.frame.y < y) y = n.frame.y;
+    if (n.frame.x < x) x = n.frame.x;
+  }
+  return { y, x };
 }
 
 function renderFlat(root: DescribeNode): string[] {
-  const lines: string[] = [];
   const interesting = root.children.filter(hasContent);
+  if (interesting.length === 0) return [];
 
-  const byZone = new Map<Zone, DescribeNode[]>();
-  for (const n of interesting) {
-    const z = zoneOf(n);
-    if (!byZone.has(z)) byZone.set(z, []);
-    byZone.get(z)!.push(n);
+  const clusters = clusterNodes(interesting).sort((a, b) => {
+    const oa = clusterOrigin(a);
+    const ob = clusterOrigin(b);
+    return oa.y - ob.y || oa.x - ob.x;
+  });
+
+  const lines: string[] = [];
+  for (let i = 0; i < clusters.length; i++) {
+    if (clusters.length > 1) lines.push(`— Group ${i + 1} —`);
+    for (const n of readingOrder(clusters[i]!)) lines.push(formatLine(n, 1));
+    if (i < clusters.length - 1) lines.push("");
   }
-
-  const orderedZones: Zone[] = ["top", "body", "action"];
-  for (const z of orderedZones) {
-    const items = byZone.get(z);
-    if (!items?.length) continue;
-    items.sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
-    lines.push(`— ${ZONE_TITLES[z]} —`);
-    for (const n of items) lines.push(formatLine(n, 1));
-    lines.push("");
-  }
-
-  // Keyboard zone: subdivide by row using rounded y. iOS QWERTY rows are
-  // ~0.062 tall and exactly aligned, so rounding to two decimals collapses
-  // each row to a single bucket. Any other "bottom" cluster (e.g. iPad
-  // toolbar) falls into one row bucket and renders as a single section.
-  const keyboard = byZone.get("keyboard");
-  if (keyboard?.length) {
-    const rows = new Map<number, DescribeNode[]>();
-    for (const n of keyboard) {
-      const key = Math.round(n.frame.y * 100);
-      if (!rows.has(key)) rows.set(key, []);
-      rows.get(key)!.push(n);
-    }
-    const orderedKeys = [...rows.keys()].sort((a, b) => a - b);
-    let idx = 1;
-    for (const k of orderedKeys) {
-      const row = rows.get(k)!.sort((a, b) => a.frame.x - b.frame.x);
-      const cat = classifyKeyboardRow(row);
-      lines.push(`— Bottom row ${idx}: ${cat} —`);
-      for (const n of row) lines.push(formatLine(n, 1));
-      lines.push("");
-      idx++;
-    }
-  }
-
-  const other = byZone.get("other");
-  if (other?.length) {
-    other.sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x);
-    lines.push("— Other —");
-    for (const n of other) lines.push(formatLine(n, 1));
-    lines.push("");
-  }
-
   return lines;
 }
 
-// ---- nested (Android-style) renderer ----
+// ---- nested renderer ----
 
 function renderNested(root: DescribeNode): string[] {
   const lines: string[] = [];
