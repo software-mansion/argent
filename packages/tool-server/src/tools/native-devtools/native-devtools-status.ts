@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -19,6 +19,8 @@ type Result = {
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
+  requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Check whether native devtools are connected to a specific app and whether the next launch is prepared for injection.
 Use when you need to verify native devtools readiness before calling native-full-hierarchy, native-describe-screen, or native-network-logs.
 
@@ -35,7 +37,7 @@ If requiresRestart is true: call restart-app, then proceed with the native featu
 Fails if the simulator server is not running for the given UDID or the bundleId is not found.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;

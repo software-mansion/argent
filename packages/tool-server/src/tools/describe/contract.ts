@@ -16,6 +16,18 @@ export interface DescribeNode {
   label?: string;
   identifier?: string;
   value?: string;
+  // Interactivity flags surfaced by the Android uiautomator dump. iOS
+  // consumers leave these unset; adding them as optional avoids breaking
+  // existing payloads. `scrollHidden` counts children that fell outside an
+  // ancestor scroll's clip rect — the agent should swipe before tapping.
+  clickable?: boolean;
+  longClickable?: boolean;
+  scrollable?: boolean;
+  checkable?: boolean;
+  checked?: boolean;
+  disabled?: boolean;
+  password?: boolean;
+  scrollHidden?: number;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -27,13 +39,26 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       label: z.string().optional(),
       identifier: z.string().optional(),
       value: z.string().optional(),
+      clickable: z.boolean().optional(),
+      longClickable: z.boolean().optional(),
+      scrollable: z.boolean().optional(),
+      checkable: z.boolean().optional(),
+      checked: z.boolean().optional(),
+      disabled: z.boolean().optional(),
+      password: z.boolean().optional(),
+      scrollHidden: z.number().int().nonnegative().optional(),
     })
     .passthrough()
 );
 
 export interface DescribeResult {
   tree: DescribeNode;
-  source: "ax-service" | "native-devtools";
+  // "ax-service" / "native-devtools" come from iOS; "uiautomator" is the
+  // Android branch's underlying provider. Agents that branch on `source`
+  // (e.g. to decide whether to also call `native-find-views` for a richer
+  // tree) need to distinguish the Android case from an iOS native-devtools
+  // fallback — which the previous shared label hid.
+  source: "ax-service" | "native-devtools" | "uiautomator";
   should_restart?: boolean;
 }
 

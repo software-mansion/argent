@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Registry } from "@argent/registry";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../blueprints/native-devtools";
+import { NATIVE_DEVTOOLS_NAMESPACE, nativeDevtoolsRef } from "../blueprints/native-devtools";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +28,8 @@ async function initSimulator(
 ): Promise<void> {
   watchedUdids.add(udid);
   try {
-    await registry.resolveService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
+    const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
+    await registry.resolveService(ndRef.urn, ndRef.options);
   } catch (err) {
     // Service failed to start (e.g. simulator shut down mid-init); retry next tick
     watchedUdids.delete(udid);

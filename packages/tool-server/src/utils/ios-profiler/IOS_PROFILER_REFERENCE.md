@@ -2,7 +2,7 @@
 
 A concise overview of how Argent's iOS profiling works: what native machinery is invoked, what gets captured, how the data is processed, and what comes back to the agent.
 
-For the deeper "why" of each pipeline decision, see `PIPELINE_DESIGN.md`. For day-to-day workflow, see the `argent-ios-profiler` skill.
+For the deeper "why" of each pipeline decision, see `PIPELINE_DESIGN.md`. For day-to-day workflow, see the `argent-native-profiler` skill.
 
 ---
 
@@ -11,7 +11,7 @@ For the deeper "why" of each pipeline decision, see `PIPELINE_DESIGN.md`. For da
 Argent profiles iOS by driving Apple's own profiling stack (`xctrace`/Instruments) from a Node tool server, then post-processing the trace into an LLM-friendly markdown report.
 
 ```
-launch-app → ios-profiler-start → (user/agent interacts) → ios-profiler-stop → ios-profiler-analyze → profiler-stack-query (drill-down) / profiler-combined-report (with React)
+launch-app → native-profiler-start → (user/agent interacts) → native-profiler-stop → native-profiler-analyze → profiler-stack-query (drill-down) / profiler-combined-report (with React)
 ```
 
 Three concerns are captured: **CPU hotspots**, **UI hangs**, and **memory leaks**. Each is summarised, classified RED/YELLOW, and accompanied by app call chains for actionability.
@@ -20,14 +20,14 @@ Three concerns are captured: **CPU hotspots**, **UI hangs**, and **memory leaks*
 
 ## 2. Native foundations
 
-| Layer                       | What it is                                                                                                                         | How Argent uses it                                                                                                                  |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Instruments / `xctrace`** | Apple's tracing framework. `xctrace` is the headless CLI used by the Instruments app under the hood.                               | Every iOS profiling action is just an `xctrace record` / `xctrace export` invocation spawned by Argent.                             |
-| **`.tracetemplate`**        | A binary plist describing which Instruments to attach and how to configure them.                                                   | Argent ships `Argent.tracetemplate`, passed via `xctrace record --template`.                                                        |
-| **`xcrun simctl`**          | Simulator control. `simctl spawn ... launchctl list` enumerates running processes; `simctl listapps` enumerates installed bundles. | Used by `ios-profiler-start` to auto-detect the foreground user app (`CFBundleExecutable`) so the user does not have to specify it. |
-| **Trace bundle (`.trace`)** | The package `xctrace record` produces. Internally a SQLite-backed structure with per-instrument tables.                            | `xctrace export --xpath ...` extracts individual tables to XML for parsing.                                                         |
+| Layer                       | What it is                                                                                                                         | How Argent uses it                                                                                                                     |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **Instruments / `xctrace`** | Apple's tracing framework. `xctrace` is the headless CLI used by the Instruments app under the hood.                               | Every iOS profiling action is just an `xctrace record` / `xctrace export` invocation spawned by Argent.                                |
+| **`.tracetemplate`**        | A binary plist describing which Instruments to attach and how to configure them.                                                   | Argent ships `Argent.tracetemplate`, passed via `xctrace record --template`.                                                           |
+| **`xcrun simctl`**          | Simulator control. `simctl spawn ... launchctl list` enumerates running processes; `simctl listapps` enumerates installed bundles. | Used by `native-profiler-start` to auto-detect the foreground user app (`CFBundleExecutable`) so the user does not have to specify it. |
+| **Trace bundle (`.trace`)** | The package `xctrace record` produces. Internally a SQLite-backed structure with per-instrument tables.                            | `xctrace export --xpath ...` extracts individual tables to XML for parsing.                                                            |
 
-`xctrace` runs via `child_process.spawn`. The PID is held in the per-device session blueprint (`IosProfilerSession`); SIGINT terminates recording cleanly so the trace bundle finalises.
+`xctrace` runs via `child_process.spawn`. The PID is held in the per-device session blueprint (`NativeProfilerSession`); SIGINT terminates recording cleanly so the trace bundle finalises.
 
 ---
 
@@ -50,9 +50,9 @@ Three concerns are captured: **CPU hotspots**, **UI hangs**, and **memory leaks*
 
 ## 4. The three tools (capture flow)
 
-All three are wired through `ios-profiler-session` (per-device service, keyed by UDID).
+All three are wired through `native-profiler-session` (per-device service, keyed by UDID).
 
-### `ios-profiler-start`
+### `native-profiler-start`
 
 1. **Detect the target app** — runs `xcrun simctl spawn <udid> launchctl list`, parses `UIKitApplication:<bundleId>` lines, cross-references with `simctl listapps` to keep only `User` apps. Fails fast if zero or more than one app match.
 2. **Resolve the template** — defaults to bundled `Argent.tracetemplate`, override via `template_path`.
@@ -67,7 +67,7 @@ All three are wired through `ios-profiler-session` (per-device service, keyed by
 4. **Start gating** — only resolves the tool call once `xctrace` prints `Starting recording` / `Ctrl-C to stop` on stdout. At that point Argent records `Date.now()` (`wallClockStartMs`) — the anchor used later for cross-tool time alignment.
 5. **Safety timeout** — auto-SIGINTs after 10 minutes if `stop` is never called.
 
-### `ios-profiler-stop`
+### `native-profiler-stop`
 
 1. `process.kill(xctracePid, "SIGINT")` and poll `process.kill(pid, 0)` until the child exits (xctrace needs a moment to finalise the trace bundle).
 2. Run **schema-aware export**:
@@ -81,7 +81,7 @@ All three are wired through `ios-profiler-session` (per-device service, keyed by
    - `<base>_raw_leaks.xml` — `Leaks` track detail
 4. Returns `{ traceFile, exportedFiles, exportDiagnostics }`. `exportDiagnostics` carries the discovered schema list and any per-stream errors so the agent can debug missing data.
 
-### `ios-profiler-analyze`
+### `native-profiler-analyze`
 
 Runs the post-processing pipeline, caches the parsed data on the session (so `profiler-stack-query` can reuse it), and renders the markdown report. Returns `{ report, reportFile, bottlenecksTotal }`. The full report is also written to `<base>-report.md` so the agent can re-read it later without re-analysing.
 
@@ -179,10 +179,10 @@ This is what makes before/after comparisons possible without keeping the origina
 
 ## 9. Cross-tool correlation: `profiler-combined-report`
 
-When both `react-profiler-analyze` and `ios-profiler-analyze` ran on the same session, this tool aligns them on a shared **wall-clock anchor**:
+When both `react-profiler-analyze` and `native-profiler-analyze` ran on the same session, this tool aligns them on a shared **wall-clock anchor**:
 
 - React Profiler stamps `Date.now()` at start and uses `performance.now()` ms internally.
-- iOS Instruments uses trace-relative ns starting at 0; the wall-clock anchor is `wallClockStartMs` recorded by `ios-profiler-start`.
+- iOS Instruments uses trace-relative ns starting at 0; the wall-clock anchor is `wallClockStartMs` recorded by `native-profiler-start`.
 - Helpers in `utils/profiler-shared/time-align.ts` convert in either direction.
 
 For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks for React commits whose `[timestamp, timestamp + totalRenderMs]` overlap (200 ms tolerance for jitter). The output report includes:
@@ -204,7 +204,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | UI hang     | `microhang`                             | YELLOW       |
 | Memory leak | any                                     | RED          |
 
-> Note: `argent-ios-profiler/SKILL.md` currently documents the YELLOW band as 5–15 %. The implementation uses 3–15 % (`MIN_WEIGHT_PERCENTAGE = 3` in `02-aggregate.ts`). The code is the source of truth.
+> Note: `argent-native-profiler/SKILL.md` currently documents the YELLOW band as 5–15 %. The implementation uses 3–15 % (`MIN_WEIGHT_PERCENTAGE = 3` in `02-aggregate.ts`). The code is the source of truth.
 
 ---
 
@@ -222,11 +222,11 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 
 | Concern                      | File                                                                          |
 | ---------------------------- | ----------------------------------------------------------------------------- |
-| Tool definitions             | `tools/profiler/ios-profiler/{start,stop,analyze}.ts`                         |
+| Tool definitions             | `tools/profiler/native-profiler/native-profiler-{start,stop,analyze}.ts`      |
 | Drill-down query             | `tools/profiler/query/profiler-stack-query.ts`                                |
 | Reload past sessions         | `tools/profiler/query/profiler-load.ts`                                       |
 | Cross-tool correlation       | `tools/profiler/combined/profiler-combined-report.ts`                         |
-| Per-device session state     | `blueprints/ios-profiler-session.ts`                                          |
+| Per-device session state     | `blueprints/native-profiler-session.ts`                                       |
 | Bundled template             | `utils/ios-profiler/Argent.tracetemplate`                                     |
 | Schema-aware XML export      | `utils/ios-profiler/export.ts`                                                |
 | Pipeline (parser + 2 stages) | `utils/ios-profiler/pipeline/{xml-parser,01-correlate,02-aggregate,index}.ts` |
@@ -234,4 +234,4 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 | RN/system filter signatures  | `utils/ios-profiler/config.ts`                                                |
 | Cross-tool time alignment    | `utils/profiler-shared/time-align.ts`                                         |
 | Design rationale             | `utils/ios-profiler/PIPELINE_DESIGN.md`                                       |
-| User-facing workflow         | `packages/argent/skills/argent-ios-profiler/SKILL.md`                         |
+| User-facing workflow         | `packages/skills/skills/argent-native-profiler/SKILL.md`                      |

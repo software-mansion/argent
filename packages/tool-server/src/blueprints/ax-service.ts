@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
   TypedEventEmitter,
+  type DeviceInfo,
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
@@ -13,6 +14,24 @@ import { axServiceBinaryPath } from "@argent/native-devtools-ios";
 const execFileAsync = promisify(execFile);
 
 export const AX_SERVICE_NAMESPACE = "AXService";
+
+// Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
+type AxServiceFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+/**
+ * Build the `ServiceRef` for the AX service keyed by an already-resolved
+ * `DeviceInfo`. The factory's iOS-only check uses the caller's classification
+ * rather than running its own.
+ */
+export function axServiceRef(device: DeviceInfo): {
+  urn: string;
+  options: AxServiceFactoryOptions;
+} {
+  return {
+    urn: `${AX_SERVICE_NAMESPACE}:${device.id}`,
+    options: { device },
+  };
+}
 
 export interface AXDescribeElement {
   label?: string;
@@ -157,8 +176,13 @@ function spawnDaemon(udid: string, socketPath: string): Promise<ChildProcess> {
       }
     });
 
+    // Defense-in-depth: a missing udid here would crash the process —
+    // throwing inside an async listener bypasses promise rejection and
+    // bubbles up as `uncaughtException`, which the tool-server treats as
+    // fatal. Tag with "?" instead of dereferencing.
+    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     proc.stderr?.on("data", (data: string) => {
-      process.stderr.write(`[ax-service ${udid.slice(0, 8)}] ${data}`);
+      process.stderr.write(`[ax-service ${udidTag}] ${data}`);
     });
 
     proc.on("exit", (code) => {
@@ -179,14 +203,39 @@ function spawnDaemon(udid: string, socketPath: string): Promise<ChildProcess> {
   });
 }
 
-export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, string> = {
+export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
   namespace: AX_SERVICE_NAMESPACE,
 
-  getURN(udid: string) {
-    return `${AX_SERVICE_NAMESPACE}:${udid}`;
+  getURN(device: DeviceInfo) {
+    return `${AX_SERVICE_NAMESPACE}:${device.id}`;
   },
 
-  async factory(_deps, udid) {
+  async factory(_deps, _payload, options) {
+    const opts = options as unknown as AxServiceFactoryOptions | undefined;
+    if (!opts?.device) {
+      throw new Error(
+        `${AX_SERVICE_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
+          `Use axServiceRef(device) when registering the service ref.`
+      );
+    }
+
+    const { device } = opts;
+    if (device.platform !== "ios") {
+      throw new Error(
+        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — describe falls back to uiautomator on Android, which does not need this service.`
+      );
+    }
+    // Reject before spawning. An undefined `device.id` slips through when an
+    // inner tool is invoked via a wrapper that doesn't re-validate the inner
+    // schema. Without this guard `getSocketPath(undefined).slice` would crash
+    // and `udid.slice` in the stderr handler below would later be fatal.
+    if (typeof device.id !== "string" || device.id.length === 0) {
+      throw new Error(
+        `${AX_SERVICE_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
+      );
+    }
+
+    const udid = device.id;
     const socketPath = getSocketPath(udid);
     const events = new TypedEventEmitter<ServiceEvents>();
 

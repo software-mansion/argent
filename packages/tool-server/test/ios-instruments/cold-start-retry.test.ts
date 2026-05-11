@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import {
-  iosInstrumentsSessionBlueprint,
-  type IosProfilerSessionApi,
-} from "../../src/blueprints/ios-profiler-session";
+  nativeProfilerSessionBlueprint,
+  type NativeProfilerSessionApi,
+} from "../../src/blueprints/native-profiler-session";
 
 // xctrace's verbatim cold-launch race signature, asserted on as a stable
-// upstream contract by the retry detector in ios-profiler-start.
+// upstream contract by the retry detector in native-profiler-start.
 const COLD_START_ERROR =
   "xctrace record exited before recording started (code=19, signal=null). " +
   "stderr: Cannot find process matching name: MyApp";
@@ -20,12 +20,13 @@ class StartFakeChild extends EventEmitter {
   kill = vi.fn();
 }
 
-async function buildSession(): Promise<IosProfilerSessionApi> {
-  const instance = await iosInstrumentsSessionBlueprint.factory({}, "DEVICE-UDID");
+async function buildSession(): Promise<NativeProfilerSessionApi> {
+  const device = { id: "DEVICE-UDID", platform: "ios" as const, kind: "simulator" as const };
+  const instance = await nativeProfilerSessionBlueprint.factory({}, device, { device });
   return instance.api;
 }
 
-describe("ios-profiler-start cold-start retry", () => {
+describe("native-profiler-start cold-start retry", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
@@ -62,8 +63,8 @@ describe("ios-profiler-start cold-start retry", () => {
       waitForXctraceReady: waitForReady,
     }));
 
-    const { iosInstrumentsStartTool: startTool } =
-      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
+    const { nativeProfilerStartTool: startTool } =
+      await import("../../src/tools/profiler/native-profiler/native-profiler-start");
 
     const api = await buildSession();
     const promise = startTool.execute({ session: api } as never, {
@@ -103,8 +104,8 @@ describe("ios-profiler-start cold-start retry", () => {
       waitForXctraceReady: waitForReady,
     }));
 
-    const { iosInstrumentsStartTool: startTool } =
-      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
+    const { nativeProfilerStartTool: startTool } =
+      await import("../../src/tools/profiler/native-profiler/native-profiler-start");
 
     const api = await buildSession();
     const promise = startTool
@@ -149,8 +150,8 @@ describe("ios-profiler-start cold-start retry", () => {
       waitForXctraceReady: waitForReady,
     }));
 
-    const { iosInstrumentsStartTool: startTool } =
-      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
+    const { nativeProfilerStartTool: startTool } =
+      await import("../../src/tools/profiler/native-profiler/native-profiler-start");
 
     const api = await buildSession();
     await expect(

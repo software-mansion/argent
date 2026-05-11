@@ -2,9 +2,10 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import {
-  IOS_PROFILER_SESSION_NAMESPACE,
-  type IosProfilerSessionApi,
-} from "../../../blueprints/ios-profiler-session";
+  nativeProfilerSessionRef,
+  type NativeProfilerSessionApi,
+} from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import {
   buildReactAnchor,
   buildIosAnchor,
@@ -36,22 +37,22 @@ interface HangCommitCorrelation {
 
 export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-combined-report",
-  description: `Generate a cross-correlated report combining React Profiler and iOS Instruments data.
-Maps iOS Instruments hangs to React commits using wall-clock time alignment.
-Requires both react-profiler-analyze and ios-profiler-analyze to have been called first.
+  description: `Generate a cross-correlated report combining React Profiler and native profiler data.
+Maps native hangs to React commits using wall-clock time alignment.
+Requires both react-profiler-analyze and native-profiler-analyze to have been called first.
 Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
-Fails if either react-profiler-analyze or ios-profiler-analyze has not been called first.`,
+Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
   services: (params) => ({
-    iosSession: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    nativeSession: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
-    const iosApi = services.iosSession as IosProfilerSessionApi;
+    const nativeApi = services.nativeSession as NativeProfilerSessionApi;
 
     // Validate prerequisites
-    if (!iosApi.parsedData) {
-      throw new Error("No iOS Instruments data. Run ios-profiler-analyze first.");
+    if (!nativeApi.parsedData) {
+      throw new Error("No native profiler data. Run native-profiler-analyze first.");
     }
 
     // Read-only: resolve react paths from cache only — no live CDP connection needed.
@@ -72,29 +73,29 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
     }
 
     const reactWallStart = onDisk.meta?.profileStartWallMs ?? null;
-    const iosWallStart = iosApi.wallClockStartMs;
+    const nativeWallStart = nativeApi.wallClockStartMs;
 
-    if (!reactWallStart && !iosWallStart) {
+    if (!reactWallStart && !nativeWallStart) {
       throw new Error(
         "Missing wall-clock anchor from both profilers. Re-run the full profiling session " +
-          "(ios-instruments-start + react-profiler-start)."
+          "(native-profiler-start + react-profiler-start)."
       );
     } else if (!reactWallStart) {
       throw new Error(
         "Missing wall-clock anchor from React Profiler (profileStartWallMs not found). " +
           "Re-run the profiling session starting with react-profiler-start."
       );
-    } else if (!iosWallStart) {
+    } else if (!nativeWallStart) {
       throw new Error(
-        "Missing wall-clock anchor from iOS Profiler (wallClockStartMs not found). " +
-          "Re-run the profiling session starting with ios-profiler-start."
+        "Missing wall-clock anchor from native profiler (wallClockStartMs not found). " +
+          "Re-run the profiling session starting with native-profiler-start."
       );
     }
 
     // Build time anchors
     const cpuStartUs = cpuProfile?.startTime ?? 0;
     const reactAnchor = buildReactAnchor(reactWallStart, cpuStartUs);
-    const iosAnchor = buildIosAnchor(iosWallStart);
+    const nativeAnchor = buildIosAnchor(nativeWallStart);
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
@@ -102,7 +103,7 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
 
-    const { uiHangs, memoryLeaks } = iosApi.parsedData;
+    const { uiHangs, memoryLeaks } = nativeApi.parsedData;
 
     // Tolerance for time alignment: wall clock jitter + the fact that
     // instruments hang detection and React commit timing may not perfectly align
@@ -114,8 +115,8 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
     for (const hang of uiHangs) {
       const hangStartNs = parseHangStartNs(hang.startTimeFormatted);
       const hangDurationNs = hang.durationMs * 1_000_000;
-      const hangWallStartMs = instrumentsNsToWallClock(hangStartNs, iosAnchor);
-      const hangWallEndMs = instrumentsNsToWallClock(hangStartNs + hangDurationNs, iosAnchor);
+      const hangWallStartMs = instrumentsNsToWallClock(hangStartNs, nativeAnchor);
+      const hangWallEndMs = instrumentsNsToWallClock(hangStartNs + hangDurationNs, nativeAnchor);
 
       const overlapping = nonMarginCommits
         .map((commit) => {
@@ -146,12 +147,12 @@ Fails if either react-profiler-analyze or ios-profiler-analyze has not been call
     const lines: string[] = [
       "# Combined Profiling Report",
       "",
-      "React Profiler + iOS Instruments — Cross-Tool Correlation",
+      "React Profiler + Native Profiler — Cross-Tool Correlation",
       "",
       `**React Profiler:** ${nonMarginCommits.length} hot commits  `,
-      `**iOS Instruments:** ${uiHangs.length} hangs, ${memoryLeaks.length} leaks`,
+      `**Native Profiler:** ${uiHangs.length} hangs, ${memoryLeaks.length} leaks`,
       "",
-      `**Clock offset:** React started ${((reactWallStart - iosWallStart) / 1000).toFixed(1)}s ${reactWallStart > iosWallStart ? "after" : "before"} Instruments`,
+      `**Clock offset:** React started ${((reactWallStart - nativeWallStart) / 1000).toFixed(1)}s ${reactWallStart > nativeWallStart ? "after" : "before"} native profiler`,
       "",
     ];
 

@@ -32,7 +32,7 @@ Call `debugger-log-registry`. Returns a summary with entry counts by level, mess
 
 These require a completed profiling session (`react-profiler-stop` + `react-profiler-analyze`).
 
-## CPU query (replaces react-profiler-cpu-summary)
+## CPU query
 
 ```json
 { "port": 8081, "device_id": "<UDID>", "mode": "top_functions", "top_n": 15 }
@@ -64,7 +64,7 @@ Call `profiler-commit-query`. Modes:
 { "device_id": "<UDID>", "mode": "hang_stacks", "hang_index": 0 }
 ```
 
-Call `profiler-stack-query` after `ios-profiler-analyze`. Modes:
+Call `profiler-stack-query` after `native-profiler-analyze`. Modes:
 
 - `hang_stacks` — full CPU context during a specific hang.
 - `function_callers` — who calls a specific native `function_name`.
@@ -89,6 +89,6 @@ Call `profiler-load`. Modes:
 
 - `list` — show all saved profiling sessions (React + iOS) in `/tmp/argent-profiler-cwd/`.
 - `load_react` — reload a React profiler session by `session_id` + `device_id`. Populates the `port:device_id`-keyed in-memory cache for `profiler-cpu-query` and `profiler-commit-query` (which must be called with the same `device_id` afterward).
-- `load_instruments` — re-parse iOS Instruments XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
+- `load_native` — re-parse native profiler XML by `session_id` and `device_id`. Populates session for `profiler-stack-query`.
 
 Use this to revisit an earlier profiling session without re-profiling. Each `react-profiler-analyze` run saves raw data with a unique timestamp.

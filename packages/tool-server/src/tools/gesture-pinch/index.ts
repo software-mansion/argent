@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type GesturePinchResult, type GesturePinchServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
+import { sleep, sendTouchEvent } from "../../utils/gesture-utils";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   centerX: z
     .number()
     .describe(
@@ -42,28 +42,56 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  pinched: boolean;
+  timestampMs: number;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
-  // android: requires instrumentation-based backend (UiAutomator); stub kept
-  // as a placeholder so the directory layout matches every other tool.
+  android: { emulator: true, device: true, unknown: true },
 };
 
-export const gesturePinchTool: ToolDefinition<Params, GesturePinchResult> = {
+export const gesturePinchTool: ToolDefinition<Params, Result> = {
   id: "gesture-pinch",
   description: `Execute a pinch-to-zoom gesture by moving two fingers toward or away from a center point to change the scale of on-screen content. All positions and distances are normalized 0.0–1.0 (fractions of screen width/height, not pixels)—same coordinate space as gesture-tap and gesture-swipe.
 startDistance > endDistance = pinch in (zoom out). startDistance < endDistance = pinch out (zoom in).
 Typical values: startDistance 0.2, endDistance 0.6 for a zoom-in pinch at screen center.
 Auto-generates interpolated frames at ~60fps. The angle parameter controls the axis (0 = horizontal, 90 = vertical).
-Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator server is not running for the given UDID.`,
+Use when you need to zoom in or out on a map, image, or zoomable view. Returns { pinched: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   zodSchema,
   capability,
   services: (params) => ({
-    simulatorServer: `SimulatorServer:${params.udid}`,
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
-  execute: dispatchByPlatform<GesturePinchServices, Params, GesturePinchResult>({
-    toolId: "gesture-pinch",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const duration = params.durationMs ?? 300;
+    const steps = Math.max(1, Math.round(duration / 16));
+    const angleDeg = params.angle ?? 0;
+    const angleRad = (angleDeg * Math.PI) / 180;
+    const cosA = Math.cos(angleRad);
+    const sinA = Math.sin(angleRad);
+
+    let timestampMs = 0;
+
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const dist = params.startDistance + (params.endDistance - params.startDistance) * t;
+      const halfDist = dist / 2;
+
+      const x1 = params.centerX - halfDist * cosA;
+      const y1 = params.centerY - halfDist * sinA;
+      const x2 = params.centerX + halfDist * cosA;
+      const y2 = params.centerY + halfDist * sinA;
+
+      const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
+      if (i === 0) timestampMs = Date.now();
+
+      sendTouchEvent(api, type, x1, y1, x2, y2);
+      if (i < steps) await sleep(16);
+    }
+
+    return { pinched: true, timestampMs };
+  },
 };

@@ -32,12 +32,12 @@ export class UnsupportedOperationError extends Error {
  * The HTTP dispatcher maps this to `501 Not Implemented` and surfaces the
  * `hint` field so the agent (and contributor) can see exactly what to wire.
  *
- * Usage in a stub:
+ * Usage in a stub at `tools/<your-tool>/platforms/<platform>.ts`:
  *
  *   throw new NotImplementedOnPlatformError({
- *     toolId: "button",
+ *     toolId: "<your-tool>",
  *     platform: "android",
- *     hint: "Use `adb shell input keyevent <KEYCODE>` (home=3, back=4, ...).",
+ *     hint: "Optional one-line nudge — e.g. which adb / xcrun command to wrap.",
  *   });
  */
 export class NotImplementedOnPlatformError extends Error {
