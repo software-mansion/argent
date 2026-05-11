@@ -357,8 +357,8 @@ async function runForeground(
     }
   }
 
-  await new Promise<void>((resolve) => {
-    child.on("exit", (code, signal) => {
+  await new Promise<void>(() => {
+    const cleanup = () => {
       process.removeListener("SIGINT", onInt);
       process.removeListener("SIGTERM", onTerm);
       if (stateWritten) {
@@ -366,11 +366,20 @@ async function runForeground(
           /* non-fatal */
         });
       }
+    };
+    // Spawn-level failures (ENOENT, EACCES) emit `error` instead of `exit` —
+    // surface them cleanly so the user gets a real message, not a stack trace.
+    child.on("error", (err) => {
+      cleanup();
+      console.error(`argent server start: failed to spawn tool-server: ${err.message}`);
+      process.exit(1);
+    });
+    child.on("exit", (code, signal) => {
+      cleanup();
       // Mirror the child's exit. Signal-terminated children get conventional
       // 128+signo exit codes so shells / supervisors see the right outcome.
       const exitCode = code ?? (signal ? 128 + (signalNumber(signal) ?? 0) : 0);
       process.exit(exitCode);
-      resolve();
     });
   });
 }
