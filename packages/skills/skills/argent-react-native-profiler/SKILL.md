@@ -26,10 +26,10 @@ This skill is complementary to `argent-react-native-optimization`, not a replace
 | `profiler-cpu-query`       | Targeted CPU investigation: top functions, time-windowed CPU, call trees, per-component CPU. |
 | `profiler-commit-query`    | Targeted commit investigation: by component, time range, commit index, or cascade tree.      |
 | `profiler-stack-query`     | iOS Instruments drill-down: hang stacks, function callers, thread breakdown, leak details.   |
-| `profiler-combined-report` | Cross-correlated report when both React Profiler and iOS Instruments ran in parallel.        |
+| `profiler-combined-report` | Cross-correlated report when both React Profiler and native profiler ran in parallel.        |
 | `profiler-load`            | List and reload previous profiling sessions from disk for re-investigation with query tools. |
 
-For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-ios-profiler` skill.
+For native profiling (CPU hotspots, UI hangs, memory leaks), see the `argent-native-profiler` skill.
 
 ---
 
@@ -37,8 +37,8 @@ For native iOS profiling (CPU hotspots, UI hangs, memory leaks), see the `argent
 
 Follow these rules throughout the profiling workflow:
 
-- Start `react-profiler-start` and `ios-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later. This gives best coverage.
-- If the user only wants iOS-only, use the `argent-ios-profiler` skill workflow. Only skip `ios-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
+- Start `react-profiler-start` and `native-profiler-start` in parallel (two tool calls in one message). Both need `device_id`; use the same UDID for both so their data can be correlated later. This gives best coverage.
+- If the user only wants native profiling, use the `argent-native-profiler` skill workflow. Only skip `native-profiler-start` if the user has **already explicitly said** they don't want native profiling in this session
 
 ### After analysis: ask about next steps
 
@@ -56,7 +56,7 @@ When drilling down, chain query tool calls based on what you find:
 
 - A hot commit -> `profiler-commit-query` mode=`by_index` to see all components -> `profiler-cpu-query` mode=`component_cpu` for the slowest one -> `profiler-cpu-query` mode=`call_tree` for the hot function -> read the source file -> propose a fix.
 - A memory leak -> `profiler-stack-query` mode=`leak_stacks` to identify the responsible module -> read the native source if actionable.
-- An iOS hang -> `profiler-stack-query` mode=`hang_stacks` to get the native call chain -> correlate with React commit timing.
+- A native hang -> `profiler-stack-query` mode=`hang_stacks` to get the native call chain -> correlate with React commit timing.
 
 ### After fixes: always re-profile
 
@@ -80,7 +80,7 @@ When profiling requires a specific interaction sequence (scroll a list, navigate
 
 Mind the react-native and ios-native profiler selection mentioned above when starting the session and start the tools. **Save `startedAtEpochMs` from the response** — you will need it for annotation offsets. Every subsequent profiler/query call in this session must use the same `device_id`. Before beginning, define lightweight success criteria with the user: which metric matters most (e.g., `totalRenderMs`, specific commit duration, render count for a component) and what threshold would be meaningful. This anchors later evaluation. On success:
 
-- if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-simulator-interact` skill.
+- if user asked you to perform the profiling, determine how to profile yourself using tools described in `argent-device-interact` skill.
 - if the user stated they wish to perform the interaction themselves — suggest what interaction to perform (e.g. "scroll the list", "switch tabs") and wait for their reply.
   If you received information about **existing profiling session** being owned by another agent:
 - if session is marked as "stale", you may overtake it without prompting the user for allowance
@@ -92,7 +92,7 @@ After each `gesture-tap` or `gesture-swipe` call, record an annotation using the
 
 ### Step 2: Stop and collect
 
-Call `react-profiler-stop` **and** `ios-profiler-stop` in parallel. Only skip `ios-profiler-stop` if you did not start it in Step 1. Note `duration_ms` and `fiber_renders_captured`.
+Call `react-profiler-stop` **and** `native-profiler-stop` in parallel. Only skip `native-profiler-stop` if you did not start it in Step 1. Note `duration_ms` and `fiber_renders_captured`.
 If `fiber_renders_captured: 0`, warn the user — React commit data may be missing.
 
 ### Step 3: Analyze
@@ -101,7 +101,7 @@ Call `react-profiler-analyze` with `port`, `device_id`, `project_root`, `platfor
 
 If you performed interactions using `gesture-tap`/`gesture-swipe`, pass `annotations` to mark when each action occurred. Each annotation's `offsetMs` must be computed as `tapTimestampMs - startedAtEpochMs`, where `tapTimestampMs` is the `timestampMs` returned by the gesture-tap/gesture-swipe tool and `startedAtEpochMs` was returned by `react-profiler-start`. Do **not** use `Date.now()` for this calculation — only server-side timestamps from the tool return values.
 
-If dual profiling, also call `ios-profiler-analyze`, then **you must** call `profiler-combined-report` for the cross-correlated view — do not skip this step when both profilers ran; the combined report surfaces correlations that individual reports miss.
+If dual profiling, also call `native-profiler-analyze`, then **you must** call `profiler-combined-report` for the cross-correlated view — do not skip this step when both profilers ran; the combined report surfaces correlations that individual reports miss.
 
 The analyze report includes **CPU hotspots per commit** — showing exactly which JS functions ran during each slow React commit. Raw data is saved to disk automatically for later reload.
 
@@ -132,7 +132,7 @@ If you profiled multiple scenarios and need to revisit earlier data:
 
 1. Call `profiler-load` mode=`list` to see all saved sessions with timestamps (the list now also shows Runtime / Device / Metro bundle columns to help identify the right session).
 2. Call `profiler-load` mode=`load_react` session_id=`<timestamp>` device_id=`<UDID>` to reload React data. `device_id` scopes the reload into the `port:device_id` cache slot.
-3. Call `profiler-load` mode=`load_instruments` session_id=`<timestamp>` device_id=`<UDID>` to reload iOS data.
+3. Call `profiler-load` mode=`load_native` session_id=`<timestamp>` device_id=`<UDID>` to reload native profiler data.
 4. Query tools now operate on the reloaded session data — **pass the same `device_id` you loaded with**, otherwise they will miss the cache.
 
 This is useful for before/after comparisons: profile, fix, re-profile, then reload the original session to compare metrics side by side.

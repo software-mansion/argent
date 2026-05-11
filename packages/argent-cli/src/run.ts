@@ -120,7 +120,7 @@ Invoke a tool exposed by the argent tool-server. Run \`argent tools\` to list
 available tools, or \`argent tools describe <name>\` to see one tool's flags.
 
 Examples:
-  argent run list-simulators
+  argent run list-devices
   argent run gesture-tap --udid <UDID> --x 0.5 --y 0.5
   argent run screenshot --udid <UDID> --out ./screen.png
   argent run run-sequence --udid <UDID> --steps-json '[{"tool":"button","args":{"button":"home"}}]'

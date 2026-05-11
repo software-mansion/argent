@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi, NetworkEvent } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import {
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NetworkEvent,
+} from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -21,6 +25,8 @@ type Result =
 
 export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
   id: "native-network-logs",
+  requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Retrieve network requests captured at the native NSURLProtocol level. 
 Unlike the JS-level network inspector (view-network-logs), this captures ALL network traffic from the app including native modules, Swift/Objective-C networking, and background transfers that bypass JS fetch. 
 Use when you need to inspect native-level HTTP traffic that is invisible to JS fetch interception. 
@@ -28,7 +34,7 @@ Returns { status, count, events } where each event contains URL, method, status 
 Fails if native devtools are not connected or the app is not running.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;

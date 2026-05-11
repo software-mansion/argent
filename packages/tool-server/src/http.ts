@@ -2,11 +2,11 @@ import express, { Request, Response } from "express";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
+import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
-import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -15,6 +15,16 @@ import {
 import { resolveDevice } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
+
+function findDependencyMissing(err: unknown): DependencyMissingError | null {
+  let current: unknown = err;
+  // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    if (current instanceof DependencyMissingError) return current;
+    current = current.cause;
+  }
+  return null;
+}
 
 // ── HTTP app ────────────────────────────────────────────────────────
 
@@ -121,9 +131,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // "unsupported on android" error, not a misleading "xcrun missing".
       // Cross-platform tools double-check inside their dispatch helper, so
       // non-HTTP callers (run-sequence, flow-run) are also covered.
-      if (def.capability && parsedData && typeof parsedData.udid === "string") {
+      //
+      // Tools spell the device parameter two ways — `udid` (legacy iOS-only
+      // tools and gestures) and `device_id` (debugger / profiler / network
+      // tools). Honour both so an Android serial reaching an iOS-only
+      // device_id-tool is rejected at the gate instead of falling through
+      // to the deeper blueprint error (which surfaces as a generic 500).
+      const deviceArg =
+        typeof parsedData?.udid === "string"
+          ? parsedData.udid
+          : typeof parsedData?.device_id === "string"
+            ? parsedData.device_id
+            : null;
+      if (def.capability && deviceArg) {
         try {
-          const device = resolveDevice(parsedData.udid);
+          const device = resolveDevice(deviceArg);
           assertSupported(def.id, def.capability, device);
         } catch (err) {
           if (err instanceof UnsupportedOperationError) {
@@ -177,8 +199,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(404).json({ error: err.message });
           return;
         }
-        if (err instanceof DependencyMissingError) {
-          res.status(424).json({ error: err.message, missing: err.missing });
+        // Walk the cause chain so a registry ToolExecutionError wrapping
+        // a DependencyMissingError still maps cleanly to 424 instead of a
+        // generic 500. Tools that ensureDep() inside execute() bypass the
+        // global preflight; this is their fall-back surface.
+        const depErr = findDependencyMissing(err);
+        if (depErr) {
+          res.status(424).json({ error: depErr.message, missing: depErr.missing });
           return;
         }
         if (err instanceof UnsupportedOperationError) {

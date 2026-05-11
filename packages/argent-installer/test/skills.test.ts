@@ -75,7 +75,7 @@ describe("refreshArgentSkills", () => {
   });
 
   it("resyncs a tracked project scope when the lock has an argent skill", () => {
-    listBundledSkillsMock.mockReturnValue(["argent-create-flow", "argent-simulator-setup"]);
+    listBundledSkillsMock.mockReturnValue(["argent-create-flow", "argent-ios-simulator-setup"]);
     writeLock(path.join(tmpDir, "skills-lock.json"), {
       "argent-create-flow": {},
     });

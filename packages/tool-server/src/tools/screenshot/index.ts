@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type ScreenshotResult, type ScreenshotServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
+import { httpScreenshot } from "../../utils/simulator-client";
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
@@ -22,29 +22,32 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  url: string;
+  path: string;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
 };
 
-export const screenshotTool: ToolDefinition<Params, ScreenshotResult> = {
+export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
-  description: `Capture a screenshot of the simulator screen. Returns { url, path } and the MCP adapter renders it as a visible image.
+  description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path } and the MCP adapter renders it as a visible image.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the simulator server is not running or the screenshot request times out.`,
+Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
-  searchHint: "simulator screen image capture baseline",
+  searchHint: "device simulator emulator screen image capture baseline",
   zodSchema,
   outputHint: "image",
   capability,
   services: (params) => ({
-    simulatorServer: {
-      urn: `SimulatorServer:${params.udid}`,
-    },
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
-  execute: dispatchByPlatform<ScreenshotServices, Params, ScreenshotResult>({
-    toolId: "screenshot",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params, options) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const signal = options?.signal ?? AbortSignal.timeout(16_000);
+    return httpScreenshot(api, params.rotation, signal, params.scale);
+  },
 };

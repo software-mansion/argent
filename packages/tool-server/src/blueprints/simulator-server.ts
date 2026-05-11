@@ -2,14 +2,38 @@ import { spawn, ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import {
   TypedEventEmitter,
+  type DeviceInfo,
   type ServiceBlueprint,
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
+import { ensureDep } from "../utils/check-deps";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
+
+// The registry's `ServiceRef.options` is typed as `Record<string, unknown>`,
+// so the factory options must be assignable to it (intersection adds the
+// implicit string index signature that an `interface { device: DeviceInfo }`
+// alone wouldn't satisfy).
+type SimulatorServerFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+
+/**
+ * Build the `ServiceRef` for the simulator-server keyed by an already-resolved
+ * `DeviceInfo`. Tool `services()` callbacks should call this rather than
+ * hand-building the URN string, so the blueprint factory always receives the
+ * device through the registry's `options` channel and never has to reclassify.
+ */
+export function simulatorServerRef(device: DeviceInfo): {
+  urn: string;
+  options: SimulatorServerFactoryOptions;
+} {
+  return {
+    urn: `${SIMULATOR_SERVER_NAMESPACE}:${device.id}`,
+    options: { device },
+  };
+}
 
 const getPaths = () => {
   const BINARY_PATH = simulatorServerBinaryPath();
@@ -26,14 +50,17 @@ export interface SimulatorServerApi {
   pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
-function spawnSimulatorServerProcess(udid: string): Promise<{
+function spawnSimulatorServerProcess(
+  udid: string,
+  platform: "ios" | "android"
+): Promise<{
   proc: ChildProcess;
   apiUrl: string;
   streamUrl: string;
 }> {
   const { BINARY_PATH, BINARY_DIR } = getPaths();
   return new Promise((resolve, reject) => {
-    const args = ["ios", "--id", udid];
+    const args = [platform, "--id", udid];
 
     const proc = spawn(BINARY_PATH, args, {
       cwd: BINARY_DIR,
@@ -88,8 +115,13 @@ function spawnSimulatorServerProcess(udid: string): Promise<{
       }
     });
 
+    // Defense-in-depth: a missing udid here would crash the process —
+    // throwing inside an async listener bypasses promise rejection and
+    // bubbles up as `uncaughtException`, which the tool-server treats as
+    // fatal. Tag with "?" instead of dereferencing.
+    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
     proc.stderr?.on("data", (data: Buffer) => {
-      process.stderr.write(`[sim ${udid.slice(0, 8)}] ${data}`);
+      process.stderr.write(`[sim ${udidTag}] ${data}`);
     });
 
     proc.on("exit", () => {
@@ -109,19 +141,41 @@ function spawnSimulatorServerProcess(udid: string): Promise<{
   });
 }
 
-export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, string> = {
+export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, DeviceInfo> = {
   namespace: SIMULATOR_SERVER_NAMESPACE,
-  getURN(udid: string) {
-    return `${SIMULATOR_SERVER_NAMESPACE}:${udid}`;
+  getURN(device: DeviceInfo) {
+    return `${SIMULATOR_SERVER_NAMESPACE}:${device.id}`;
   },
-  async factory(_deps, payload) {
-    const udid = payload;
-    // Enable accessibility automation before any app is launched so that apps
-    // start with their AX server running. If this is called after apps are already
-    // running (e.g. a pre-booted simulator), those apps won't pick up the flag
-    // until restarted — but new launches will work correctly.
-    await ensureAutomationEnabled(udid).catch(() => {});
-    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(udid);
+  async factory(_deps, _payload, options) {
+    const opts = options as unknown as SimulatorServerFactoryOptions | undefined;
+    if (!opts?.device) {
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
+          `Use simulatorServerRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
+      );
+    }
+
+    const { device } = opts;
+    if (typeof device.id !== "string" || device.id.length === 0) {
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
+      );
+    }
+
+    if (device.platform === "ios") {
+      // Enable accessibility automation before any app is launched so that apps
+      // start with their AX server running. If this is called after apps are already
+      // running (e.g. a pre-booted simulator), those apps won't pick up the flag
+      // until restarted — but new launches will work correctly.
+      await ensureAutomationEnabled(device.id).catch(() => {});
+    } else {
+      await ensureDep("adb");
+    }
+
+    const { proc, apiUrl, streamUrl } = await spawnSimulatorServerProcess(
+      device.id,
+      device.platform
+    );
 
     const events = new TypedEventEmitter<ServiceEvents>();
 

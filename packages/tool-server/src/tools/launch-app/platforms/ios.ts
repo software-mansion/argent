@@ -1,25 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { NativeDevtoolsApi } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import type { LaunchAppIosServices, LaunchAppParams, LaunchAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
 
-export interface LaunchAppParams {
-  udid: string;
-  bundleId: string;
-}
-
-export interface LaunchAppResult {
-  launched: boolean;
-  bundleId: string;
-}
-
-export interface LaunchAppServices {
-  nativeDevtools: NativeDevtoolsApi;
-}
-
-export const iosImpl: PlatformImpl<LaunchAppServices, LaunchAppParams, LaunchAppResult> = {
+export const iosImpl: PlatformImpl<LaunchAppIosServices, LaunchAppParams, LaunchAppResult> = {
   requires: ["xcrun"],
   handler: async (services, params) => {
     await services.nativeDevtools.ensureEnvReady();

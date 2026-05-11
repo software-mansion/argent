@@ -1,19 +1,30 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an iOS app UI by running interact-screenshot-verify loops using argent simulator tools. Use when testing a UI flow, verifying login works, testing navigation, or running an end-to-end UI test scenario.
+description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing a UI flow, verifying login works, testing navigation, or running an end-to-end UI test scenario.
 ---
+
+## Platform-agnostic
+
+The interaction tool names are identical on iOS and Android — `gesture-tap`, `gesture-swipe`, `describe`, `screenshot`, `launch-app`, etc. — and the tool-server auto-dispatches based on the `udid` you pass (UUID-shape → iOS, adb serial → Android).
+
+Get a `udid` via:
+
+| Platform | Setup skill                     | Find devices with                                           |
+| -------- | ------------------------------- | ----------------------------------------------------------- |
+| iOS      | `argent-ios-simulator-setup`    | `list-devices` → `boot-device` with `udid` if none booted   |
+| Android  | `argent-android-emulator-setup` | `list-devices` → `boot-device` with `avdName` if none ready |
 
 ## 1. Workflow
 
-All interactions go through argent MCP tools. Ensure the simulator is booted before starting.
+All interactions go through argent MCP tools. Ensure the simulator/emulator is ready before starting.
 
 1. **Baseline screenshot**: Call `screenshot` to see the current UI state.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
-   - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps. To use it, resolve the `argent-react-native-app-workflow` skill for setup.
-   - **Standard iOS app screens and in-app modals**: use `describe` — it returns the accessibility element tree with normalized frame coordinates.
-   - **Permission prompts / system modal overlays**: still try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
+   - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
+   - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree in the same DescribeNode shape.
+   - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
-3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `paste`, etc.) — you receive a screenshot automatically.
+3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
 4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with `screenshot`.
 5. **Repeat** for each step in the flow.
 
@@ -66,7 +77,7 @@ Steps:
 
 ## Tips
 
-- **Use `paste` for text entry** — faster and more reliable than key-by-key `keyboard`.
+- **Use `paste` for text entry on iOS** — faster and more reliable than key-by-key `keyboard`. `paste` is iOS-only; on Android use `keyboard` instead.
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
 - **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
@@ -75,10 +86,11 @@ Steps:
 
 ## Related Skills
 
-| Skill                              | When to use                                      |
-| ---------------------------------- | ------------------------------------------------ |
-| `argent-simulator-interact`        | Detailed tool usage for tapping, swiping, typing |
-| `argent-simulator-setup`           | Booting and connecting a simulator               |
-| `argent-react-native-app-workflow` | Starting the app, Metro, build issues            |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation         |
-| `argent-create-flow`               | Record a test sequence as a replayable flow      |
+| Skill                              | When to use                                             |
+| ---------------------------------- | ------------------------------------------------------- |
+| `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS + Android) |
+| `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                 |
+| `argent-android-emulator-setup`    | Booting and connecting an Android emulator              |
+| `argent-react-native-app-workflow` | Starting the app, Metro, build issues                   |
+| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                |
+| `argent-create-flow`               | Record a test sequence as a replayable flow             |

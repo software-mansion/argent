@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import {
-  iosInstrumentsSessionBlueprint,
-  type IosProfilerSessionApi,
-} from "../../src/blueprints/ios-profiler-session";
+  nativeProfilerSessionBlueprint,
+  type NativeProfilerSessionApi,
+} from "../../src/blueprints/native-profiler-session";
 
 // Minimal ChildProcess fake — same shape as the lifecycle tests.
 class FakeChild extends EventEmitter {
@@ -32,14 +32,15 @@ class FakeChild extends EventEmitter {
 const asChild = (c: FakeChild): ChildProcess => c as unknown as ChildProcess;
 
 async function buildSession(): Promise<{
-  api: IosProfilerSessionApi;
+  api: NativeProfilerSessionApi;
   dispose: () => Promise<void>;
 }> {
-  const instance = await iosInstrumentsSessionBlueprint.factory({}, "DEVICE-UDID");
+  const device = { id: "DEVICE-UDID", platform: "ios" as const, kind: "simulator" as const };
+  const instance = await nativeProfilerSessionBlueprint.factory({}, device, { device });
   return { api: instance.api, dispose: instance.dispose };
 }
 
-describe("iosInstrumentsSessionBlueprint dispose", () => {
+describe("nativeProfilerSessionBlueprint dispose", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 

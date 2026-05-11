@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -51,6 +51,8 @@ type Result =
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
+  requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Get the complete UIKit view tree for the running app.
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
 Use skipClasses / skipClassPrefixes to prune SwiftUI internal subtrees and reduce output size. Use the fields param to request only the properties you need.
@@ -59,7 +61,7 @@ Returns { status: "ok", windows } with the full view hierarchy, or { status: "re
 Fails if native devtools are not connected or the app is not running.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;

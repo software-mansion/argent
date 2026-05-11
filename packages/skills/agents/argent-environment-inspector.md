@@ -45,7 +45,7 @@ but required by the main agent, fill it in by manual inspection of the project.
    - `expo` in dependencies or `app.json` with `expo` key → Expo project
    - `pubspec.yaml` present → Flutter project
    - `ios/*.xcodeproj` or `ios/*.xcworkspace` without `react-native` → native iOS
-   - `android/build.gradle` without `react-native` → native Android
+   - `android/build.gradle` or `android/build.gradle.kts` without `react-native` → native Android
    - None of the above → classify based on what you find (web app, library, etc.)
 
 3. **Explore beyond the snapshot.** Use Read, Glob, Grep, and Bash to fill
@@ -64,7 +64,7 @@ but required by the main agent, fill it in by manual inspection of the project.
      flows (`.maestro/`).
    - For Flutter: `pubspec.yaml`, `analysis_options.yaml`, `lib/` structure.
    - For native iOS: Xcode project/workspace, schemes, `Podfile`, `Package.swift`.
-   - For native Android: `build.gradle`, `settings.gradle`, flavor configs.
+   - For native Android: `build.gradle` / `build.gradle.kts`, `settings.gradle` / `settings.gradle.kts`, flavor configs.
 
 4. **Populate every field** in the output schema below. Use `null` for
    genuinely unknown values or fields that do not apply to this project type.
@@ -89,6 +89,8 @@ Return a JSON object with these top-level fields:
 | `startup_commands`                    | array        | `[{ command, context }]` — concrete dev server start commands                                 |
 | `build_commands`                      | array        | `[{ command, platform, context }]` — build commands per platform                              |
 | `argent_workflow`                     | object       | `{ start_dev_server, build_ios, build_android, notes }` — exact commands for Argent           |
+| `ios_has_podfile`                     | bool         | True when `ios/Podfile` exists                                                                |
+| `android_has_gradle`                  | bool         | True when `android/gradlew` exists                                                            |
 | `configs`                             | object       | Paths to metro, babel, app, tsconfig, pubspec, xcode, gradle configs (`null` if absent)       |
 | `metro_port`                          | number\|null | From config or default 8081; `null` for non-RN                                                |
 | `env_resolution`                      | object       | `{ env_files, strategy, notes }`                                                              |

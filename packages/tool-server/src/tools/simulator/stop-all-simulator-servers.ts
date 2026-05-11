@@ -10,7 +10,7 @@ export function createStopAllSimulatorServersTool(
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
-    description: `Stop all running simulator-server processes and native devtools services and free their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
+    description: `Stop all running simulator-server processes (iOS + Android) and native devtools services and free their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
     services: () => ({}),
     async execute() {
       const snapshot = registry.getSnapshot();

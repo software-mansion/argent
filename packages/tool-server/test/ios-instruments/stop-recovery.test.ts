@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { ChildProcess } from "child_process";
 import {
-  iosInstrumentsSessionBlueprint,
-  type IosProfilerSessionApi,
-} from "../../src/blueprints/ios-profiler-session";
+  nativeProfilerSessionBlueprint,
+  type NativeProfilerSessionApi,
+} from "../../src/blueprints/native-profiler-session";
 
 // Mock the trace exporter so tests don't shell out to xctrace or touch disk.
 vi.mock("../../src/utils/ios-profiler/export", () => ({
@@ -12,8 +12,8 @@ vi.mock("../../src/utils/ios-profiler/export", () => ({
 }));
 
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
-import { iosInstrumentsStopTool } from "../../src/tools/profiler/ios-profiler/ios-profiler-stop";
-import { handleXctraceExit } from "../../src/tools/profiler/ios-profiler/ios-profiler-start";
+import { nativeProfilerStopTool } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
+import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
 
 const mockedExport = vi.mocked(exportIosTraceData);
 
@@ -41,8 +41,9 @@ class FakeChild extends EventEmitter {
 
 const asChild = (c: FakeChild): ChildProcess => c as unknown as ChildProcess;
 
-async function buildSession(): Promise<IosProfilerSessionApi> {
-  const instance = await iosInstrumentsSessionBlueprint.factory({}, "DEVICE-UDID");
+async function buildSession(): Promise<NativeProfilerSessionApi> {
+  const device = { id: "DEVICE-UDID", platform: "ios" as const, kind: "simulator" as const };
+  const instance = await nativeProfilerSessionBlueprint.factory({}, device, { device });
   return instance.api;
 }
 
@@ -95,7 +96,7 @@ describe("handleXctraceExit", () => {
   });
 });
 
-describe("ios-profiler-stop recovery branch", () => {
+describe("native-profiler-stop recovery branch", () => {
   beforeEach(() => {
     mockedExport.mockReset();
     mockedExport.mockReturnValue(FAKE_EXPORT_RESULT);
@@ -111,7 +112,7 @@ describe("ios-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 0, signal: null };
 
-    const result = await iosInstrumentsStopTool.execute({ session: api } as never, {
+    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
       device_id: "DEVICE-UDID",
     });
 
@@ -130,7 +131,7 @@ describe("ios-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
 
-    const result = await iosInstrumentsStopTool.execute({ session: api } as never, {
+    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
       device_id: "DEVICE-UDID",
     });
 
@@ -144,7 +145,7 @@ describe("ios-profiler-stop recovery branch", () => {
     api.recordingTimedOut = true;
     api.recordingExitedUnexpectedly = false;
 
-    const result = await iosInstrumentsStopTool.execute({ session: api } as never, {
+    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
       device_id: "DEVICE-UDID",
     });
 
@@ -158,8 +159,8 @@ describe("ios-profiler-stop recovery branch", () => {
     api.traceFile = FAKE_TRACE; // a stale traceFile alone must not trigger recovery
 
     await expect(
-      iosInstrumentsStopTool.execute({ session: api } as never, { device_id: "DEVICE-UDID" })
-    ).rejects.toThrow("No active iOS profiling session found");
+      nativeProfilerStopTool.execute({ session: api } as never, { device_id: "DEVICE-UDID" })
+    ).rejects.toThrow("No active native profiling session found");
     expect(mockedExport).not.toHaveBeenCalled();
   });
 
@@ -167,8 +168,10 @@ describe("ios-profiler-stop recovery branch", () => {
     const api = await buildSession();
 
     await expect(
-      iosInstrumentsStopTool.execute({ session: api } as never, { device_id: "DEVICE-UDID" })
-    ).rejects.toThrow("No active iOS profiling session found. Call ios-profiler-start first.");
+      nativeProfilerStopTool.execute({ session: api } as never, { device_id: "DEVICE-UDID" })
+    ).rejects.toThrow(
+      "No active native profiling session found. Call native-profiler-start first."
+    );
     expect(mockedExport).not.toHaveBeenCalled();
   });
 
@@ -189,7 +192,7 @@ describe("ios-profiler-stop recovery branch", () => {
     api.xctraceProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
-    const promise = iosInstrumentsStopTool.execute({ session: api } as never, {
+    const promise = nativeProfilerStopTool.execute({ session: api } as never, {
       device_id: "DEVICE-UDID",
     });
     await vi.advanceTimersByTimeAsync(10);
@@ -204,7 +207,7 @@ describe("ios-profiler-stop recovery branch", () => {
   });
 });
 
-describe("ios-profiler-start fresh-start reset", () => {
+describe("native-profiler-start fresh-start reset", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
@@ -246,8 +249,8 @@ describe("ios-profiler-start fresh-start reset", () => {
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
     }));
 
-    const { iosInstrumentsStartTool: startTool } =
-      await import("../../src/tools/profiler/ios-profiler/ios-profiler-start");
+    const { nativeProfilerStartTool: startTool } =
+      await import("../../src/tools/profiler/native-profiler/native-profiler-start");
 
     const api = await buildSession();
     // Pre-populate stale state from a prior aborted run.

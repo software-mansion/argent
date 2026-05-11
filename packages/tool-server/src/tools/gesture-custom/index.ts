@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { iosImpl, type GestureCustomResult, type GestureCustomServices } from "./platforms/ios";
-import { androidImpl } from "./platforms/android";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
+import { sendCommand } from "../../utils/simulator-client";
+import { interpolateEvents } from "../../utils/gesture-utils";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const eventSchema = z.object({
   type: z.enum(["Down", "Move", "Up"]).describe("Touch event type"),
@@ -23,7 +26,7 @@ const eventSchema = z.object({
 });
 
 const zodSchema = z.object({
-  udid: z.string().describe("Simulator UDID"),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   events: z
     .array(eventSchema)
     .describe(
@@ -41,20 +44,24 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
+interface Result {
+  events: number;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
-  // android: not yet implemented; flip on once `customAndroid` is real.
+  android: { emulator: true, device: true, unknown: true },
 };
 
-export const gestureCustomTool: ToolDefinition<Params, GestureCustomResult> = {
+export const gestureCustomTool: ToolDefinition<Params, Result> = {
   id: "gesture-custom",
   description: `Send a sequence of touch events for complex gestures.
 Use for: long press, drag-and-drop, custom scroll, pinch (second touch point).
 For simple taps use the gesture-tap tool. For straight-line scrolling use the gesture-swipe tool.
 For pinch gestures use gesture-pinch. For rotation gestures use gesture-rotate.
-All x/y values are normalized 0.0–1.0 (screen fractions, not pixels), matching simulator-server touch input. delayMs controls the delay before each event (default 16ms ≈ 60fps).
+All x/y values are normalized 0.0–1.0 (screen fractions, not pixels). delayMs controls the delay before each event (default 16ms ≈ 60fps).
 Set interpolate to auto-generate smooth intermediate Move events between your keyframes.
-Returns { events: number } with the total count of events dispatched. Fails if the simulator server is not running or an event type is invalid.
+Returns { events: number } with the total count of events dispatched. Fails if the target device is not booted or an event type is invalid.
 
 Example long-press at center:
   [{"type":"Down","x":0.5,"y":0.5},{"type":"Up","x":0.5,"y":0.5,"delayMs":800}]
@@ -71,12 +78,26 @@ Example pinch-to-zoom (with interpolate:10 for smoothness):
   zodSchema,
   capability,
   services: (params) => ({
-    simulatorServer: `SimulatorServer:${params.udid}`,
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
-  execute: dispatchByPlatform<GestureCustomServices, Params, GestureCustomResult>({
-    toolId: "gesture-custom",
-    capability,
-    ios: iosImpl,
-    android: androidImpl,
-  }),
+  async execute(services, params) {
+    const api = services.simulatorServer as SimulatorServerApi;
+    const events =
+      params.interpolate && params.interpolate > 0
+        ? interpolateEvents(params.events, params.interpolate)
+        : params.events;
+
+    for (const event of events) {
+      await sleep(event.delayMs ?? 16);
+      sendCommand(api, {
+        cmd: "touch",
+        type: event.type,
+        x: event.x,
+        y: event.y,
+        second_x: event.x2 ?? null,
+        second_y: event.y2 ?? null,
+      });
+    }
+    return { events: events.length };
+  },
 };
