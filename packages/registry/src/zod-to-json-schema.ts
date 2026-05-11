@@ -24,6 +24,9 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
   if (type instanceof z.ZodNumber) return { type: "number" };
   if (type instanceof z.ZodBoolean) return { type: "boolean" };
   if (type instanceof z.ZodOptional) return zodTypeToJsonSchema(type.unwrap());
+  if (type instanceof z.ZodDefault) {
+    return { ...zodTypeToJsonSchema(type._def.innerType), default: type._def.defaultValue() };
+  }
   if (type instanceof z.ZodArray) {
     return { type: "array", items: zodTypeToJsonSchema(type.element) };
   }
@@ -40,5 +43,5 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
 }
 
 function isOptional(type: z.ZodTypeAny): boolean {
-  return type instanceof z.ZodOptional;
+  return type instanceof z.ZodOptional || type instanceof z.ZodDefault;
 }
