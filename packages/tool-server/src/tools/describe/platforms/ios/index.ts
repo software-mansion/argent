@@ -3,7 +3,7 @@ import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import { DescribeResult } from "../../contract";
+import { DescribeTreeData } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
@@ -23,7 +23,7 @@ export async function describeIos(
   registry: Registry,
   device: DeviceInfo,
   params: DescribeIosParams
-): Promise<DescribeResult> {
+): Promise<DescribeTreeData> {
   const axRef = axServiceRef(device);
   const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
   const response = await axApi.describe();
