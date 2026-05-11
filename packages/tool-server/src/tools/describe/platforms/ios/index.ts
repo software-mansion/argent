@@ -1,9 +1,9 @@
 import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
-import { axServiceRef, type AXServiceApi } from "../../../../blueprints/ax-service";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
+import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
+import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import type { DescribeResult } from "../../contract";
+import { DescribeResult } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
