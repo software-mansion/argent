@@ -161,20 +161,23 @@ function parseStartFlags(argv: string[]): StartFlags {
   return flags;
 }
 
+// Require digits only — rejects empty strings, signs, decimals, hex, scientific
+// notation, and trailing that `parseInt` would silently truncate
+// (e.g. `--port=123abc` parsing as 123).
+const NON_NEGATIVE_INT = /^\d+$/;
+
 function parsePort(raw: string): number {
-  const n = parseInt(raw, 10);
-  if (!Number.isInteger(n) || n < 0 || n > 65535) {
+  if (!NON_NEGATIVE_INT.test(raw) || Number(raw) > 65535) {
     throw new StartFlagError(`--port must be an integer 0..65535, got "${raw}"`);
   }
-  return n;
+  return Number(raw);
 }
 
 function parseIdle(raw: string): number {
-  const n = parseInt(raw, 10);
-  if (!Number.isInteger(n) || n < 0) {
+  if (!NON_NEGATIVE_INT.test(raw)) {
     throw new StartFlagError(`--idle-timeout must be a non-negative integer, got "${raw}"`);
   }
-  return n;
+  return Number(raw);
 }
 
 function printStartHelp(): void {
