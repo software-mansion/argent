@@ -4,7 +4,13 @@ import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
-import { ensureToolsServer, type ToolMeta, type ToolsServerPaths } from "@argent/tools-client";
+import {
+  ensureToolsServer,
+  getResolvedToolsUrl,
+  isRemoteRouted,
+  type ToolMeta,
+  type ToolsServerPaths,
+} from "@argent/tools-client";
 import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "./content.js";
 import {
   autoScreenshotEnabled,
@@ -69,8 +75,9 @@ export interface StartMcpServerOptions {
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
   let TOOLS_URL: string;
-  if (process.env.ARGENT_TOOLS_URL) {
-    TOOLS_URL = process.env.ARGENT_TOOLS_URL;
+  const resolved = await getResolvedToolsUrl();
+  if (resolved.url) {
+    TOOLS_URL = resolved.url;
   } else {
     try {
       TOOLS_URL = await ensureToolsServer(options.paths);
@@ -83,7 +90,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
-    if (process.env.ARGENT_TOOLS_URL) return;
+    if (await isRemoteRouted()) return;
     if (!reconnectPromise) {
       reconnectPromise = ensureToolsServer(options.paths)
         .then((url) => {
@@ -258,8 +265,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   await server.connect(new StdioServerTransport());
 
-  // Proactive health monitoring — restart tool server if it dies between requests
-  if (!process.env.ARGENT_TOOLS_URL) {
+  // Proactive health monitoring — restart tool server if it dies between requests.
+  // Only run for auto-spawned servers; remote-routed targets (env var or link)
+  // are the user's responsibility, and a silent local respawn would mask outages.
+  if (!(await isRemoteRouted())) {
     const HEALTH_INTERVAL_MS = 30_000;
     const healthInterval = setInterval(async () => {
       try {

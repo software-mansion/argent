@@ -11,7 +11,9 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@argent/tools-client": "file:../argent-tools-client"
+    "@argent/tools-client": "file:../argent-tools-client",
+    "@clack/prompts": "^1.1.0",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

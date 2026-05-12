@@ -1,4 +1,5 @@
 import { ensureToolsServer, type ToolsServerPaths } from "./launcher.js";
+import { getResolvedToolsUrl } from "./link-config.js";
 
 export interface ToolMeta {
   name: string;
@@ -36,7 +37,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   let cached: string | null = null;
 
   async function baseUrl(): Promise<string> {
-    if (process.env.ARGENT_TOOLS_URL) return process.env.ARGENT_TOOLS_URL;
+    const resolved = await getResolvedToolsUrl();
+    if (resolved.url) return resolved.url;
     if (cached) return cached;
     if (!options.paths) {
       throw new Error(
