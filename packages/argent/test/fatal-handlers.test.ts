@@ -39,8 +39,11 @@ interface RunResult {
 function runChild(scriptBody: string, timeoutMs = 3_000): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
+    // Override HOME (and USERPROFILE for Windows) so fatal-log breadcrumbs go
+    // under the test tmpdir, not the developer's real ~/.argent.
     const child = spawn(process.execPath, ["--input-type=module", "-e", scriptBody], {
       stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, HOME: tmpDir, USERPROFILE: tmpDir },
     });
     let stdout = "";
     let stderr = "";
@@ -96,6 +99,11 @@ describe("installFatalHandlers", () => {
     const result = await runChild(script);
     expect(result.exitCode).toBe(1);
     expect(result.durationMs).toBeLessThan(2_000);
+    // Reviewer asked for forensic logging so the cause is recoverable when
+    // stdio is broken. Verify a breadcrumb was persisted to disk.
+    const fatalLog = fs.readFileSync(path.join(tmpDir, ".argent", "mcp-fatal.log"), "utf8");
+    expect(fatalLog).toMatch(/Broken (stdout|stderr)|synthetic EPIPE|initial boom/);
+    expect(fatalLog).toContain(`pid=`);
   });
 
   it("exits with code 1 in non-mcp mode on uncaught exception", async () => {
