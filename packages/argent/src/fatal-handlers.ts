@@ -55,17 +55,14 @@ export function installFatalHandlers(opts: { isMcpServer: boolean }): void {
   function reportFatal(label: string, getDetail: () => string): void {
     let detail: string;
     try {
-      detail = getDetail();
-    } catch {
-      detail = "<failed to format>";
-    }
-    try {
+      try {
+        detail = getDetail();
+      } catch {
+        detail = "<failed to format>";
+      }
       process.stderr.write(`[argent] ${label}: ${detail}\n`);
     } catch {
-      // Synchronous stderr write failed — stderr is unusable but the 'error'
-      // listener above may not fire synchronously, so persist the breadcrumb
-      // here too before we exit.
-      appendFatalLog(label, detail);
+      appendFatalLog(label, detail!);
       process.exit(1);
     }
     if (!opts.isMcpServer) process.exit(1);
