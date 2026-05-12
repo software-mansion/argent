@@ -1,4 +1,27 @@
 /**
+ * Verbose error message returned when the React DevTools hook is missing.
+ * Exported so the tool layer can recognise the same diagnosis without string
+ * matching on bespoke phrasings. Mirrored by `react-profiler-start` so the
+ * operator sees one consistent explanation regardless of which entry point
+ * they hit first.
+ */
+export const INSPECT_NO_DEVTOOLS_HOOK_ERROR =
+  "React DevTools hook (__REACT_DEVTOOLS_GLOBAL_HOOK__) is not present in this app's JavaScript runtime. " +
+  "Component inspection requires a development build with React DevTools enabled. " +
+  "Likely causes: (1) the app is a release/production build — DevTools is stripped to reduce bundle size; " +
+  "(2) you connected to the wrong JS runtime; (3) this isn't a React (Native) app. " +
+  "Fix: rebuild in debug/dev mode (e.g. `npx react-native run-ios` without --configuration Release; for Expo, run a dev client).";
+
+export const INSPECT_NO_RENDERER_ERROR =
+  "React DevTools hook is present but no renderer has registered yet. " +
+  "Component inspection requires the React renderer to be attached — wait for the app to render its first commit, then retry. " +
+  "If this persists, confirm the app is a React (Native) app running in development mode.";
+
+export const INSPECT_NO_FIBER_ROOT_ERROR =
+  "React DevTools is attached but no fiber root has mounted yet. " +
+  "Wait for the app to render its first frame and retry.";
+
+/**
  * Generate a JS script that calls getInspectorDataForViewAtPoint at (x, y)
  * and pushes the result via __argent_callback binding with a requestId
  * for correlation.
@@ -17,13 +40,31 @@
  * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
  * @babel/plugin-transform-react-jsx-source). Frames from _debugSource are flagged
  * with `original: true` since they already contain the real source path.
+ *
+ * Production-build guards: dereferencing __REACT_DEVTOOLS_GLOBAL_HOOK__ blindly
+ * would throw `Cannot read property 'renderers' of undefined` on release builds
+ * where DevTools is stripped. The script reports these conditions through the
+ * same __argent_callback error channel as `no host fiber`, so the tool surfaces
+ * a verbose diagnostic instead of a generic TypeError.
  */
 export function makeInspectScript(x: number, y: number, requestId: string): string {
+  const noHookMsg = JSON.stringify(INSPECT_NO_DEVTOOLS_HOOK_ERROR);
+  const noRendererMsg = JSON.stringify(INSPECT_NO_RENDERER_ERROR);
+  const noRootMsg = JSON.stringify(INSPECT_NO_FIBER_ROOT_ERROR);
   return `(function() {
-  var hook = window.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  function __argent_fail(msg) {
+    __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:msg}));
+  }
+  var hook = (typeof globalThis !== 'undefined' ? globalThis : window).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!hook) { __argent_fail(${noHookMsg}); return; }
+  if (!hook.renderers || typeof hook.renderers.values !== 'function' || hook.renderers.size === 0) {
+    __argent_fail(${noRendererMsg}); return;
+  }
   var renderer = Array.from(hook.renderers.values())[0];
+  if (typeof hook.getFiberRoots !== 'function') { __argent_fail(${noRendererMsg}); return; }
   var roots = hook.getFiberRoots(1);
-  var root = Array.from(roots)[0];
+  var root = roots && Array.from(roots)[0];
+  if (!root || !root.current) { __argent_fail(${noRootMsg}); return; }
 
   var useFabric = typeof nativeFabricUIManager !== 'undefined';
 

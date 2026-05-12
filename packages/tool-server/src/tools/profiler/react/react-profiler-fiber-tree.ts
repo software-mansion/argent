@@ -5,15 +5,17 @@ import {
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
+import { NO_DEVTOOLS_HOOK_ERROR } from "./react-profiler-start";
 
 const HOOK_NOT_PRESENT_ERRORS = new Set([
   "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
   "no renderers attached to hook",
 ]);
 
-const HOOK_MISSING_MESSAGE =
-  "React DevTools hook not present. Ensure the app is in development mode. " +
-  "Try calling react-profiler-start first to re-inject the hook.";
+// See `react-profiler-renders.ts` for the rationale — verbose remediation
+// matches the rest of the profiler tool tree instead of the misleading
+// "re-inject the hook" advice that pre-dated this change.
+const HOOK_MISSING_MESSAGE = NO_DEVTOOLS_HOOK_ERROR;
 
 function buildFiberTreeScript(maxDepth: number, filter: string): string {
   return `

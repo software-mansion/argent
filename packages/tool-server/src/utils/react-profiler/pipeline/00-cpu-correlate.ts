@@ -35,6 +35,38 @@ export interface CpuSampleIndex {
 }
 
 /**
+ * Validate the shape of a `HermesCpuProfile` before any consumer dereferences
+ * its arrays. A malformed profile (e.g. one written when Hermes was never
+ * actually sampling because the runtime is a release build with React
+ * DevTools stripped) used to surface as a generic "Cannot read properties of
+ * undefined (reading 'length')" TypeError; surface a verbose, actionable
+ * message instead.
+ */
+export function assertHermesCpuProfile(
+  cpuProfile: unknown,
+  context: string
+): asserts cpuProfile is HermesCpuProfile {
+  const p = cpuProfile as Partial<HermesCpuProfile> | null | undefined;
+  if (!p || typeof p !== "object") {
+    throw new Error(
+      `${context}: CPU profile is missing or not an object. The session may have been recorded against a non-dev build where Hermes CPU sampling never started; rerun react-profiler-start on a development build of the app.`
+    );
+  }
+  if (!Array.isArray(p.samples) || !Array.isArray(p.nodes) || !Array.isArray(p.timeDeltas)) {
+    throw new Error(
+      `${context}: CPU profile is malformed (missing samples/nodes/timeDeltas). ` +
+        `This usually means Hermes CPU sampling was never actually started for this session — most often a release build without React DevTools, or a Metro reload between react-profiler-start and react-profiler-stop. ` +
+        `Rerun react-profiler-start on a dev build and retry.`
+    );
+  }
+  if (typeof p.startTime !== "number" || typeof p.endTime !== "number") {
+    throw new Error(
+      `${context}: CPU profile is missing startTime/endTime timestamps; the recording is incomplete and cannot be analysed.`
+    );
+  }
+}
+
+/**
  * Build a pre-computed index of CPU sample timestamps for efficient windowed queries.
  * Aligns CPU profile microsecond clock to React commit performance.now() clock.
  */
@@ -42,6 +74,7 @@ export function buildCpuSampleIndex(
   cpuProfile: HermesCpuProfile,
   firstCommitTimestampMs: number | null
 ): CpuSampleIndex {
+  assertHermesCpuProfile(cpuProfile, "buildCpuSampleIndex");
   const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
 
   const nodeMap = new Map<number, HermesProfileNode>();

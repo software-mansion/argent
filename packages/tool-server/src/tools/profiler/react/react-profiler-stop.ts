@@ -180,15 +180,43 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         );
       }
 
+      // The CPU sampler is enabled by react-profiler-start only after the
+      // DevTools-hook checks pass. If `profilingActive` is false, start
+      // either threw before `Profiler.start` (e.g. release build with
+      // React DevTools stripped) or never ran. Calling `Profiler.stop`
+      // against an un-started Hermes sampler returns an empty profile
+      // that would later crash `profile.samples.length` with a generic
+      // TypeError — detect it up front and explain.
+      if (!api.profilingActive) {
+        throw new Error(
+          "No active profiling run to stop. The session exists but Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
+            "Check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again."
+        );
+      }
+
       api.profilingActive = false; // reset BEFORE the CDP call so state is clean even if it throws
 
       const cpuResult = (await cdp.send("Profiler.stop")) as {
         profile?: HermesCpuProfile;
       };
       if (!cpuResult?.profile) {
-        throw new Error("Profiler returned no profile data.");
+        throw new Error(
+          "Hermes Profiler.stop returned no profile data. The CPU sampler may have been reset between start and stop (Metro reload, debugger disconnect). " +
+            "Call react-profiler-start to begin a fresh session."
+        );
       }
       const profile = cpuResult.profile;
+      if (
+        !Array.isArray(profile.samples) ||
+        !Array.isArray(profile.nodes) ||
+        !Array.isArray(profile.timeDeltas)
+      ) {
+        throw new Error(
+          "Hermes Profiler.stop returned a malformed profile (missing samples/nodes/timeDeltas). " +
+            "This usually means CPU sampling was never actually started for this session — most often a release build without React DevTools, or a Metro reload between start and stop. " +
+            "Call react-profiler-start on a dev build and retry."
+        );
+      }
 
       // Single evaluate: stop the backend profiler, read the live buffer, and
       // resolve every referenced fiberID to a displayName in one round-trip.
@@ -311,12 +339,6 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         totalReactCommits: api.totalReactCommits,
       };
 
-      cacheProfilerPaths(api.port, sessionPaths, api.deviceId);
-      api.sessionPaths = sessionPaths;
-      api.sessionId = null;
-      api.ownerToolServerPid = null;
-      api.disposeSession();
-
       const duration_ms = (profile.endTime - profile.startTime) / 1000;
 
       const response: Record<string, unknown> = {
@@ -348,6 +370,16 @@ Fails if no active profiling session exists or the CDP connection was lost durin
           response["unattributed_commit_count"] = unattributedByCommit.length;
         }
       }
+
+      // Publish session paths only once the response is fully built. If any
+      // step above throws, the previous (potentially valid) cache entry is
+      // preserved and we don't point react-profiler-analyze at a partial /
+      // corrupted dump on disk.
+      cacheProfilerPaths(api.port, sessionPaths, api.deviceId);
+      api.sessionPaths = sessionPaths;
+      api.sessionId = null;
+      api.ownerToolServerPid = null;
+      api.disposeSession();
 
       return response;
     },
