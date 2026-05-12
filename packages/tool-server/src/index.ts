@@ -2,10 +2,12 @@ import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
-import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
 
 const PROCESS_TIMEOUT_MS = 5_000;
+const DEFAULT_PORT = "3001";
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
 
 // Format an HTTP origin for display. Bracket IPv6 literals per RFC 3986 §3.2.2.
 function formatOrigin(host: string, port: number): string {
@@ -67,12 +69,10 @@ export function start(): void {
   });
 
   // ── Config ────────────────────────────────────────────────────────
-  const PORT = parseInt(process.env.ARGENT_PORT ?? "3001", 10);
-  // ARGENT_HOST defaults to loopback so the local auto-spawn path stays safe.
-  // `argent server start --host 0.0.0.0` is the opt-in for remote exposure.
-  const HOST = process.env.ARGENT_HOST ?? "127.0.0.1";
+  const PORT = parseInt(process.env.ARGENT_PORT ?? DEFAULT_PORT, 10);
+  const HOST = process.env.ARGENT_HOST ?? DEFAULT_HOST;
   const idleMinutes = parseInt(
-    process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? String(DEFAULT_IDLE_TIMEOUT_MINUTES),
+    process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? DEFAULT_IDLE_TIMEOUT_MINUTES,
     10
   );
   const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;

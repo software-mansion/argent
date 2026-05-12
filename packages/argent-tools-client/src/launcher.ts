@@ -10,6 +10,10 @@ const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
 
+// Idle-shutdown policy for auto-spawned servers (MCP path). The CLI's
+// `argent server start` overrides this; manual launches default to no timeout.
+const AUTOSPAWN_IDLE_TIMEOUT_MINUTES = 30;
+
 /**
  * Filesystem locations the launcher needs to spawn tool-server. Provided by
  * the consuming package (typically the published `@swmansion/argent`), since
@@ -303,7 +307,9 @@ export async function ensureToolsServer(paths: ToolsServerPaths): Promise<string
 
   // Spawn a new server
   const port = await findFreePort();
-  const { port: actualPort, pid } = await spawnToolsServer(paths, port);
+  const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
+    idleTimeoutMinutes: AUTOSPAWN_IDLE_TIMEOUT_MINUTES,
+  });
 
   await writeState({
     port: actualPort,
