@@ -244,9 +244,7 @@ async function preflightHealth(url: string): Promise<{ ok: boolean; error?: stri
 
 function printRestartHint(): void {
   console.log(
-    pc.dim(
-      "Restart your editor to apply the change to any running `argent mcp` session."
-    )
+    pc.dim("Restart your editor to apply the change to any running `argent mcp` session.")
   );
 }
 
