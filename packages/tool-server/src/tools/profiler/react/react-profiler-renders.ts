@@ -5,6 +5,7 @@ import {
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
+import { NO_DEVTOOLS_HOOK_ERROR } from "./react-profiler-start";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -55,9 +56,13 @@ const HOOK_NOT_PRESENT_ERRORS = new Set([
   "no renderers attached to hook",
 ]);
 
-const HOOK_MISSING_MESSAGE =
-  "React DevTools hook not present. Ensure the app is in development mode. " +
-  "Try calling react-profiler-start first to re-inject the hook.";
+// Mirror the verbose explanation from react-profiler-start so the operator
+// hears a consistent diagnosis (rebuild in dev mode) regardless of which
+// profiler entry point they hit first. "Try calling react-profiler-start
+// first to re-inject the hook" — the prior message — is wrong advice for a
+// release build because there is no DevTools backend to attach to in the
+// first place.
+const HOOK_MISSING_MESSAGE = NO_DEVTOOLS_HOOK_ERROR;
 
 type ParsedRenders =
   | Record<

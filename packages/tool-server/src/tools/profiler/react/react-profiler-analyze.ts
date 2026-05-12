@@ -18,7 +18,10 @@ import {
   readCommitTree,
   writeDumpCompact,
 } from "../../../utils/react-profiler/debug/dump";
-import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
+import {
+  assertHermesCpuProfile,
+  serializeCpuSampleIndex,
+} from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
@@ -83,10 +86,15 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       );
     }
 
-    // Read profiling data from disk (transient — GC'd when function returns)
+    // Read profiling data from disk (transient — GC'd when function returns).
+    // Validate the on-disk profile shape up front so a malformed dump (most
+    // commonly produced when CPU sampling never actually started — e.g.
+    // release builds without React DevTools) surfaces a verbose, actionable
+    // error here instead of a generic TypeError deep inside the pipeline.
     let cpuProfile: HermesCpuProfile | null = null;
     if (sessionPaths.cpuProfilePath) {
       cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
+      assertHermesCpuProfile(cpuProfile, "react-profiler-analyze");
     }
 
     let commitTree: DevToolsCommitTree;

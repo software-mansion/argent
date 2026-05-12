@@ -5,6 +5,7 @@ import {
   getCachedProfilerPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
+  assertHermesCpuProfile,
   buildCpuSampleIndex,
   queryCpuWindow,
   deserializeCpuSampleIndex,
@@ -83,8 +84,12 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     }
   }
 
-  // Slow path: build index from raw CPU profile
+  // Slow path: build index from raw CPU profile. Validate shape at the tool
+  // boundary so a malformed dump (loaded via profiler-load, or written by a
+  // pre-fix react-profiler-stop) surfaces the verbose diagnosis rather than
+  // a generic TypeError deep inside the indexer.
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
+  assertHermesCpuProfile(cpuProfile, "profiler-cpu-query");
   let commitTree = null;
   let firstCommitTs: number | null = null;
   if (sessionPaths.commitsPath) {
