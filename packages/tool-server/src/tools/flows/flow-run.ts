@@ -2,7 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
-import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
@@ -50,6 +50,7 @@ Fails if the flow file does not exist or a step tool raises an error (execution 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not
 set to true, the tool returns a notice with the prerequisite instead of running.
 Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
+    longRunning: true,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
@@ -95,8 +96,6 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
           steps.push({ kind: "tool", tool: step.name, error });
           break;
         }
-
-        await sleep(DEFAULT_INTER_STEP_DELAY_MS);
       }
 
       return {

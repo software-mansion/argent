@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { getFlowPath, getActiveFlow, appendStep, type FlowStep } from "./flow-utils";
+import { getFlowPath, getActiveFlow, appendStep } from "./flow-utils";
 
 const zodSchema = z.object({
   command: z.string().describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
@@ -36,9 +36,12 @@ export function createFlowAddStepTool(
 
       const toolResult = await registry.invokeTool(params.command, args);
 
-      const step: FlowStep = { kind: "tool", name: params.command, args };
-      if (params.delayMs !== undefined) step.delayMs = params.delayMs;
-      const flowFile = await appendStep(filePath, step);
+      const flowFile = await appendStep(filePath, {
+        kind: "tool",
+        name: params.command,
+        args,
+        delayMs: params.delayMs,
+      });
 
       return {
         message: `Step added to "${flowName}" flow`,
