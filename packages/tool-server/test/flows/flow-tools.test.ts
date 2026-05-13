@@ -728,6 +728,23 @@ describe("flow-execute", () => {
     });
   });
 
+  it("sleeps the step's delayMs before executing it", async () => {
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    const runFlow = createRunFlowTool(registry);
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "pre-delay.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5 }, delayMs: 300 }],
+      })
+    );
+    const start = Date.now();
+    await runFlow.execute({}, { name: "pre-delay", project_root: tmpDir });
+    expect(Date.now() - start).toBeGreaterThanOrEqual(290);
+  });
+
   it("sleeps 100ms after each successful tool step", async () => {
     const registry = createMockRegistry({ tap: { result: { tapped: true } } });
     const runFlow = createRunFlowTool(registry);

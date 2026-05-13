@@ -78,6 +78,8 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
           continue;
         }
 
+        if (step.delayMs) await sleep(step.delayMs);
+
         const toolDef = registry.getTool(step.name);
 
         try {
