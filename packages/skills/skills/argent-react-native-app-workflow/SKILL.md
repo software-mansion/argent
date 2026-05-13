@@ -50,7 +50,10 @@ npx react-native run-ios       # iOS
 npx react-native run-android   # Android
 ```
 
-Optional: specify the target device, e.g. `npx react-native run-ios --simulator="iPhone 16"` or `npx react-native run-android --deviceId=<serial>`.
+**Always pass the target device explicitly** — derive it from `list-devices` (see `<device_selection_rule>`):
+
+- iOS: `npx react-native run-ios --simulator="<name>"` (or `--udid <UDID>`).
+- Android: `npx react-native run-android --deviceId=<adb-serial>`.
 
 **Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops.
 
@@ -58,7 +61,7 @@ Optional: specify the target device, e.g. `npx react-native run-ios --simulator=
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If the device isn't booted: use `boot-device` with the iOS `udid` or Android `avdName`. Refer to the `argent-ios-simulator-setup` / `argent-android-emulator-setup` skill.
+- [ ] If the device isn't booted yet: use `boot-device` with the iOS `udid` or Android `avdName`. Refer to the `argent-ios-simulator-setup` / `argent-android-emulator-setup` skill.
 - [ ] Android: `adb -s <serial> reverse tcp:8081 tcp:8081` done.
 
 ---
