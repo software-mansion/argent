@@ -17,6 +17,8 @@ adb -s <serial> reverse tcp:8081 tcp:8081
 
 `<serial>` is the Android `serial` from `list-devices`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
 
+**LogBox banner**: when working with a React Native app, call `dismiss-logbox` once at the start of your session. The tool resolves the same `JsRuntimeDebugger` service every `debugger-*` tool uses (auto-connecting if needed) and hides the bottom-screen LogBox banner for the rest of the session. JS reloads do not bring it back. The fullscreen redbox shown for fatal/uncaught errors is unaffected.
+
 ## 2. Tool Overview
 
 All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID or Android serial, a.k.a. `logicalDeviceId` — the CDP-reported id that matches the device). Always make sure you target the correct app on the correct device.
@@ -36,6 +38,7 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 | ----------------------- | ---------------------------------------------------------------------------------------- |
 | `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.     |
 | `restart-app`           | Terminate and relaunch the app by UDID and bundleId. Use when app lost Metro connection. |
+| `dismiss-logbox`        | Hide the bottom-screen LogBox banner (warnings + non-fatal errors) without affecting the fullscreen redbox for fatal errors. Auto-connects the debugger if not already connected. Idempotent. The disable script is re-injected automatically on every JS reload via a CDP `executionContextCreated` listener inside the debugger blueprint — so calling once per session is enough. |
 
 ### Inspection & console
 

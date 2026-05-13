@@ -1,7 +1,13 @@
 /**
  * IIFE that scans the Metro module registry for the LogBox module
- * and calls `ignoreAllLogs(true)` to suppress the yellow/red overlay,
- * then clears any already-queued LogBox entries (e.g. SegmentFetcher).
+ * and calls `ignoreAllLogs(true)` to suppress the bottom-screen LogBox
+ * banner (yellow warnings + red non-fatal errors).
+ *
+ * The fullscreen LogBox shown for fatal/uncaught errors is **not**
+ * affected — `ignoreAllLogs` gates only the banner via `_isDisabled`,
+ * not the redbox. Leftover warning logs already in the LogBox registry
+ * remain in memory but stay invisible because `_isDisabled === true`;
+ * RN deduplicates by category so growth is bounded.
  *
  * Uses `__r.getModules()` (available in DEV) to iterate only
  * already-initialized modules, avoiding forced evaluation of unloaded
@@ -66,7 +72,8 @@ export const DISABLE_LOGBOX_SCRIPT = `(function() {
   if (LB && typeof LB.ignoreAllLogs === 'function') {
     LB.ignoreAllLogs(true);
   }
-  if (LBData) {
-    LBData.clear();
-  }
+  // Intentionally NOT clearing the LogBox data store — that path routes
+  // through setSelectedLog(-1) and would dismiss an open fullscreen
+  // redbox. The banner is gated by _isDisabled directly, so leftover
+  // warning logs stay invisible.
 })()`;

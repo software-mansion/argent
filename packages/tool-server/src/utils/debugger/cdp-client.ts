@@ -32,6 +32,7 @@ export type CDPClientEvents = {
   scriptParsed: (script: ScriptInfo) => void;
   paused: (params: Record<string, unknown>) => void;
   consoleAPICalled: (params: ConsoleAPICalledParams) => void;
+  executionContextCreated: (params: Record<string, unknown>) => void;
 };
 
 interface CDPExceptionDetails {
@@ -321,6 +322,10 @@ export class CDPClient {
 
     if (method === "Debugger.paused") {
       this.events.emit("paused", params);
+    }
+
+    if (method === "Runtime.executionContextCreated") {
+      this.events.emit("executionContextCreated", params);
     }
 
     this.events.emit("event", method, params);
