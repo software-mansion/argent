@@ -33,5 +33,8 @@ jobs:
       - name: Typecheck tests
         run: npm run typecheck:tests --workspaces --if-present
 
+      - name: Typecheck scripts
+        run: npm run typecheck:scripts
+
       - name: Run tests
         run: npm test --workspaces --if-present

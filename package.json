@@ -13,7 +13,8 @@
     "pack": "npm run download:simulator-server && npm run download:native-binaries && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "pack:mcp": "npm run pack",
     "dev": "node scripts/dev.cjs",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
   },
   "devDependencies": {
     "prettier": "^3.0.0"

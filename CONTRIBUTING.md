@@ -158,7 +158,13 @@ npm run typecheck:tests --workspaces --if-present   # all packages
 npm run typecheck:tests -w @argent/tool-server      # one package
 ```
 
-CI runs the same command after the `tsc --build` step.
+Build/publish scripts under `scripts/` and `packages/*/scripts/` are JavaScript (`.cjs` / `.mjs`) and are typechecked separately via `tsconfig.scripts.json` (`allowJs` + `checkJs`):
+
+```bash
+npm run typecheck:scripts
+```
+
+CI runs both commands after the `tsc --build` step.
 
 ---
 
@@ -179,10 +185,11 @@ CI runs the same command after the `tsc --build` step.
    ```bash
    npm run build
    ```
-4. **Ensure tests pass** for the packages you touched, and that test sources typecheck:
+4. **Ensure tests pass** for the packages you touched, and that test sources and build scripts typecheck:
    ```bash
    npm test --workspaces --if-present
    npm run typecheck:tests --workspaces --if-present
+   npm run typecheck:scripts
    ```
 5. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
 6. **Open the PR** against `main` and fill in the description with context on what changed and why.
