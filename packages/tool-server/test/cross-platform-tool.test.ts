@@ -25,7 +25,12 @@ describe("dispatchByPlatform", () => {
     const iosHandler = vi.fn().mockResolvedValue("from-ios");
     const androidHandler = vi.fn().mockResolvedValue("from-android");
 
-    const execute = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
       toolId: "test",
       capability: capabilityBoth,
       ios: { handler: iosHandler },
@@ -41,7 +46,12 @@ describe("dispatchByPlatform", () => {
   });
 
   it("rejects with UnsupportedOperationError when capability does not declare the platform", async () => {
-    const execute = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
       toolId: "ios-only-tool",
       capability: capabilityIosOnly,
       ios: { handler: async () => "ok" },
@@ -60,7 +70,12 @@ describe("dispatchByPlatform", () => {
     const iosHandler = vi.fn().mockResolvedValue("ios-ran");
     const androidHandler = vi.fn().mockResolvedValue("android-ran");
 
-    const execute = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const execute = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
       toolId: "test",
       capability: capabilityBoth,
       ios: { requires: ["xcrun"], handler: iosHandler },
@@ -77,12 +92,14 @@ describe("dispatchByPlatform", () => {
       return { sawSignal: !!options?.signal, sawService: services.foo };
     });
 
-    const execute = dispatchByPlatform<{ foo: string }, { udid: string }, unknown>({
-      toolId: "test",
-      capability: capabilityBoth,
-      ios: { handler },
-      android: { handler },
-    });
+    const execute = dispatchByPlatform<{ foo: string }, { foo: string }, { udid: string }, unknown>(
+      {
+        toolId: "test",
+        capability: capabilityBoth,
+        ios: { handler },
+        android: { handler },
+      }
+    );
 
     const controller = new AbortController();
     const result = await execute({ foo: "bar" }, { udid: iosUdid }, { signal: controller.signal });
@@ -98,7 +115,12 @@ describe("dispatchByPlatform", () => {
       handler,
     };
 
-    const a = dispatchByPlatform<Record<string, never>, { udid: string }, string>({
+    const a = dispatchByPlatform<
+      Record<string, never>,
+      Record<string, never>,
+      { udid: string },
+      string
+    >({
       toolId: "t",
       capability: capabilityBoth,
       ios: noRequires,

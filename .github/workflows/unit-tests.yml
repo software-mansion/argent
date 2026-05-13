@@ -30,5 +30,8 @@ jobs:
       - name: Build workspace dependencies
         run: npx tsc --build
 
+      - name: Typecheck tests
+        run: npm run typecheck:tests --workspaces --if-present
+
       - name: Run tests
         run: npm test --workspaces --if-present

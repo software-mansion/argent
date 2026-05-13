@@ -2,13 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "../../../registry/src/index";
+import type { Registry } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
-import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import {
+  createRunFlowTool,
+  type FlowRunResult,
+  type FlowPrerequisiteNotice,
+} from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import {
   clearActiveFlow,
@@ -19,6 +23,14 @@ import {
 } from "../../src/tools/flows/flow-utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+function assertFlowRunResult(
+  r: FlowRunResult | FlowPrerequisiteNotice
+): asserts r is FlowRunResult {
+  if (!("steps" in r)) {
+    throw new Error(`expected FlowRunResult, got prerequisite notice: ${r.notice}`);
+  }
+}
 
 let tmpDir: string;
 
@@ -434,6 +446,7 @@ describe("flow-execute", () => {
       {},
       { name: "run-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
+    assertFlowRunResult(result);
 
     expect(result.flow).toBe("run-test");
     expect(result.executionPrerequisite).toBe(PREREQ);
@@ -482,6 +495,7 @@ describe("flow-execute", () => {
     await fs.writeFile(path.join(dir, "error-test.yaml"), content);
 
     const result = await runFlow.execute({}, { name: "error-test", project_root: tmpDir });
+    assertFlowRunResult(result);
 
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0]).toMatchObject({
@@ -521,6 +535,7 @@ describe("flow-execute", () => {
       {},
       { name: "hint-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
+    assertFlowRunResult(result);
 
     expect(result.steps[0]).toMatchObject({
       kind: "tool",

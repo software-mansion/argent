@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import supertest from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import type { Registry } from "@argent/registry";
 
@@ -41,10 +42,9 @@ function stubRegistry(toolResult: unknown = { ok: true }): Registry {
 
 describe("HTTP update note injection", () => {
   let handle: HttpAppHandle;
-  let request: typeof import("supertest").default;
+  const request = supertest;
 
   beforeEach(async () => {
-    request = await import("supertest").then((m) => m.default);
     suppressed = false;
     mockGetUpdateState.mockReturnValue({
       updateAvailable: false,
