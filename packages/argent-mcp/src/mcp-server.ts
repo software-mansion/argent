@@ -39,7 +39,8 @@ export async function fetchWithReconnect(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    const timer =
+      fetchTimeoutMs > 0 ? setTimeout(() => controller.abort(), fetchTimeoutMs) : undefined;
     try {
       return await fetch(getUrl(), { ...init, signal: controller.signal });
     } catch (err) {
@@ -130,12 +131,14 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
+    const longRunning = name === "run-sequence" || name === "flow-execute";
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
       init: {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(args ?? {}),
       },
+      fetchTimeoutMs: longRunning ? 0 : FETCH_TIMEOUT_MS,
     });
 
     const json = (await res.json()) as ToolAPIResponse;

@@ -92,4 +92,25 @@ describe("fetch timeout in fetchWithReconnect", () => {
 
     server.close();
   });
+
+  it("disables the per-attempt timeout when fetchTimeoutMs is 0", async () => {
+    const server = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      }, 200);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+
+    const res = await fetchWithReconnect(
+      () => `http://127.0.0.1:${port}/slow`,
+      mockSuccessfulReconnect,
+      { fetchTimeoutMs: 0 }
+    );
+    expect(res.ok).toBe(true);
+
+    server.close();
+  });
 });

@@ -3,6 +3,8 @@ import * as fs from "node:fs/promises";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
   project_root: z
@@ -92,6 +94,8 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
           steps.push({ kind: "tool", tool: step.name, error });
           break;
         }
+
+        await sleep(100);
       }
 
       return {
