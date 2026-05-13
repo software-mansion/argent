@@ -66,7 +66,7 @@ export function clearActiveFlow(): void {
 // ── Types ────────────────────────────────────────────────────────────
 
 export type FlowStep =
-  | { kind: "tool"; name: string; args: Record<string, unknown> }
+  | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string };
 
 export type FlowFile = {
@@ -74,7 +74,9 @@ export type FlowFile = {
   steps: FlowStep[];
 };
 
-type YamlStep = { echo: string } | { tool: string; args?: Record<string, unknown> };
+type YamlStep =
+  | { echo: string }
+  | { tool: string; args?: Record<string, unknown>; delayMs?: number };
 
 type YamlFlowFile = {
   executionPrerequisite: string;
@@ -87,15 +89,21 @@ function toYamlStep(step: FlowStep): YamlStep {
   if (step.kind === "echo") {
     return { echo: step.message };
   }
-  const hasArgs = Object.keys(step.args).length > 0;
-  return hasArgs ? { tool: step.name, args: step.args } : { tool: step.name };
+  const yaml: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
+    tool: step.name,
+  };
+  if (Object.keys(step.args).length > 0) yaml.args = step.args;
+  if (step.delayMs !== undefined) yaml.delayMs = step.delayMs;
+  return yaml;
 }
 
 function fromYamlStep(raw: YamlStep): FlowStep {
   if ("echo" in raw) {
     return { kind: "echo", message: raw.echo };
   }
-  return { kind: "tool", name: raw.tool, args: raw.args ?? {} };
+  const step: FlowStep = { kind: "tool", name: raw.tool, args: raw.args ?? {} };
+  if (raw.delayMs !== undefined) step.delayMs = raw.delayMs;
+  return step;
 }
 
 // ── Serialisation ────────────────────────────────────────────────────

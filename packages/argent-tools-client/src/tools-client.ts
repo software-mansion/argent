@@ -7,6 +7,7 @@ export interface ToolMeta {
   outputHint?: string;
   alwaysLoad?: boolean;
   searchHint?: string;
+  longRunning?: boolean;
 }
 
 export interface ToolInvocationResult {

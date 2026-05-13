@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { Registry } from "../../../registry/src/index";
+import type { Registry } from "@argent/registry";
 
 import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recording";
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
@@ -726,6 +726,23 @@ describe("flow-execute", () => {
       tool: "swipe",
       error: expect.stringContaining("failed"),
     });
+  });
+
+  it("sleeps the step's delayMs before executing it", async () => {
+    const registry = createMockRegistry({ tap: { result: { tapped: true } } });
+    const runFlow = createRunFlowTool(registry);
+    const dir = path.join(tmpDir, ".argent", "flows");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      path.join(dir, "pre-delay.yaml"),
+      serializeFlow({
+        executionPrerequisite: "",
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5 }, delayMs: 300 }],
+      })
+    );
+    const start = Date.now();
+    await runFlow.execute({}, { name: "pre-delay", project_root: tmpDir });
+    expect(Date.now() - start).toBeGreaterThanOrEqual(290);
   });
 
   it("does not interfere with active recording state", async () => {
