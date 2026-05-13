@@ -47,7 +47,7 @@ Decision order:
 4. **Nothing is running, no explicit intent:**
    - Single-platform project (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    - Cross-platform project → ASK the user before booting.
-</device_selection_rule>
+     </device_selection_rule>
 
 <skill_reading_rule>
 <important>Always read relevant skills for guidance before executing argent-mcp tool - read skill_routing reference</important>
