@@ -10,6 +10,7 @@ import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-de
 import {
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
   READ_STATE_SCRIPT,
+  BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT,
   buildStartScript,
   STOP_FOR_TAKEOVER_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
@@ -50,6 +51,56 @@ type ReadStateResult =
       owner: ProfilerSessionOwner | null;
       nowEpochMs: number;
     };
+
+type BootstrapResult = {
+  ok: boolean;
+  reason:
+    | "already-attached"
+    | "bootstrapped"
+    | "no-hook"
+    | "no-renderers"
+    | "no-metro-modules"
+    | "no-rdt-module"
+    | "unsupported-rdt-version"
+    | "metro-scan-error"
+    | "bootstrap-threw"
+    | "bootstrap-no-effect";
+  renderersCount?: number;
+  rendererInterfacesCount?: number;
+  message?: string;
+};
+
+/**
+ * Translate a bootstrap failure into a single actionable error message.
+ * The original "wait for the app to render" message conflated three distinct
+ * failure modes — see BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT for the reason list.
+ */
+function bootstrapFailureMessage(bootstrap: BootstrapResult): string {
+  const counts =
+    bootstrap.renderersCount !== undefined
+      ? ` (renderers=${bootstrap.renderersCount}, rendererInterfaces=${bootstrap.rendererInterfacesCount ?? 0})`
+      : "";
+  switch (bootstrap.reason) {
+    case "no-hook":
+      return "__REACT_DEVTOOLS_GLOBAL_HOOK__ not present. React profiling requires a development build of the app.";
+    case "no-renderers":
+      return `No React renderer is registered with the DevTools hook yet${counts}. Wait for the app to render its first commit and retry.`;
+    case "no-metro-modules":
+      return `React DevTools backend is not attached and could not be auto-started: Metro module registry (__r.getModules) is unavailable${counts}. As a fallback, run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+    case "no-rdt-module":
+      return `React DevTools backend is not attached and could not be auto-started: react-devtools-core is not in the Metro bundle${counts}. This is expected in production builds — profiling requires a development build. If this is a dev build, run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+    case "unsupported-rdt-version":
+      return `React DevTools backend is not attached and could not be auto-started: react-devtools-core <5.1 detected (no connectWithCustomMessagingProtocol export). This is React Native <0.74. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+    case "metro-scan-error":
+      return `React DevTools backend bootstrap failed scanning Metro modules${counts}: ${bootstrap.message ?? "unknown error"}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+    case "bootstrap-threw":
+      return `React DevTools backend bootstrap threw${counts}: ${bootstrap.message ?? "unknown error"}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+    case "bootstrap-no-effect":
+      return `React DevTools backend bootstrap reported no error but rendererInterfaces remained empty${counts}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+    default:
+      return `React DevTools backend bootstrap failed (${bootstrap.reason})${counts}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+  }
+}
 
 function safeGetState(registry: Registry, urn: string): ServiceState | null {
   try {
@@ -129,21 +180,64 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
       // Snapshot backend state so we can decide whether to start, take over, or refuse.
-      const stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+      let stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
       if (!stateJson) {
         throw new Error("Failed to read React profiler state from runtime (no value returned).");
       }
-      const state = JSON.parse(stateJson) as ReadStateResult;
+      let state = JSON.parse(stateJson) as ReadStateResult;
 
       if (!state.hookExists) {
         throw new Error(
           "__REACT_DEVTOOLS_GLOBAL_HOOK__ not present. React profiling requires a development build of the app."
         );
       }
+
+      // If the hook is present but no rendererInterface is registered, the
+      // React DevTools backend hasn't called `attach()` yet — typically because
+      // no external DevTools client (Fusebox React tab, `npx react-devtools`)
+      // is connected in a bridgeless RN dev build. Try to bootstrap it
+      // ourselves via react-devtools-core; fall back to an actionable error
+      // identifying the specific failure mode (production build, rdt-core
+      // version too old, etc.).
       if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
-        throw new Error(
-          "No React renderer interface attached yet. Wait for the app to render its first commit and retry."
-        );
+        const bootstrapJson = (await cdp.evaluate(BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT)) as
+          | string
+          | undefined;
+        if (!bootstrapJson) {
+          throw new Error(
+            "Failed to bootstrap React DevTools backend (no value returned from runtime)."
+          );
+        }
+        const bootstrap = JSON.parse(bootstrapJson) as BootstrapResult;
+
+        if (!bootstrap.ok) {
+          throw new Error(bootstrapFailureMessage(bootstrap));
+        }
+
+        // Re-run the setup script: it walks `hook.rendererInterfaces` and
+        // installs the `__argent_startWrapped__` wrappers. The previous setup
+        // call (before bootstrap) saw an empty map and did nothing, so the
+        // freshly-attached interfaces are unwrapped — `buildStartScript`'s
+        // post-start check on `__argent_isProfiling__` would fail without this.
+        await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+
+        stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+        if (!stateJson) {
+          throw new Error(
+            "Failed to re-read React profiler state after bootstrap (no value returned)."
+          );
+        }
+        state = JSON.parse(stateJson) as ReadStateResult;
+
+        if (
+          !state.hookExists ||
+          !("rendererInterfaceFound" in state) ||
+          !state.rendererInterfaceFound
+        ) {
+          throw new Error(
+            `React DevTools backend bootstrap reported success (${bootstrap.reason}) but rendererInterfaces was empty on re-read. Run \`npx react-devtools\` and reload the JS bundle, then retry.`
+          );
+        }
       }
 
       // If a session is already active, classify it and decide.
