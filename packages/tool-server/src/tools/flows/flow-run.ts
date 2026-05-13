@@ -2,8 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
@@ -95,7 +94,7 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
           break;
         }
 
-        await sleep(100);
+        await sleep(DEFAULT_INTER_STEP_DELAY_MS);
       }
 
       return {
