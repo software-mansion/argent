@@ -38,6 +38,15 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
   return aEmu - bEmu;
 }
 
+// Cross-platform readiness rank used after each platform's own ordering:
+// ready/booted devices float to the top of the merged list regardless of
+// platform, so a booted Android emulator is not buried beneath idle iOS
+// simulators just because iOS was concatenated first.
+function readinessRank(d: IosDevice | AndroidDevice): number {
+  if (d.platform === "ios") return d.state === "Booted" ? 0 : 1;
+  return d.state === "device" ? 0 : 1;
+}
+
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
@@ -69,6 +78,13 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     }));
     androidTagged.sort(sortAndroid);
 
-    return { devices: [...iosTagged, ...androidTagged], avds };
+    // Merge by readiness rank (stable sort preserves per-platform order within
+    // each rank). The previous behavior always emitted all iOS devices before
+    // any Android device, which led downstream agents to pick iOS by default
+    // even when an Android emulator was the only ready target.
+    const devices: Array<IosDevice | AndroidDevice> = [...iosTagged, ...androidTagged];
+    devices.sort((a, b) => readinessRank(a) - readinessRank(b));
+
+    return { devices, avds };
   },
 };

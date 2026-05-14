@@ -42,7 +42,11 @@ const MAX_BODY_SIZE = 1000;
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
   requestId: z.string().describe("The requestId from view-network-logs to get full details for"),
   includeBody: z.coerce
     .boolean()

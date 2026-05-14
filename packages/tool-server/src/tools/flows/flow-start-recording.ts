@@ -20,7 +20,7 @@ const zodSchema = z.object({
   executionPrerequisite: z
     .string()
     .describe(
-      'Describes the required app/simulator state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")'
+      'Describes the required app/device state before running this flow (e.g. "App on home screen after a fresh reload", "Settings app open on General page")'
     ),
 });
 
@@ -30,7 +30,7 @@ export const flowStartRecordingTool: ToolDefinition<
 > = {
   id: "flow-start-recording",
   description: `Start recording a new flow. Creates a .yaml file in the .argent/flows/ directory.
-Use when you want to capture a reusable sequence of simulator interactions for later replay.
+Use when you want to capture a reusable sequence of device interactions (iOS simulator or Android emulator) for later replay.
 Returns { message, flowFile } and optionally { previousFlow } if a prior recording was abandoned.
 Fails if the .argent/flows/ directory cannot be created or the flow file cannot be written.
 

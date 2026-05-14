@@ -69,13 +69,18 @@ When `is_react_native` is true: load `argent-react-native-app-workflow` skill. U
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
 
-iOS SIMULATOR SETUP
-Skill: `argent-ios-simulator-setup`
-When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
+PLATFORM DETECTION (do this before any setup skill)
+When the target platform is not specified by the user, call `list-devices` **first** to discover which platforms are
+ready. If exactly one platform has a booted/ready device, target that one. If both have ready devices, ask the user.
+**Do not assume iOS by default.** Android emulators and iOS simulators are both first-class targets.
 
-ANDROID EMULATOR SETUP
+DEVICE SETUP — ANDROID
 Skill: `argent-android-emulator-setup`
-When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
+When: Target platform is Android, no emulator running yet, need an adb serial, or about to install an APK.
+
+DEVICE SETUP — iOS
+Skill: `argent-ios-simulator-setup`
+When: Target platform is iOS, no simulator booted yet, need a UDID or simulator-server.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
