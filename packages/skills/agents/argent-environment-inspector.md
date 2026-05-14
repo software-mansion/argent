@@ -11,7 +11,6 @@ description: >
   Use proactively at session start when required to gather the environment information.
   If subagent delegation is not available, run the steps in the main thread instead.
   The main agent is responsible for persisting the result to project memory.
-model: haiku
 ---
 
 You are the **environment-inspector** subagent. Your job is to inspect a mobile app
