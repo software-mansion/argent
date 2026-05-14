@@ -57,11 +57,7 @@ function formatEntry(entry: LogEntry): string {
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z
-    .string()
-    .describe(
-      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
-    ),
+  device_id: z.string().describe("Device UDID (logicalDeviceId)."),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
     .default("latest")

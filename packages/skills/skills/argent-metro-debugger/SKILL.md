@@ -32,10 +32,10 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 
 ### Reload & recovery
 
-| Tool                    | Purpose                                                                                                            |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.                               |
-| `restart-app`           | Terminate and relaunch the app by device id and bundleId/package name. Use when the app lost its Metro connection. |
+| Tool                    | Purpose                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.          |
+| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection. |
 
 ### Inspection & console
 
@@ -70,7 +70,7 @@ Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to
 ## 4. Golden Rules
 
 1. **`debugger-status` first when something fails** — it runs discovery, connection, and returns diagnostics.
-2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on the device (iOS simulator or Android emulator), then retry `debugger-status`. On Android, also re-run `adb -s <serial> reverse tcp:8081 tcp:8081` first.
+2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on the device, then retry `debugger-status`.
 3. **Never assume one failure is permanent** — follow recovery steps before asking the user. For starting Metro and full failure recovery, see `argent-react-native-app-workflow` and `references/failure-scenarios.md`.
 
 ---
@@ -120,7 +120,7 @@ When reading from the log file:
 | Diagnose / check connection   | `debugger-status`                                                   |
 | Connect to Metro CDP          | `debugger-connect`                                                  |
 | Reload JS (already connected) | `debugger-reload-metro`                                             |
-| Relaunch app on device        | `restart-app` (iOS simulator or Android emulator)                   |
+| Relaunch app on device        | `restart-app`                                                       |
 | Inspect component at point    | `debugger-inspect-element`                                          |
 | Full component tree           | `debugger-component-tree`                                           |
 | Console log overview          | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |

@@ -11,10 +11,7 @@ description: Step-by-step workflows for developing or debugging React Native app
 
 Do NOT default to `npx react-native start` or `npx react-native run-ios` without first checking for custom scripts and workflows.
 
-**Manual fallback** (if neither the agent nor the tool is available): read ALL `package.json` scripts — look for custom scripts like `start:local`, `start:dev`, `ios`, `android`, `build:ios`, `build:android`, flavors, etc. Custom scripts take priority over default commands. Also check `metro.config.js` for non-default port or watchFolders. Platform-specific notes:
-
-- **iOS**: prefer opening `.xcworkspace` over `.xcodeproj` (CocoaPods generates the workspace).
-- **Android**: build entry is `android/gradlew` (Unix) or `gradlew.bat` (Windows). Open `android/` in Android Studio for detailed errors. Check `android/app/build.gradle` (or `build.gradle.kts`) for `applicationId`, flavors, and signing config.
+**Manual fallback** (if neither the agent nor the tool is available): read ALL `package.json` scripts — look for custom scripts like `start:local`, `start:dev`, `ios`, `build:ios`, flavors, etc. Custom scripts take priority over default commands. Also check `metro.config.js` for non-default port or watchFolders. For iOS builds, prefer opening `.xcworkspace` over `.xcodeproj` (CocoaPods generates the workspace).
 
 **If the project structure is convoluted, ask the user before proceeding.**
 
@@ -24,7 +21,6 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 - [ ] `node_modules` present (if not: `npm install` or `yarn`)
 - [ ] For iOS: `ios/Podfile` exists; if `ios/Pods` missing or stale, run `cd ios && pod install && cd ..`
-- [ ] For Android: `android/gradlew` exists and is executable. A first run may need `cd android && ./gradlew --version` to warm the Gradle wrapper.
 - [ ] No conflicting Metro on default port (see 1.2)
 
 ### 1.2 Start Metro
@@ -87,8 +83,7 @@ To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 ### 2.2 Confirm Correct Server Connection
 
 - **App must point at the same host/port as the running Metro.** Default: same machine, port 8081.
-- **iOS Simulator:** by default uses localhost; no extra config needed for same-machine Metro.
-- **Android emulator / device:** Metro is **not** auto-reachable. Before the app starts, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the device can reach Metro on `localhost`. Re-run if the device restarts or adb drops.
+- **iOS Simulator:** By default uses localhost; no extra config needed for same-machine Metro.
 
 **Verify Metro is reachable:** use the `debugger-status` tool.
 
@@ -96,10 +91,10 @@ To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
 
 After code or config changes, the app must load the new bundle:
 
-| Method      | How                                                                                                                                                                                                  |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reload tool | Use the `debugger-reload-metro` tool (works on both iOS and Android)                                                                                                                                 |
-| Restart app | Use the `restart-app` tool, or kill the app on the device and re-run the platform build command (`npx react-native run-ios` on iOS, `npx react-native run-android` on Android, or the custom script) |
+| Method      | How                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------- |
+| Reload tool | Use the `debugger-reload-metro` tool                                                              |
+| Restart app | Use the `restart-app` tool, or kill the app in simulator and run `npx react-native run-ios` again |
 
 **Agent checklist:**
 
@@ -109,23 +104,16 @@ After code or config changes, the app must load the new bundle:
 
 ---
 
-## 3. Build / Install / Retry (React Native — iOS & Android native)
+## 3. Build / Install / Retry (React Native & iOS Native)
 
-### 3.1 When Build Fails
+### 3.1 When Build Fails (e.g. xcodebuild exit code 65)
 
 **Order of operations (simplest first):**
 
-1. Clean build folder, then retry the build command (iOS: `cd ios && xcodebuild clean` or Xcode → Product → Clean; Android: `cd android && ./gradlew clean`).
-2. Clear caches and reinstall JS dependencies: reset Metro cache (`npx react-native start --reset-cache`), `watchman watch-del-all`, remove `node_modules` + lockfile, `npm install` (or `yarn`).
-3. **iOS-specific** (when `xcodebuild` fails, e.g. exit code 65):
-   - `cd ios && rm -rf build Pods Podfile.lock && pod install --repo-update`
-   - CocoaPods deeper issues: `pod deintegrate` then `pod install --repo-update`
-   - Open `ios/*.xcworkspace` in Xcode for detailed errors in the Report navigator
-4. **Android-specific** (when `gradlew` fails, e.g. exit code 1):
-   - `cd android && ./gradlew clean` then re-run the build
-   - Stale daemon / cache: `cd android && ./gradlew --stop`, optionally `rm -rf ~/.gradle/caches/` (heavy — only when corruption is suspected)
-   - Missing dependency: confirm `android/build.gradle` repositories and SDK levels match the target; check `local.properties` for `sdk.dir`
-   - Open `android/` in Android Studio for the full error log and Gradle console
+1. Clean build folder, then retry the build command
+2. Clear caches and reinstall dependencies: reset Metro cache, `watchman watch-del-all`, remove `node_modules` + lockfile, `npm install`, then `cd ios && rm -rf build Pods Podfile.lock && pod install --repo-update`
+3. CocoaPods issues: `pod deintegrate` then `pod install --repo-update`
+4. Open `ios/*.xcworkspace` in Xcode for detailed errors in the Report navigator
 
 ### 3.2 When to Ask the User
 
@@ -139,13 +127,13 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 
 ### 3.4 When to Reinstall vs Refresh
 
-| Situation                                             | Action                                                                                                                                                                                         |
-| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                                                                                                                                  |
-| Native code or `pod install` / project config changed | Rebuild for the target platform: `npx react-native run-ios` (iOS) or `npx react-native run-android` (Android). Metro can stay running.                                                         |
-| `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install` (iOS) and/or refresh the Android Gradle wrapper (`cd android && ./gradlew :app:dependencies` will fetch). Then rebuild. |
-| App needs reinstalling from build output              | Use `reinstall-app` tool with device id, bundle id / package name, and the bundle path (`.app` for iOS, `.apk` for Android).                                                                   |
-| Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                                                                                                                         |
+| Situation                                             | Action                                                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| JS/React only changed                                 | Use `debugger-reload-metro` tool. No rebuild.                                         |
+| Native code or `pod install` / project config changed | Rebuild: `npx react-native run-ios` (Metro can stay running).                         |
+| `node_modules` or `package.json` changed              | `npm install`, then if native deps changed run `cd ios && pod install`. Then rebuild. |
+| App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                         |
+| Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                |
 
 ### 3.5 Device Control
 
@@ -161,7 +149,7 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device) |
 | Stop all simulator servers | `stop-all-simulator-servers` tool (iOS + Android)                      |
 
-For full device setup workflow, refer to the `argent-ios-simulator-setup` skill (iOS) or the `argent-android-emulator-setup` skill (Android).
+For full simulator setup workflow, refer to the `argent-ios-simulator-setup` skill.
 
 ---
 
@@ -175,8 +163,8 @@ For full device setup workflow, refer to the `argent-ios-simulator-setup` skill 
 | **React component hierarchy**     | Use `debugger-component-tree` tool for a text tree, or `debugger-inspect-element` at specific logical pixel coordinates (not normalized 0-1).                                                                                                                     |
 | **Visual state of the app**       | Use `screenshot` tool to capture the current screen, but prefer `describe` or `debugger-component-tree` for actual navigation and target discovery. If a permission prompt or system-owned modal overlay is not exposed reliably, then fall back to `screenshot`. |
 | **Evaluate JS in the app**        | Use `debugger-evaluate` tool to run JavaScript in the app's runtime.                                                                                                                                                                                              |
-| **Native crashes / native stack** | iOS: `npx react-native log-ios` or iOS Simulator: Debug → Open System Log. Android: `npx react-native log-android` or `adb -s <serial> logcat` (filter by tag/PID).                                                                                               |
-| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts. iOS: `ios/Podfile`, `ios/*.xcworkspace`. Android: `android/build.gradle`, `android/app/build.gradle`, `android/gradle.properties`, `android/local.properties`.                                      |
+| **Native crashes / native stack** | `npx react-native log-ios` or iOS Simulator: Debug → Open System Log.                                                                                                                                                                                             |
+| **Build/runtime config**          | `metro.config.js`, `babel.config.js`, `package.json` scripts, `ios/Podfile`.                                                                                                                                                                                      |
 
 For comprehensive Metro debugging workflows (component inspection, console logs, JS evaluation), refer to the `argent-metro-debugger` skill.
 
@@ -197,7 +185,7 @@ Use the argent tools instead.
 Check the `argent-environment-inspector` result for test commands. For interactive UI testing with automatic screenshot verification, use the `argent-test-ui-flow` skill.
 
 - **Unit tests**: Look for Jest in `package.json` (`"test": "jest"`, `jest` config). Run: `npm test` or `yarn test`.
-- **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`. iOS often also needs `applesimutils`. Android Detox needs an AVD configured in `.detoxrc` and `adb` on PATH.
+- **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
 - **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `argent-test-ui-flow` skill.
 
 ### 5.2 Running Tests (Typical)
@@ -205,9 +193,10 @@ Check the `argent-environment-inspector` result for test commands. For interacti
 If the user's intent is ambiguous (run existing tests, write new tests, or find missing coverage), clarify before proceeding.
 
 - **Jest**: `npm test` or `npx jest`.
-- **Detox** (configuration names are project-specific — check `.detoxrc.js` for available `configurations`):
-  - iOS: `detox build --configuration ios.sim.release` (or debug) then `detox test --configuration ios.sim.release`. Ensure the iOS simulator is booted and not used by another process.
-  - Android: `detox build --configuration android.emu.release` (or debug) then `detox test --configuration android.emu.release`. Ensure the AVD is running and `adb devices` lists it.
+- **Detox (example)**:
+  - Build: `detox build --configuration ios.sim.release` (or debug).
+  - Run: `detox test --configuration ios.sim.release`.
+  - Ensure simulator is booted and not used by another process.
 
 ### 5.3 Agent Testing Checklist
 
@@ -227,7 +216,6 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
 | Run iOS app                  | `npx react-native run-ios`                                                                                                               |
 | Run Android app              | `npx react-native run-android`                                                                                                           |
-| Android: Metro reverse-port  | `adb -s <serial> reverse tcp:8081 tcp:8081` (after device boot, before app start)                                                        |
 | List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
 | Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
@@ -239,20 +227,19 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Run JS in app                | `debugger-evaluate` tool                                                                                                                 |
 | iOS native logs              | `npx react-native log-ios`                                                                                                               |
 | Android native logs          | `npx react-native log-android` or `adb -s <serial> logcat`                                                                               |
-| Android: stop emulator       | `adb -s <serial> emu kill`                                                                                                               |
-| Clean + reinstall (nuclear)  | See §3.1 step 3 (iOS) or §3.1 step 4 (Android)                                                                                           |
+| Clean + reinstall (nuclear)  | See §3.1 step 3                                                                                                                          |
 
 ---
 
 ## Related Skills
 
-| Skill                           | When to use                                                                             |
-| ------------------------------- | --------------------------------------------------------------------------------------- |
-| `argent-ios-simulator-setup`    | Initial iOS simulator boot and connection setup                                         |
-| `argent-android-emulator-setup` | Initial Android emulator boot, AVD selection, `adb reverse` setup                       |
-| `argent-device-interact`        | Tapping, swiping, typing, hardware buttons, gestures (iOS simulator + Android emulator) |
-| `argent-metro-debugger`         | Full Metro CDP debugging: component inspection, console logs, JS evaluation             |
-| `argent-react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                           |
-| `argent-test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action         |
+| Skill                           | When to use                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------- |
+| `argent-ios-simulator-setup`    | Initial iOS simulator boot and connection setup                                 |
+| `argent-android-emulator-setup` | Initial Android emulator boot and connection setup                              |
+| `argent-device-interact`        | Tapping, swiping, typing, hardware buttons, gestures on the simulator/emulator  |
+| `argent-metro-debugger`         | Full Metro CDP debugging: component inspection, console logs, JS evaluation     |
+| `argent-react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                   |
+| `argent-test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
 
 Ask the user before running tests: confirm which test suite (unit, E2E, or both), whether to use existing CI commands, and whether they want you to run existing tests, write new ones, or explore test cases yourself.

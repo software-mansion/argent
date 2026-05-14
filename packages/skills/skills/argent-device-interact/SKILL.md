@@ -24,7 +24,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing** — on iOS try `paste` first then fall back to `keyboard`; on Android use `keyboard` directly (`paste` is iOS-only).
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For app navigation, prefer `describe` first** (on both iOS and Android). It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` (iOS only) when you need app-scoped UIKit properties.
+6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
@@ -291,6 +291,4 @@ Stops on the first error and returns partial results.
 
 ### iOS
 
-- **`paste` is iOS-only**: form-field text entry via clipboard. Falls back to `keyboard` when `paste` errors. On Android the capability gate rejects it explicitly.
-- **`native-*` tools (native-describe-screen, native-find-views, native-full-hierarchy, native-network-logs, native-view-at-point, native-user-interactable-view-at-point) are iOS-only**: they read UIKit / NSURLProtocol via injected native devtools. The capability gate rejects them on Android.
-- **`native-profiler-*` is iOS-only today** (xctrace-backed); Android support is on the roadmap.
+_(no iOS-only gotchas collected here yet — add them as they come up)_

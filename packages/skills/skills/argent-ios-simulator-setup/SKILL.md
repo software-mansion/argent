@@ -1,6 +1,6 @@
 ---
 name: argent-ios-simulator-setup
-description: Set up and connect to an iOS simulator using argent MCP tools. Use when the target platform is iOS — booting a simulator, getting an iOS UDID, or before any iOS simulator interaction task. For Android targets, use argent-android-emulator-setup instead.
+description: Set up and connect to an iOS simulator using argent MCP tools. Use when starting a new session, booting an iOS simulator, getting an iOS UDID, or before any iOS simulator interaction task.
 ---
 
 ## 1. Setup Steps

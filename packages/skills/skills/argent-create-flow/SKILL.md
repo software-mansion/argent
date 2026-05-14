@@ -1,6 +1,6 @@
 ---
 name: argent-create-flow
-description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of device actions (iOS simulator or Android emulator).
+description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of device actions.
 ---
 
 ## 1. Overview
