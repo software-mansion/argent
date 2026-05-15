@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/skills",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "type": "module",
   "description": "Claude Code skills for iOS simulator and Android emulator interaction via argent",
   "scripts": {
