@@ -16,6 +16,27 @@ import { resolveDevice } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
+const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
+const BEARER_PREFIX = "Bearer ";
+
+// Constant-time comparison so a leaked token can't be recovered byte-by-byte
+// via response-timing measurements. Both strings must be the same length to
+// avoid leaking length information either; we pad/truncate to a fixed compare
+// width of the expected token's length.
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function extractBearerToken(authHeader: string | undefined): string | null {
+  if (!authHeader || !authHeader.startsWith(BEARER_PREFIX)) return null;
+  return authHeader.slice(BEARER_PREFIX.length).trim() || null;
+}
+
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
   let current: unknown = err;
   // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
@@ -42,18 +63,86 @@ export interface HttpAppHandle {
   getLastActivityAt: () => number;
 }
 
+// Loopback hostnames the browser is allowed to address us by. The
+// tool-server binds to 127.0.0.1 only, but a public attacker page that
+// briefly DNS-rebinds its own hostname to 127.0.0.1 can still reach us
+// — the Host header is the only signal that distinguishes that traffic
+// from a legitimate same-origin request, so we gate on it.
+const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
+
+function extractHostname(host: string): string {
+  // IPv6 literals are bracketed: "[::1]:8080" → "::1"
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end === -1 ? host : host.slice(1, end);
+  }
+  const colon = host.indexOf(":");
+  return colon === -1 ? host : host.slice(0, colon);
+}
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   app.use(express.json());
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
-  app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    if (_req.method === "OPTIONS") {
-      res.sendStatus(204);
+  // Reject requests whose Host header points to anything other than a
+  // loopback hostname. Closes the DNS-rebinding bypass, where a public
+  // origin's hostname briefly resolves to 127.0.0.1 and the browser dutifully
+  // forwards the rebound origin's cookies/CSRF state to us. Runs before the
+  // auth gate so a rebound public origin doesn't even reach the token check.
+  app.use((req, res, next) => {
+    const host = req.headers.host;
+    if (!host) {
+      res.status(400).json({ error: "Missing Host header" });
+      return;
+    }
+    const hostname = extractHostname(host);
+    if (!ALLOWED_HOSTNAMES.has(hostname)) {
+      res.status(403).json({
+        error:
+          `Refusing request with Host "${host}". The tool-server only accepts ` +
+          `loopback hostnames (127.0.0.1, localhost, ::1) to defend against ` +
+          `DNS-rebinding. If you are reaching this from your own client, use ` +
+          `127.0.0.1 instead of a public hostname.`,
+      });
+      return;
+    }
+    next();
+  });
+
+  // Auth token snapshotted at startup. The launcher generates this and passes
+  // it in via env (see ensureToolsServer). Empty string ⇒ auth disabled, which
+  // is supported only for local dev (`npm run dev`); in that case stderr gets
+  // a one-shot warning so the operator notices.
+  const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
+  if (!expectedToken) {
+    process.stderr.write(
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
+        `Any local process can drive the tool-server. This is only safe for development.\n`
+    );
+  }
+
+  // Authorization gate. Runs after Host validation and before any handler.
+  // /preview is intentionally exempt because it is user-facing and was not
+  // gated before; tightening it is a follow-up.
+  app.use((req, res, next) => {
+    if (!expectedToken) {
+      next();
+      return;
+    }
+    if (req.path.startsWith("/preview")) {
+      next();
+      return;
+    }
+    const provided = extractBearerToken(req.headers.authorization);
+    if (!provided || !constantTimeEqual(provided, expectedToken)) {
+      res.status(401).json({
+        error:
+          "Missing or invalid Authorization header. Tool-server requires " +
+          "`Authorization: Bearer <token>` where <token> matches the value in " +
+          "~/.argent/tool-server.json.",
+      });
       return;
     }
     next();

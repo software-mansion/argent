@@ -1,5 +1,31 @@
 import { SourceMapConsumer } from "source-map-js";
 
+// Only http/https URLs whose host is a loopback name are allowed to be
+// fetched by the source-map registry. The legitimate caller is Metro, which
+// always emits absolute http://localhost:<port>/<bundle>.map URLs over CDP.
+// Anything else (e.g., a malicious app's script setting //# sourceMappingURL
+// to http://attacker.example/, or http://169.254.169.254/<cloud-metadata>)
+// would otherwise turn the tool-server into a blind fetcher of attacker-
+// chosen URLs from the host network.
+const ALLOWED_SOURCE_MAP_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+export function isAllowedSourceMapURL(raw: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  // Node's URL parser keeps the brackets on IPv6 hostnames ("[::1]"), strip
+  // them before consulting the allowlist.
+  const hostname =
+    parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+      ? parsed.hostname.slice(1, -1)
+      : parsed.hostname;
+  return ALLOWED_SOURCE_MAP_HOSTS.has(hostname);
+}
+
 export interface GeneratedPosition {
   scriptUrl: string;
   scriptId: string;
@@ -143,6 +169,7 @@ export class SourceMapsRegistry {
         const decoded = Buffer.from(base64Part, "base64").toString("utf-8");
         rawData = JSON.parse(decoded);
       } else {
+        if (!isAllowedSourceMapURL(sourceMapURL)) return;
         const res = await fetch(sourceMapURL);
         if (!res.ok) return;
         rawData = await res.json();
