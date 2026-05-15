@@ -1,9 +1,24 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import type { DescribeResult } from "./contract";
+import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
 import { iosRequires, describeIos } from "./platforms/ios";
+import { formatDescribeTree } from "./format-tree";
+
+// In-between layer between the per-platform adapters (which still own all
+// pruning — the Android v2 trimmer in uiautomator-parser stays untouched) and
+// the public DescribeResult. The internal `tree` is converted to a token-
+// efficient text rendering here and then dropped, so the caller (LLM) never
+// pays for the JSON tree.
+function withDescription(data: DescribeTreeData): DescribeResult {
+  const out: DescribeResult = {
+    description: formatDescribeTree(data.tree, { source: data.source }),
+    source: data.source,
+  };
+  if (data.should_restart) out.should_restart = data.should_restart;
+  return out;
+}
 
 const zodSchema = z.object({
   udid: z
@@ -66,11 +81,13 @@ For React Native apps, debugger-component-tree returns React component names wit
       capability,
       ios: {
         requires: iosRequires,
-        handler: (_services, params, device) => describeIos(registry, device, params),
+        handler: async (_services, params, device) =>
+          withDescription(await describeIos(registry, device, params)),
       },
       android: {
         requires: androidRequires,
-        handler: (_services, params) => describeAndroid(params.udid, params.bundleId),
+        handler: async (_services, params) =>
+          withDescription(await describeAndroid(params.udid, params.bundleId)),
       },
     }),
   };

@@ -4,6 +4,15 @@ import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
+// The describe tool no longer surfaces the JSON tree — `result.description`
+// is the text rendering produced by format-tree.ts. `elementLineCount` counts
+// the per-element lines (everything indented under a section header), which
+// is what the old `tree.children.length` was effectively measuring once you
+// ignore the root AXGroup wrapper.
+function elementLineCount(description: string): number {
+  return description.split("\n").filter((l) => /^ {2}AX/.test(l)).length;
+}
+
 function makeAXServiceApi(response: AXDescribeResponse): AXServiceApi {
   return {
     describe: async () => response,
@@ -94,9 +103,8 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.role).toBe("AXGroup");
-    expect(result.tree.children[0]?.label).toBe("General");
-    expect(result.tree.children[0]?.role).toBe("AXButton");
+    expect(result.description).toContain("ROOT  AXGroup");
+    expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
   it("returns dialog elements when alertVisible is true", async () => {
@@ -122,10 +130,9 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(2);
-    expect(result.tree.children[0]?.label).toBe("Allow Once");
-    expect(result.tree.children[0]?.role).toBe("AXButton");
-    expect(result.tree.children[1]?.label).toBe("Don\u2019t Allow");
+    expect(elementLineCount(result.description)).toBe(2);
+    expect(result.description).toMatch(/AXButton\s+"Allow Once"/);
+    expect(result.description).toMatch(/AXButton\s+"Don\u2019t Allow"/);
   });
 
   it("returns empty root when no elements and no native fallback", async () => {
@@ -139,8 +146,8 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.role).toBe("AXGroup");
-    expect(result.tree.children).toHaveLength(0);
+    expect(result.description).toContain("ROOT  AXGroup");
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("uses bundleId for native-devtools fallback when AX returns empty", async () => {
@@ -174,8 +181,7 @@ describe("describe tool", () => {
       { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
     );
     expect(result.source).toBe("native-devtools");
-    expect(result.tree.children[0]?.label).toBe("General");
-    expect(result.tree.children[0]?.role).toBe("AXButton");
+    expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
   it("falls back to native-devtools with auto-target when AX returns empty", async () => {
@@ -206,7 +212,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("native-devtools");
-    expect(result.tree.children[0]?.label).toBe("Hello World");
+    expect(result.description).toContain('"Hello World"');
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -230,7 +236,7 @@ describe("describe tool", () => {
     );
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
-    expect(result.tree.children).toHaveLength(0);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {
@@ -245,7 +251,7 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(0);
+    expect(elementLineCount(result.description)).toBe(0);
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -287,11 +293,10 @@ describe("describe tool", () => {
 
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(3);
-    expect(result.tree.children[0]?.role).toBe("AXTextField");
-    expect(result.tree.children[0]?.value).toBe("Search");
-    expect(result.tree.children[1]?.role).toBe("AXButton");
-    expect(result.tree.children[2]?.label).toBe("Accessibility");
+    expect(elementLineCount(result.description)).toBe(3);
+    expect(result.description).toMatch(/AXTextField\s+"Search"\s+value="Search"/);
+    expect(result.description).toMatch(/AXButton\s+"General"/);
+    expect(result.description).toMatch(/AXButton\s+"Accessibility"/);
   });
 
   it("resolves ax-service with the correct URN", async () => {
@@ -336,6 +341,6 @@ describe("describe tool", () => {
       { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
     );
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(0);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 });
