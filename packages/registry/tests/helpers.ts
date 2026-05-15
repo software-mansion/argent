@@ -7,7 +7,7 @@ import type {
 } from "../src/types";
 
 export interface StaticBlueprintResult {
-  blueprint: ServiceBlueprint<{ id: string; deps?: string[] }, string>;
+  blueprint: ServiceBlueprint<Record<string, unknown>, string>;
   emitters: TypedEventEmitter<ServiceEvents>[];
 }
 
@@ -27,7 +27,7 @@ export function createStaticBlueprint(
   }
 ): StaticBlueprintResult {
   const emitters: TypedEventEmitter<ServiceEvents>[] = [];
-  const blueprint: ServiceBlueprint<{ id: string; deps?: string[] }, string> = {
+  const blueprint: ServiceBlueprint<Record<string, unknown>, string> = {
     namespace: `static-${id}`,
     getURN() {
       return `static-${id}:only`;

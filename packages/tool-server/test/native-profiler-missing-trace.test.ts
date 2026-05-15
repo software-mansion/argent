@@ -37,12 +37,16 @@ describe("native-profiler-analyze: missing trace file", () => {
         deviceId: "TEST-DEVICE",
         appProcess: null,
         xctracePid: null,
+        xctraceProcess: null,
         traceFile,
         exportedFiles: { cpu: cpuPath, hangs: hangsPath, leaks: leaksPath },
         profilingActive: false,
         wallClockStartMs: null,
         parsedData: null,
         recordingTimeout: null,
+        recordingTimedOut: false,
+        recordingExitedUnexpectedly: false,
+        lastExitInfo: null,
       };
 
       const result = await nativeProfilerAnalyzeTool.execute(

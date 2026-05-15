@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { toMcpTool } from "../src/tool-mapping";
+import { toMcpTool } from "../src/tool-mapping.js";
 
 describe("toMcpTool — MCP _meta forwarding", () => {
   const base = {

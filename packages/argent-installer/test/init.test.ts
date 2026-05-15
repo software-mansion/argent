@@ -39,7 +39,7 @@ describe("init — skills command construction", () => {
   });
 
   it("default method builds correct args with local scope", () => {
-    const scope = "local";
+    const scope = "local" as "local" | "global";
     const args = ["skills", "add", SKILLS_DIR];
     if (scope === "global") args.push("-g");
     args.push("--skill", "*", "-y");

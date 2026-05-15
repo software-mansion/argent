@@ -1,0 +1,13 @@
+# Submodules — not formatted by this repo.
+packages/argent-private/
+
+# Build artifacts.
+**/dist/
+**/node_modules/
+
+# Lock files.
+package-lock.json
+pnpm-lock.yaml
+
+# Generated.
+**/tsconfig.tsbuildinfo

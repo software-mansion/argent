@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import http from "node:http";
-import { fetchWithReconnect } from "../src/mcp-server";
+import { fetchWithReconnect } from "../src/mcp-server.js";
 
 async function mockSuccessfulReconnect() {
   return new Promise<void>((res) => res());

@@ -144,8 +144,8 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
   it("bounds bootTimeoutMs to [30s, 15min]", () => {
     // Timeouts should fail at the zod layer before reaching execute.
     const tool = createBootDeviceTool({} as unknown as Registry);
-    expect(tool.zodSchema.safeParse({ avdName: "x", bootTimeoutMs: 29_999 }).success).toBe(false);
-    expect(tool.zodSchema.safeParse({ avdName: "x", bootTimeoutMs: 900_001 }).success).toBe(false);
-    expect(tool.zodSchema.safeParse({ avdName: "x", bootTimeoutMs: 60_000 }).success).toBe(true);
+    expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 29_999 }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 900_001 }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 60_000 }).success).toBe(true);
   });
 });

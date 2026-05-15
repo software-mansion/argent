@@ -151,6 +151,21 @@ npm run test:watch -w @argent/registry
 npm run test:watch -w @argent/tool-server
 ```
 
+Test files live outside the per-package `tsconfig.json` (which is scoped to `src/**`) and Vitest transforms them with esbuild, so neither path actually typechecks tests. To run `tsc` over the test sources, use:
+
+```bash
+npm run typecheck:tests --workspaces --if-present   # all packages
+npm run typecheck:tests -w @argent/tool-server      # one package
+```
+
+Build/publish scripts under `scripts/` and `packages/*/scripts/` are JavaScript (`.cjs` / `.mjs`) and are typechecked separately via `tsconfig.scripts.json` (`allowJs` + `checkJs`):
+
+```bash
+npm run typecheck:scripts
+```
+
+CI runs both commands after the `tsc --build` step.
+
 ---
 
 ## Code style
@@ -170,7 +185,12 @@ npm run test:watch -w @argent/tool-server
    ```bash
    npm run build
    ```
-4. **Ensure tests pass** for the packages you touched.
+4. **Ensure tests pass** for the packages you touched, and that test sources and build scripts typecheck:
+   ```bash
+   npm test --workspaces --if-present
+   npm run typecheck:tests --workspaces --if-present
+   npm run typecheck:scripts
+   ```
 5. **Write a clear PR title** — it becomes part of the release changelog. Use the same prefix convention as commit messages (`feat:`, `fix:`, etc.).
 6. **Open the PR** against `main` and fill in the description with context on what changed and why.
 7. A maintainer will review and may request changes. Address feedback with new commits (don't force-push after review starts).
