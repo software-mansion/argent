@@ -1,9 +1,6 @@
 /** How often the idle timer checks for inactivity (ms). */
 export const IDLE_CHECK_INTERVAL_MS = 60_000;
 
-/** Default idle timeout before auto-shutdown (minutes). */
-export const DEFAULT_IDLE_TIMEOUT_MINUTES = 30;
-
 export interface IdleTimer {
   touch(): void;
   dispose(): void;

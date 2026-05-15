@@ -17,6 +17,7 @@
  *   argent tools                  List tools exposed by the tool-server
  *   argent tools describe <name>  Show one tool's flags
  *   argent run <tool> [flags]     Invoke a tool by name
+ *   argent server start [flags]   Spawn a long-lived tool-server (foreground by default)
  *   argent server status|stop|logs   Manage the shared tool-server
  */
 
@@ -63,7 +64,7 @@ Commands:
   remove      Alias for uninstall
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
-  server      Manage the shared tool-server (status / stop / logs)
+  server      Manage the shared tool-server (start / status / stop / logs)
 
 Options:
   --help, -h     Show this help message
@@ -108,7 +109,7 @@ async function main(): Promise<void> {
     case "run":
       return (await loadCli()).run(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "server":
-      return (await loadCli()).server(rest);
+      return (await loadCli()).server(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

@@ -2,10 +2,18 @@ import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
-import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
 
 const PROCESS_TIMEOUT_MS = 5_000;
+const DEFAULT_PORT = "3001";
+const DEFAULT_HOST = "127.0.0.1";
+const DEFAULT_IDLE_TIMEOUT_MINUTES = "0";
+
+// Format an HTTP origin for display. Bracket IPv6 literals per RFC 3986 §3.2.2.
+function formatOrigin(host: string, port: number): string {
+  const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${h}:${port}`;
+}
 
 /**
  * Prepends an ISO timestamp to every line written to stdout/stderr.
@@ -61,9 +69,10 @@ export function start(): void {
   });
 
   // ── Config ────────────────────────────────────────────────────────
-  const PORT = parseInt(process.env.PORT ?? "3001", 10);
+  const PORT = parseInt(process.env.ARGENT_PORT ?? DEFAULT_PORT, 10);
+  const HOST = process.env.ARGENT_HOST ?? DEFAULT_HOST;
   const idleMinutes = parseInt(
-    process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? String(DEFAULT_IDLE_TIMEOUT_MINUTES),
+    process.env.ARGENT_IDLE_TIMEOUT_MINUTES ?? DEFAULT_IDLE_TIMEOUT_MINUTES,
     10
   );
   const idleTimeoutMs = idleMinutes > 0 ? idleMinutes * 60_000 : 0;
@@ -103,15 +112,25 @@ export function start(): void {
   // simulators before any agent tool call (e.g. launch-app) can arrive.
   watcherReady
     .then(() => {
-      server = httpHandle.app.listen(PORT, "127.0.0.1", () => {
+      server = httpHandle.app.listen(PORT, HOST, () => {
         const addr = server!.address();
         const boundPort = typeof addr === "object" && addr ? addr.port : PORT;
-        process.stdout.write(`Tools server listening on http://127.0.0.1:${boundPort}\n`);
-        process.stderr.write(`  GET  http://127.0.0.1:${boundPort}/tools\n`);
-        process.stderr.write(`  POST http://127.0.0.1:${boundPort}/tools/:name\n`);
+        const origin = formatOrigin(HOST, boundPort);
+        process.stdout.write(`Tools server listening on ${origin}\n`);
+        process.stderr.write(`  GET  ${origin}/tools\n`);
+        process.stderr.write(`  POST ${origin}/tools/:name\n`);
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
         }
+      });
+      // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
+      // clean exit instead of routing through uncaughtException → crashShutdown.
+      server.on("error", (err: NodeJS.ErrnoException) => {
+        const code = err.code ? `${err.code}: ` : "";
+        process.stderr.write(
+          `[tool-server] Failed to bind ${HOST}:${PORT} — ${code}${err.message}\n`
+        );
+        process.exit(1);
       });
     })
     .catch((err) => {
