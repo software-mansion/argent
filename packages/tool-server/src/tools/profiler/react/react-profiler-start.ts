@@ -71,34 +71,27 @@ type BootstrapResult = {
 };
 
 /**
- * Translate a bootstrap failure into a single actionable error message.
- * The original "wait for the app to render" message conflated three distinct
- * failure modes — see BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT for the reason list.
+ * Translate a bootstrap failure into an agent-facing error message.
+ *
+ * Each message describes what went wrong, a plausible cause, and what the
+ * agent should ask the user / do next — in one short sentence per part, with
+ * no internal identifiers or jargon.
  */
 function bootstrapFailureMessage(bootstrap: BootstrapResult): string {
-  const counts =
-    bootstrap.renderersCount !== undefined
-      ? ` (renderers=${bootstrap.renderersCount}, rendererInterfaces=${bootstrap.rendererInterfacesCount ?? 0})`
-      : "";
   switch (bootstrap.reason) {
     case "no-hook":
-      return "__REACT_DEVTOOLS_GLOBAL_HOOK__ not present. React profiling requires a development build of the app.";
-    case "no-renderers":
-      return `No React renderer is registered with the DevTools hook yet${counts}. Wait for the app to render its first commit and retry.`;
-    case "no-metro-modules":
-      return `React DevTools backend is not attached and could not be auto-started: Metro module registry (__r.getModules) is unavailable${counts}. As a fallback, run \`npx react-devtools\` and reload the JS bundle, then retry.`;
     case "no-rdt-module":
-      return `React DevTools backend is not attached and could not be auto-started: react-devtools-core is not in the Metro bundle${counts}. This is expected in production builds — profiling requires a development build. If this is a dev build, run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+      return "React DevTools is not available in this app. This usually means the app is a production build. Ask the user to run a development build of the app, then retry.";
+    case "no-renderers":
+      return "React has not rendered yet, so there is nothing to profile. Ask the user to wait until the app shows React content (or navigate to a screen with React content), then retry.";
+    case "no-metro-modules":
+      return "Could not attach the React DevTools backend: the JS runtime does not expose a Metro module registry. This runtime is not a standard Metro-bundled React Native app and the React profiler cannot proceed. Inform the user that React profiling is only supported on standard Metro / React Native bundles.";
     case "unsupported-rdt-version":
-      return `React DevTools backend is not attached and could not be auto-started: react-devtools-core <5.1 detected (no connectWithCustomMessagingProtocol export). This is React Native <0.74. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
-    case "metro-scan-error":
-      return `React DevTools backend bootstrap failed scanning Metro modules${counts}: ${bootstrap.message ?? "unknown error"}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
-    case "bootstrap-threw":
-      return `React DevTools backend bootstrap threw${counts}: ${bootstrap.message ?? "unknown error"}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
-    case "bootstrap-no-effect":
-      return `React DevTools backend bootstrap reported no error but rendererInterfaces remained empty${counts}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
-    default:
-      return `React DevTools backend bootstrap failed (${bootstrap.reason})${counts}. Run \`npx react-devtools\` and reload the JS bundle, then retry.`;
+      return "This app is running React Native older than 0.74, which the React profiler does not support. Ask the user to upgrade React Native to 0.74 or newer to use this tool.";
+    default: {
+      const detail = bootstrap.message ? ` (runtime error: ${bootstrap.message})` : "";
+      return `Could not attach the React DevTools backend${detail}. Ask the user to fully reload the JS bundle and retry. If the error persists, the runtime may not be supported by the React profiler.`;
+    }
   }
 }
 
@@ -188,7 +181,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
 
       if (!state.hookExists) {
         throw new Error(
-          "__REACT_DEVTOOLS_GLOBAL_HOOK__ not present. React profiling requires a development build of the app."
+          "React DevTools is not available in this app. This usually means the app is a production build. Ask the user to run a development build of the app, then retry."
         );
       }
 
@@ -205,7 +198,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           | undefined;
         if (!bootstrapJson) {
           throw new Error(
-            "Failed to bootstrap React DevTools backend (no value returned from runtime)."
+            "Failed to attach React DevTools backend (no value returned from runtime)."
           );
         }
         const bootstrap = JSON.parse(bootstrapJson) as BootstrapResult;
@@ -224,7 +217,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
         stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
         if (!stateJson) {
           throw new Error(
-            "Failed to re-read React profiler state after bootstrap (no value returned)."
+            "Failed to re-read React profiler state after attach (no value returned)."
           );
         }
         state = JSON.parse(stateJson) as ReadStateResult;
@@ -235,7 +228,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
           !state.rendererInterfaceFound
         ) {
           throw new Error(
-            `React DevTools backend bootstrap reported success (${bootstrap.reason}) but rendererInterfaces was empty on re-read. Run \`npx react-devtools\` and reload the JS bundle, then retry.`
+            "Attached the React DevTools backend but no React renderer registered itself afterwards. Ask the user to fully reload the JS bundle and retry."
           );
         }
       }
@@ -257,7 +250,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
             how_to_reclaim:
-              'A profiling session is already active. Stop and ask the user whether you should take over the session. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field. If the sessions is marked as "stale", takeover is safe and may be initiated without prompting the user. Inform about possible cause of already running or stale session. When informing the user, warn about caveats of continuing profiling and taking over the old session.',
+              "Another profiling session is already active — see the `owner` field. Ask the user before taking over and explain that the prior session's data will be discarded; to take over, call react-profiler-start again with { force: true }. If `stale` is true, the prior owner is likely gone and you may take over without prompting the user.",
           };
         }
 
