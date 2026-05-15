@@ -4,17 +4,26 @@ set -euo pipefail
 # Downloads signed native binaries (dylibs + ax-service) from argent-private-releases.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
-#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
+#   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to the
+#                latest release published in argent-private-releases.
 #
 # Requires:
 #   - gh CLI (no authentication needed — the repo is public)
 
 REPO="software-mansion-labs/argent-private-releases"
 
-TAG="${1:-argent-main}"
+TAG="${1:-}"
 
-# Verify the release exists before attempting downloads.
-if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
+if [[ -z "${TAG}" ]]; then
+  echo "Resolving latest release from ${REPO}..."
+  TAG="$(gh release view --repo "${REPO}" --json tagName --jq .tagName 2>/dev/null || true)"
+  if [[ -z "${TAG}" ]]; then
+    echo "Error: could not resolve the latest release from ${REPO}." >&2
+    echo "Make sure the repo has at least one published (non-draft) release." >&2
+    exit 1
+  fi
+  echo "Latest release: ${TAG}"
+elif ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
   echo "Error: release '${TAG}' not found in ${REPO}." >&2
   echo "Build and publish the native binaries for this version first, then retry." >&2
   exit 1

@@ -25,19 +25,13 @@ jobs:
           registry-url: "https://registry.npmjs.org"
           scope: "@swmansion"
 
-      - name: Resolve native binaries tag
-        id: binaries_tag
-        run: |
-          REF="${{ inputs.ref }}"
-          echo "tag=argent-${REF//\//-}" >> $GITHUB_OUTPUT
-
       - name: Download signed simulator-server binary
         run: bash scripts/download-simulator-server.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download signed native binaries (dylibs + ax-service)
-        run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        run: bash scripts/download-native-binaries.sh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
