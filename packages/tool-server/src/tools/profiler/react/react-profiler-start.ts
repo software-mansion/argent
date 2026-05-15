@@ -10,6 +10,7 @@ import { JS_RUNTIME_DEBUGGER_NAMESPACE } from "../../../blueprints/js-runtime-de
 import {
   REACT_NATIVE_PROFILER_SETUP_SCRIPT,
   READ_STATE_SCRIPT,
+  BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT,
   buildStartScript,
   STOP_FOR_TAKEOVER_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
@@ -18,6 +19,10 @@ import {
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
+import {
+  bootstrapFailureMessage,
+  type BootstrapResult,
+} from "../../../utils/react-profiler/devtools-bootstrap";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -129,21 +134,64 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
       // Snapshot backend state so we can decide whether to start, take over, or refuse.
-      const stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+      let stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
       if (!stateJson) {
         throw new Error("Failed to read React profiler state from runtime (no value returned).");
       }
-      const state = JSON.parse(stateJson) as ReadStateResult;
+      let state = JSON.parse(stateJson) as ReadStateResult;
 
       if (!state.hookExists) {
         throw new Error(
-          "__REACT_DEVTOOLS_GLOBAL_HOOK__ not present. React profiling requires a development build of the app."
+          "React DevTools is not available in this app. This usually means the app is a production build. Ask the user to run a development build of the app, then retry."
         );
       }
+
+      // If the hook is present but no rendererInterface is registered, the
+      // React DevTools backend hasn't called `attach()` yet — typically because
+      // no external DevTools client (Fusebox React tab, `npx react-devtools`)
+      // is connected in a bridgeless RN dev build. Try to bootstrap it
+      // ourselves via react-devtools-core; fall back to an actionable error
+      // identifying the specific failure mode (production build, rdt-core
+      // version too old, etc.).
       if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
-        throw new Error(
-          "No React renderer interface attached yet. Wait for the app to render its first commit and retry."
-        );
+        const bootstrapJson = (await cdp.evaluate(BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT)) as
+          | string
+          | undefined;
+        if (!bootstrapJson) {
+          throw new Error(
+            "Failed to attach React DevTools backend (no value returned from runtime)."
+          );
+        }
+        const bootstrap = JSON.parse(bootstrapJson) as BootstrapResult;
+
+        if (!bootstrap.ok) {
+          throw new Error(bootstrapFailureMessage(bootstrap));
+        }
+
+        // Re-run the setup script: it walks `hook.rendererInterfaces` and
+        // installs the `__argent_startWrapped__` wrappers. The previous setup
+        // call (before bootstrap) saw an empty map and did nothing, so the
+        // freshly-attached interfaces are unwrapped — `buildStartScript`'s
+        // post-start check on `__argent_isProfiling__` would fail without this.
+        await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+
+        stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+        if (!stateJson) {
+          throw new Error(
+            "Failed to re-read React profiler state after attach (no value returned)."
+          );
+        }
+        state = JSON.parse(stateJson) as ReadStateResult;
+
+        if (
+          !state.hookExists ||
+          !("rendererInterfaceFound" in state) ||
+          !state.rendererInterfaceFound
+        ) {
+          throw new Error(
+            "Attached the React DevTools backend but no React renderer registered itself afterwards. Ask the user to fully reload the JS bundle and retry."
+          );
+        }
       }
 
       // If a session is already active, classify it and decide.
@@ -163,7 +211,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
             age_seconds: staleness.ageSeconds,
             stale: staleness.stale,
             how_to_reclaim:
-              'A profiling session is already active. Stop and ask the user whether you should take over the session. To take over and discard the current session, call react-profiler-start again with { force: true }. Details about the current owner are in the `owner` field. If the sessions is marked as "stale", takeover is safe and may be initiated without prompting the user. Inform about possible cause of already running or stale session. When informing the user, warn about caveats of continuing profiling and taking over the old session.',
+              "Another profiling session is already active — see the `owner` field. Ask the user before taking over and explain that the prior session's data will be discarded; to take over, call react-profiler-start again with { force: true }. If `stale` is true, the prior owner is likely gone and you may take over without prompting the user.",
           };
         }
 
