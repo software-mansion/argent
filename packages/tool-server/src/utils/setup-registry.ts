@@ -35,6 +35,7 @@ import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro
 import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
 import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
 import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
+import { dismissLogboxTool } from "../tools/debugger/dismiss-logbox";
 import { networkLogsTool } from "../tools/network/network-logs";
 import { networkRequestTool } from "../tools/network/network-request";
 import { createDescribeTool } from "../tools/describe";
@@ -102,6 +103,7 @@ export function createRegistry(): Registry {
   registry.registerTool(debuggerComponentTreeTool);
   registry.registerTool(debuggerInspectElementTool);
   registry.registerTool(debuggerLogRegistryTool);
+  registry.registerTool(dismissLogboxTool);
   registry.registerTool(networkLogsTool);
   registry.registerTool(networkRequestTool);
   registry.registerTool(createDescribeTool(registry));

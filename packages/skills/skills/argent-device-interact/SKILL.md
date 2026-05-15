@@ -108,7 +108,7 @@ Read the exact error and choose the action that matches it:
 
 Coordinates: `0.0` = left/top, `1.0` = right/bottom.
 
-Before tapping near the bottom of the screen in React Native apps, check that "Open Debugger to View Warnings" banners are not visible — tapping them breaks the debugger connection. Close them with the X icon if present.
+When working with a React Native app, call the `dismiss-logbox` tool once near the start of your interaction session — this hides the bottom-screen LogBox banner (yellow warnings + red non-fatal errors) and keeps it hidden across JS reloads, without affecting the fullscreen redbox for fatal errors. **Never tap the banner or its X icon** — accidental hits open the fullscreen debugger overlay. If `describe` still shows an `AXGroup` near the bottom of the screen with a label that starts with `"! "`, call `dismiss-logbox` again (it's idempotent).
 
 ### gesture-swipe — Straight-line gesture
 
