@@ -18,9 +18,13 @@ describe("formatDescribeTree", () => {
       role: "AXGroup",
       frame: { x: 0, y: 0, width: 1, height: 1 },
       children: [
-        leaf({ role: "AXButton", label: "C", frame: { x: 0.30, y: 0.50, width: 0.1, height: 0.05 } }),
-        leaf({ role: "AXButton", label: "A", frame: { x: 0.05, y: 0.05, width: 0.1, height: 0.05 } }),
-        leaf({ role: "AXButton", label: "B", frame: { x: 0.20, y: 0.50, width: 0.1, height: 0.05 } }),
+        leaf({ role: "AXButton", label: "C", frame: { x: 0.3, y: 0.5, width: 0.1, height: 0.05 } }),
+        leaf({
+          role: "AXButton",
+          label: "A",
+          frame: { x: 0.05, y: 0.05, width: 0.1, height: 0.05 },
+        }),
+        leaf({ role: "AXButton", label: "B", frame: { x: 0.2, y: 0.5, width: 0.1, height: 0.05 } }),
       ],
     };
     const out = formatDescribeTree(root, { source: "ax-service" });

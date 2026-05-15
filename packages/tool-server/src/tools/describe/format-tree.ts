@@ -62,13 +62,13 @@ function formatFlags(n: DescribeNode): string {
 function hasContent(n: DescribeNode): boolean {
   return Boolean(
     n.label ||
-      n.value ||
-      n.identifier ||
-      n.clickable ||
-      n.longClickable ||
-      n.scrollable ||
-      n.checkable ||
-      (typeof n.scrollHidden === "number" && n.scrollHidden > 0)
+    n.value ||
+    n.identifier ||
+    n.clickable ||
+    n.longClickable ||
+    n.scrollable ||
+    n.checkable ||
+    (typeof n.scrollHidden === "number" && n.scrollHidden > 0)
   );
 }
 
