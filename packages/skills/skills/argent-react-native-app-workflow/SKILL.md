@@ -43,17 +43,14 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 In a **separate** terminal (Metro keeps running in the first):
 
-**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`). Only fall back to the default if no custom scripts are defined:
-
-```bash
-npx react-native run-ios       # iOS
-npx react-native run-android   # Android
-```
+**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`). Only fall back to the defaults below if no custom scripts are defined.
 
 **Always pass the target device explicitly** — derive it from `list-devices` (see `<device_selection_rule>`):
 
-- iOS: `npx react-native run-ios --simulator="<name>"` (or `--udid <UDID>`).
-- Android: `npx react-native run-android --deviceId=<adb-serial>`.
+```bash
+npx react-native run-ios --simulator="<name>"        # iOS (or --udid <UDID>)
+npx react-native run-android --deviceId=<adb-serial> # Android
+```
 
 **Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops.
 
