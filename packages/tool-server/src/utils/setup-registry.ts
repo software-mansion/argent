@@ -69,6 +69,8 @@ import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-dat
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { proposeVariantTool } from "../tools/variants/propose-variant";
+import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -150,6 +152,10 @@ export function createRegistry(): Registry {
   // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
+
+  // Variant proposal tools (non-blocking propose + single blocking await)
+  registry.registerTool(proposeVariantTool);
+  registry.registerTool(awaitUserSelectionTool);
 
   return registry;
 }

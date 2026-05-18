@@ -169,6 +169,295 @@
         border-radius: 3px;
         font-size: 12px;
       }
+
+      /* ── Variant proposals ─────────────────────────────────────────── */
+      .main {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+        position: relative;
+      }
+      .sidebar {
+        width: 340px;
+        flex-shrink: 0;
+        border-left: 1px solid var(--border);
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .sidebar.hidden {
+        display: none;
+      }
+      .sidebar-head {
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .sidebar-head h2 {
+        font-size: 13px;
+        margin: 0;
+        font-weight: 600;
+      }
+      .sidebar-head .round-badge {
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .sidebar-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 10px;
+      }
+      .sidebar-empty {
+        color: var(--muted);
+        text-align: center;
+        padding: 28px 16px;
+        line-height: 1.5;
+      }
+      .vp-el {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin-bottom: 10px;
+        background: var(--bg);
+        overflow: hidden;
+      }
+      .vp-el.offscreen {
+        opacity: 0.62;
+      }
+      .vp-el-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      .vp-el-head .name {
+        font-weight: 600;
+      }
+      .vp-el-head .where {
+        margin-left: auto;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+      .vp-el-head .where.on {
+        color: var(--ok);
+      }
+      .vp-chips {
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .vp-chip {
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 7px 9px;
+        background: var(--surface);
+        cursor: grab;
+        user-select: none;
+        transition:
+          border-color 0.12s,
+          background 0.12s;
+      }
+      .vp-chip:hover {
+        border-color: var(--accent);
+      }
+      .vp-chip:active {
+        cursor: grabbing;
+      }
+      .vp-chip.dragging {
+        opacity: 0.5;
+      }
+      .vp-chip.staged {
+        border-color: var(--ok);
+        background: rgba(92, 220, 139, 0.12);
+      }
+      .vp-chip .vp-chip-top {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .vp-chip .vp-chip-name {
+        font-weight: 600;
+      }
+      .vp-chip .vp-chip-tag {
+        margin-left: auto;
+        font-size: 10px;
+        color: var(--ok);
+      }
+      .vp-chip .vp-chip-summary {
+        color: var(--muted);
+        margin-top: 3px;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .vp-chip pre {
+        margin: 6px 0 0;
+        padding: 6px 8px;
+        background: #000;
+        border-radius: 4px;
+        font-size: 11px;
+        max-height: 120px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      .vp-el-comment {
+        width: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-top: 0;
+        padding: 6px 9px;
+        font: inherit;
+        font-size: 12px;
+        resize: vertical;
+        min-height: 30px;
+      }
+      .sidebar-foot {
+        padding: 10px 12px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .sidebar-foot textarea {
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 6px 9px;
+        font: inherit;
+        font-size: 12px;
+        resize: vertical;
+        min-height: 34px;
+      }
+      .complete-btn {
+        background: var(--accent);
+        color: #06122b;
+        border: 0;
+        border-radius: 6px;
+        padding: 9px 12px;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .complete-btn:disabled {
+        background: var(--border);
+        color: var(--muted);
+        cursor: not-allowed;
+      }
+      .complete-note {
+        color: var(--muted);
+        font-size: 11px;
+        text-align: center;
+      }
+      .complete-note.ok {
+        color: var(--ok);
+      }
+      /* Floating, draggable variant bubble pinned over an on-screen element. */
+      .bubble {
+        position: absolute;
+        transform: translate(-50%, calc(-100% - 14px));
+        min-width: 150px;
+        max-width: 240px;
+        background: var(--surface);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        box-shadow: 0 8px 28px #000a;
+        z-index: 6;
+        pointer-events: auto;
+        font-size: 12px;
+      }
+      .bubble::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        bottom: -7px;
+        width: 12px;
+        height: 12px;
+        background: var(--surface);
+        border-right: 1px solid var(--accent);
+        border-bottom: 1px solid var(--accent);
+        transform: translateX(-50%) rotate(45deg);
+      }
+      .bubble.dropping {
+        border-color: var(--ok);
+        box-shadow: 0 0 0 2px var(--ok);
+      }
+      .bubble-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 9px;
+        border-bottom: 1px solid var(--border);
+        cursor: move;
+      }
+      .bubble-head .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+      }
+      .bubble-head .name {
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .bubble-head .count {
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .bubble-body {
+        padding: 7px 9px;
+      }
+      .bubble-staged {
+        color: var(--ok);
+      }
+      .bubble-hint {
+        color: var(--muted);
+      }
+      /* Corner notification stack for off-screen / unmatched proposals. */
+      .corner {
+        position: absolute;
+        left: 14px;
+        bottom: 14px;
+        z-index: 7;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-width: 260px;
+      }
+      .corner-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 3px solid #d8a657;
+        border-radius: 6px;
+        padding: 7px 10px;
+        font-size: 12px;
+        box-shadow: 0 6px 20px #0007;
+      }
+      .corner-card.dropping {
+        border-color: var(--ok);
+        border-left-color: var(--ok);
+      }
+      .corner-card .ttl {
+        font-weight: 600;
+      }
+      .corner-card .sub {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 2px;
+      }
+      .corner-card .sub.staged {
+        color: var(--ok);
+      }
     </style>
   </head>
   <body>
@@ -183,8 +472,33 @@
         <span id="debug" class="debug"></span>
         <span id="status" class="status">idle</span>
       </div>
-      <div class="viewport" id="viewport">
-        <div class="empty">Select a booted simulator to start streaming.</div>
+      <div class="main">
+        <div class="viewport" id="viewport">
+          <div class="empty">Select a booted simulator to start streaming.</div>
+        </div>
+        <div class="corner" id="corner"></div>
+        <aside class="sidebar hidden" id="sidebar">
+          <div class="sidebar-head">
+            <h2>Design variants</h2>
+            <span class="round-badge" id="round-badge"></span>
+          </div>
+          <div class="sidebar-body" id="sidebar-body">
+            <div class="sidebar-empty">
+              No variants proposed yet.<br />
+              When the agent calls <code>propose_variant</code>, options appear here and as
+              floating bubbles over the matching element on the stream. Drag a variant onto its
+              element to stage it.
+            </div>
+          </div>
+          <div class="sidebar-foot">
+            <textarea
+              id="global-comment"
+              placeholder="Overall comment for the agent (optional)…"
+            ></textarea>
+            <button class="complete-btn" id="complete-btn" disabled>Complete selection</button>
+            <div class="complete-note" id="complete-note"></div>
+          </div>
+        </aside>
       </div>
     </div>
 
@@ -792,6 +1106,416 @@
       window.addEventListener("blur", releaseAllInput);
 
       window.addEventListener("beforeunload", teardownStream);
+
+      // ── Variant proposals ───────────────────────────────────────────────
+      // Polls /preview/variants for the agent's staged design variants and
+      // /preview/describe for the live element tree, then renders each element
+      // as a floating draggable bubble pinned over its on-screen frame (or a
+      // corner card when it is off-screen). The user drags a variant from the
+      // sidebar onto its element to stage a pick; "Complete selection" POSTs
+      // them back, unblocking the agent's await_user_selection call.
+      const sidebar = document.getElementById("sidebar");
+      const sidebarBody = document.getElementById("sidebar-body");
+      const roundBadge = document.getElementById("round-badge");
+      const cornerEl = document.getElementById("corner");
+      const completeBtn = document.getElementById("complete-btn");
+      const completeNote = document.getElementById("complete-note");
+      const globalCommentEl = document.getElementById("global-comment");
+
+      const vp = {
+        round: -1,
+        proposals: [],
+        staged: {}, // elementId -> variantId
+        comments: {}, // elementId -> string
+        tree: null,
+        treeAt: 0,
+        bubbles: new Map(), // elementId -> { el, manual, mx, my }
+        submitting: false,
+        justCompletedRound: -1,
+      };
+
+      function vpMatchNode(node, match) {
+        const out = [];
+        const needle = (match.value || "").trim().toLowerCase();
+        const walk = (n) => {
+          if (!n || typeof n !== "object") return;
+          const label = (n.label || "").toLowerCase();
+          const ident = (n.identifier || "").toLowerCase();
+          const value = (n.value || "").toLowerCase();
+          const role = (n.role || "").toLowerCase();
+          let hit = false;
+          if (match.by === "label") hit = label === needle;
+          else if (match.by === "identifier") hit = ident === needle;
+          else if (match.by === "role") hit = role === needle;
+          else hit = label.includes(needle) || ident.includes(needle) || value.includes(needle);
+          if (hit && n.frame) out.push(n);
+          if (Array.isArray(n.children)) n.children.forEach(walk);
+        };
+        walk(node);
+        if (out.length === 0) return null;
+        // Most specific = smallest on-screen area (e.g. the button, not its
+        // container). Ignore degenerate / fully off-screen frames.
+        let best = null;
+        let bestArea = Infinity;
+        for (const n of out) {
+          const f = n.frame;
+          if (!f || f.width <= 0 || f.height <= 0) continue;
+          const cx = f.x + f.width / 2;
+          const cy = f.y + f.height / 2;
+          if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
+          const area = f.width * f.height;
+          if (area < bestArea) {
+            bestArea = area;
+            best = n;
+          }
+        }
+        return best;
+      }
+
+      function vpBubbleXY(frame) {
+        if (!img || !stage) return null;
+        const imgRect = img.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
+        if (!imgRect.width || !imgRect.height) return null;
+        const cx = frame.x + frame.width / 2;
+        const cy = frame.y + frame.height / 2;
+        return {
+          x: imgRect.left - stageRect.left + cx * imgRect.width,
+          y: imgRect.top - stageRect.top + cy * imgRect.height,
+        };
+      }
+
+      async function vpPoll() {
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/variants`, { cache: "no-store" });
+          if (res.ok) {
+            const snap = await res.json();
+            if (snap.round !== vp.round) {
+              // New round → drop any stale staging from the previous one.
+              vp.round = snap.round;
+              vp.staged = {};
+              vp.comments = {};
+              if (globalCommentEl) globalCommentEl.value = "";
+              if (vp.justCompletedRound !== snap.round) setCompleteNote("");
+            }
+            vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
+          }
+        } catch {
+          /* tool-server momentarily unreachable — keep last state */
+        }
+
+        if (currentUdid && vp.proposals.length > 0) {
+          try {
+            const dres = await fetch(
+              `${TOOL_SERVER}/preview/describe/${encodeURIComponent(currentUdid)}`,
+              { cache: "no-store" }
+            );
+            if (dres.ok) {
+              const d = await dres.json();
+              if (d && d.tree) {
+                vp.tree = d.tree;
+                vp.treeAt = Date.now();
+              }
+            }
+          } catch {
+            /* describe is best-effort; stale tree is fine for ~6s */
+          }
+        }
+        if (Date.now() - vp.treeAt > 6000) vp.tree = null;
+
+        vpRender();
+      }
+
+      function vpStage(elementId, variantId) {
+        vp.staged[elementId] = variantId;
+        setCompleteNote("");
+        vpRender();
+      }
+
+      function setCompleteNote(text, ok) {
+        completeNote.textContent = text;
+        completeNote.className = "complete-note" + (ok ? " ok" : "");
+      }
+
+      function vpChipDragData(ev, elementId, variantId) {
+        ev.dataTransfer.setData(
+          "application/json",
+          JSON.stringify({ elementId, variantId })
+        );
+        ev.dataTransfer.effectAllowed = "copy";
+      }
+
+      function vpReadDrag(ev) {
+        try {
+          return JSON.parse(ev.dataTransfer.getData("application/json"));
+        } catch {
+          return null;
+        }
+      }
+
+      function vpRenderSidebar() {
+        const has = vp.proposals.length > 0;
+        sidebar.classList.toggle("hidden", !has);
+        roundBadge.textContent = has ? `round ${vp.round}` : "";
+        completeBtn.disabled = !has || vp.submitting;
+        if (!has) {
+          sidebarBody.innerHTML =
+            '<div class="sidebar-empty">No variants proposed yet.<br/>When the agent calls ' +
+            "<code>propose_variant</code>, options appear here and as floating bubbles over the " +
+            "matching element on the stream. Drag a variant onto its element to stage it.</div>";
+          return;
+        }
+        sidebarBody.innerHTML = "";
+        for (const p of vp.proposals) {
+          const onScreen = !!p._node;
+          const wrap = document.createElement("div");
+          wrap.className = "vp-el" + (onScreen ? "" : " offscreen");
+
+          const head = document.createElement("div");
+          head.className = "vp-el-head";
+          const nm = document.createElement("span");
+          nm.className = "name";
+          nm.textContent = p.element;
+          const where = document.createElement("span");
+          where.className = "where" + (onScreen ? " on" : "");
+          where.textContent = onScreen ? "on screen" : "off screen";
+          head.appendChild(nm);
+          head.appendChild(where);
+          wrap.appendChild(head);
+
+          const chips = document.createElement("div");
+          chips.className = "vp-chips";
+          for (const v of p.variants) {
+            const staged = vp.staged[p.id] === v.id;
+            const chip = document.createElement("div");
+            chip.className = "vp-chip" + (staged ? " staged" : "");
+            chip.draggable = true;
+            chip.addEventListener("dragstart", (ev) => {
+              chip.classList.add("dragging");
+              vpChipDragData(ev, p.id, v.id);
+            });
+            chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+            // Click also stages — convenience + works without a live stream.
+            chip.addEventListener("click", () => vpStage(p.id, v.id));
+
+            const top = document.createElement("div");
+            top.className = "vp-chip-top";
+            const cn = document.createElement("span");
+            cn.className = "vp-chip-name";
+            cn.textContent = v.name;
+            top.appendChild(cn);
+            if (staged) {
+              const tag = document.createElement("span");
+              tag.className = "vp-chip-tag";
+              tag.textContent = "✓ staged";
+              top.appendChild(tag);
+            }
+            chip.appendChild(top);
+
+            const sm = document.createElement("div");
+            sm.className = "vp-chip-summary";
+            sm.textContent = v.summary || "";
+            chip.appendChild(sm);
+
+            if (v.code) {
+              const pre = document.createElement("pre");
+              pre.textContent = v.code;
+              chip.appendChild(pre);
+            }
+            if (v.filePath) {
+              const fp = document.createElement("div");
+              fp.className = "vp-chip-summary";
+              fp.textContent = "↳ " + v.filePath;
+              chip.appendChild(fp);
+            }
+            chips.appendChild(chip);
+          }
+          wrap.appendChild(chips);
+
+          const cmt = document.createElement("textarea");
+          cmt.className = "vp-el-comment";
+          cmt.placeholder = `Comment on "${p.element}" (optional)…`;
+          cmt.value = vp.comments[p.id] || "";
+          cmt.addEventListener("input", () => {
+            vp.comments[p.id] = cmt.value;
+          });
+          wrap.appendChild(cmt);
+
+          sidebarBody.appendChild(wrap);
+        }
+      }
+
+      function vpMakeDropTarget(el, elementId) {
+        el.addEventListener("dragover", (ev) => {
+          ev.preventDefault();
+          ev.dataTransfer.dropEffect = "copy";
+          el.classList.add("dropping");
+        });
+        el.addEventListener("dragleave", () => el.classList.remove("dropping"));
+        el.addEventListener("drop", (ev) => {
+          ev.preventDefault();
+          el.classList.remove("dropping");
+          const data = vpReadDrag(ev);
+          if (!data) return;
+          // Dropping a chip anywhere on the stream stages that chip's own
+          // element/variant (the chip unambiguously identifies both); a
+          // specific bubble/corner card narrows it to that element.
+          const target = elementId || data.elementId;
+          if (target !== data.elementId) return;
+          vpStage(data.elementId, data.variantId);
+        });
+      }
+
+      function vpEnsureBubble(p) {
+        let rec = vp.bubbles.get(p.id);
+        if (!rec) {
+          const el = document.createElement("div");
+          el.className = "bubble";
+          rec = { el, manual: false, mx: 0, my: 0 };
+          vp.bubbles.set(p.id, rec);
+          vpMakeDropTarget(el, p.id);
+          // Drag the bubble by its header to move it off the element it covers.
+          el.addEventListener("pointerdown", (ev) => {
+            if (!ev.target.closest(".bubble-head")) return;
+            ev.stopPropagation();
+            ev.preventDefault();
+            const sr = stage.getBoundingClientRect();
+            const move = (m) => {
+              rec.manual = true;
+              rec.mx = m.clientX - sr.left;
+              rec.my = m.clientY - sr.top;
+              el.style.left = rec.mx + "px";
+              el.style.top = rec.my + "px";
+            };
+            const up = () => {
+              window.removeEventListener("pointermove", move);
+              window.removeEventListener("pointerup", up);
+            };
+            window.addEventListener("pointermove", move);
+            window.addEventListener("pointerup", up);
+          });
+        }
+        return rec;
+      }
+
+      function vpRenderBubbles() {
+        const live = new Set();
+        for (const p of vp.proposals) {
+          if (!p._node || !stage || !img) continue;
+          const pos = vpBubbleXY(p._node.frame);
+          if (!pos) continue;
+          live.add(p.id);
+          const rec = vpEnsureBubble(p);
+          if (rec.el.parentElement !== stage) stage.appendChild(rec.el);
+          if (!rec.manual) {
+            rec.el.style.left = pos.x + "px";
+            rec.el.style.top = pos.y + "px";
+          }
+          const stagedV = vp.staged[p.id]
+            ? p.variants.find((v) => v.id === vp.staged[p.id])
+            : null;
+          rec.el.innerHTML =
+            '<div class="bubble-head"><span class="dot"></span>' +
+            `<span class="name">${escapeHtml(p.element)}</span>` +
+            `<span class="count">${p.variants.length} var${p.variants.length === 1 ? "" : "s"}</span></div>` +
+            '<div class="bubble-body">' +
+            (stagedV
+              ? `<span class="bubble-staged">✓ ${escapeHtml(stagedV.name)}</span>`
+              : '<span class="bubble-hint">drag a variant here</span>') +
+            "</div>";
+        }
+        for (const [id, rec] of vp.bubbles) {
+          if (!live.has(id)) {
+            rec.el.remove();
+            vp.bubbles.delete(id);
+          }
+        }
+      }
+
+      function vpRenderCorner() {
+        cornerEl.innerHTML = "";
+        const off = vp.proposals.filter((p) => !p._node);
+        for (const p of off) {
+          const card = document.createElement("div");
+          card.className = "corner-card";
+          const stagedV = vp.staged[p.id]
+            ? p.variants.find((v) => v.id === vp.staged[p.id])
+            : null;
+          card.innerHTML =
+            `<div class="ttl">⚑ ${escapeHtml(p.element)}</div>` +
+            `<div class="sub${stagedV ? " staged" : ""}">` +
+            (stagedV
+              ? `staged: ${escapeHtml(stagedV.name)}`
+              : `${p.variants.length} variant${p.variants.length === 1 ? "" : "s"} · off screen — drop here or scroll it into view`) +
+            "</div>";
+          vpMakeDropTarget(card, p.id);
+          cornerEl.appendChild(card);
+        }
+      }
+
+      function vpRender() {
+        // Resolve each proposal against the live tree (best-effort).
+        for (const p of vp.proposals) {
+          p._node = vp.tree ? vpMatchNode(vp.tree, p.match) : null;
+        }
+        vpRenderSidebar();
+        vpRenderBubbles();
+        vpRenderCorner();
+      }
+
+      async function vpComplete() {
+        if (vp.submitting || vp.proposals.length === 0) return;
+        vp.submitting = true;
+        completeBtn.disabled = true;
+        setCompleteNote("Submitting…");
+        const selections = vp.proposals.map((p) => ({
+          elementId: p.id,
+          variantId: vp.staged[p.id] || null,
+          comment: vp.comments[p.id] || undefined,
+        }));
+        try {
+          const res = await fetch(`${TOOL_SERVER}/preview/variants/selection`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              selections,
+              globalComment: globalCommentEl ? globalCommentEl.value : "",
+            }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+          const picked = selections.filter((s) => s.variantId).length;
+          vp.justCompletedRound = vp.round;
+          setCompleteNote(
+            `Sent ${picked}/${selections.length} pick(s) to the agent.`,
+            true
+          );
+        } catch (err) {
+          setCompleteNote(`Failed: ${err.message || err}`);
+        } finally {
+          vp.submitting = false;
+          completeBtn.disabled = vp.proposals.length === 0;
+        }
+      }
+
+      completeBtn.addEventListener("click", vpComplete);
+      // The stream itself is a drop target so a chip dropped anywhere on the
+      // device stages that chip's own element (matches "drag onto the stream").
+      const viewportEl = document.getElementById("viewport");
+      viewportEl.addEventListener("dragover", (ev) => {
+        if (vp.proposals.length) ev.preventDefault();
+      });
+      viewportEl.addEventListener("drop", (ev) => {
+        ev.preventDefault();
+        const data = vpReadDrag(ev);
+        if (data) vpStage(data.elementId, data.variantId);
+      });
+      window.addEventListener("resize", () => {
+        for (const rec of vp.bubbles.values()) rec.manual = false;
+        vpRender();
+      });
+      setInterval(vpPoll, 1500);
+      vpPoll();
 
       refreshSimulators();
     </script>
