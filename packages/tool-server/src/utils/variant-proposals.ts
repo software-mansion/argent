@@ -103,9 +103,14 @@ export interface StoreSnapshot {
 type StoreEvents = {
   /** Emitted whenever proposals change (UI may live-refresh). */
   changed: () => void;
-  /** Emitted when the user submits a selection for `round`. */
-  completed: (round: number) => void;
 };
+
+/** A parked `await_user_selection` call, bound to the round it is waiting on. */
+interface Waiter {
+  round: number;
+  settled: boolean;
+  settle: (outcome: AwaitOutcome) => void;
+}
 
 function slug(s: string): string {
   return s
@@ -115,7 +120,7 @@ function slug(s: string): string {
     .slice(0, 40);
 }
 
-class VariantProposalStore {
+export class VariantProposalStore {
   readonly events = new TypedEventEmitter<StoreEvents>();
 
   private round = 1;
@@ -125,9 +130,29 @@ class VariantProposalStore {
   private globalComment = "";
   private submitted: SubmittedSelection[] = [];
   private variantSeq = 0;
+  /** Parked await_user_selection calls. */
+  private waitersList: Waiter[] = [];
+  /** Frozen result of the current round once the user submits. */
+  private lastOutcome: Extract<AwaitOutcome, { status: "completed" }> | null = null;
 
   /** Begin a fresh round, discarding the previous one's proposals/selections. */
   reset(): void {
+    // Any await still parked on the round being discarded must not hang
+    // forever — resolve it so the agent gets a definitive answer and can
+    // re-propose. (Reachable when a second caller proposes/resets while an
+    // earlier round's await is parked.)
+    const superseded = this.waitersList.filter((w) => !w.settled);
+    this.waitersList = [];
+    for (const w of superseded) {
+      w.settled = true;
+      w.settle({
+        status: "no_proposals",
+        message:
+          "The selection round was superseded before the user submitted. Call " +
+          "propose_variant then await_user_selection again for the new round.",
+      });
+    }
+
     this.round += 1;
     this.proposals = [];
     this.completed = false;
@@ -135,6 +160,7 @@ class VariantProposalStore {
     this.globalComment = "";
     this.submitted = [];
     this.variantSeq = 0;
+    this.lastOutcome = null;
     this.events.emit("changed");
   }
 
@@ -205,15 +231,16 @@ class VariantProposalStore {
         ...p,
         variants: p.variants.map((v) => ({ ...v })),
       })),
-      agentWaiting: this.waiters > 0,
+      agentWaiting: this.waitersList.some((w) => !w.settled),
     };
   }
 
   /** Called by the preview UI when the human presses "Complete selection". */
-  submitSelection(input: {
-    selections: SubmittedSelection[];
-    globalComment?: string;
-  }): { ok: true; round: number; resolved: number } {
+  submitSelection(input: { selections: SubmittedSelection[]; globalComment?: string }): {
+    ok: true;
+    round: number;
+    resolved: number;
+  } {
     if (this.proposals.length === 0) {
       throw new Error("No proposals to select from.");
     }
@@ -223,9 +250,23 @@ class VariantProposalStore {
     this.globalComment = (input.globalComment ?? "").trim();
     this.completed = true;
     this.consumed = false;
+    // Freeze the outcome once so every parked waiter (and any later fast-path
+    // await) sees the exact same selections, regardless of subsequent rounds.
+    this.lastOutcome = this.buildOutcome();
+
+    // Resolve EVERY await parked on this round with the same frozen outcome —
+    // not just the first. A round whose result was delivered to a waiter is
+    // closed (consumed) so the next bare await returns no_proposals.
+    const round = this.round;
+    const toSettle = this.waitersList.filter((w) => !w.settled && w.round === round);
+    this.waitersList = this.waitersList.filter((w) => w.round !== round || w.settled);
+    if (toSettle.length > 0) this.consumed = true;
+    for (const w of toSettle) {
+      w.settled = true;
+      w.settle(this.lastOutcome);
+    }
     this.events.emit("changed");
-    this.events.emit("completed", this.round);
-    return { ok: true, round: this.round, resolved: this.submitted.length };
+    return { ok: true, round, resolved: this.submitted.length };
   }
 
   private buildOutcome(): Extract<AwaitOutcome, { status: "completed" }> {
@@ -246,6 +287,19 @@ class VariantProposalStore {
         continue;
       }
       const variant = p.variants.find((v) => v.id === picked.variantId) ?? null;
+      if (!variant) {
+        // Picked id doesn't resolve to a real variant — treat as no choice.
+        unselected.push({ element: p.element });
+        if (picked.comment) {
+          selections.push({
+            element: p.element,
+            match: p.match,
+            chosenVariant: null,
+            comment: picked.comment,
+          });
+        }
+        continue;
+      }
       selections.push({
         element: p.element,
         match: p.match,
@@ -263,15 +317,15 @@ class VariantProposalStore {
     };
   }
 
-  private waiters = 0;
-
   /**
    * Block until the user submits a selection for the current round.
    *
    * Resolves immediately if a selection is already waiting to be consumed.
    * On `timeoutMs` elapse returns a `pending` outcome (so the agent — or the
    * MCP client wrapping it — can re-await without losing the live proposals).
-   * Honors `signal`: a client disconnect rejects with an AbortError.
+   * Honors `signal`: a client disconnect rejects with an AbortError. Every
+   * await parked on a round is resolved when that round is submitted (or the
+   * round is superseded), so concurrent / re-entrant awaits never strand.
    */
   awaitSelection(opts: { signal?: AbortSignal; timeoutMs: number }): Promise<AwaitOutcome> {
     // A completed round whose result the agent already consumed is closed.
@@ -285,9 +339,11 @@ class VariantProposalStore {
       });
     }
 
+    // Submitted but no waiter was parked to receive it → hand back the frozen
+    // outcome and close the round.
     if (this.completed && !this.consumed) {
       this.consumed = true;
-      return Promise.resolve(this.buildOutcome());
+      return Promise.resolve(this.lastOutcome ?? this.buildOutcome());
     }
 
     if (this.proposals.length === 0) {
@@ -298,54 +354,61 @@ class VariantProposalStore {
       });
     }
 
-    this.waiters += 1;
-    this.events.emit("changed");
-
     return new Promise<AwaitOutcome>((resolve, reject) => {
-      const cleanup = () => {
-        this.waiters = Math.max(0, this.waiters - 1);
-        this.events.off("completed", onComplete);
-        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+      let done = false;
+      const finish = (fn: () => void) => {
+        if (done) return;
+        done = true;
         clearTimeout(timer);
+        if (opts.signal) opts.signal.removeEventListener("abort", onAbort);
+        const i = this.waitersList.indexOf(waiter);
+        if (i >= 0) this.waitersList.splice(i, 1);
         this.events.emit("changed");
+        fn();
       };
 
-      const onComplete = (round: number) => {
-        if (this.completed && !this.consumed) {
-          this.consumed = true;
-          cleanup();
-          resolve(this.buildOutcome());
-        }
+      // Bound to the round captured at park time. submitSelection() / reset()
+      // call settle(); they also remove it from waitersList first.
+      const waiter: Waiter = {
+        round: this.round,
+        settled: false,
+        settle: (outcome) => finish(() => resolve(outcome)),
       };
 
       const onAbort = () => {
-        cleanup();
-        const err = new Error("await_user_selection aborted (client disconnected)");
-        err.name = "AbortError";
-        reject(err);
+        waiter.settled = true;
+        finish(() => {
+          const err = new Error("await_user_selection aborted (client disconnected)");
+          err.name = "AbortError";
+          reject(err);
+        });
       };
 
       const timer = setTimeout(() => {
-        cleanup();
-        resolve({
-          status: "pending",
-          round: this.round,
-          message:
-            "User has not completed their selection yet. The proposals are still live in the " +
-            "preview UI — call await_user_selection again to keep waiting (this is expected; " +
-            "it is not an error).",
-          proposedElements: this.proposals.map((p) => ({
-            element: p.element,
-            variantCount: p.variants.length,
-          })),
-        });
+        waiter.settled = true;
+        finish(() =>
+          resolve({
+            status: "pending",
+            round: waiter.round,
+            message:
+              "User has not completed their selection yet. The proposals are still live in " +
+              "the preview UI — call await_user_selection again to keep waiting (this is " +
+              "expected; it is not an error).",
+            proposedElements: this.proposals.map((p) => ({
+              element: p.element,
+              variantCount: p.variants.length,
+            })),
+          })
+        );
       }, opts.timeoutMs);
+
+      this.waitersList.push(waiter);
+      this.events.emit("changed");
 
       if (opts.signal) {
         if (opts.signal.aborted) return onAbort();
         opts.signal.addEventListener("abort", onAbort, { once: true });
       }
-      this.events.on("completed", onComplete);
     });
   }
 }

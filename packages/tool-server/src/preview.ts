@@ -6,10 +6,7 @@ import type { Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
 import { listDevicesTool } from "./tools/devices/list-devices";
-import {
-  variantProposalStore,
-  type SubmittedSelection,
-} from "./utils/variant-proposals";
+import { variantProposalStore, type SubmittedSelection } from "./utils/variant-proposals";
 import type { DescribeResult } from "./tools/describe/contract";
 
 function findUiHtml(): string | null {
@@ -115,8 +112,7 @@ export function createPreviewRouter(registry: Registry): Router {
       selections.push({
         elementId: s.elementId,
         variantId: typeof s.variantId === "string" ? s.variantId : null,
-        comment:
-          typeof s.comment === "string" && s.comment.trim() ? s.comment.trim() : undefined,
+        comment: typeof s.comment === "string" && s.comment.trim() ? s.comment.trim() : undefined,
       });
     }
     try {
