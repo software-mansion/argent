@@ -205,8 +205,30 @@ describe("VariantProposalStore — timeout / abort / lifecycle", () => {
     expect(s.snapshot().agentWaiting).toBe(false);
   });
 
-  it("throws on submit with no proposals (HTTP layer maps to 400)", () => {
+  it("throws only when there are neither proposals nor comments", () => {
     const s = new VariantProposalStore();
-    expect(() => s.submitSelection({ selections: [] })).toThrow(/no proposals/i);
+    expect(() => s.submitSelection({ selections: [] })).toThrow(/nothing to submit/i);
+    expect(() =>
+      s.submitSelection({ selections: [], annotations: [{ comment: "   " } as any] })
+    ).toThrow(/nothing to submit/i);
+  });
+
+  it("delivers an annotations-only round (no proposals) via the await fast-path", async () => {
+    const s = new VariantProposalStore();
+    // No propose_variant at all — user only pinned an inspector comment.
+    const r = s.submitSelection({
+      selections: [],
+      annotations: [
+        { target: "Tab bar", match: { by: "role", value: "TabBar" }, comment: "raise contrast" },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    const out = await s.awaitSelection({ timeoutMs: 1000 });
+    expect(out.status).toBe("completed");
+    if (out.status !== "completed") throw new Error("unreachable");
+    expect(out.selections).toEqual([]);
+    expect(out.annotations).toEqual([
+      { target: "Tab bar", match: { by: "role", value: "TabBar" }, comment: "raise contrast" },
+    ]);
   });
 });
