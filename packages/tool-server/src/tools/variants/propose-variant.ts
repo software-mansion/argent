@@ -1,0 +1,82 @@
+import { z } from "zod";
+import type { ToolDefinition } from "@argent/registry";
+import { variantProposalStore } from "../../utils/variant-proposals";
+
+const zodSchema = z.object({
+  element: z
+    .string()
+    .min(1)
+    .describe(
+      "Human name of the on-screen element this variant targets, e.g. \"Foo button\" or " +
+        '"profile header". Repeated calls with the same element accumulate multiple variants ' +
+        "on it. Used as the default screen matcher when `match` is omitted."
+    ),
+  match: z
+    .object({
+      by: z
+        .enum(["text", "label", "identifier", "role"])
+        .describe(
+          "How the preview UI locates the live element in the running app's accessibility tree: " +
+            "`text` (fuzzy contains on label/value/identifier), `label` (exact a11y label), " +
+            "`identifier` (exact testID / accessibilityIdentifier / resource-id), `role` (e.g. Button)."
+        ),
+      value: z.string().min(1).describe("Value to match against, per `by`."),
+    })
+    .optional()
+    .describe(
+      "Optional precise matcher so the floating variant bubble anchors to the right element on " +
+        "the streamed screen. Defaults to { by: 'text', value: element }. Get exact " +
+        "labels/identifiers from the `describe` tool first for reliable anchoring."
+    ),
+  variant: z
+    .object({
+      name: z.string().min(1).describe("Short variant name shown on the chip, e.g. \"Bold CTA\"."),
+      summary: z
+        .string()
+        .min(1)
+        .describe("One- or two-sentence description of what this variant changes and why."),
+      code: z
+        .string()
+        .optional()
+        .describe("Optional inline code/JSX for the variant, shown when the chip is expanded."),
+      filePath: z
+        .string()
+        .optional()
+        .describe("Optional path to a file containing the variant implementation."),
+    })
+    .describe("The variant being proposed for `element`."),
+});
+
+type Params = z.infer<typeof zodSchema>;
+
+export const proposeVariantTool: ToolDefinition<Params> = {
+  id: "propose_variant",
+  description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
+
+Use when you have produced multiple alternative designs for an element and want the human to pick.
+Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Foo", v2),
+propose_variant("Bar", v1)…  Variants accumulate per element and across elements. The agent is NOT
+blocked — keep proposing and keep working. The proposals appear live as floating, draggable bubbles
+over the streamed simulator in the Argent preview UI (off-screen elements show as a corner badge).
+
+When you have proposed every variant for every element, call \`await_user_selection\` once — that is
+the single blocking call that waits for the human's picks.
+
+Returns { round, elementId, variantId, element, variantCount, totalElements } — confirmation only;
+it does not wait for the user.`,
+  searchHint: "propose design variant alternative option for element non-blocking ab choice",
+  zodSchema,
+  services: () => ({}),
+  async execute(_services, params) {
+    const res = variantProposalStore.proposeVariant(params);
+    return {
+      ...res,
+      hint:
+        res.variantCount === 1
+          ? `Staged the first variant for "${res.element}". Propose more variants (for this or ` +
+            `other elements), then call await_user_selection once when done.`
+          : `"${res.element}" now has ${res.variantCount} variants. Keep proposing or call ` +
+            `await_user_selection when every element is covered.`,
+    };
+  },
+};

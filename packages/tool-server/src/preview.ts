@@ -6,6 +6,11 @@ import type { Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
 import { listDevicesTool } from "./tools/devices/list-devices";
+import {
+  variantProposalStore,
+  type SubmittedSelection,
+} from "./utils/variant-proposals";
+import type { DescribeResult } from "./tools/describe/contract";
 
 function findUiHtml(): string | null {
   // Candidate paths (first match wins):
@@ -88,6 +93,53 @@ export function createPreviewRouter(registry: Registry): Router {
         streamUrl: api.streamUrl,
         wsUrl: wsUrlFromHttp(api.apiUrl),
       });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // ── Variant proposals ────────────────────────────────────────────────
+  // Live proposal state for the UI to poll. Invisible to MCP (only /tools).
+  router.get("/variants", (_req: Request, res: Response) => {
+    res.set("Cache-Control", "no-store");
+    res.json(variantProposalStore.snapshot());
+  });
+
+  // Human pressed "Complete selection" in the UI — unblocks await_user_selection.
+  router.post("/variants/selection", (req: Request, res: Response) => {
+    const body = req.body ?? {};
+    const rawSelections = Array.isArray(body.selections) ? body.selections : [];
+    const selections: SubmittedSelection[] = [];
+    for (const s of rawSelections) {
+      if (!s || typeof s.elementId !== "string") continue;
+      selections.push({
+        elementId: s.elementId,
+        variantId: typeof s.variantId === "string" ? s.variantId : null,
+        comment:
+          typeof s.comment === "string" && s.comment.trim() ? s.comment.trim() : undefined,
+      });
+    }
+    try {
+      const result = variantProposalStore.submitSelection({
+        selections,
+        globalComment: typeof body.globalComment === "string" ? body.globalComment : undefined,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // Accessibility tree for the streamed device so the UI can anchor each
+  // floating variant bubble to its element's on-screen frame. Thin proxy over
+  // the `describe` tool; failures are non-fatal for the UI (it falls back to
+  // corner notifications).
+  router.get("/describe/:udid", async (req: Request, res: Response) => {
+    const udid = req.params.udid!;
+    try {
+      const data = await registry.invokeTool<DescribeResult>("describe", { udid });
+      res.set("Cache-Control", "no-store");
+      res.json(data);
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }

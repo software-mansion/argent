@@ -67,6 +67,8 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
+import { proposeVariantTool } from "../tools/variants/propose-variant";
+import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -146,6 +148,10 @@ export function createRegistry(): Registry {
   // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
+
+  // Variant proposal tools (non-blocking propose + single blocking await)
+  registry.registerTool(proposeVariantTool);
+  registry.registerTool(awaitUserSelectionTool);
 
   return registry;
 }
