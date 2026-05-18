@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@argent/tools-client": "file:../argent-tools-client",
-    "@modelcontextprotocol/sdk": "^1.20.0"
+    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

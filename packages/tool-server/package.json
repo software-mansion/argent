@@ -18,7 +18,7 @@
     "express": "^4.19.2",
     "semver": "^7.7.4",
     "source-map-js": "^1.2.1",
-    "tree-sitter": "^0.21.1",
+    "tree-sitter": "^0.25.0",
     "tree-sitter-typescript": "^0.23.2",
     "ws": "^8.18.0",
     "yaml": "^2.8.2",
