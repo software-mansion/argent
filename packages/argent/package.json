@@ -53,7 +53,7 @@
     "picocolors": "^1.1.1",
     "semver": "^7.7.4",
     "smol-toml": "^1.6.1",
-    "typescript": "^5.5.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.0.18",
     "yaml": "^2.8.3"
   }
