@@ -170,7 +170,11 @@ export class SourceMapsRegistry {
         rawData = JSON.parse(decoded);
       } else {
         if (!isAllowedSourceMapURL(sourceMapURL)) return;
-        const res = await fetch(sourceMapURL);
+        // `redirect: "error"` so a loopback URL that passes the allowlist
+        // can't 302 us onto an internal/metadata host (the redirect target
+        // is never re-validated otherwise). Metro never redirects .map URLs,
+        // so this is behaviour-preserving for the legitimate path.
+        const res = await fetch(sourceMapURL, { redirect: "error" });
         if (!res.ok) return;
         rawData = await res.json();
       }

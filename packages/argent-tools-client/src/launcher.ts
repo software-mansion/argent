@@ -184,8 +184,12 @@ export async function readState(): Promise<ToolsServerState | null> {
 
 async function writeState(state: ToolsServerState): Promise<void> {
   await mkdir(STATE_DIR, { recursive: true });
-  // mode 0600: owner-only read/write. Stops other local users from reading
-  // the auth token out of the state file.
+  // Unlink any pre-existing file first: writeFile's `mode` is only applied
+  // when the file is *created*, so writing over a looser-perm file left by
+  // an older launcher / `npm run dev` / a corrupt write would leak the auth
+  // token at the old (e.g. 0644) mode. Removing it first guarantees the new
+  // file is created fresh at 0600 with no world-readable window.
+  await unlink(STATE_FILE).catch(() => {});
   await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + "\n", {
     encoding: "utf8",
     mode: 0o600,

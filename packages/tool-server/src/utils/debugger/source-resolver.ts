@@ -2,9 +2,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 // Source extensions we are willing to read into a debug response. Anything
-// else (e.g., ~/.zshrc, /etc/passwd, an .env file inside the project) is
-// rejected even if the path passes the project-root containment check.
-const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".json"]);
+// else (e.g., ~/.zshrc, /etc/passwd, an .env file inside the project, or a
+// .json holding service-account / firebase / EAS credentials) is rejected
+// even if the path passes the project-root containment check. Stack frames
+// and React fiber _debugSource only ever point at code files, never .json.
+const ALLOWED_SOURCE_EXTENSIONS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 
 function isInsideProject(absFile: string, projectRoot: string): boolean {
   const resolvedRoot = path.resolve(projectRoot);
@@ -145,9 +147,16 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
         const absPath = path.isAbsolute(location.file)
           ? path.resolve(location.file)
           : path.resolve(projectRoot, location.file);
-        if (!isInsideProject(absPath, projectRoot)) return null;
-        if (!hasAllowedExtension(absPath)) return null;
-        const content = await fs.readFile(absPath, "utf-8");
+        // Resolve symlinks (and any symlinked path components, e.g. macOS
+        // /tmp -> /private/tmp) before the containment/extension checks: a
+        // symlink inside projectRoot can point outside it and fs.readFile
+        // would happily follow it. realpath throws ENOENT for a missing file,
+        // which the surrounding try/catch turns into a silent null.
+        const realRoot = await fs.realpath(projectRoot);
+        const realPath = await fs.realpath(absPath);
+        if (!isInsideProject(realPath, realRoot)) return null;
+        if (!hasAllowedExtension(realPath)) return null;
+        const content = await fs.readFile(realPath, "utf-8");
         const lines = content.split("\n");
         const start = Math.max(0, location.line - 1 - contextLines);
         const end = Math.min(lines.length, location.line + contextLines);

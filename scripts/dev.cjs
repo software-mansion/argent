@@ -207,7 +207,12 @@ const devMcpEntry = {
   type: "stdio",
   command: "node",
   args: [LOCAL_MCP_ENTRY, "mcp"],
-  env: { ARGENT_MCP_LOG: LOG_FILE },
+  // Point the dev MCP straight at the running dev tool-server. Without this
+  // it calls ensureToolsServer(), which now treats the tokenless dev state
+  // as stale, SIGTERMs the dev server and tries to spawn the throwing dev
+  // stub — breaking `npm run dev`. The dev server runs auth-disabled, so no
+  // ARGENT_AUTH_TOKEN is needed here.
+  env: { ARGENT_MCP_LOG: LOG_FILE, ARGENT_TOOLS_URL: `http://127.0.0.1:${PORT}` },
 };
 
 if (!claudeConfig.mcpServers) claudeConfig.mcpServers = {};
@@ -220,7 +225,9 @@ if (shouldPatchCursor) {
   cursorConfig.mcpServers.argent = {
     command: "node",
     args: [LOCAL_MCP_ENTRY, "mcp"],
-    env: { ARGENT_MCP_LOG: LOG_FILE },
+    // Same env as the Claude entry (incl. ARGENT_TOOLS_URL) so Cursor's dev
+    // MCP also reuses the running dev tool-server instead of killing it.
+    env: devMcpEntry.env,
   };
   writeJson(CURSOR_MCP_JSON, cursorConfig);
   console.log(`✓ Patched ~/.cursor/mcp.json → node ${LOCAL_MCP_ENTRY} mcp\n`);
