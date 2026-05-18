@@ -1,4 +1,4 @@
-import type { DescribeFrame, DescribeNode } from "./contract";
+import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
 
 // Token-efficient view of a pruned DescribeNode tree. The previous shape sent
 // the full JSON tree to the agent, which on a typical iOS screen ran ~6× the
@@ -7,16 +7,38 @@ import type { DescribeFrame, DescribeNode } from "./contract";
 // trimmer in uiautomator-parser) finish — this layer only re-presents what's
 // already in the tree, never drops or merges nodes.
 //
-// Two rendering modes are picked automatically:
-//   - "flat" trees (root → leaves, no grandchildren — what ax-service emits):
-//     emit one line per labeled / interactive node, sorted in reading order
-//     (top-to-bottom, then left-to-right). Spatial relationships are already
-//     fully described by each line's frame, so no grouping or section
-//     headers are added.
-//   - "nested" trees (uiautomator on Android, or native-devtools fallback):
-//     indented DFS so the parent / child structure is visible directly.
-// The chosen mode is reported at the top so a consumer that wants to re-parse
-// the formatted text can branch on it.
+// Mode is decided by the originating `source`, not the tree silhouette:
+//   - "ax-service" and "native-devtools" (the iOS providers) emit a flat list
+//     of leaves under a synthetic root; the flat renderer sorts those in
+//     reading order (top-to-bottom, then left-to-right).
+//   - "uiautomator" (Android) emits a real parent/child tree; the nested
+//     renderer is an iterative DFS that preserves depth via indentation.
+// Picking by source (rather than checking `every child has no grandchildren`)
+// keeps behaviour stable for callers that diff two close-in-time describes —
+// a single accidental grandchild used to flip an ax-service response into
+// nested mode discontinuously.
+//
+// What gets emitted: any node with a "content" role (AXButton, AXImage,
+// AXStaticText, …) is printed even when its label is empty, so an icon-only
+// button or an undecorated image still surfaces as `AXImage  (frame)`. Pure
+// container roles (AXGroup, RCTView, …) only print when they carry their own
+// label / value / identifier / interactivity flag, OR (in nested mode) when
+// they have descendants worth showing.
+
+const CONTENT_ROLES = new Set([
+  // iOS AX traits surfaced by mapNativeTraitsToDescribeRole. AXGroup is
+  // deliberately excluded: it's the catch-all wrapper, so requiring it to
+  // carry its own label/value before we emit a line keeps decorative
+  // groupings out of the output.
+  "AXButton",
+  "AXStaticText",
+  "AXImage",
+  "AXLink",
+  "AXTextField",
+  "AXHeading",
+  "AXTabBar",
+  "AXAdjustable",
+]);
 
 function clampFinite(n: number): number {
   return Number.isFinite(n) ? n : 0;
@@ -72,44 +94,60 @@ function hasContent(n: DescribeNode): boolean {
   );
 }
 
+// A node is worth its own line when EITHER it carries its own metadata
+// (`hasContent`) OR its role tells us it's a thing the user can act on. The
+// role check is what keeps unlabeled `AXImage`s and icon-only `AXButton`s on
+// screen — without it, anything missing `accessibilityLabel` on iOS would
+// silently vanish from describe (the bug the user originally flagged).
+function shouldEmit(n: DescribeNode): boolean {
+  return hasContent(n) || CONTENT_ROLES.has(n.role);
+}
+
 function formatLine(n: DescribeNode, indent: number): string {
   const pad = "  ".repeat(indent);
-  const role = n.role.padEnd(12);
+  // Drop value when it's the same string as label — iOS reports placeholder
+  // text under both fields for text inputs, which doubled the byte cost for
+  // zero added signal.
+  const dedupedValue = n.value && n.value !== n.label ? n.value : undefined;
   const labelPart = formatLabel(n.label);
-  const valuePart = formatAttr("value", n.value);
+  const valuePart = formatAttr("value", dedupedValue);
   const idPart = formatAttr("id", n.identifier);
   const flagPart = formatFlags(n);
-  return `${pad}${role} ${labelPart}${valuePart}${idPart}${flagPart}  ${fmtFrame(n.frame)}`;
+  // Single space between role and the rest — we deliberately don't pad the
+  // role to a fixed column. Padding to 12 chars worked for iOS AX roles (all
+  // ≤12 chars) but broke alignment the moment Android passed through raw
+  // class names like `androidx.compose.ui.platform.ComposeView` (41 chars).
+  const annotations = `${labelPart}${valuePart}${idPart}${flagPart}`.trim();
+  const annotated = annotations ? ` ${annotations}` : "";
+  return `${pad}${n.role}${annotated}  ${fmtFrame(n.frame)}`;
 }
 
-function isFlatTree(root: DescribeNode): boolean {
-  // Root → leaves with no grandchildren. This is what the iOS ax-service
-  // adapter emits; the flat renderer relies on the assumption that every
-  // child is a positioned leaf.
-  if (root.children.length === 0) return true;
-  return root.children.every((c) => c.children.length === 0);
-}
-
-// ---- flat renderer ----
+// ---- flat renderer (ax-service, native-devtools) ----
 
 function renderFlat(root: DescribeNode): string[] {
   return root.children
-    .filter(hasContent)
+    .filter(shouldEmit)
     .slice()
     .sort((a, b) => a.frame.y - b.frame.y || a.frame.x - b.frame.x)
     .map((n) => formatLine(n, 1));
 }
 
-// ---- nested renderer ----
+// ---- nested renderer (uiautomator) ----
 
 function renderNested(root: DescribeNode): string[] {
   const lines: string[] = [];
   // Iterative DFS so very deep Compose / RN trees don't risk a stack overflow.
+  // Start at the root's children (depth 1) — the root itself is already
+  // printed by the header's ROOT line, so emitting it again here just
+  // duplicates the same role/frame for every nested-mode response.
   type Frame = { node: DescribeNode; depth: number };
-  const stack: Frame[] = [{ node: root, depth: 0 }];
+  const stack: Frame[] = [];
+  for (let i = root.children.length - 1; i >= 0; i--) {
+    stack.push({ node: root.children[i]!, depth: 1 });
+  }
   while (stack.length > 0) {
     const { node, depth } = stack.pop()!;
-    if (depth === 0 || hasContent(node) || node.children.length > 0) {
+    if (shouldEmit(node) || node.children.length > 0) {
       lines.push(formatLine(node, depth));
     }
     for (let i = node.children.length - 1; i >= 0; i--) {
@@ -120,13 +158,13 @@ function renderNested(root: DescribeNode): string[] {
 }
 
 export interface FormatDescribeOptions {
-  source?: string;
+  source: DescribeSource;
 }
 
-export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions = {}): string {
-  const mode: "flat" | "nested" = isFlatTree(root) ? "flat" : "nested";
+export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
+  const mode: "flat" | "nested" = opts.source === "uiautomator" ? "nested" : "flat";
   const header: string[] = [];
-  if (opts.source) header.push(`Source: ${opts.source}`);
+  header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
   header.push(
     "Coordinates are normalized [0,1] fractions of the screen (x, y, width, height), " +

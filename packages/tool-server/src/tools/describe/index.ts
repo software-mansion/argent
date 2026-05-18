@@ -57,11 +57,14 @@ system dialogs, permission prompts, and any foreground app content. On Android, 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
 
-Returns a JSON tree of UI elements with roles, labels, values, and frame coordinates in normalized
-[0,1] space (fractions of the screen, not pixels) — the same coordinate space as tap/swipe/gesture
-and simulator-server touch input.
+Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
+line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
+are normalized [0,1] fractions of the screen width/height (not pixels) — the same space as
+gesture-tap / gesture-swipe / gesture-pinch.
 
-Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
+To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
+\`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
+can be applied to a line in isolation.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).

@@ -294,7 +294,9 @@ describe("describe tool", () => {
     const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
     expect(elementLineCount(result.description)).toBe(3);
-    expect(result.description).toMatch(/AXTextField\s+"Search"\s+value="Search"/);
+    // value is dropped when it duplicates label — see format-tree.ts hasContent comment
+    expect(result.description).toMatch(/AXTextField\s+"Search"\s+\(/);
+    expect(result.description).not.toMatch(/value="Search"/);
     expect(result.description).toMatch(/AXButton\s+"General"/);
     expect(result.description).toMatch(/AXButton\s+"Accessibility"/);
   });
