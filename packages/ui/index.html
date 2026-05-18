@@ -323,13 +323,23 @@
         background: rgba(92, 220, 139, 0.13);
       }
       .vrow .thumb {
-        width: 52px;
-        height: 92px;
+        position: relative;
+        width: 96px;
+        height: 96px;
         flex-shrink: 0;
         border-radius: 4px;
         border: 1px solid var(--border);
-        object-fit: cover;
+        overflow: hidden;
         background: #000;
+      }
+      .vrow .thumb-img {
+        position: absolute;
+        top: 0;
+        left: 0;
+        max-width: none;
+        user-select: none;
+        -webkit-user-drag: none;
+        pointer-events: none;
       }
       .vrow .thumb.placeholder {
         display: flex;
@@ -416,6 +426,9 @@
         position: absolute;
         cursor: crosshair;
         z-index: 8;
+        /* The spotlight root sets pointer-events:none; this capture layer must
+           opt back in or hover/click never reaches it and nothing un-blurs. */
+        pointer-events: auto;
       }
       .inspecting .stage img {
         cursor: crosshair;
@@ -737,6 +750,11 @@
       /** Last known CapsLock state to resync iOS if it drifts. */
       let lastCapsLockState = false;
       let cmdCounter = 0;
+      /** Trailing-debounce state for wheel scrolling (see attachInputHandlers). */
+      let wheelTimer = null;
+      let wheelPt = null;
+      let wheelDX = 0;
+      let wheelDY = 0;
 
       // ── Helpers ─────────────────────────────────────────────────────────
       function setStatus(text, kind = "") {
@@ -997,6 +1015,12 @@
         }
         pressedKeys.clear();
         activePointerId = null;
+        // Drop any pending trailing wheel flush so a scroll can't fire into a
+        // torn-down / blurred stream after the fact.
+        if (wheelTimer) {
+          clearTimeout(wheelTimer);
+          wheelTimer = null;
+        }
       }
 
       function attachInputHandlers(target) {
@@ -1072,19 +1096,29 @@
           }
         });
 
+        // A single trackpad scrub emits a long flood of wheel events (incl. a
+        // ~1–2s macOS momentum tail). sim-server turns *each* wheel command into
+        // a ~400ms swipe driven to the screen edge, so forwarding the whole
+        // flood makes one flick scroll "forever". Mirror radon-ide: swallow the
+        // burst and emit ONE wheel command 100ms after it settles.
         target.addEventListener(
           "wheel",
           (ev) => {
+            ev.preventDefault();
             const pt = toDeviceCoords(ev);
             if (!pt) return;
-            const dx = normalizeWheel(ev.deltaX);
-            const dy = normalizeWheel(ev.deltaY);
-            if (dx === 0 && dy === 0) {
-              ev.preventDefault();
-              return;
-            }
-            sendCmd({ cmd: "wheel", x: pt.x, y: pt.y, dx, dy });
-            ev.preventDefault();
+            wheelPt = pt;
+            wheelDX = ev.deltaX;
+            wheelDY = ev.deltaY;
+            if (wheelTimer) clearTimeout(wheelTimer);
+            wheelTimer = setTimeout(() => {
+              wheelTimer = null;
+              const dx = normalizeWheel(wheelDX);
+              const dy = normalizeWheel(wheelDY);
+              if ((dx !== 0 || dy !== 0) && wheelPt) {
+                sendCmd({ cmd: "wheel", x: wheelPt.x, y: wheelPt.y, dx, dy });
+              }
+            }, 100);
           },
           { passive: false }
         );
@@ -1400,6 +1434,55 @@
         )}/${encodeURIComponent(v.id)}`;
       }
 
+      // Crop the variant screenshot down to just the target element's box so
+      // the thumbnail shows the element — not the whole device screen squeezed
+      // into a chip. Letterboxed (no distortion). Falls back to the full,
+      // contained image when the element isn't matched on-screen or the agent
+      // supplied a data: URI (treated as author-made art, shown whole).
+      function applyThumbCrop(tw, frame) {
+        const im = tw.querySelector(".thumb-img");
+        if (!im || !im.naturalWidth || !im.naturalHeight) return;
+        const NW = im.naturalWidth,
+          NH = im.naturalHeight;
+        let fx = 0,
+          fy = 0,
+          fw = 1,
+          fh = 1;
+        const finite = (n) => typeof n === "number" && isFinite(n);
+        if (
+          frame &&
+          !tw._noCrop &&
+          finite(frame.x) &&
+          finite(frame.y) &&
+          finite(frame.width) &&
+          finite(frame.height)
+        ) {
+          fx = Math.max(0, Math.min(1, frame.x));
+          fy = Math.max(0, Math.min(1, frame.y));
+          fw = Math.max(0.02, Math.min(1 - fx, frame.width));
+          fh = Math.max(0.02, Math.min(1 - fy, frame.height));
+        }
+        const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}`;
+        if (tw._cropKey === key) return; // unchanged — avoid layout thrash
+        tw._cropKey = key;
+        const THUMB_W = 96,
+          MIN_H = 44,
+          MAX_H = 150;
+        const rw = fw * NW,
+          rh = fh * NH,
+          rx = fx * NW,
+          ry = fy * NH;
+        const W = THUMB_W;
+        const H = Math.round(Math.max(MIN_H, Math.min(MAX_H, W / (rw / rh))));
+        tw.style.width = W + "px";
+        tw.style.height = H + "px";
+        const s = Math.min(W / rw, H / rh); // contain element region (letterbox)
+        im.style.width = NW * s + "px";
+        im.style.height = NH * s + "px";
+        im.style.left = (W - rw * s) / 2 - rx * s + "px";
+        im.style.top = (H - rh * s) / 2 - ry * s + "px";
+      }
+
       function buildCard(p) {
         const el = document.createElement("div");
         el.className = "vcard";
@@ -1469,14 +1552,21 @@
 
           const src = previewSrc(p, v);
           if (src) {
+            const tw = document.createElement("div");
+            tw.className = "thumb";
+            // data: previews are author-supplied art — show whole, don't crop.
+            tw._noCrop = /^data:/i.test(src);
             const im = document.createElement("img");
-            im.className = "thumb";
-            im.src = src;
+            im.className = "thumb-img";
+            im.draggable = false;
             im.alt = v.name;
+            im.onload = () => applyThumbCrop(tw, p._node && p._node.frame);
             im.onerror = () => {
-              im.replaceWith(placeholderThumb());
+              tw.replaceWith(placeholderThumb());
             };
-            row.appendChild(im);
+            im.src = src;
+            tw.appendChild(im);
+            row.appendChild(tw);
           } else {
             row.appendChild(placeholderThumb());
           }
@@ -1560,6 +1650,11 @@
           } else if (!staged && tag) {
             tag.remove();
           }
+        });
+        // Re-crop thumbnails: the matched element's frame only arrives once
+        // describe has resolved, and can shift between polls.
+        el.querySelectorAll(".thumb").forEach((tw) => {
+          if (tw.querySelector(".thumb-img")) applyThumbCrop(tw, p._node && p._node.frame);
         });
         const w = el.querySelector(".where");
         if (w) {
@@ -1707,7 +1802,13 @@
         s.hit.style.width = r.w + "px";
         s.hit.style.height = r.h + "px";
         const n = vp.commentFor || vp.focus;
-        if (!n) {
+        const f = n && n.frame;
+        // No focus (or a frame the describe tree somehow didn't validate) →
+        // dim the whole stream with no cutout. Mirrors applyThumbCrop's guard
+        // so a non-finite frame can never emit NaN/null CSS.
+        const validFrame =
+          f && [f.x, f.y, f.width, f.height].every((v) => typeof v === "number" && isFinite(v));
+        if (!validFrame) {
           // whole stream dimmed, no cutout
           s.strips[0].style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
           s.strips[1].style.display =
@@ -1719,7 +1820,6 @@
           s.ring.style.display = "none";
           return;
         }
-        const f = n.frame;
         const ex = r.x + f.x * r.w,
           ey = r.y + f.y * r.h,
           ew = f.width * r.w,
