@@ -61,6 +61,14 @@ Optional: specify the target device, e.g. `npx react-native run-ios --simulator=
 - [ ] If the device isn't booted: use `boot-device` with the iOS `udid` or Android `avdName`. Refer to the `argent-ios-simulator-setup` / `argent-android-emulator-setup` skill.
 - [ ] Android: `adb -s <serial> reverse tcp:8081 tcp:8081` done.
 
+### 1.4 Hide the LogBox banner
+
+After the app is running and Metro is connected, call `dismiss-logbox` once. This connects the JS runtime debugger if it isn't already connected and hides the bottom-screen LogBox banner (yellow warnings + red non-fatal errors) for the rest of the session, including across JS reloads. The fullscreen redbox shown for fatal/uncaught errors is **not** affected — fatal errors remain visible.
+
+- Pass `port` if Metro isn't on 8081 (look it up from the `argent-environment-inspector` result).
+- Idempotent: re-call after a reload only if you have a specific reason to suspect the banner returned (rare).
+- Never tap the banner directly — the X target overlaps the bottom tab bar in most apps and missed taps open the fullscreen debugger overlay.
+
 ---
 
 ## 2. Ensuring / Debugging Metro
@@ -225,6 +233,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Check Metro status           | `debugger-status` tool                                                                                                                   |
 | Inspect React component tree | `debugger-component-tree` tool                                                                                                           |
 | Run JS in app                | `debugger-evaluate` tool                                                                                                                 |
+| Hide LogBox banner           | `dismiss-logbox` tool (call once per RN session; auto-connects the debugger; never affects fullscreen fatal redbox)                      |
 | iOS native logs              | `npx react-native log-ios`                                                                                                               |
 | Android native logs          | `npx react-native log-android` or `adb -s <serial> logcat`                                                                               |
 | Clean + reinstall (nuclear)  | See §3.1 step 3                                                                                                                          |

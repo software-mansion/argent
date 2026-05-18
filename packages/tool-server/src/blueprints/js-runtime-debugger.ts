@@ -153,6 +153,32 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
 
     await cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT"));
 
+    // Re-inject the disable script whenever a new JS execution context is
+    // created. JS reloads (cmd-R, shake menu, fast-refresh full reload,
+    // DevSettings.reload, debugger-reload-metro via CDP Page.reload) all
+    // destroy and re-create the JS context, which resets LogBox._isDisabled
+    // back to false. The CDP connection survives the reload, so this
+    // listener fires reliably and re-disables the banner without requiring
+    // the agent to re-call dismiss-logbox.
+    //
+    // Two delayed evals run after each event: an early one to cover fast
+    // bundles, a later one to cover cold-boot / slow-device cases where the
+    // bundle isn't ready at 1500ms. The script is idempotent and bounded-cost,
+    // so redundant runs are free insurance. Failures are logged via
+    // warnOnError but do not break the debugger session.
+    const pendingDisables = new Set<ReturnType<typeof setTimeout>>();
+    cdp.events.on("executionContextCreated", () => {
+      for (const t of pendingDisables) clearTimeout(t);
+      pendingDisables.clear();
+      for (const delayMs of [1500, 3500]) {
+        const timer = setTimeout(() => {
+          pendingDisables.delete(timer);
+          cdp.evaluate(DISABLE_LOGBOX_SCRIPT).catch(warnOnError("DISABLE_LOGBOX_SCRIPT[ctx]"));
+        }, delayMs);
+        pendingDisables.add(timer);
+      }
+    });
+
     await sourceMaps.waitForPending();
 
     const sourceResolver = createSourceResolver(port, metro.projectRoot);
