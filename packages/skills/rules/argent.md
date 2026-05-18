@@ -128,6 +128,11 @@ RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`
 When: A multi-step interaction sequence needs to be repeated — re-profiling after a fix, A/B comparisons, regression checks, user says "again" / "run that flow", or you worked through a complex path worth saving. Also use proactively: if you are about to repeat steps you already performed, record first, then replay.
 Prompt keywords: flow, repeat, test X times
+
+PROPOSING DESIGN VARIANTS FOR HUMAN SELECTION
+Use skill: `argent-propose-variants`
+When: The user asks for design alternatives / options / A-B choices for a screen or component, or you have produced more than one candidate look for an element and want a human to pick before committing. Covers the build → navigate → screenshot → propose_variant loop and the single blocking await_user_selection call.
+Prompt keywords: variant, design option, alternative, A/B, "let me pick", "show me options"
 </skill_routing>
 
 <subagents>

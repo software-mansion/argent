@@ -398,18 +398,20 @@
         min-height: 28px;
       }
 
-      /* Element-inspector spotlight: 4 blur+dim strips frame the focus rect. */
+      /* Element-inspector spotlight: ONE blur+dim layer over the stream with
+         a rectangular hole punched by clip-path (even-odd). A single element
+         (not 4 strips) → zero overlap, so no compounding dark/bright shapes
+         flicker as the cutout moves. The donut path keeps a constant segment
+         structure so the clip-path transition interpolates smoothly. */
       .spot {
         position: absolute;
         background: rgba(8, 8, 10, 0.55);
         backdrop-filter: blur(5px);
         -webkit-backdrop-filter: blur(5px);
         pointer-events: none;
+        will-change: clip-path;
         transition:
-          left 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
-          top 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
-          width 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
-          height 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
+          clip-path 0.28s cubic-bezier(0.22, 1, 0.36, 1),
           opacity 0.18s ease;
       }
       .spot-ring {
@@ -789,6 +791,12 @@
         // read-only annotation surface — never drive the device.
         if (typeof vp !== "undefined" && vp.inspect) return;
         ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
+        // Every command (touch/scroll/key) likely moved the screen — wake the
+        // describe loop *now* so connectors/pins track interaction, not just
+        // the fixed cadence. Only when something is actually anchored to the
+        // stream, else it would needlessly collapse the idle wait.
+        // kickDescribe() is hoisted + self-throttled.
+        if (vp.proposals.length || vp.annotations.length) kickDescribe();
       }
 
       /**
@@ -941,6 +949,9 @@
           ws = null;
         }
         wsOpen = false;
+        // No live stream → no current device. Prevents the describe loop from
+        // firing one stale GET /preview/describe/<oldUdid> after teardown.
+        currentUdid = null;
         // Explicitly clear the img src — otherwise the browser keeps the MJPEG
         // HTTP connection open after the element is detached, and re-selecting
         // a simulator leaks more connections. Same trick radon-ide uses.
@@ -1283,7 +1294,7 @@
         annotations: [], // [{ id, target, match, comment }]
         tree: null,
         treeAt: 0,
-        cards: new Map(), // id -> { el, sig, target, anim, home, pos, vel, pinned, gone, spawned, dragging }
+        cards: new Map(), // id -> { el, sig, target, anim, animVel, home, pos, vel, pinned, gone, spawned, dragging }
         thumbFrames: {}, // id -> frozen frame for the static preview crop
         conn: new Map(), // id -> { path, dot } reused SVG nodes
         pinEls: new Map(), // annId -> reused pin element
@@ -1460,19 +1471,58 @@
         if (Date.now() - vp.treeAt > 6000) vp.tree = null;
         vpRender();
       }
-      // Single self-scheduling loop (started once). Polls as fast as describe
-      // can answer while needed, backs off when idle. Never run twice.
+      // Interruptible delay: an un-skippable floor (rate ceiling), then a
+      // remainder that a kick (device interaction) can cut short. A kick that
+      // lands during the floor is remembered so a single tap still re-describes
+      // promptly. Reset per wait so only kicks during *this* wait count.
+      let describeWaker = null;
+      let describeKicked = false;
+      function kickDescribe() {
+        describeKicked = true;
+        const w = describeWaker;
+        if (w) {
+          describeWaker = null;
+          w();
+        }
+      }
+      function describeDelay(ms, floorMs) {
+        return new Promise((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            describeWaker = null;
+            resolve();
+          };
+          const floor = Math.max(0, Math.min(floorMs || 0, ms));
+          describeKicked = false;
+          setTimeout(() => {
+            if (done) return;
+            const rest = ms - floor;
+            if (rest <= 0 || describeKicked) return finish();
+            const t = setTimeout(finish, rest);
+            describeWaker = () => {
+              clearTimeout(t);
+              finish();
+            };
+          }, floor);
+        });
+      }
+      // Single loop (started once, never twice). Background cadence ~300ms
+      // while work is on screen; a kick from sendCmd() collapses the wait to
+      // the floor so connectors chase live drags/scrolls, then it idles at
+      // 900ms when there is nothing to track.
       let describeLoopArmed = false;
       async function pollDescribe() {
         if (describeLoopArmed) return;
         describeLoopArmed = true;
-        const tick = async () => {
+        for (;;) {
           const t0 = Date.now();
           await describeOnce();
           const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
-          setTimeout(tick, need ? Math.max(300, 360 - (Date.now() - t0)) : 900);
-        };
-        tick();
+          const base = need ? Math.max(160, 300 - (Date.now() - t0)) : 900;
+          await describeDelay(base, need ? 130 : 0);
+        }
       }
 
       function setNote(text, kind) {
@@ -1824,18 +1874,21 @@
           prevBottom = w.y + w.ch;
           w.rec.home = w.rec.pinned && w.rec.pos ? w.rec.pos : { x: gx, y: w.y };
           if (!w.rec.pos) {
-            // First appearance: spawn just below home with an upward
-            // mini-velocity so it springs into place dynamically.
-            w.rec.pos = { x: w.rec.home.x + (Math.random() * 50 - 25), y: w.rec.home.y + 44 };
-            w.rec.vel = { x: Math.random() * 8 - 4, y: -(7 + Math.random() * 9) };
+            // First appearance: spawn a touch below home with a gentle upward
+            // drift so it floats into place like a cloud (px/s — the spring
+            // tick is time-based, not per-frame).
+            w.rec.pos = { x: w.rec.home.x + (Math.random() * 20 - 10), y: w.rec.home.y + 22 };
+            w.rec.vel = { x: Math.random() * 20 - 10, y: -(28 + Math.random() * 34) };
             // Place immediately so it doesn't flash at (0,0) before vpTick.
             w.rec.el.style.left = w.rec.pos.x + "px";
             w.rec.el.style.top = w.rec.pos.y + "px";
           }
           if (!w.rec.spawned) {
             w.rec.spawned = true;
-            w.rec.vel.x += Math.random() * 12 - 6;
-            w.rec.vel.y += Math.random() * 8 - 6;
+            // A whisper of extra drift so multiple bubbles don't move in
+            // lockstep — soft enough to stay cloud-like.
+            w.rec.vel.x += Math.random() * 24 - 12;
+            w.rec.vel.y += Math.random() * 20 - 12;
           }
         }
       }
@@ -1897,12 +1950,9 @@
         root.style.inset = "0";
         root.style.zIndex = "8";
         root.style.pointerEvents = "none";
-        const strips = [0, 1, 2, 3].map(() => {
-          const s = document.createElement("div");
-          s.className = "spot";
-          root.appendChild(s);
-          return s;
-        });
+        const mask = document.createElement("div");
+        mask.className = "spot";
+        root.appendChild(mask);
         const ring = document.createElement("div");
         ring.className = "spot-ring";
         const lab = document.createElement("span");
@@ -1926,7 +1976,7 @@
           openCommentPop(vp.focus);
         });
         mainEl.appendChild(root);
-        vp.spot = { root, strips, ring, lab, hit };
+        vp.spot = { root, mask, ring, lab, hit };
         return vp.spot;
       }
       function paintSpot() {
@@ -1942,47 +1992,49 @@
         s.hit.style.top = r.y + "px";
         s.hit.style.width = r.w + "px";
         s.hit.style.height = r.h + "px";
+        // One dim+blur layer over exactly the stream rect; the cutout is a
+        // clip-path hole in element-local coords.
+        s.mask.style.left = r.x + "px";
+        s.mask.style.top = r.y + "px";
+        s.mask.style.width = r.w + "px";
+        s.mask.style.height = r.h + "px";
+        const W = r.w,
+          H = r.h;
+        const q = (v) => Math.round(v * 10) / 10;
+        const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
         const n = vp.commentFor || vp.focus;
         const f = n && n.frame;
         // No focus (or a frame the describe tree somehow didn't validate) →
-        // dim the whole stream with no cutout. Mirrors applyThumbCrop's guard
-        // so a non-finite frame can never emit NaN/null CSS.
+        // collapse the hole to a point at centre (full blur, no cutout) while
+        // keeping the SAME path segment structure so the clip-path transition
+        // still interpolates. Mirrors applyThumbCrop's finite guard so a
+        // non-finite frame can never emit NaN CSS.
         const validFrame =
           f && [f.x, f.y, f.width, f.height].every((v) => typeof v === "number" && isFinite(v));
+        let hx, hy, hx2, hy2;
         if (!validFrame) {
-          // whole stream dimmed, no cutout
-          s.strips[0].style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
-          s.strips[1].style.display =
-            s.strips[2].style.display =
-            s.strips[3].style.display =
-              "none";
-          s.strips[0].className = "spot";
-          s.strips[0].style.display = "";
+          hx = hx2 = W / 2;
+          hy = hy2 = H / 2;
           s.ring.style.display = "none";
-          return;
+        } else {
+          const ex = f.x * W,
+            ey = f.y * H,
+            ew = f.width * W,
+            eh = f.height * H;
+          hx = clamp(ex, 0, W);
+          hy = clamp(ey, 0, H);
+          hx2 = clamp(ex + ew, hx, W);
+          hy2 = clamp(ey + eh, hy, H);
+          s.ring.style.display = "";
+          s.ring.style.left = r.x + ex + "px";
+          s.ring.style.top = r.y + ey + "px";
+          s.ring.style.width = ew + "px";
+          s.ring.style.height = eh + "px";
+          s.lab.textContent = nodeDesc(n);
         }
-        const ex = r.x + f.x * r.w,
-          ey = r.y + f.y * r.h,
-          ew = f.width * r.w,
-          eh = f.height * r.h;
-        const set = (el, x, y, w, h) => {
-          el.className = "spot";
-          el.style.display = "";
-          el.style.left = x + "px";
-          el.style.top = y + "px";
-          el.style.width = Math.max(0, w) + "px";
-          el.style.height = Math.max(0, h) + "px";
-        };
-        set(s.strips[0], r.x, r.y, r.w, ey - r.y); // top
-        set(s.strips[1], r.x, ey + eh, r.w, r.y + r.h - (ey + eh)); // bottom
-        set(s.strips[2], r.x, ey, ex - r.x, eh); // left
-        set(s.strips[3], ex + ew, ey, r.x + r.w - (ex + ew), eh); // right
-        s.ring.style.display = "";
-        s.ring.style.left = ex + "px";
-        s.ring.style.top = ey + "px";
-        s.ring.style.width = ew + "px";
-        s.ring.style.height = eh + "px";
-        s.lab.textContent = nodeDesc(n);
+        const path = `path(evenodd, "M0 0H${q(W)}V${q(H)}H0Z M${q(hx)} ${q(hy)}H${q(hx2)}V${q(hy2)}H${q(hx)}Z")`;
+        s.mask.style.clipPath = path;
+        s.mask.style.webkitClipPath = path;
       }
       function setInspect(on) {
         vp.inspect = on;
@@ -2132,36 +2184,66 @@
         commentBtn.hidden = !img; // only when a stream is live
       }
 
-      // rAF loop: spring each bubble toward its home (with a little spawn
-      // velocity → snappy, bouncy entrance), ease the connector endpoint
-      // toward the element's latest frame, and redraw every frame so lines
-      // and pins glide with the stream instead of stepping once per poll.
-      function vpTick() {
+      // rAF loop, fixed-timestep so motion is identical at 60/120 Hz and after
+      // a stutter (accumulator). Two damped springs (semi-implicit Euler):
+      // bubbles use a slow, near-critically-damped spring so they drift into
+      // place like a cloud; the connector endpoint uses a fast, zero-overshoot
+      // spring so the line glides *continuously* between describe samples
+      // (no arrive-wait-jump) and locks onto a fresh sample without wobble.
+      const VP_DT = 1 / 120;
+      const BUB_K = 4.2 * 4.2, // ω=4.2 rad/s, ζ=0.9 → ~1.05s floaty settle,
+        BUB_C = 2 * 0.9 * 4.2; //   one whisper of overshoot (not jiggly)
+      const CON_K = 26 * 26, // ω=26 rad/s, ζ=1 → ~0.15s, tight, no overshoot
+        CON_C = 2 * 1 * 26;
+      function vpSpr(s, v, key, target, k, c) {
+        const a = -k * (s[key] - target) - c * v[key];
+        v[key] += a * VP_DT;
+        s[key] += v[key] * VP_DT;
+      }
+      let vpLastT = 0;
+      let vpAcc = 0;
+      function vpTick(now) {
         requestAnimationFrame(vpTick);
-        if (!vp.proposals.length && !vp.inspect && !vp.annotations.length) return;
+        const t = now || performance.now();
+        if (!vp.proposals.length && !vp.inspect && !vp.annotations.length) {
+          vpLastT = t;
+          vpAcc = 0;
+          return;
+        }
+        const dt = vpLastT ? Math.min(0.25, (t - vpLastT) / 1000) : VP_DT;
+        vpLastT = t;
+        vpAcc += dt;
+        let steps = 0;
+        while (vpAcc >= VP_DT && steps < 30) {
+          vpAcc -= VP_DT;
+          steps++;
+          for (const p of vp.proposals) {
+            const rec = vp.cards.get(p.id);
+            if (!rec) continue;
+            if (rec.target) {
+              const tf = rec.target;
+              if (!rec.anim || !rec.animVel) {
+                rec.anim = { x: tf.x, y: tf.y, width: tf.width, height: tf.height };
+                rec.animVel = { x: 0, y: 0, width: 0, height: 0 };
+              } else {
+                vpSpr(rec.anim, rec.animVel, "x", tf.x, CON_K, CON_C);
+                vpSpr(rec.anim, rec.animVel, "y", tf.y, CON_K, CON_C);
+                vpSpr(rec.anim, rec.animVel, "width", tf.width, CON_K, CON_C);
+                vpSpr(rec.anim, rec.animVel, "height", tf.height, CON_K, CON_C);
+              }
+            } else {
+              rec.anim = null;
+            }
+            if (rec.pos && rec.home && !(rec.dragging && vp.cardDragging)) {
+              vpSpr(rec.pos, rec.vel, "x", rec.home.x, BUB_K, BUB_C);
+              vpSpr(rec.pos, rec.vel, "y", rec.home.y, BUB_K, BUB_C);
+            }
+          }
+        }
+        if (steps >= 30) vpAcc = 0; // shed backlog after a long stall
         for (const p of vp.proposals) {
           const rec = vp.cards.get(p.id);
-          if (!rec) continue;
-          if (rec.target) {
-            const t = rec.target;
-            if (!rec.anim) rec.anim = { x: t.x, y: t.y, width: t.width, height: t.height };
-            else {
-              const k = 0.32;
-              rec.anim.x += (t.x - rec.anim.x) * k;
-              rec.anim.y += (t.y - rec.anim.y) * k;
-              rec.anim.width += (t.width - rec.anim.width) * k;
-              rec.anim.height += (t.height - rec.anim.height) * k;
-            }
-          } else {
-            rec.anim = null;
-          }
-          if (rec.pos && rec.home && !(rec.dragging && vp.cardDragging)) {
-            const SK = 0.16, // stiffness
-              DM = 0.78; // damping (< 1 → slight overshoot = bouncy)
-            rec.vel.x = (rec.vel.x + (rec.home.x - rec.pos.x) * SK) * DM;
-            rec.vel.y = (rec.vel.y + (rec.home.y - rec.pos.y) * SK) * DM;
-            rec.pos.x += rec.vel.x;
-            rec.pos.y += rec.vel.y;
+          if (rec && rec.pos && rec.home && !(rec.dragging && vp.cardDragging)) {
             rec.el.style.left = rec.pos.x + "px";
             rec.el.style.top = rec.pos.y + "px";
           }
