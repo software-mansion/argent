@@ -28,8 +28,11 @@ It parks until the user presses "Complete selection" in the Argent preview UI, t
 choices and any comments.
 
 Returns one of:
-  • { status: "completed", selections: [{ element, chosenVariant, comment? }], unselected, globalComment }
+  • { status: "completed", selections: [{ element, chosenVariant, comment? }], unselected,
+      annotations: [{ target, match, comment }], globalComment }
         — the user is done; apply chosenVariant for each element (skip ones in \`unselected\`).
+        \`annotations\` are free-form comments the user pinned to specific on-screen elements via
+        the inspector — treat each as a change request for that element.
   • { status: "pending", message, proposedElements } — timeoutSeconds elapsed with no submission.
         Expected, not an error: the proposals are still live; call await_user_selection AGAIN.
   • { status: "no_proposals" } — you called this before propose_variant.

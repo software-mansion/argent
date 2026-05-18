@@ -99,6 +99,31 @@ describe("VariantProposalStore — blocking await + submit", () => {
     expect(s.snapshot().agentWaiting).toBe(false);
   });
 
+  it("delivers element annotations and a previewImage through the outcome", async () => {
+    const s = new VariantProposalStore();
+    s.proposeVariant({
+      element: "Foo",
+      variant: { name: "Bold", summary: "s", previewImage: "/tmp/shot.png" },
+    });
+    const foo = s.snapshot().proposals[0]!;
+    expect(foo.variants[0]!.previewImage).toBe("/tmp/shot.png");
+    expect(s.findVariant(foo.id, foo.variants[0]!.id)?.previewImage).toBe("/tmp/shot.png");
+
+    const p = s.awaitSelection({ timeoutMs: 2000 });
+    s.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id }],
+      annotations: [
+        { target: "Search bar", match: { by: "text", value: "Search" }, comment: "add clear (x)" },
+        { target: "", match: { by: "label", value: "" }, comment: "   " }, // dropped (blank)
+      ],
+    });
+    const out = await p;
+    if (out.status !== "completed") throw new Error("unreachable");
+    expect(out.annotations).toEqual([
+      { target: "Search bar", match: { by: "text", value: "Search" }, comment: "add clear (x)" },
+    ]);
+  });
+
   it("resolves EVERY concurrent waiter with the same frozen outcome", async () => {
     const s = new VariantProposalStore();
     s.proposeVariant({ element: "Foo", variant: variant("Bold") });

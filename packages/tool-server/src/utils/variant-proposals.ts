@@ -44,6 +44,13 @@ export interface Variant {
   code?: string;
   /** Path to a file containing the variant implementation (optional). */
   filePath?: string;
+  /**
+   * Optional preview of how the variant looks. May be an http(s) URL, a
+   * `data:` URI, or a local image file path (e.g. a screenshot from the
+   * Argent screenshot tool) — the latter is streamed by
+   * `GET /preview/variant-image/:elementId/:variantId`.
+   */
+  previewImage?: string;
   createdAt: number;
 }
 
@@ -70,6 +77,19 @@ export interface ResolvedSelection {
   comment?: string;
 }
 
+/**
+ * A free-form comment the user anchored to an arbitrary on-screen element via
+ * the "Add comment" inspector (not necessarily an element the agent proposed
+ * variants for). Delivered to the agent alongside the variant selections.
+ */
+export interface ElementAnnotation {
+  /** Human-readable element descriptor (a11y label / identifier / role). */
+  target: string;
+  /** Matcher the agent can use to re-locate the element. */
+  match: VariantMatch;
+  comment: string;
+}
+
 export type AwaitOutcome =
   | {
       status: "completed";
@@ -77,6 +97,8 @@ export type AwaitOutcome =
       selections: ResolvedSelection[];
       /** Elements the agent proposed but the user did not pick a variant for. */
       unselected: Array<{ element: string }>;
+      /** User-initiated comments anchored to elements via the inspector. */
+      annotations: ElementAnnotation[];
       globalComment?: string;
       completedAt: number;
     }
@@ -129,6 +151,7 @@ export class VariantProposalStore {
   private consumed = false;
   private globalComment = "";
   private submitted: SubmittedSelection[] = [];
+  private submittedAnnotations: ElementAnnotation[] = [];
   private variantSeq = 0;
   /** Parked await_user_selection calls. */
   private waitersList: Waiter[] = [];
@@ -159,9 +182,16 @@ export class VariantProposalStore {
     this.consumed = false;
     this.globalComment = "";
     this.submitted = [];
+    this.submittedAnnotations = [];
     this.variantSeq = 0;
     this.lastOutcome = null;
     this.events.emit("changed");
+  }
+
+  /** Look up a stored variant (used to resolve a preview-image path safely). */
+  findVariant(elementId: string, variantId: string): Variant | null {
+    const p = this.proposals.find((x) => x.id === elementId);
+    return p?.variants.find((v) => v.id === variantId) ?? null;
   }
 
   private autoRollIfConsumed(): void {
@@ -173,7 +203,13 @@ export class VariantProposalStore {
   proposeVariant(input: {
     element: string;
     match?: VariantMatch;
-    variant: { name: string; summary: string; code?: string; filePath?: string };
+    variant: {
+      name: string;
+      summary: string;
+      code?: string;
+      filePath?: string;
+      previewImage?: string;
+    };
   }): {
     round: number;
     elementId: string;
@@ -207,6 +243,7 @@ export class VariantProposalStore {
       summary: input.variant.summary,
       code: input.variant.code,
       filePath: input.variant.filePath,
+      previewImage: input.variant.previewImage,
       createdAt: Date.now(),
     };
     proposal.variants.push(variant);
@@ -236,7 +273,11 @@ export class VariantProposalStore {
   }
 
   /** Called by the preview UI when the human presses "Complete selection". */
-  submitSelection(input: { selections: SubmittedSelection[]; globalComment?: string }): {
+  submitSelection(input: {
+    selections: SubmittedSelection[];
+    globalComment?: string;
+    annotations?: ElementAnnotation[];
+  }): {
     ok: true;
     round: number;
     resolved: number;
@@ -247,6 +288,13 @@ export class VariantProposalStore {
     this.submitted = input.selections.filter((s) =>
       this.proposals.some((p) => p.id === s.elementId)
     );
+    this.submittedAnnotations = (input.annotations ?? [])
+      .filter((a) => a && typeof a.comment === "string" && a.comment.trim())
+      .map((a) => ({
+        target: String(a.target ?? "").slice(0, 200) || "(element)",
+        match: a.match,
+        comment: a.comment.trim().slice(0, 2_000),
+      }));
     this.globalComment = (input.globalComment ?? "").trim();
     this.completed = true;
     this.consumed = false;
@@ -312,6 +360,7 @@ export class VariantProposalStore {
       round: this.round,
       selections,
       unselected,
+      annotations: this.submittedAnnotations.map((a) => ({ ...a })),
       globalComment: this.globalComment || undefined,
       completedAt: Date.now(),
     };

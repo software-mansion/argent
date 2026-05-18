@@ -6,7 +6,12 @@ import type { Registry } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "./blueprints/simulator-server";
 import { resolveDevice } from "./utils/device-info";
 import { listDevicesTool } from "./tools/devices/list-devices";
-import { variantProposalStore, type SubmittedSelection } from "./utils/variant-proposals";
+import {
+  variantProposalStore,
+  type SubmittedSelection,
+  type ElementAnnotation,
+  type VariantMatch,
+} from "./utils/variant-proposals";
 import type { DescribeResult } from "./tools/describe/contract";
 
 function findUiHtml(): string | null {
@@ -115,15 +120,69 @@ export function createPreviewRouter(registry: Registry): Router {
         comment: typeof s.comment === "string" && s.comment.trim() ? s.comment.trim() : undefined,
       });
     }
+    const matchKinds = new Set(["text", "label", "identifier", "role"]);
+    const rawAnn = Array.isArray(body.annotations) ? body.annotations : [];
+    const annotations: ElementAnnotation[] = [];
+    for (const a of rawAnn) {
+      if (!a || typeof a.comment !== "string" || !a.comment.trim()) continue;
+      const m = a.match;
+      const match: VariantMatch =
+        m && matchKinds.has(m.by) && typeof m.value === "string" && m.value
+          ? { by: m.by, value: String(m.value) }
+          : { by: "text", value: String(a.target ?? "") };
+      annotations.push({
+        target: typeof a.target === "string" && a.target ? a.target : "(element)",
+        match,
+        comment: a.comment,
+      });
+    }
     try {
       const result = variantProposalStore.submitSelection({
         selections,
+        annotations,
         globalComment: typeof body.globalComment === "string" ? body.globalComment : undefined,
       });
       res.json(result);
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  // Streams a variant's local preview-image file (e.g. a screenshot path the
+  // agent attached). Only ever serves a path currently stored on a variant —
+  // no arbitrary filesystem access. http(s)/data: previews are used directly
+  // by the browser and never hit this route.
+  router.get("/variant-image/:elementId/:variantId", (req: Request, res: Response) => {
+    const v = variantProposalStore.findVariant(req.params.elementId!, req.params.variantId!);
+    const src = v?.previewImage;
+    if (!src || /^(https?:|data:)/i.test(src)) {
+      res.status(404).end();
+      return;
+    }
+    let real: string;
+    try {
+      real = fs.realpathSync(src);
+      if (!fs.statSync(real).isFile()) throw new Error("not a file");
+    } catch {
+      res.status(404).end();
+      return;
+    }
+    const ext = path.extname(real).toLowerCase();
+    const mime =
+      ext === ".png"
+        ? "image/png"
+        : ext === ".jpg" || ext === ".jpeg"
+          ? "image/jpeg"
+          : ext === ".webp"
+            ? "image/webp"
+            : ext === ".gif"
+              ? "image/gif"
+              : "application/octet-stream";
+    res.set("Cache-Control", "no-store");
+    res.type(mime);
+    fs.createReadStream(real)
+      .on("error", () => res.status(404).end())
+      .pipe(res);
   });
 
   // Accessibility tree for the streamed device so the UI can anchor each
