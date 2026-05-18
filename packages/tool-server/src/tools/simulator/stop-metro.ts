@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import type { ToolDefinition } from "@argent/registry";
 
 const zodSchema = z.object({
@@ -23,7 +23,10 @@ export const stopMetroTool: ToolDefinition<
   async execute(_services, params) {
     const port = (params as { port: number }).port;
     try {
-      const output = execSync(`lsof -ti tcp:${port}`, {
+      // execFileSync (no shell) so `port` can never be shell-interpreted,
+      // even if a caller bypasses the zod schema. `port` is also validated to
+      // an int by registry.invokeTool before reaching here.
+      const output = execFileSync("lsof", ["-ti", `tcp:${port}`], {
         encoding: "utf-8",
         timeout: 5_000,
       }).trim();

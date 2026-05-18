@@ -85,6 +85,20 @@ describe("Authorization gate", () => {
     const res = await request(handle.app).get("/registry/snapshot");
     expect(res.status).toBe(401);
   });
+
+  it("exempts the /preview UI subtree from auth", async () => {
+    // The browser-loaded preview UI has no token; /preview and /preview/* must
+    // stay reachable. (stub registry has no UI html → not 200, but must not 401.)
+    const res = await request(handle.app).get("/preview/");
+    expect(res.status).not.toBe(401);
+  });
+
+  it("does NOT exempt a non-/preview/ path that merely starts with 'preview' (footgun closed)", async () => {
+    // Guards the tightened exemption: a bare startsWith('/preview') used to
+    // leave a route like /preview-status silently unauthenticated.
+    const res = await request(handle.app).get("/preview-status");
+    expect(res.status).toBe(401);
+  });
 });
 
 describe("Authorization gate (token unset / dev mode)", () => {

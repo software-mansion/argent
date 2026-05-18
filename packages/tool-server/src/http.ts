@@ -124,14 +124,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   }
 
   // Authorization gate. Runs after Host validation and before any handler.
-  // /preview is intentionally exempt because it is user-facing and was not
-  // gated before; tightening it is a follow-up.
+  // The /preview subtree is exempt because it is the browser-loaded in-process
+  // UI (no token available client-side); fully authenticating it needs an
+  // out-of-band UI session and is a deliberate follow-up. The exemption is an
+  // exact `/preview` or `/preview/`-prefixed match so a future top-level route
+  // like `/preview-status` can't be silently un-gated by a bare startsWith.
   app.use((req, res, next) => {
     if (!expectedToken) {
       next();
       return;
     }
-    if (req.path.startsWith("/preview")) {
+    if (req.path === "/preview" || req.path.startsWith("/preview/")) {
       next();
       return;
     }

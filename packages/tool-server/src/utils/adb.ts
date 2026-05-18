@@ -117,6 +117,18 @@ async function runAdbBinary(args: string[], options: { timeoutMs?: number } = {}
   }
 }
 
+/**
+ * POSIX single-quote escape for a value interpolated into an `adb shell`
+ * command string. `adb shell <str>` re-parses <str> through the device's
+ * /bin/sh, so an unquoted bundleId/activity like `x; rm -rf /` would execute
+ * on the device. Wrapping in single quotes and escaping embedded quotes makes
+ * the value an inert single token. (open-url/platforms/android.ts already does
+ * this inline for URLs; this is the shared form.)
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 /** `adb -s <serial> shell <shellCommand>` with the shell command passed as a single argv entry. */
 export async function adbShell(
   serial: string,
