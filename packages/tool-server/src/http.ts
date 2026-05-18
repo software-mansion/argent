@@ -88,6 +88,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         outputHint?: string;
         alwaysLoad?: boolean;
         searchHint?: string;
+        longRunning?: boolean;
       } = {
         name: id,
         description: def?.description ?? "",
@@ -96,6 +97,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (def?.outputHint) entry.outputHint = def.outputHint;
       if (def?.alwaysLoad) entry.alwaysLoad = true;
       if (def?.searchHint) entry.searchHint = def.searchHint;
+      if (def?.longRunning) entry.longRunning = true;
       return entry;
     });
     res.json({ tools });

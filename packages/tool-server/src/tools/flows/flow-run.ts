@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
+import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
   name: z.string().describe('Name of the flow to run (e.g. "settings-explore")'),
@@ -42,13 +43,15 @@ export function createRunFlowTool(
     id: "flow-execute",
     description: `Run a saved flow from the .argent/flows/ directory.
 Each step is executed in order: tool calls are dispatched through the registry,
-echo steps print a message. Returns the result of every step, including images.
+echo steps print a message. A tool step may carry \`delayMs: <ms>\` to sleep
+that long before the step runs. Returns the result of every step, including images.
 Use when you want to replay a recorded flow or run a scripted sequence of simulator actions.
 Fails if the flow file does not exist or a step tool raises an error (execution stops at that step).
 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not
 set to true, the tool returns a notice with the prerequisite instead of running.
 Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
+    longRunning: true,
     zodSchema,
     services: () => ({}),
     async execute(_services, params) {
@@ -76,6 +79,8 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
           steps.push({ kind: "echo", message: step.message });
           continue;
         }
+
+        if (step.delayMs) await sleep(step.delayMs);
 
         const toolDef = registry.getTool(step.name);
 
