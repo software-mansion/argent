@@ -48,10 +48,10 @@ Before starting to interact with the app, read the `argent-device-interact` skil
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
+- Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
@@ -68,6 +68,9 @@ When `is_react_native` is true: load `argent-react-native-app-workflow` skill. U
 <skill_routing>
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
+
+PLATFORM DETECTION
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS.
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`

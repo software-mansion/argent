@@ -24,7 +24,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing** — on iOS try `paste` first then fall back to `keyboard`; on Android use `keyboard` directly (`paste` is iOS-only).
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
-6. **For native iOS app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
+6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
 ## 3. Opening Apps
 
