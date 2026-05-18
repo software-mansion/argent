@@ -237,10 +237,6 @@
         stroke-width: 1.5;
         opacity: 0.7;
       }
-      .connectors path.offscreen {
-        stroke-dasharray: 4 4;
-        opacity: 0.5;
-      }
       .connectors circle {
         fill: var(--accent);
       }
@@ -261,6 +257,16 @@
         box-shadow: 0 10px 30px #0009;
         pointer-events: auto;
         overflow: hidden;
+        transform-origin: center center;
+        /* left/top are JS spring-driven; scale+opacity pop via CSS. */
+        transition:
+          opacity 0.22s ease,
+          transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      .vcard.gone {
+        opacity: 0;
+        transform: scale(0.8);
+        pointer-events: none;
       }
       .vcard-head {
         display: flex;
@@ -399,6 +405,12 @@
         backdrop-filter: blur(5px);
         -webkit-backdrop-filter: blur(5px);
         pointer-events: none;
+        transition:
+          left 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
+          top 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
+          width 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
+          height 0.3s cubic-bezier(0.34, 1.4, 0.64, 1),
+          opacity 0.18s ease;
       }
       .spot-ring {
         position: absolute;
@@ -406,6 +418,11 @@
         border-radius: 4px;
         box-shadow: 0 0 0 1px #000a;
         pointer-events: none;
+        transition:
+          left 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
+          top 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
+          width 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
+          height 0.26s cubic-bezier(0.34, 1.56, 0.64, 1);
       }
       .spot-ring .lab {
         position: absolute;
@@ -1152,7 +1169,14 @@
       function shouldForwardKey(ev) {
         if (!wsOpen) return false;
         const ae = document.activeElement;
-        if (ae && (ae.tagName === "SELECT" || ae.tagName === "BUTTON" || ae.tagName === "INPUT")) {
+        if (
+          ae &&
+          (ae.tagName === "SELECT" ||
+            ae.tagName === "BUTTON" ||
+            ae.tagName === "INPUT" ||
+            ae.tagName === "TEXTAREA" ||
+            ae.isContentEditable)
+        ) {
           return false;
         }
         // Let the browser keep its own shortcuts (Cmd+R, Cmd+T, Cmd+W, Cmd+L, …).
@@ -1259,7 +1283,10 @@
         annotations: [], // [{ id, target, match, comment }]
         tree: null,
         treeAt: 0,
-        cards: new Map(), // elementId -> { el, pos:{x,y}|null }
+        cards: new Map(), // id -> { el, sig, target, anim, home, pos, vel, pinned, gone, spawned, dragging }
+        thumbFrames: {}, // id -> frozen frame for the static preview crop
+        conn: new Map(), // id -> { path, dot } reused SVG nodes
+        pinEls: new Map(), // annId -> reused pin element
         annId: 0,
         submitting: false,
         dragging: false,
@@ -1365,7 +1392,8 @@
         };
       }
 
-      async function vpPoll() {
+      // Proposals change rarely → poll on a relaxed interval.
+      async function pollVariants() {
         try {
           const res = await fetch(`${TOOL_SERVER}/preview/variants`, { cache: "no-store" });
           if (res.ok) {
@@ -1381,6 +1409,7 @@
                 vp.staged = {};
                 vp.comments = {};
                 vp.annotations = [];
+                vp.thumbFrames = {};
                 if (globalCommentEl) globalCommentEl.value = "";
                 if (vp.justCompletedRound === snap.round) {
                   /* keep our own success note */
@@ -1394,11 +1423,25 @@
         } catch {
           /* keep last state */
         }
-        if (currentUdid && (vp.proposals.length > 0 || vp.inspect)) {
+        vpRender();
+      }
+
+      // Element geometry changes continuously as the user scrolls the device,
+      // so poll describe as fast as it can answer (self-scheduling, never
+      // overlapping) — combined with vpTick easing, the lines track the stream.
+      let describeInFlight = false;
+      async function describeOnce() {
+        const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
+        if (need && !describeInFlight) {
+          describeInFlight = true;
+          // Bound each request — describe is polled ~3×/s now, so a single
+          // stuck socket must not latch describeInFlight and stall the loop.
+          const ac = new AbortController();
+          const killer = setTimeout(() => ac.abort(), 4000);
           try {
             const d = await fetch(
               `${TOOL_SERVER}/preview/describe/${encodeURIComponent(currentUdid)}`,
-              { cache: "no-store" }
+              { cache: "no-store", signal: ac.signal }
             );
             if (d.ok) {
               const j = await d.json();
@@ -1408,11 +1451,28 @@
               }
             }
           } catch {
-            /* describe best-effort */
+            /* describe best-effort (incl. abort/timeout) */
+          } finally {
+            clearTimeout(killer);
+            describeInFlight = false;
           }
         }
         if (Date.now() - vp.treeAt > 6000) vp.tree = null;
         vpRender();
+      }
+      // Single self-scheduling loop (started once). Polls as fast as describe
+      // can answer while needed, backs off when idle. Never run twice.
+      let describeLoopArmed = false;
+      async function pollDescribe() {
+        if (describeLoopArmed) return;
+        describeLoopArmed = true;
+        const tick = async () => {
+          const t0 = Date.now();
+          await describeOnce();
+          const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
+          setTimeout(tick, need ? Math.max(300, 360 - (Date.now() - t0)) : 900);
+        };
+        tick();
       }
 
       function setNote(text, kind) {
@@ -1512,13 +1572,22 @@
             const node = rec ? rec.el : el;
             const x = m.clientX - mr.left - node.offsetWidth / 2;
             const y = m.clientY - mr.top - 12;
-            if (rec) rec.pos = { x, y };
+            if (rec) {
+              // Pin where the user drops it; freeze the spring so it doesn't
+              // fight the pointer (the rAF tick reads pos/home).
+              rec.dragging = true;
+              rec.pinned = true;
+              rec.pos = { x, y };
+              rec.home = { x, y };
+              rec.vel = { x: 0, y: 0 };
+            }
             node.style.left = x + "px";
             node.style.top = y + "px";
-            drawConnectors();
           };
           const up = () => {
             vp.cardDragging = false;
+            const rec = vp.cards.get(p.id);
+            if (rec) rec.dragging = false;
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
             window.removeEventListener("pointercancel", up);
@@ -1560,7 +1629,7 @@
             im.className = "thumb-img";
             im.draggable = false;
             im.alt = v.name;
-            im.onload = () => applyThumbCrop(tw, p._node && p._node.frame);
+            im.onload = () => applyThumbCrop(tw, vp.thumbFrames[p.id]);
             im.onerror = () => {
               tw.replaceWith(placeholderThumb());
             };
@@ -1651,10 +1720,11 @@
             tag.remove();
           }
         });
-        // Re-crop thumbnails: the matched element's frame only arrives once
-        // describe has resolved, and can shift between polls.
+        // The preview screenshot is a static artifact — crop it at the frame
+        // the element had when first matched (frozen per id), so the thumbnail
+        // does NOT shift when the live screen scrolls.
         el.querySelectorAll(".thumb").forEach((tw) => {
-          if (tw.querySelector(".thumb-img")) applyThumbCrop(tw, p._node && p._node.frame);
+          if (tw.querySelector(".thumb-img")) applyThumbCrop(tw, vp.thumbFrames[p.id]);
         });
         const w = el.querySelector(".where");
         if (w) {
@@ -1666,25 +1736,28 @@
         return el.contains(document.activeElement);
       }
 
+      // Structural pass only. Card *positions* are integrated by the rAF
+      // physics tick (vpTick); here we just (re)build DOM, toggle the
+      // off-screen fade, and compute each visible card's spring "home"
+      // anchored to its element (vertical de-overlap) — not a rigid column.
+      const GONE_GRACE_MS = 550; // ride out brief edge drop-outs before fading
       function layoutCards() {
+        const now = Date.now();
         const mr = mainEl.getBoundingClientRect();
-        const mw = mr.width;
         const r = streamRect();
         const cardW = 232;
-        const gutterX = r
-          ? Math.min(mw - cardW - 14, r.x + r.w + 26)
-          : Math.max(14, mw - cardW - 14);
+        const gx = r
+          ? Math.min(mr.width - cardW - 14, r.x + r.w + 26)
+          : Math.max(14, mr.width - cardW - 14);
         const live = new Set();
-        let y = 14;
         for (const p of vp.proposals) {
           live.add(p.id);
           let rec = vp.cards.get(p.id);
           const sig = cardSig(p);
           if (!rec) {
-            rec = { el: buildCard(p), pos: null, sig };
+            rec = { el: buildCard(p), sig, pinned: false, pos: null, vel: { x: 0, y: 0 } };
             vp.cards.set(p.id, rec);
           } else if (rec.sig !== sig && !vp.dragging && !vp.cardDragging && !cardHasFocus(rec.el)) {
-            // Structure changed and it's safe to swap — preserve manual pos.
             const fresh = buildCard(p);
             rec.el.replaceWith(fresh);
             rec.el = fresh;
@@ -1692,58 +1765,126 @@
           }
           if (rec.el.parentElement !== cardsEl) cardsEl.appendChild(rec.el);
           refreshCardState(rec.el, p);
-          const pos = rec.pos || { x: gutterX, y };
-          rec.el.style.left = pos.x + "px";
-          rec.el.style.top = pos.y + "px";
-          y = (rec.pos ? y : pos.y) + rec.el.offsetHeight + 12;
+          const matched = !!p._node;
+          if (matched) {
+            rec.everMatched = true;
+            rec.lostAt = 0;
+            rec.target = p._node.frame;
+          } else if (rec.everMatched && !rec.lostAt) {
+            rec.lostAt = now;
+          }
+          // Hysteresis: an element grazing the screen edge between describe
+          // polls must NOT fade+teleport the card. Fade only after it's been
+          // gone for GONE_GRACE_MS; never show a phantom card for an element
+          // that has never been on screen. Keep the last frame during the
+          // grace window so the connector holds steady instead of blinking.
+          const lost =
+            !matched && (!rec.everMatched || (rec.lostAt && now - rec.lostAt > GONE_GRACE_MS));
+          const wasGone = rec.gone;
+          // Keep it visible if the user is mid-typing in its comment box.
+          rec.gone = lost && !cardHasFocus(rec.el);
+          rec.el.classList.toggle("gone", rec.gone);
+          if (rec.gone) rec.target = null; // drop the connector when truly gone
+          if (wasGone && !rec.gone) {
+            rec.spawned = false; // genuine re-entry → pop back in
+            rec.pos = null;
+          }
         }
         for (const [id, rec] of vp.cards) {
           if (!live.has(id)) {
             rec.el.remove();
+            const cn = vp.conn.get(id);
+            if (cn) {
+              cn.path.remove();
+              cn.dot.remove();
+              vp.conn.delete(id);
+            }
             vp.cards.delete(id);
+          }
+        }
+        // Dynamic homes: align each visible card's vertical centre with its
+        // element, then push apart any that would overlap.
+        if (!r) return;
+        const want = [];
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec || rec.gone || !rec.target) continue;
+          const ch = rec.el.offsetHeight || 132;
+          const cy = r.y + (rec.target.y + rec.target.height / 2) * r.h;
+          want.push({
+            rec,
+            ch,
+            y: Math.max(8, Math.min(mr.height - ch - 8, cy - ch / 2)),
+          });
+        }
+        want.sort((a, b) => a.y - b.y);
+        let prevBottom = -Infinity;
+        for (const w of want) {
+          if (w.y < prevBottom + 12) w.y = prevBottom + 12;
+          prevBottom = w.y + w.ch;
+          w.rec.home = w.rec.pinned && w.rec.pos ? w.rec.pos : { x: gx, y: w.y };
+          if (!w.rec.pos) {
+            // First appearance: spawn just below home with an upward
+            // mini-velocity so it springs into place dynamically.
+            w.rec.pos = { x: w.rec.home.x + (Math.random() * 50 - 25), y: w.rec.home.y + 44 };
+            w.rec.vel = { x: Math.random() * 8 - 4, y: -(7 + Math.random() * 9) };
+            // Place immediately so it doesn't flash at (0,0) before vpTick.
+            w.rec.el.style.left = w.rec.pos.x + "px";
+            w.rec.el.style.top = w.rec.pos.y + "px";
+          }
+          if (!w.rec.spawned) {
+            w.rec.spawned = true;
+            w.rec.vel.x += Math.random() * 12 - 6;
+            w.rec.vel.y += Math.random() * 8 - 6;
           }
         }
       }
 
+      // Reuses SVG nodes (no per-frame teardown) and draws to the *eased*
+      // element frame (rec.anim) + live card rect, so the line tracks the
+      // stream smoothly every animation frame. Off-screen → no line at all.
       function drawConnectors() {
-        while (connEl.firstChild) connEl.removeChild(connEl.firstChild);
         const mr = mainEl.getBoundingClientRect();
         connEl.setAttribute("width", mr.width);
         connEl.setAttribute("height", mr.height);
         const r = streamRect();
+        const live = new Set();
         for (const p of vp.proposals) {
           const rec = vp.cards.get(p.id);
-          if (!rec) continue;
+          if (!rec || rec.gone || !rec.anim || !r) continue;
+          live.add(p.id);
+          let cn = vp.conn.get(p.id);
+          if (!cn) {
+            const path = document.createElementNS(SVGNS, "path");
+            const dot = document.createElementNS(SVGNS, "circle");
+            dot.setAttribute("r", "4");
+            connEl.append(path, dot);
+            cn = { path, dot };
+            vp.conn.set(p.id, cn);
+          }
           const cr = rec.el.getBoundingClientRect();
-          const from = { x: cr.left - mr.left, y: cr.top - mr.top + cr.height / 2 };
-          // anchor on the card side facing the stream
-          if (r && from.x > r.x + r.w) from.x = cr.left - mr.left;
-          else from.x = cr.left - mr.left + cr.width;
-
-          let to,
-            off = false;
-          if (p._node) {
-            to = elementPoint(p._node.frame);
-          }
-          if (!to && r) {
-            off = true;
-            to = { x: r.x + r.w / 2, y: r.y + 8 }; // points at the screen, top-center
-          }
-          if (!to) continue;
-          const path = document.createElementNS(SVGNS, "path");
+          const cardLeft = cr.left - mr.left;
+          const from = {
+            x: cardLeft > r.x + r.w ? cardLeft : cardLeft + cr.width,
+            y: cr.top - mr.top + cr.height / 2,
+          };
+          const to = {
+            x: r.x + (rec.anim.x + rec.anim.width / 2) * r.w,
+            y: r.y + (rec.anim.y + rec.anim.height / 2) * r.h,
+          };
           const mx = (from.x + to.x) / 2;
-          path.setAttribute(
+          cn.path.setAttribute(
             "d",
             `M ${from.x} ${from.y} C ${mx} ${from.y} ${mx} ${to.y} ${to.x} ${to.y}`
           );
-          if (off) path.setAttribute("class", "offscreen");
-          connEl.appendChild(path);
-          if (!off) {
-            const c = document.createElementNS(SVGNS, "circle");
-            c.setAttribute("cx", to.x);
-            c.setAttribute("cy", to.y);
-            c.setAttribute("r", "4");
-            connEl.appendChild(c);
+          cn.dot.setAttribute("cx", to.x);
+          cn.dot.setAttribute("cy", to.y);
+        }
+        for (const [id, cn] of vp.conn) {
+          if (!live.has(id)) {
+            cn.path.remove();
+            cn.dot.remove();
+            vp.conn.delete(id);
           }
         }
       }
@@ -1862,7 +2003,7 @@
           releaseAllInput();
           ensureSpot();
           paintSpot();
-          vpPoll();
+          describeOnce(); // immediate tree for the spotlight; loop continues
         }
       }
       function openCommentPop(node) {
@@ -1924,47 +2065,64 @@
         });
       }
 
-      function renderPins() {
-        cardsEl.querySelectorAll(".ann-pin").forEach((e) => e.remove());
-        if (!vp.tree) return;
+      // Structure only — reconcile the pin set with vp.annotations (reused
+      // elements, listener bound once so click survives 60fps repositioning).
+      function ensurePins() {
+        const live = new Set(vp.annotations.map((a) => String(a.id)));
+        for (const [id, el] of vp.pinEls) {
+          if (!live.has(id)) {
+            el.remove();
+            vp.pinEls.delete(id);
+          }
+        }
         vp.annotations.forEach((a, i) => {
-          const n = vpMatchNode(vp.tree, a.match);
-          if (!n) return;
-          const pt = elementPoint(n.frame);
-          if (!pt) return;
-          const pin = document.createElement("div");
-          pin.className = "ann-pin";
-          pin.textContent = String(i + 1);
-          pin.title = a.target + ": " + a.comment;
-          pin.style.left = pt.x + "px";
-          pin.style.top = pt.y + "px";
-          pin.addEventListener("click", () => {
-            if (confirm(`Remove comment on "${a.target}"?\n\n“${a.comment}”`)) {
-              vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
-              vpRender();
-            }
-          });
-          cardsEl.appendChild(pin);
+          let el = vp.pinEls.get(String(a.id));
+          if (!el) {
+            el = document.createElement("div");
+            el.className = "ann-pin";
+            el.addEventListener("click", () => {
+              if (confirm(`Remove comment on "${a.target}"?\n\n“${a.comment}”`)) {
+                vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
+                vpRender();
+              }
+            });
+            cardsEl.appendChild(el);
+            vp.pinEls.set(String(a.id), el);
+          }
+          el.textContent = String(i + 1);
+          el.title = a.target + ": " + a.comment;
         });
       }
+      // Per-frame: glide each pin to its element's latest position.
+      function positionPins() {
+        if (!vp.tree) return;
+        for (const a of vp.annotations) {
+          const el = vp.pinEls.get(String(a.id));
+          if (!el) continue;
+          const n = vpMatchNode(vp.tree, a.match);
+          const pt = n && elementPoint(n.frame);
+          if (!pt) {
+            el.style.display = "none";
+            continue;
+          }
+          el.style.display = "";
+          el.style.left = pt.x + "px";
+          el.style.top = pt.y + "px";
+        }
+      }
 
+      // Structural pass (poll / resize / stage cadence). Positions, connector
+      // and pin tracking are handled every animation frame by vpTick().
       function vpRender() {
         for (const p of vp.proposals) {
           p._node = vp.tree ? vpMatchNode(vp.tree, p.match) : null;
-        }
-        layoutCards();
-        // reflect on-screen / off-screen on each card header
-        for (const p of vp.proposals) {
-          const rec = vp.cards.get(p.id);
-          if (!rec) continue;
-          const w = rec.el.querySelector(".where");
-          if (w) {
-            w.textContent = p._node ? "on screen" : "off screen";
-            w.className = "where" + (p._node ? " on" : "");
+          if (p._node && !vp.thumbFrames[p.id]) {
+            const f = p._node.frame;
+            vp.thumbFrames[p.id] = { x: f.x, y: f.y, width: f.width, height: f.height };
           }
         }
-        drawConnectors();
-        renderPins();
+        layoutCards();
+        ensurePins();
         if (vp.inspect) paintSpot();
 
         const has = vp.proposals.length > 0 || vp.annotations.length > 0;
@@ -1973,6 +2131,45 @@
         completeBtn.disabled = vp.submitting || !has;
         commentBtn.hidden = !img; // only when a stream is live
       }
+
+      // rAF loop: spring each bubble toward its home (with a little spawn
+      // velocity → snappy, bouncy entrance), ease the connector endpoint
+      // toward the element's latest frame, and redraw every frame so lines
+      // and pins glide with the stream instead of stepping once per poll.
+      function vpTick() {
+        requestAnimationFrame(vpTick);
+        if (!vp.proposals.length && !vp.inspect && !vp.annotations.length) return;
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec) continue;
+          if (rec.target) {
+            const t = rec.target;
+            if (!rec.anim) rec.anim = { x: t.x, y: t.y, width: t.width, height: t.height };
+            else {
+              const k = 0.32;
+              rec.anim.x += (t.x - rec.anim.x) * k;
+              rec.anim.y += (t.y - rec.anim.y) * k;
+              rec.anim.width += (t.width - rec.anim.width) * k;
+              rec.anim.height += (t.height - rec.anim.height) * k;
+            }
+          } else {
+            rec.anim = null;
+          }
+          if (rec.pos && rec.home && !(rec.dragging && vp.cardDragging)) {
+            const SK = 0.16, // stiffness
+              DM = 0.78; // damping (< 1 → slight overshoot = bouncy)
+            rec.vel.x = (rec.vel.x + (rec.home.x - rec.pos.x) * SK) * DM;
+            rec.vel.y = (rec.vel.y + (rec.home.y - rec.pos.y) * SK) * DM;
+            rec.pos.x += rec.vel.x;
+            rec.pos.y += rec.vel.y;
+            rec.el.style.left = rec.pos.x + "px";
+            rec.el.style.top = rec.pos.y + "px";
+          }
+        }
+        drawConnectors();
+        positionPins();
+      }
+      requestAnimationFrame(vpTick);
 
       async function vpComplete() {
         if (vp.submitting) return;
@@ -2018,6 +2215,9 @@
       // Called by teardownStream when the stream is torn down.
       function vpResetOverlay() {
         vp.cards.clear();
+        vp.thumbFrames = {};
+        vp.conn.clear();
+        vp.pinEls.clear();
         if (cardsEl) cardsEl.innerHTML = "";
         if (connEl) while (connEl.firstChild) connEl.removeChild(connEl.firstChild);
         if (vp.spot) {
@@ -2044,7 +2244,12 @@
       commentBtn.addEventListener("click", () => setInspect(!vp.inspect));
       completeBtn.addEventListener("click", vpComplete);
       document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && vp.inspect) setInspect(false);
+        if (e.key !== "Escape" || !vp.inspect) return;
+        // Don't tear down the inspector (and lose an in-progress comment) if
+        // the user is typing — let the comment-pop's own Cancel handle that.
+        const ae = document.activeElement;
+        if (ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT")) return;
+        setInspect(false);
       });
       viewport.addEventListener("dragover", (ev) => {
         if (vp.proposals.length) ev.preventDefault();
@@ -2058,8 +2263,9 @@
         if (data) vpStage(data.elementId, data.variantId);
       });
       window.addEventListener("resize", () => vpRender());
-      setInterval(vpPoll, 1500);
-      vpPoll();
+      setInterval(pollVariants, 1200);
+      pollVariants();
+      pollDescribe(); // arms the single fast describe loop
 
       refreshSimulators();
     </script>
