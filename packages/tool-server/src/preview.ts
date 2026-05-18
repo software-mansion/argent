@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { Request, Response, Router } from "express";
 import express from "express";
@@ -166,9 +167,31 @@ export function createPreviewRouter(registry: Registry): Router {
   });
 
   // Streams a variant's local preview-image file (e.g. a screenshot path the
-  // agent attached). Only ever serves a path currently stored on a variant —
-  // no arbitrary filesystem access. http(s)/data: previews are used directly
-  // by the browser and never hit this route.
+  // agent attached). Only serves a path currently stored on a variant AND
+  // resolving (after symlinks) under an allowlisted root (OS temp dir — where
+  // the screenshot tool writes — or the tool-server cwd), with a known image
+  // extension and a size cap. http(s)/data: previews are used directly by the
+  // browser and never hit this route. This route has no auth and IDs are
+  // enumerable, so the containment check is the real protection.
+  const IMG_MIME: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+  };
+  const MAX_PREVIEW_BYTES = 25 * 1024 * 1024;
+  const allowedRoots = (() => {
+    const roots = new Set<string>();
+    for (const r of [os.tmpdir(), process.cwd()]) {
+      try {
+        roots.add(fs.realpathSync(r));
+      } catch {
+        /* skip unresolvable root */
+      }
+    }
+    return [...roots];
+  })();
   router.get("/variant-image/:elementId/:variantId", (req: Request, res: Response) => {
     const v = variantProposalStore.findVariant(req.params.elementId!, req.params.variantId!);
     const src = v?.previewImage;
@@ -177,28 +200,30 @@ export function createPreviewRouter(registry: Registry): Router {
       return;
     }
     let real: string;
+    let size: number;
     try {
       real = fs.realpathSync(src);
-      if (!fs.statSync(real).isFile()) throw new Error("not a file");
+      const st = fs.statSync(real);
+      if (!st.isFile()) throw new Error("not a file");
+      size = st.size;
     } catch {
       res.status(404).end();
       return;
     }
-    const ext = path.extname(real).toLowerCase();
-    const mime =
-      ext === ".png"
-        ? "image/png"
-        : ext === ".jpg" || ext === ".jpeg"
-          ? "image/jpeg"
-          : ext === ".webp"
-            ? "image/webp"
-            : ext === ".gif"
-              ? "image/gif"
-              : "application/octet-stream";
+    const contained = allowedRoots.some(
+      (root) => real === root || real.startsWith(root + path.sep)
+    );
+    const mime = IMG_MIME[path.extname(real).toLowerCase()];
+    if (!contained || !mime || size > MAX_PREVIEW_BYTES) {
+      res.status(404).end();
+      return;
+    }
     res.set("Cache-Control", "no-store");
     res.type(mime);
     fs.createReadStream(real)
-      .on("error", () => res.status(404).end())
+      .on("error", () => {
+        if (!res.headersSent) res.status(404).end();
+      })
       .pipe(res);
   });
 

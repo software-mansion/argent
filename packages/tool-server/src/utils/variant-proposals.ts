@@ -282,19 +282,22 @@ export class VariantProposalStore {
     round: number;
     resolved: number;
   } {
-    if (this.proposals.length === 0) {
-      throw new Error("No proposals to select from.");
-    }
-    this.submitted = input.selections.filter((s) =>
-      this.proposals.some((p) => p.id === s.elementId)
-    );
-    this.submittedAnnotations = (input.annotations ?? [])
+    const cleanAnnotations = (input.annotations ?? [])
       .filter((a) => a && typeof a.comment === "string" && a.comment.trim())
       .map((a) => ({
         target: String(a.target ?? "").slice(0, 200) || "(element)",
         match: a.match,
         comment: a.comment.trim().slice(0, 2_000),
       }));
+    // A round with neither proposals nor any inspector comment has nothing to
+    // deliver. Annotations alone ARE deliverable (free-form element feedback).
+    if (this.proposals.length === 0 && cleanAnnotations.length === 0) {
+      throw new Error("Nothing to submit — no proposals and no comments.");
+    }
+    this.submitted = input.selections.filter((s) =>
+      this.proposals.some((p) => p.id === s.elementId)
+    );
+    this.submittedAnnotations = cleanAnnotations;
     this.globalComment = (input.globalComment ?? "").trim();
     this.completed = true;
     this.consumed = false;

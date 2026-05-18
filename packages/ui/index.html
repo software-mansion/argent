@@ -750,6 +750,9 @@
 
       function sendCmd(obj) {
         if (!ws || !wsOpen) return;
+        // While the element-comment inspector is active the stream is a
+        // read-only annotation surface — never drive the device.
+        if (typeof vp !== "undefined" && vp.inspect) return;
         ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
       }
 
@@ -1226,6 +1229,7 @@
         annId: 0,
         submitting: false,
         dragging: false,
+        cardDragging: false,
         justCompletedRound: -1,
         inspect: false,
         focus: null, // describe node currently spotlighted
@@ -1233,9 +1237,6 @@
         spot: null, // spotlight layer root (child of mainEl)
       };
 
-      function escapeAttr(s) {
-        return String(s).replace(/[<>&"]/g, (c) => "&#" + c.charCodeAt(0) + ";");
-      }
       function nodeText(n) {
         return (n && (n.label || n.value || n.identifier)) || "";
       }
@@ -1420,21 +1421,28 @@
           ev.preventDefault();
           ev.stopPropagation();
           const mr = mainEl.getBoundingClientRect();
-          const rec = vp.cards.get(p.id);
+          vp.cardDragging = true;
           const move = (m) => {
-            const x = m.clientX - mr.left - el.offsetWidth / 2;
+            // Resolve the live rec/el each move so a poll-driven rebuild
+            // (rare while dragging — guarded) can't strand the drag.
+            const rec = vp.cards.get(p.id);
+            const node = rec ? rec.el : el;
+            const x = m.clientX - mr.left - node.offsetWidth / 2;
             const y = m.clientY - mr.top - 12;
             if (rec) rec.pos = { x, y };
-            el.style.left = x + "px";
-            el.style.top = y + "px";
+            node.style.left = x + "px";
+            node.style.top = y + "px";
             drawConnectors();
           };
           const up = () => {
+            vp.cardDragging = false;
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
+            window.removeEventListener("pointercancel", up);
           };
           window.addEventListener("pointermove", move);
           window.addEventListener("pointerup", up);
+          window.addEventListener("pointercancel", up);
         });
 
         const body = document.createElement("div");
@@ -1442,6 +1450,7 @@
         for (const v of p.variants) {
           const row = document.createElement("div");
           row.className = "vrow" + (vp.staged[p.id] === v.id ? " staged" : "");
+          row.dataset.vid = v.id;
           row.draggable = true;
           row.addEventListener("dragstart", (ev) => {
             row.classList.add("dragging");
@@ -1524,10 +1533,47 @@
         return d;
       }
 
+      // Structural signature — a card is only torn down & rebuilt when the
+      // agent actually changed its variants, never on a routine poll (so the
+      // per-card comment box keeps focus and the variant list keeps its
+      // scroll position).
+      function cardSig(p) {
+        return JSON.stringify([
+          p.element,
+          p.variants.map((v) => [v.id, v.name, v.summary, v.code, v.filePath, v.previewImage]),
+        ]);
+      }
+      // In-place refresh of the mutable bits (staged highlight, on/off-screen
+      // badge) without rebuilding the card DOM.
+      function refreshCardState(el, p) {
+        el.querySelectorAll(".vrow").forEach((row) => {
+          const staged = vp.staged[p.id] === row.dataset.vid;
+          row.classList.toggle("staged", staged);
+          const vn = row.querySelector(".vn");
+          if (!vn) return;
+          const tag = vn.querySelector(".tag");
+          if (staged && !tag) {
+            const t = document.createElement("span");
+            t.className = "tag";
+            t.textContent = "✓ staged";
+            vn.appendChild(t);
+          } else if (!staged && tag) {
+            tag.remove();
+          }
+        });
+        const w = el.querySelector(".where");
+        if (w) {
+          w.textContent = p._node ? "on screen" : "off screen";
+          w.className = "where" + (p._node ? " on" : "");
+        }
+      }
+      function cardHasFocus(el) {
+        return el.contains(document.activeElement);
+      }
+
       function layoutCards() {
         const mr = mainEl.getBoundingClientRect();
-        const mw = mr.width,
-          mh = mr.height;
+        const mw = mr.width;
         const r = streamRect();
         const cardW = 232;
         const gutterX = r
@@ -1538,15 +1584,19 @@
         for (const p of vp.proposals) {
           live.add(p.id);
           let rec = vp.cards.get(p.id);
+          const sig = cardSig(p);
           if (!rec) {
-            rec = { el: buildCard(p), pos: null };
+            rec = { el: buildCard(p), pos: null, sig };
             vp.cards.set(p.id, rec);
-          } else {
+          } else if (rec.sig !== sig && !vp.dragging && !vp.cardDragging && !cardHasFocus(rec.el)) {
+            // Structure changed and it's safe to swap — preserve manual pos.
             const fresh = buildCard(p);
             rec.el.replaceWith(fresh);
             rec.el = fresh;
+            rec.sig = sig;
           }
           if (rec.el.parentElement !== cardsEl) cardsEl.appendChild(rec.el);
+          refreshCardState(rec.el, p);
           const pos = rec.pos || { x: gutterX, y };
           rec.el.style.left = pos.x + "px";
           rec.el.style.top = pos.y + "px";
@@ -1707,6 +1757,9 @@
             vp.spot = null;
           }
         } else {
+          // Annotate mode is read-only w.r.t. the device — drop any held
+          // touch/keys; sendCmd() also no-ops while inspecting.
+          releaseAllInput();
           ensureSpot();
           paintSpot();
           vpPoll();
@@ -1874,8 +1927,20 @@
         if (popEl) popEl.hidden = true;
         vp.focus = null;
         vp.commentFor = null;
+        // Fully exit inspect mode so a stream re-attach doesn't leave a
+        // stuck/double-click state (button label, .inspecting class).
+        vp.inspect = false;
+        vp.cardDragging = false;
+        commentBtn.classList.remove("active");
+        commentBtn.textContent = "＋ Add comment";
+        document.getElementById("root").classList.remove("inspecting");
       }
 
+      // Safety net: HTML5 dragend can be missed if the source node is removed
+      // mid-drag — never let vp.dragging latch true (it gates round clearing).
+      document.addEventListener("dragend", () => {
+        vp.dragging = false;
+      });
       commentBtn.addEventListener("click", () => setInspect(!vp.inspect));
       completeBtn.addEventListener("click", vpComplete);
       document.addEventListener("keydown", (e) => {
