@@ -485,16 +485,15 @@
           <div class="sidebar-body" id="sidebar-body">
             <div class="sidebar-empty">
               No variants proposed yet.<br />
-              When the agent calls <code>propose_variant</code>, options appear here and as
-              floating bubbles over the matching element on the stream. Drag a variant onto its
-              element to stage it.
+              When the agent calls <code>propose_variant</code>, options appear here and as floating
+              bubbles over the matching element on the stream. Drag a variant onto its element to
+              stage it.
             </div>
           </div>
           <div class="sidebar-foot">
             <textarea
               id="global-comment"
-              placeholder="Overall comment for the agent (optional)…"
-            ></textarea>
+              placeholder="Overall comment for the agent (optional)…"></textarea>
             <button class="complete-btn" id="complete-btn" disabled>Complete selection</button>
             <div class="complete-note" id="complete-note"></div>
           </div>
@@ -828,6 +827,9 @@
         stage = null;
         touchDots = { primary: null, mirror: null, anchor: null };
         viewport.innerHTML = "";
+        // Bubble DOM lived inside `stage` (just wiped) — drop the now-detached
+        // element refs so they're rebuilt against the next stream.
+        vp.bubbles.clear();
       }
 
       async function connect(udid) {
@@ -1131,6 +1133,7 @@
         treeAt: 0,
         bubbles: new Map(), // elementId -> { el, manual, mx, my }
         submitting: false,
+        dragging: false,
         justCompletedRound: -1,
       };
 
@@ -1191,12 +1194,27 @@
           if (res.ok) {
             const snap = await res.json();
             if (snap.round !== vp.round) {
-              // New round → drop any stale staging from the previous one.
-              vp.round = snap.round;
-              vp.staged = {};
-              vp.comments = {};
-              if (globalCommentEl) globalCommentEl.value = "";
-              if (vp.justCompletedRound !== snap.round) setCompleteNote("");
+              // New round → drop stale staging. Don't yank it out from under
+              // an in-flight submit or an active drag; defer to a later poll
+              // (vp.round stays unchanged so this re-fires next tick).
+              if (!vp.submitting && !vp.dragging) {
+                const hadWork =
+                  Object.keys(vp.staged).length > 0 ||
+                  Object.values(vp.comments).some((c) => c) ||
+                  (globalCommentEl && globalCommentEl.value);
+                const prev = vp.round;
+                vp.round = snap.round;
+                vp.staged = {};
+                vp.comments = {};
+                if (globalCommentEl) globalCommentEl.value = "";
+                if (vp.justCompletedRound === snap.round) {
+                  /* keep the success note from our own submit */
+                } else if (prev >= 0 && hadWork) {
+                  setCompleteNote(`Agent started a new round — previous selections were cleared.`);
+                } else {
+                  setCompleteNote("");
+                }
+              }
             }
             vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
           }
@@ -1238,10 +1256,7 @@
       }
 
       function vpChipDragData(ev, elementId, variantId) {
-        ev.dataTransfer.setData(
-          "application/json",
-          JSON.stringify({ elementId, variantId })
-        );
+        ev.dataTransfer.setData("application/json", JSON.stringify({ elementId, variantId }));
         ev.dataTransfer.effectAllowed = "copy";
       }
 
@@ -1292,9 +1307,13 @@
             chip.draggable = true;
             chip.addEventListener("dragstart", (ev) => {
               chip.classList.add("dragging");
+              vp.dragging = true;
               vpChipDragData(ev, p.id, v.id);
             });
-            chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+            chip.addEventListener("dragend", () => {
+              chip.classList.remove("dragging");
+              vp.dragging = false;
+            });
             // Click also stages — convenience + works without a live stream.
             chip.addEventListener("click", () => vpStage(p.id, v.id));
 
@@ -1404,6 +1423,7 @@
           if (!p._node || !stage || !img) continue;
           const pos = vpBubbleXY(p._node.frame);
           if (!pos) continue;
+          p._onBubble = true; // shown as a bubble → not a corner card
           live.add(p.id);
           const rec = vpEnsureBubble(p);
           if (rec.el.parentElement !== stage) stage.appendChild(rec.el);
@@ -1411,9 +1431,7 @@
             rec.el.style.left = pos.x + "px";
             rec.el.style.top = pos.y + "px";
           }
-          const stagedV = vp.staged[p.id]
-            ? p.variants.find((v) => v.id === vp.staged[p.id])
-            : null;
+          const stagedV = vp.staged[p.id] ? p.variants.find((v) => v.id === vp.staged[p.id]) : null;
           rec.el.innerHTML =
             '<div class="bubble-head"><span class="dot"></span>' +
             `<span class="name">${escapeHtml(p.element)}</span>` +
@@ -1434,13 +1452,14 @@
 
       function vpRenderCorner() {
         cornerEl.innerHTML = "";
-        const off = vp.proposals.filter((p) => !p._node);
+        // Anything not currently shown as an on-screen bubble (off-screen,
+        // unmatched, stale describe tree, or no live stream surface) gets a
+        // corner card so a proposal is never invisible.
+        const off = vp.proposals.filter((p) => !p._onBubble);
         for (const p of off) {
           const card = document.createElement("div");
           card.className = "corner-card";
-          const stagedV = vp.staged[p.id]
-            ? p.variants.find((v) => v.id === vp.staged[p.id])
-            : null;
+          const stagedV = vp.staged[p.id] ? p.variants.find((v) => v.id === vp.staged[p.id]) : null;
           card.innerHTML =
             `<div class="ttl">⚑ ${escapeHtml(p.element)}</div>` +
             `<div class="sub${stagedV ? " staged" : ""}">` +
@@ -1457,6 +1476,7 @@
         // Resolve each proposal against the live tree (best-effort).
         for (const p of vp.proposals) {
           p._node = vp.tree ? vpMatchNode(vp.tree, p.match) : null;
+          p._onBubble = false; // set true by vpRenderBubbles if anchored
         }
         vpRenderSidebar();
         vpRenderBubbles();
@@ -1486,10 +1506,7 @@
           if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
           const picked = selections.filter((s) => s.variantId).length;
           vp.justCompletedRound = vp.round;
-          setCompleteNote(
-            `Sent ${picked}/${selections.length} pick(s) to the agent.`,
-            true
-          );
+          setCompleteNote(`Sent ${picked}/${selections.length} pick(s) to the agent.`, true);
         } catch (err) {
           setCompleteNote(`Failed: ${err.message || err}`);
         } finally {
@@ -1511,7 +1528,9 @@
         if (data) vpStage(data.elementId, data.variantId);
       });
       window.addEventListener("resize", () => {
-        for (const rec of vp.bubbles.values()) rec.manual = false;
+        // Re-anchor auto-positioned bubbles to the new stage rect; keep any
+        // bubbles the user manually dragged where they put them (don't discard
+        // deliberate placement on an incidental resize / soft-keyboard).
         vpRender();
       });
       setInterval(vpPoll, 1500);

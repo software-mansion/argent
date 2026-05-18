@@ -6,8 +6,9 @@ const zodSchema = z.object({
   element: z
     .string()
     .min(1)
+    .max(200)
     .describe(
-      "Human name of the on-screen element this variant targets, e.g. \"Foo button\" or " +
+      'Human name of the on-screen element this variant targets, e.g. "Foo button" or ' +
         '"profile header". Repeated calls with the same element accumulate multiple variants ' +
         "on it. Used as the default screen matcher when `match` is omitted."
     ),
@@ -30,17 +31,24 @@ const zodSchema = z.object({
     ),
   variant: z
     .object({
-      name: z.string().min(1).describe("Short variant name shown on the chip, e.g. \"Bold CTA\"."),
+      name: z
+        .string()
+        .min(1)
+        .max(120)
+        .describe('Short variant name shown on the chip, e.g. "Bold CTA".'),
       summary: z
         .string()
         .min(1)
+        .max(2_000)
         .describe("One- or two-sentence description of what this variant changes and why."),
       code: z
         .string()
+        .max(20_000)
         .optional()
         .describe("Optional inline code/JSX for the variant, shown when the chip is expanded."),
       filePath: z
         .string()
+        .max(1_000)
         .optional()
         .describe("Optional path to a file containing the variant implementation."),
     })

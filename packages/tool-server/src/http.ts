@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
-import { createIdleTimer } from "./utils/idle-timer";
+import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
@@ -273,6 +273,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
+      // A long-running tool (e.g. await_user_selection) can legitimately hold
+      // the request open for many minutes while it waits on external input.
+      // An in-flight invocation IS activity, so keep the idle timer warm for
+      // its whole duration — otherwise the auto-shutdown reaps the server out
+      // from under the still-open request. Cleared as soon as it settles.
+      const keepAlive =
+        def.longRunning && options?.idleTimeoutMs && options.idleTimeoutMs > 0
+          ? setInterval(() => idleTimer.touch(), Math.max(1_000, IDLE_CHECK_INTERVAL_MS / 2))
+          : null;
+      if (keepAlive) keepAlive.unref?.();
+
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
@@ -324,6 +335,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });
+      } finally {
+        if (keepAlive) clearInterval(keepAlive);
       }
     }
   );
