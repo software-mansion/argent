@@ -170,181 +170,370 @@
         font-size: 12px;
       }
 
-      /* ── Variant proposals ─────────────────────────────────────────── */
+      /* ── Variant proposals + inspector ─────────────────────────────── */
+      [hidden] {
+        display: none !important;
+      }
       .main {
         flex: 1;
         display: flex;
         min-height: 0;
         position: relative;
+        overflow: hidden;
       }
-      .sidebar {
-        width: 340px;
-        flex-shrink: 0;
-        border-left: 1px solid var(--border);
-        background: var(--surface);
-        display: flex;
-        flex-direction: column;
-        min-height: 0;
-      }
-      .sidebar.hidden {
-        display: none;
-      }
-      .sidebar-head {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border);
+      .viewport {
+        flex: 1;
         display: flex;
         align-items: center;
-        gap: 8px;
+        justify-content: center;
+        padding: 12px;
+        min-height: 0;
+        position: relative;
       }
-      .sidebar-head h2 {
+      #sim-picker {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #sim-label {
+        color: var(--fg);
         font-size: 13px;
-        margin: 0;
-        font-weight: 600;
       }
-      .sidebar-head .round-badge {
-        margin-left: auto;
+      .round-badge {
         color: var(--muted);
         font-size: 11px;
       }
-      .sidebar-body {
-        flex: 1;
-        overflow-y: auto;
-        padding: 10px;
-      }
-      .sidebar-empty {
-        color: var(--muted);
-        text-align: center;
-        padding: 28px 16px;
-        line-height: 1.5;
-      }
-      .vp-el {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        margin-bottom: 10px;
+      .tool-toggle {
         background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .tool-toggle:hover {
+        border-color: var(--accent);
+      }
+      .tool-toggle.active {
+        background: var(--accent);
+        color: #06122b;
+        border-color: var(--accent);
+        font-weight: 700;
+      }
+
+      /* SVG layer for thin connector lines between cards and elements. */
+      .connectors {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 4;
+      }
+      .connectors path {
+        fill: none;
+        stroke: var(--accent);
+        stroke-width: 1.5;
+        opacity: 0.7;
+      }
+      .connectors path.offscreen {
+        stroke-dasharray: 4 4;
+        opacity: 0.5;
+      }
+      .connectors circle {
+        fill: var(--accent);
+      }
+
+      /* Floating variant cards, absolutely placed around the stream. */
+      .cards {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 5;
+      }
+      .vcard {
+        position: absolute;
+        width: 232px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 10px 30px #0009;
+        pointer-events: auto;
         overflow: hidden;
       }
-      .vp-el.offscreen {
-        opacity: 0.62;
-      }
-      .vp-el-head {
+      .vcard-head {
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 8px 10px;
+        padding: 7px 10px;
         border-bottom: 1px solid var(--border);
+        cursor: move;
+        background: #1c1c21;
       }
-      .vp-el-head .name {
+      .vcard-head .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--accent);
+        flex-shrink: 0;
+      }
+      .vcard-head .nm {
         font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      .vp-el-head .where {
+      .vcard-head .where {
         margin-left: auto;
         font-size: 10px;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.03em;
         color: var(--muted);
+        flex-shrink: 0;
       }
-      .vp-el-head .where.on {
+      .vcard-head .where.on {
         color: var(--ok);
       }
-      .vp-chips {
-        padding: 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
+      .vcard-body {
+        max-height: 320px;
+        overflow-y: auto;
       }
-      .vp-chip {
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 7px 9px;
-        background: var(--surface);
+      .vrow {
+        display: flex;
+        gap: 8px;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--border);
         cursor: grab;
         user-select: none;
-        transition:
-          border-color 0.12s,
-          background 0.12s;
       }
-      .vp-chip:hover {
-        border-color: var(--accent);
+      .vrow:last-child {
+        border-bottom: 0;
       }
-      .vp-chip:active {
+      .vrow:hover {
+        background: #20202a;
+      }
+      .vrow:active {
         cursor: grabbing;
       }
-      .vp-chip.dragging {
-        opacity: 0.5;
+      .vrow.dragging {
+        opacity: 0.45;
       }
-      .vp-chip.staged {
-        border-color: var(--ok);
-        background: rgba(92, 220, 139, 0.12);
+      .vrow.staged {
+        background: rgba(92, 220, 139, 0.13);
       }
-      .vp-chip .vp-chip-top {
+      .vrow .thumb {
+        width: 52px;
+        height: 92px;
+        flex-shrink: 0;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+        object-fit: cover;
+        background: #000;
+      }
+      .vrow .thumb.placeholder {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--muted);
+        font-size: 9px;
+        text-align: center;
+      }
+      .vrow .meta {
+        min-width: 0;
+        flex: 1;
+      }
+      .vrow .vn {
+        font-weight: 600;
         display: flex;
         align-items: center;
         gap: 6px;
       }
-      .vp-chip .vp-chip-name {
-        font-weight: 600;
-      }
-      .vp-chip .vp-chip-tag {
-        margin-left: auto;
+      .vrow .vn .tag {
         font-size: 10px;
         color: var(--ok);
       }
-      .vp-chip .vp-chip-summary {
+      .vrow .vs {
         color: var(--muted);
+        font-size: 11px;
         margin-top: 3px;
-        font-size: 12px;
-        line-height: 1.4;
+        line-height: 1.35;
       }
-      .vp-chip pre {
-        margin: 6px 0 0;
-        padding: 6px 8px;
+      .vrow .vcode {
+        margin: 5px 0 0;
+        padding: 5px 7px;
         background: #000;
         border-radius: 4px;
-        font-size: 11px;
-        max-height: 120px;
+        font-size: 10px;
+        max-height: 90px;
         overflow: auto;
         white-space: pre-wrap;
       }
-      .vp-el-comment {
+      .vcard-cmt {
+        width: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        border: 0;
+        border-top: 1px solid var(--border);
+        padding: 6px 10px;
+        font: inherit;
+        font-size: 11px;
+        resize: vertical;
+        min-height: 28px;
+      }
+
+      /* Element-inspector spotlight: 4 blur+dim strips frame the focus rect. */
+      .spot {
+        position: absolute;
+        background: rgba(8, 8, 10, 0.55);
+        backdrop-filter: blur(5px);
+        -webkit-backdrop-filter: blur(5px);
+        pointer-events: none;
+      }
+      .spot-ring {
+        position: absolute;
+        border: 2px solid var(--accent);
+        border-radius: 4px;
+        box-shadow: 0 0 0 1px #000a;
+        pointer-events: none;
+      }
+      .spot-ring .lab {
+        position: absolute;
+        top: -22px;
+        left: 0;
+        background: var(--accent);
+        color: #06122b;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 1px 7px;
+        border-radius: 4px;
+        white-space: nowrap;
+        max-width: 240px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .spot-hit {
+        position: absolute;
+        cursor: crosshair;
+        z-index: 8;
+      }
+      .inspecting .stage img {
+        cursor: crosshair;
+      }
+
+      /* Comment box bubble anchored next to the inspected element. */
+      .comment-pop {
+        position: absolute;
+        z-index: 9;
+        width: 248px;
+        background: var(--surface);
+        border: 1px solid var(--accent);
+        border-radius: 10px;
+        box-shadow: 0 12px 36px #000b;
+        padding: 10px;
+      }
+      .comment-pop h3 {
+        margin: 0 0 7px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .comment-pop h3 span {
+        color: var(--accent);
+      }
+      .comment-pop textarea {
         width: 100%;
         background: var(--bg);
         color: var(--fg);
         border: 1px solid var(--border);
-        border-top: 0;
-        padding: 6px 9px;
+        border-radius: 5px;
+        padding: 6px 8px;
         font: inherit;
         font-size: 12px;
         resize: vertical;
-        min-height: 30px;
+        min-height: 64px;
       }
-      .sidebar-foot {
-        padding: 10px 12px;
-        border-top: 1px solid var(--border);
+      .comment-pop .row {
         display: flex;
-        flex-direction: column;
-        gap: 8px;
+        gap: 6px;
+        margin-top: 8px;
       }
-      .sidebar-foot textarea {
+      .comment-pop button {
+        flex: 1;
+        border: 0;
+        border-radius: 5px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .comment-pop .save {
+        background: var(--accent);
+        color: #06122b;
+      }
+      .comment-pop .cancel {
+        background: var(--border);
+        color: var(--fg);
+      }
+
+      /* Saved-annotation pin shown on its element. */
+      .ann-pin {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        width: 20px;
+        height: 20px;
+        border-radius: 50% 50% 50% 2px;
+        background: #d8a657;
+        color: #1a1205;
+        font-size: 11px;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 3px 10px #0008;
+        pointer-events: auto;
+        cursor: help;
+        z-index: 7;
+      }
+
+      /* Slim bottom action bar (replaces the old sidebar foot). */
+      .footbar {
+        position: absolute;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(22, 22, 26, 0.94);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 10px;
+        box-shadow: 0 10px 30px #0009;
+        z-index: 10;
+        max-width: 70%;
+      }
+      .footbar textarea {
         background: var(--bg);
         color: var(--fg);
         border: 1px solid var(--border);
-        border-radius: 4px;
+        border-radius: 5px;
         padding: 6px 9px;
         font: inherit;
         font-size: 12px;
-        resize: vertical;
-        min-height: 34px;
+        resize: none;
+        width: 260px;
+        height: 32px;
       }
       .complete-btn {
         background: var(--accent);
         color: #06122b;
         border: 0;
         border-radius: 6px;
-        padding: 9px 12px;
+        padding: 8px 14px;
         font-size: 13px;
         font-weight: 700;
         cursor: pointer;
+        white-space: nowrap;
       }
       .complete-btn:disabled {
         background: var(--border);
@@ -354,150 +543,46 @@
       .complete-note {
         color: var(--muted);
         font-size: 11px;
-        text-align: center;
+        max-width: 200px;
       }
       .complete-note.ok {
         color: var(--ok);
       }
-      /* Floating, draggable variant bubble pinned over an on-screen element. */
-      .bubble {
-        position: absolute;
-        transform: translate(-50%, calc(-100% - 14px));
-        min-width: 150px;
-        max-width: 240px;
-        background: var(--surface);
-        border: 1px solid var(--accent);
-        border-radius: 8px;
-        box-shadow: 0 8px 28px #000a;
-        z-index: 6;
-        pointer-events: auto;
-        font-size: 12px;
-      }
-      .bubble::after {
-        content: "";
-        position: absolute;
-        left: 50%;
-        bottom: -7px;
-        width: 12px;
-        height: 12px;
-        background: var(--surface);
-        border-right: 1px solid var(--accent);
-        border-bottom: 1px solid var(--accent);
-        transform: translateX(-50%) rotate(45deg);
-      }
-      .bubble.dropping {
-        border-color: var(--ok);
-        box-shadow: 0 0 0 2px var(--ok);
-      }
-      .bubble-head {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 9px;
-        border-bottom: 1px solid var(--border);
-        cursor: move;
-      }
-      .bubble-head .dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--accent);
-      }
-      .bubble-head .name {
-        font-weight: 600;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-      .bubble-head .count {
-        margin-left: auto;
-        color: var(--muted);
-        font-size: 11px;
-      }
-      .bubble-body {
-        padding: 7px 9px;
-      }
-      .bubble-staged {
-        color: var(--ok);
-      }
-      .bubble-hint {
-        color: var(--muted);
-      }
-      /* Corner notification stack for off-screen / unmatched proposals. */
-      .corner {
-        position: absolute;
-        left: 14px;
-        bottom: 14px;
-        z-index: 7;
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        max-width: 260px;
-      }
-      .corner-card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-left: 3px solid #d8a657;
-        border-radius: 6px;
-        padding: 7px 10px;
-        font-size: 12px;
-        box-shadow: 0 6px 20px #0007;
-      }
-      .corner-card.dropping {
-        border-color: var(--ok);
-        border-left-color: var(--ok);
-      }
-      .corner-card .ttl {
-        font-weight: 600;
-      }
-      .corner-card .sub {
-        color: var(--muted);
-        font-size: 11px;
-        margin-top: 2px;
-      }
-      .corner-card .sub.staged {
-        color: var(--ok);
+      .complete-note.err {
+        color: var(--error);
       }
     </style>
   </head>
   <body>
     <div id="root">
       <div class="toolbar">
-        <label for="sim-select">Simulator</label>
-        <select id="sim-select">
-          <option>Loading…</option>
-        </select>
-        <button id="refresh-btn" title="Refresh simulator list">⟳</button>
-        <span id="hint" class="debug" style="min-width: auto"></span>
-        <span id="debug" class="debug"></span>
+        <span id="sim-picker">
+          <label for="sim-select">Simulator</label>
+          <select id="sim-select">
+            <option>Loading…</option>
+          </select>
+          <button id="refresh-btn" title="Refresh simulator list">⟳</button>
+        </span>
+        <span id="sim-label"></span>
+        <button id="comment-btn" class="tool-toggle" hidden>＋ Add comment</button>
+        <span id="round-badge" class="round-badge"></span>
         <span id="status" class="status">idle</span>
       </div>
-      <div class="main">
+      <div class="main" id="main">
         <div class="viewport" id="viewport">
-          <div class="empty">Select a booted simulator to start streaming.</div>
+          <div class="empty">Connecting…</div>
         </div>
-        <div class="corner" id="corner"></div>
-        <aside class="sidebar hidden" id="sidebar">
-          <div class="sidebar-head">
-            <h2>Design variants</h2>
-            <span class="round-badge" id="round-badge"></span>
-          </div>
-          <div class="sidebar-body" id="sidebar-body">
-            <div class="sidebar-empty">
-              No variants proposed yet.<br />
-              When the agent calls <code>propose_variant</code>, options appear here and as floating
-              bubbles over the matching element on the stream. Drag a variant onto its element to
-              stage it.
-            </div>
-          </div>
-          <div class="sidebar-foot">
-            <textarea
-              id="global-comment"
-              placeholder="Overall comment for the agent (optional)…"></textarea>
-            <button class="complete-btn" id="complete-btn" disabled>Complete selection</button>
-            <div class="complete-note" id="complete-note"></div>
-          </div>
-        </aside>
+        <svg class="connectors" id="connectors" aria-hidden="true"></svg>
+        <div class="cards" id="cards"></div>
+        <div class="comment-pop" id="comment-pop" hidden></div>
+        <div class="footbar" id="footbar" hidden>
+          <textarea
+            id="global-comment"
+            rows="1"
+            placeholder="Overall comment for the agent (optional)…"></textarea>
+          <button class="complete-btn" id="complete-btn">Complete selection</button>
+          <span class="complete-note" id="complete-note"></span>
+        </div>
       </div>
     </div>
 
@@ -625,12 +710,10 @@
 
       // ── DOM ─────────────────────────────────────────────────────────────
       const select = document.getElementById("sim-select");
+      const simLabel = document.getElementById("sim-label");
       const status = document.getElementById("status");
       const viewport = document.getElementById("viewport");
       const refreshBtn = document.getElementById("refresh-btn");
-      const debugEl = document.getElementById("debug");
-      const hintEl = document.getElementById("hint");
-      hintEl.textContent = `Hold ${IS_MAC ? "Option" : "Ctrl"} for pinch · +Shift to move anchor`;
 
       // ── State ───────────────────────────────────────────────────────────
       /** @type {WebSocket | null} */
@@ -666,24 +749,8 @@
       }
 
       function sendCmd(obj) {
-        if (!ws || !wsOpen) {
-          debugEl.textContent = `ws not open — dropped ${obj.cmd}`;
-          return;
-        }
+        if (!ws || !wsOpen) return;
         ws.send(JSON.stringify({ id: nextCmdId(), ...obj }));
-        if (obj.cmd === "touch") {
-          const tail =
-            obj.second_x != null
-              ? ` / (${obj.second_x.toFixed(3)}, ${obj.second_y.toFixed(3)})`
-              : "";
-          debugEl.textContent = `${obj.type} (${obj.x.toFixed(3)}, ${obj.y.toFixed(3)})${tail}`;
-        } else if (obj.cmd === "key") {
-          debugEl.textContent = `key ${obj.direction} ${obj.code}`;
-        } else if (obj.cmd === "wheel") {
-          debugEl.textContent = `wheel dx=${obj.dx} dy=${obj.dy}`;
-        } else {
-          debugEl.textContent = `${obj.cmd}`;
-        }
       }
 
       /**
@@ -773,12 +840,32 @@
       }
 
       // ── Simulator list ─────────────────────────────────────────────────
+      const simPicker = document.getElementById("sim-picker");
       async function refreshSimulators() {
         setStatus("loading simulators…");
         try {
           const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const { simulators } = await res.json();
+          const booted = (simulators || []).filter((s) => s.state === "Booted");
+
+          // Exactly one usable simulator → skip the picker entirely and just
+          // connect to it; show its name as a static label instead.
+          if (booted.length === 1) {
+            simPicker.hidden = true;
+            simLabel.hidden = false;
+            simLabel.textContent = booted[0].name;
+            setStatus("idle");
+            if (currentUdid !== booted[0].udid) {
+              connect(booted[0].udid).catch((err) =>
+                setStatus(String(err.message || err), "error")
+              );
+            }
+            return;
+          }
+
+          simPicker.hidden = false;
+          simLabel.hidden = true;
           select.innerHTML = "";
           if (!simulators || simulators.length === 0) {
             const opt = document.createElement("option");
@@ -827,9 +914,8 @@
         stage = null;
         touchDots = { primary: null, mirror: null, anchor: null };
         viewport.innerHTML = "";
-        // Bubble DOM lived inside `stage` (just wiped) — drop the now-detached
-        // element refs so they're rebuilt against the next stream.
-        vp.bubbles.clear();
+        // Overlay DOM lived inside `stage` (just wiped) — drop detached refs.
+        vpResetOverlay();
       }
 
       async function connect(udid) {
@@ -1109,44 +1195,71 @@
 
       window.addEventListener("beforeunload", teardownStream);
 
-      // ── Variant proposals ───────────────────────────────────────────────
-      // Polls /preview/variants for the agent's staged design variants and
-      // /preview/describe for the live element tree, then renders each element
-      // as a floating draggable bubble pinned over its on-screen frame (or a
-      // corner card when it is off-screen). The user drags a variant from the
-      // sidebar onto its element to stage a pick; "Complete selection" POSTs
-      // them back, unblocking the agent's await_user_selection call.
-      const sidebar = document.getElementById("sidebar");
-      const sidebarBody = document.getElementById("sidebar-body");
+      // ── Variant proposals + element-comment inspector ───────────────────
+      // Polls /preview/variants and /preview/describe, renders each proposed
+      // element as a floating card connected by a thin line to its live
+      // on-screen position, and provides an "Add comment" element inspector
+      // (spotlight: blur+dim everything except the hovered element, click to
+      // attach a comment). Picks + comments + annotations are pushed back to
+      // the agent's await_user_selection via "Complete selection".
+      const mainEl = document.getElementById("main");
+      const cardsEl = document.getElementById("cards");
+      const connEl = document.getElementById("connectors");
+      const popEl = document.getElementById("comment-pop");
+      const footEl = document.getElementById("footbar");
+      const commentBtn = document.getElementById("comment-btn");
       const roundBadge = document.getElementById("round-badge");
-      const cornerEl = document.getElementById("corner");
       const completeBtn = document.getElementById("complete-btn");
       const completeNote = document.getElementById("complete-note");
       const globalCommentEl = document.getElementById("global-comment");
+      const SVGNS = "http://www.w3.org/2000/svg";
 
       const vp = {
         round: -1,
         proposals: [],
         staged: {}, // elementId -> variantId
         comments: {}, // elementId -> string
+        annotations: [], // [{ id, target, match, comment }]
         tree: null,
         treeAt: 0,
-        bubbles: new Map(), // elementId -> { el, manual, mx, my }
+        cards: new Map(), // elementId -> { el, pos:{x,y}|null }
+        annId: 0,
         submitting: false,
         dragging: false,
         justCompletedRound: -1,
+        inspect: false,
+        focus: null, // describe node currently spotlighted
+        commentFor: null, // describe node a comment-pop is open for
+        spot: null, // spotlight layer root (child of mainEl)
       };
 
+      function escapeAttr(s) {
+        return String(s).replace(/[<>&"]/g, (c) => "&#" + c.charCodeAt(0) + ";");
+      }
+      function nodeText(n) {
+        return (n && (n.label || n.value || n.identifier)) || "";
+      }
+      function nodeDesc(n) {
+        return (n && (n.identifier || n.label || n.value || (n.role ? n.role : ""))) || "element";
+      }
+      function nodeMatch(n) {
+        if (n.identifier) return { by: "identifier", value: n.identifier };
+        if (n.label) return { by: "label", value: n.label };
+        if (n.value) return { by: "text", value: n.value };
+        return { by: "role", value: n.role || "" };
+      }
+
+      // Smallest on-screen describe node matching a proposal's matcher.
       function vpMatchNode(node, match) {
-        const out = [];
         const needle = (match.value || "").trim().toLowerCase();
+        const out = [];
         const walk = (n) => {
           if (!n || typeof n !== "object") return;
           const label = (n.label || "").toLowerCase();
           const ident = (n.identifier || "").toLowerCase();
           const value = (n.value || "").toLowerCase();
           const role = (n.role || "").toLowerCase();
-          let hit = false;
+          let hit;
           if (match.by === "label") hit = label === needle;
           else if (match.by === "identifier") hit = ident === needle;
           else if (match.by === "role") hit = role === needle;
@@ -1155,36 +1268,65 @@
           if (Array.isArray(n.children)) n.children.forEach(walk);
         };
         walk(node);
-        if (out.length === 0) return null;
-        // Most specific = smallest on-screen area (e.g. the button, not its
-        // container). Ignore degenerate / fully off-screen frames.
-        let best = null;
-        let bestArea = Infinity;
+        let best = null,
+          bestArea = Infinity;
         for (const n of out) {
           const f = n.frame;
           if (!f || f.width <= 0 || f.height <= 0) continue;
-          const cx = f.x + f.width / 2;
-          const cy = f.y + f.height / 2;
+          const cx = f.x + f.width / 2,
+            cy = f.y + f.height / 2;
           if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
-          const area = f.width * f.height;
-          if (area < bestArea) {
-            bestArea = area;
+          const a = f.width * f.height;
+          if (a < bestArea) {
+            bestArea = a;
             best = n;
           }
         }
         return best;
       }
 
-      function vpBubbleXY(frame) {
-        if (!img || !stage) return null;
-        const imgRect = img.getBoundingClientRect();
-        const stageRect = stage.getBoundingClientRect();
-        if (!imgRect.width || !imgRect.height) return null;
-        const cx = frame.x + frame.width / 2;
-        const cy = frame.y + frame.height / 2;
+      // Smallest node whose frame contains a normalized point (inspector pick).
+      function vpNodeAtPoint(node, x, y) {
+        let best = null,
+          bestArea = Infinity;
+        const walk = (n) => {
+          if (!n || typeof n !== "object") return;
+          const f = n.frame;
+          if (
+            f &&
+            f.width > 0 &&
+            f.height > 0 &&
+            x >= f.x &&
+            x <= f.x + f.width &&
+            y >= f.y &&
+            y <= f.y + f.height
+          ) {
+            const a = f.width * f.height;
+            if (a < bestArea && nodeText(n)) {
+              bestArea = a;
+              best = n;
+            }
+          }
+          if (Array.isArray(n.children)) n.children.forEach(walk);
+        };
+        walk(node);
+        return best;
+      }
+
+      // Stream image rect, in coordinates relative to #main.
+      function streamRect() {
+        if (!img) return null;
+        const ir = img.getBoundingClientRect();
+        const mr = mainEl.getBoundingClientRect();
+        if (!ir.width || !ir.height) return null;
+        return { x: ir.left - mr.left, y: ir.top - mr.top, w: ir.width, h: ir.height };
+      }
+      function elementPoint(frame) {
+        const r = streamRect();
+        if (!r) return null;
         return {
-          x: imgRect.left - stageRect.left + cx * imgRect.width,
-          y: imgRect.top - stageRect.top + cy * imgRect.height,
+          x: r.x + (frame.x + frame.width / 2) * r.w,
+          y: r.y + (frame.y + frame.height / 2) * r.h,
         };
       }
 
@@ -1194,300 +1336,497 @@
           if (res.ok) {
             const snap = await res.json();
             if (snap.round !== vp.round) {
-              // New round → drop stale staging. Don't yank it out from under
-              // an in-flight submit or an active drag; defer to a later poll
-              // (vp.round stays unchanged so this re-fires next tick).
               if (!vp.submitting && !vp.dragging) {
                 const hadWork =
                   Object.keys(vp.staged).length > 0 ||
-                  Object.values(vp.comments).some((c) => c) ||
+                  vp.annotations.length > 0 ||
                   (globalCommentEl && globalCommentEl.value);
                 const prev = vp.round;
                 vp.round = snap.round;
                 vp.staged = {};
                 vp.comments = {};
+                vp.annotations = [];
                 if (globalCommentEl) globalCommentEl.value = "";
                 if (vp.justCompletedRound === snap.round) {
-                  /* keep the success note from our own submit */
+                  /* keep our own success note */
                 } else if (prev >= 0 && hadWork) {
-                  setCompleteNote(`Agent started a new round — previous selections were cleared.`);
-                } else {
-                  setCompleteNote("");
-                }
+                  setNote("Agent started a new round — previous selections cleared.");
+                } else setNote("");
               }
             }
             vp.proposals = Array.isArray(snap.proposals) ? snap.proposals : [];
           }
         } catch {
-          /* tool-server momentarily unreachable — keep last state */
+          /* keep last state */
         }
-
-        if (currentUdid && vp.proposals.length > 0) {
+        if (currentUdid && (vp.proposals.length > 0 || vp.inspect)) {
           try {
-            const dres = await fetch(
+            const d = await fetch(
               `${TOOL_SERVER}/preview/describe/${encodeURIComponent(currentUdid)}`,
               { cache: "no-store" }
             );
-            if (dres.ok) {
-              const d = await dres.json();
-              if (d && d.tree) {
-                vp.tree = d.tree;
+            if (d.ok) {
+              const j = await d.json();
+              if (j && j.tree) {
+                vp.tree = j.tree;
                 vp.treeAt = Date.now();
               }
             }
           } catch {
-            /* describe is best-effort; stale tree is fine for ~6s */
+            /* describe best-effort */
           }
         }
         if (Date.now() - vp.treeAt > 6000) vp.tree = null;
-
         vpRender();
       }
 
+      function setNote(text, kind) {
+        completeNote.textContent = text || "";
+        completeNote.className = "complete-note" + (kind ? " " + kind : "");
+      }
       function vpStage(elementId, variantId) {
         vp.staged[elementId] = variantId;
-        setCompleteNote("");
+        setNote("");
         vpRender();
       }
 
-      function setCompleteNote(text, ok) {
-        completeNote.textContent = text;
-        completeNote.className = "complete-note" + (ok ? " ok" : "");
+      // ── Floating cards + connectors ─────────────────────────────────────
+      function previewSrc(p, v) {
+        if (!v.previewImage) return null;
+        if (/^(https?:|data:)/i.test(v.previewImage)) return v.previewImage;
+        return `${TOOL_SERVER}/preview/variant-image/${encodeURIComponent(
+          p.id
+        )}/${encodeURIComponent(v.id)}`;
       }
 
-      function vpChipDragData(ev, elementId, variantId) {
-        ev.dataTransfer.setData("application/json", JSON.stringify({ elementId, variantId }));
-        ev.dataTransfer.effectAllowed = "copy";
-      }
+      function buildCard(p) {
+        const el = document.createElement("div");
+        el.className = "vcard";
 
-      function vpReadDrag(ev) {
-        try {
-          return JSON.parse(ev.dataTransfer.getData("application/json"));
-        } catch {
-          return null;
-        }
-      }
+        const head = document.createElement("div");
+        head.className = "vcard-head";
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        const nm = document.createElement("span");
+        nm.className = "nm";
+        nm.textContent = p.element;
+        const where = document.createElement("span");
+        where.className = "where";
+        head.append(dot, nm, where);
+        el.appendChild(head);
 
-      function vpRenderSidebar() {
-        const has = vp.proposals.length > 0;
-        sidebar.classList.toggle("hidden", !has);
-        roundBadge.textContent = has ? `round ${vp.round}` : "";
-        completeBtn.disabled = !has || vp.submitting;
-        if (!has) {
-          sidebarBody.innerHTML =
-            '<div class="sidebar-empty">No variants proposed yet.<br/>When the agent calls ' +
-            "<code>propose_variant</code>, options appear here and as floating bubbles over the " +
-            "matching element on the stream. Drag a variant onto its element to stage it.</div>";
-          return;
-        }
-        sidebarBody.innerHTML = "";
-        for (const p of vp.proposals) {
-          const onScreen = !!p._node;
-          const wrap = document.createElement("div");
-          wrap.className = "vp-el" + (onScreen ? "" : " offscreen");
+        // Drag the card by its header to reposition it.
+        head.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const mr = mainEl.getBoundingClientRect();
+          const rec = vp.cards.get(p.id);
+          const move = (m) => {
+            const x = m.clientX - mr.left - el.offsetWidth / 2;
+            const y = m.clientY - mr.top - 12;
+            if (rec) rec.pos = { x, y };
+            el.style.left = x + "px";
+            el.style.top = y + "px";
+            drawConnectors();
+          };
+          const up = () => {
+            window.removeEventListener("pointermove", move);
+            window.removeEventListener("pointerup", up);
+          };
+          window.addEventListener("pointermove", move);
+          window.addEventListener("pointerup", up);
+        });
 
-          const head = document.createElement("div");
-          head.className = "vp-el-head";
-          const nm = document.createElement("span");
-          nm.className = "name";
-          nm.textContent = p.element;
-          const where = document.createElement("span");
-          where.className = "where" + (onScreen ? " on" : "");
-          where.textContent = onScreen ? "on screen" : "off screen";
-          head.appendChild(nm);
-          head.appendChild(where);
-          wrap.appendChild(head);
+        const body = document.createElement("div");
+        body.className = "vcard-body";
+        for (const v of p.variants) {
+          const row = document.createElement("div");
+          row.className = "vrow" + (vp.staged[p.id] === v.id ? " staged" : "");
+          row.draggable = true;
+          row.addEventListener("dragstart", (ev) => {
+            row.classList.add("dragging");
+            vp.dragging = true;
+            ev.dataTransfer.setData(
+              "application/json",
+              JSON.stringify({ elementId: p.id, variantId: v.id })
+            );
+            ev.dataTransfer.effectAllowed = "copy";
+          });
+          row.addEventListener("dragend", () => {
+            row.classList.remove("dragging");
+            vp.dragging = false;
+          });
+          row.addEventListener("click", () => vpStage(p.id, v.id));
 
-          const chips = document.createElement("div");
-          chips.className = "vp-chips";
-          for (const v of p.variants) {
-            const staged = vp.staged[p.id] === v.id;
-            const chip = document.createElement("div");
-            chip.className = "vp-chip" + (staged ? " staged" : "");
-            chip.draggable = true;
-            chip.addEventListener("dragstart", (ev) => {
-              chip.classList.add("dragging");
-              vp.dragging = true;
-              vpChipDragData(ev, p.id, v.id);
-            });
-            chip.addEventListener("dragend", () => {
-              chip.classList.remove("dragging");
-              vp.dragging = false;
-            });
-            // Click also stages — convenience + works without a live stream.
-            chip.addEventListener("click", () => vpStage(p.id, v.id));
-
-            const top = document.createElement("div");
-            top.className = "vp-chip-top";
-            const cn = document.createElement("span");
-            cn.className = "vp-chip-name";
-            cn.textContent = v.name;
-            top.appendChild(cn);
-            if (staged) {
-              const tag = document.createElement("span");
-              tag.className = "vp-chip-tag";
-              tag.textContent = "✓ staged";
-              top.appendChild(tag);
-            }
-            chip.appendChild(top);
-
-            const sm = document.createElement("div");
-            sm.className = "vp-chip-summary";
-            sm.textContent = v.summary || "";
-            chip.appendChild(sm);
-
-            if (v.code) {
-              const pre = document.createElement("pre");
-              pre.textContent = v.code;
-              chip.appendChild(pre);
-            }
-            if (v.filePath) {
-              const fp = document.createElement("div");
-              fp.className = "vp-chip-summary";
-              fp.textContent = "↳ " + v.filePath;
-              chip.appendChild(fp);
-            }
-            chips.appendChild(chip);
+          const src = previewSrc(p, v);
+          if (src) {
+            const im = document.createElement("img");
+            im.className = "thumb";
+            im.src = src;
+            im.alt = v.name;
+            im.onerror = () => {
+              im.replaceWith(placeholderThumb());
+            };
+            row.appendChild(im);
+          } else {
+            row.appendChild(placeholderThumb());
           }
-          wrap.appendChild(chips);
 
-          const cmt = document.createElement("textarea");
-          cmt.className = "vp-el-comment";
-          cmt.placeholder = `Comment on "${p.element}" (optional)…`;
-          cmt.value = vp.comments[p.id] || "";
-          cmt.addEventListener("input", () => {
-            vp.comments[p.id] = cmt.value;
-          });
-          wrap.appendChild(cmt);
-
-          sidebarBody.appendChild(wrap);
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          const vn = document.createElement("div");
+          vn.className = "vn";
+          const vnt = document.createElement("span");
+          vnt.textContent = v.name;
+          vn.appendChild(vnt);
+          if (vp.staged[p.id] === v.id) {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            tag.textContent = "✓ staged";
+            vn.appendChild(tag);
+          }
+          const vs = document.createElement("div");
+          vs.className = "vs";
+          vs.textContent = v.summary || "";
+          meta.append(vn, vs);
+          if (v.code) {
+            const pre = document.createElement("pre");
+            pre.className = "vcode";
+            pre.textContent = v.code;
+            meta.appendChild(pre);
+          }
+          if (v.filePath) {
+            const fp = document.createElement("div");
+            fp.className = "vs";
+            fp.textContent = "↳ " + v.filePath;
+            meta.appendChild(fp);
+          }
+          row.appendChild(meta);
+          body.appendChild(row);
         }
-      }
+        el.appendChild(body);
 
-      function vpMakeDropTarget(el, elementId) {
-        el.addEventListener("dragover", (ev) => {
-          ev.preventDefault();
-          ev.dataTransfer.dropEffect = "copy";
-          el.classList.add("dropping");
+        const cmt = document.createElement("textarea");
+        cmt.className = "vcard-cmt";
+        cmt.placeholder = `Comment on "${p.element}" (optional)…`;
+        cmt.value = vp.comments[p.id] || "";
+        cmt.addEventListener("input", () => {
+          vp.comments[p.id] = cmt.value;
         });
-        el.addEventListener("dragleave", () => el.classList.remove("dropping"));
-        el.addEventListener("drop", (ev) => {
-          ev.preventDefault();
-          el.classList.remove("dropping");
-          const data = vpReadDrag(ev);
-          if (!data) return;
-          // Dropping a chip anywhere on the stream stages that chip's own
-          // element/variant (the chip unambiguously identifies both); a
-          // specific bubble/corner card narrows it to that element.
-          const target = elementId || data.elementId;
-          if (target !== data.elementId) return;
-          vpStage(data.elementId, data.variantId);
-        });
+        cmt.addEventListener("pointerdown", (e) => e.stopPropagation());
+        el.appendChild(cmt);
+        return el;
+      }
+      function placeholderThumb() {
+        const d = document.createElement("div");
+        d.className = "thumb placeholder";
+        d.textContent = "no preview";
+        return d;
       }
 
-      function vpEnsureBubble(p) {
-        let rec = vp.bubbles.get(p.id);
-        if (!rec) {
-          const el = document.createElement("div");
-          el.className = "bubble";
-          rec = { el, manual: false, mx: 0, my: 0 };
-          vp.bubbles.set(p.id, rec);
-          vpMakeDropTarget(el, p.id);
-          // Drag the bubble by its header to move it off the element it covers.
-          el.addEventListener("pointerdown", (ev) => {
-            if (!ev.target.closest(".bubble-head")) return;
-            ev.stopPropagation();
-            ev.preventDefault();
-            const sr = stage.getBoundingClientRect();
-            const move = (m) => {
-              rec.manual = true;
-              rec.mx = m.clientX - sr.left;
-              rec.my = m.clientY - sr.top;
-              el.style.left = rec.mx + "px";
-              el.style.top = rec.my + "px";
-            };
-            const up = () => {
-              window.removeEventListener("pointermove", move);
-              window.removeEventListener("pointerup", up);
-            };
-            window.addEventListener("pointermove", move);
-            window.addEventListener("pointerup", up);
-          });
-        }
-        return rec;
-      }
-
-      function vpRenderBubbles() {
+      function layoutCards() {
+        const mr = mainEl.getBoundingClientRect();
+        const mw = mr.width,
+          mh = mr.height;
+        const r = streamRect();
+        const cardW = 232;
+        const gutterX = r
+          ? Math.min(mw - cardW - 14, r.x + r.w + 26)
+          : Math.max(14, mw - cardW - 14);
         const live = new Set();
+        let y = 14;
         for (const p of vp.proposals) {
-          if (!p._node || !stage || !img) continue;
-          const pos = vpBubbleXY(p._node.frame);
-          if (!pos) continue;
-          p._onBubble = true; // shown as a bubble → not a corner card
           live.add(p.id);
-          const rec = vpEnsureBubble(p);
-          if (rec.el.parentElement !== stage) stage.appendChild(rec.el);
-          if (!rec.manual) {
-            rec.el.style.left = pos.x + "px";
-            rec.el.style.top = pos.y + "px";
+          let rec = vp.cards.get(p.id);
+          if (!rec) {
+            rec = { el: buildCard(p), pos: null };
+            vp.cards.set(p.id, rec);
+          } else {
+            const fresh = buildCard(p);
+            rec.el.replaceWith(fresh);
+            rec.el = fresh;
           }
-          const stagedV = vp.staged[p.id] ? p.variants.find((v) => v.id === vp.staged[p.id]) : null;
-          rec.el.innerHTML =
-            '<div class="bubble-head"><span class="dot"></span>' +
-            `<span class="name">${escapeHtml(p.element)}</span>` +
-            `<span class="count">${p.variants.length} var${p.variants.length === 1 ? "" : "s"}</span></div>` +
-            '<div class="bubble-body">' +
-            (stagedV
-              ? `<span class="bubble-staged">✓ ${escapeHtml(stagedV.name)}</span>`
-              : '<span class="bubble-hint">drag a variant here</span>') +
-            "</div>";
+          if (rec.el.parentElement !== cardsEl) cardsEl.appendChild(rec.el);
+          const pos = rec.pos || { x: gutterX, y };
+          rec.el.style.left = pos.x + "px";
+          rec.el.style.top = pos.y + "px";
+          y = (rec.pos ? y : pos.y) + rec.el.offsetHeight + 12;
         }
-        for (const [id, rec] of vp.bubbles) {
+        for (const [id, rec] of vp.cards) {
           if (!live.has(id)) {
             rec.el.remove();
-            vp.bubbles.delete(id);
+            vp.cards.delete(id);
           }
         }
       }
 
-      function vpRenderCorner() {
-        cornerEl.innerHTML = "";
-        // Anything not currently shown as an on-screen bubble (off-screen,
-        // unmatched, stale describe tree, or no live stream surface) gets a
-        // corner card so a proposal is never invisible.
-        const off = vp.proposals.filter((p) => !p._onBubble);
-        for (const p of off) {
-          const card = document.createElement("div");
-          card.className = "corner-card";
-          const stagedV = vp.staged[p.id] ? p.variants.find((v) => v.id === vp.staged[p.id]) : null;
-          card.innerHTML =
-            `<div class="ttl">⚑ ${escapeHtml(p.element)}</div>` +
-            `<div class="sub${stagedV ? " staged" : ""}">` +
-            (stagedV
-              ? `staged: ${escapeHtml(stagedV.name)}`
-              : `${p.variants.length} variant${p.variants.length === 1 ? "" : "s"} · off screen — drop here or scroll it into view`) +
-            "</div>";
-          vpMakeDropTarget(card, p.id);
-          cornerEl.appendChild(card);
+      function drawConnectors() {
+        while (connEl.firstChild) connEl.removeChild(connEl.firstChild);
+        const mr = mainEl.getBoundingClientRect();
+        connEl.setAttribute("width", mr.width);
+        connEl.setAttribute("height", mr.height);
+        const r = streamRect();
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec) continue;
+          const cr = rec.el.getBoundingClientRect();
+          const from = { x: cr.left - mr.left, y: cr.top - mr.top + cr.height / 2 };
+          // anchor on the card side facing the stream
+          if (r && from.x > r.x + r.w) from.x = cr.left - mr.left;
+          else from.x = cr.left - mr.left + cr.width;
+
+          let to,
+            off = false;
+          if (p._node) {
+            to = elementPoint(p._node.frame);
+          }
+          if (!to && r) {
+            off = true;
+            to = { x: r.x + r.w / 2, y: r.y + 8 }; // points at the screen, top-center
+          }
+          if (!to) continue;
+          const path = document.createElementNS(SVGNS, "path");
+          const mx = (from.x + to.x) / 2;
+          path.setAttribute(
+            "d",
+            `M ${from.x} ${from.y} C ${mx} ${from.y} ${mx} ${to.y} ${to.x} ${to.y}`
+          );
+          if (off) path.setAttribute("class", "offscreen");
+          connEl.appendChild(path);
+          if (!off) {
+            const c = document.createElementNS(SVGNS, "circle");
+            c.setAttribute("cx", to.x);
+            c.setAttribute("cy", to.y);
+            c.setAttribute("r", "4");
+            connEl.appendChild(c);
+          }
         }
+      }
+
+      // ── Element-comment inspector (spotlight) ───────────────────────────
+      function ensureSpot() {
+        if (vp.spot) return vp.spot;
+        const root = document.createElement("div");
+        root.style.position = "absolute";
+        root.style.inset = "0";
+        root.style.zIndex = "8";
+        root.style.pointerEvents = "none";
+        const strips = [0, 1, 2, 3].map(() => {
+          const s = document.createElement("div");
+          s.className = "spot";
+          root.appendChild(s);
+          return s;
+        });
+        const ring = document.createElement("div");
+        ring.className = "spot-ring";
+        const lab = document.createElement("span");
+        lab.className = "lab";
+        ring.appendChild(lab);
+        root.appendChild(ring);
+        const hit = document.createElement("div");
+        hit.className = "spot-hit";
+        root.appendChild(hit);
+        hit.addEventListener("pointermove", (ev) => {
+          const r = streamRect();
+          if (!r || !vp.tree || vp.commentFor) return;
+          const x = (ev.clientX - mainEl.getBoundingClientRect().left - r.x) / r.w;
+          const y = (ev.clientY - mainEl.getBoundingClientRect().top - r.y) / r.h;
+          vp.focus = vpNodeAtPoint(vp.tree, x, y);
+          paintSpot();
+        });
+        hit.addEventListener("click", (ev) => {
+          if (!vp.focus) return;
+          vp.commentFor = vp.focus;
+          openCommentPop(vp.focus);
+        });
+        mainEl.appendChild(root);
+        vp.spot = { root, strips, ring, lab, hit };
+        return vp.spot;
+      }
+      function paintSpot() {
+        if (!vp.inspect) return;
+        const s = ensureSpot();
+        const r = streamRect();
+        if (!r) {
+          s.root.style.display = "none";
+          return;
+        }
+        s.root.style.display = "";
+        s.hit.style.left = r.x + "px";
+        s.hit.style.top = r.y + "px";
+        s.hit.style.width = r.w + "px";
+        s.hit.style.height = r.h + "px";
+        const n = vp.commentFor || vp.focus;
+        if (!n) {
+          // whole stream dimmed, no cutout
+          s.strips[0].style.cssText = `position:absolute;left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
+          s.strips[1].style.display =
+            s.strips[2].style.display =
+            s.strips[3].style.display =
+              "none";
+          s.strips[0].className = "spot";
+          s.strips[0].style.display = "";
+          s.ring.style.display = "none";
+          return;
+        }
+        const f = n.frame;
+        const ex = r.x + f.x * r.w,
+          ey = r.y + f.y * r.h,
+          ew = f.width * r.w,
+          eh = f.height * r.h;
+        const set = (el, x, y, w, h) => {
+          el.className = "spot";
+          el.style.display = "";
+          el.style.left = x + "px";
+          el.style.top = y + "px";
+          el.style.width = Math.max(0, w) + "px";
+          el.style.height = Math.max(0, h) + "px";
+        };
+        set(s.strips[0], r.x, r.y, r.w, ey - r.y); // top
+        set(s.strips[1], r.x, ey + eh, r.w, r.y + r.h - (ey + eh)); // bottom
+        set(s.strips[2], r.x, ey, ex - r.x, eh); // left
+        set(s.strips[3], ex + ew, ey, r.x + r.w - (ex + ew), eh); // right
+        s.ring.style.display = "";
+        s.ring.style.left = ex + "px";
+        s.ring.style.top = ey + "px";
+        s.ring.style.width = ew + "px";
+        s.ring.style.height = eh + "px";
+        s.lab.textContent = nodeDesc(n);
+      }
+      function setInspect(on) {
+        vp.inspect = on;
+        commentBtn.classList.toggle("active", on);
+        commentBtn.textContent = on ? "✕ Done commenting" : "＋ Add comment";
+        document.getElementById("root").classList.toggle("inspecting", on);
+        if (!on) {
+          vp.focus = null;
+          vp.commentFor = null;
+          popEl.hidden = true;
+          if (vp.spot) {
+            vp.spot.root.remove();
+            vp.spot = null;
+          }
+        } else {
+          ensureSpot();
+          paintSpot();
+          vpPoll();
+        }
+      }
+      function openCommentPop(node) {
+        const r = streamRect();
+        if (!r) return;
+        const f = node.frame;
+        const ex = r.x + f.x * r.w,
+          ey = r.y + f.y * r.h,
+          ew = f.width * r.w;
+        popEl.innerHTML = "";
+        const h = document.createElement("h3");
+        h.textContent = "Comment on ";
+        const sp = document.createElement("span");
+        sp.textContent = nodeDesc(node);
+        h.appendChild(sp);
+        const ta = document.createElement("textarea");
+        ta.placeholder = "What should change about this element?";
+        const rowd = document.createElement("div");
+        rowd.className = "row";
+        const save = document.createElement("button");
+        save.className = "save";
+        save.textContent = "Save comment";
+        const cancel = document.createElement("button");
+        cancel.className = "cancel";
+        cancel.textContent = "Cancel";
+        rowd.append(save, cancel);
+        popEl.append(h, ta, rowd);
+        popEl.hidden = false;
+        // place to the right of the element, or left if no room
+        const mr = mainEl.getBoundingClientRect();
+        let px = ex + ew + 14;
+        if (px + 260 > mr.width) px = Math.max(8, ex - 262);
+        let py = Math.min(Math.max(8, ey - 10), mr.height - 180);
+        popEl.style.left = px + "px";
+        popEl.style.top = py + "px";
+        ta.focus();
+        const close = () => {
+          popEl.hidden = true;
+          vp.commentFor = null;
+          paintSpot();
+        };
+        save.addEventListener("click", () => {
+          const text = ta.value.trim();
+          if (text) {
+            vp.annotations.push({
+              id: ++vp.annId,
+              target: nodeDesc(node),
+              match: nodeMatch(node),
+              comment: text,
+            });
+          }
+          close();
+          setInspect(false);
+          vpRender();
+        });
+        cancel.addEventListener("click", () => {
+          close();
+          vp.focus = null;
+        });
+      }
+
+      function renderPins() {
+        cardsEl.querySelectorAll(".ann-pin").forEach((e) => e.remove());
+        if (!vp.tree) return;
+        vp.annotations.forEach((a, i) => {
+          const n = vpMatchNode(vp.tree, a.match);
+          if (!n) return;
+          const pt = elementPoint(n.frame);
+          if (!pt) return;
+          const pin = document.createElement("div");
+          pin.className = "ann-pin";
+          pin.textContent = String(i + 1);
+          pin.title = a.target + ": " + a.comment;
+          pin.style.left = pt.x + "px";
+          pin.style.top = pt.y + "px";
+          pin.addEventListener("click", () => {
+            if (confirm(`Remove comment on "${a.target}"?\n\n“${a.comment}”`)) {
+              vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
+              vpRender();
+            }
+          });
+          cardsEl.appendChild(pin);
+        });
       }
 
       function vpRender() {
-        // Resolve each proposal against the live tree (best-effort).
         for (const p of vp.proposals) {
           p._node = vp.tree ? vpMatchNode(vp.tree, p.match) : null;
-          p._onBubble = false; // set true by vpRenderBubbles if anchored
         }
-        vpRenderSidebar();
-        vpRenderBubbles();
-        vpRenderCorner();
+        layoutCards();
+        // reflect on-screen / off-screen on each card header
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec) continue;
+          const w = rec.el.querySelector(".where");
+          if (w) {
+            w.textContent = p._node ? "on screen" : "off screen";
+            w.className = "where" + (p._node ? " on" : "");
+          }
+        }
+        drawConnectors();
+        renderPins();
+        if (vp.inspect) paintSpot();
+
+        const has = vp.proposals.length > 0 || vp.annotations.length > 0;
+        footEl.hidden = !has;
+        roundBadge.textContent = vp.proposals.length > 0 ? `round ${vp.round}` : "";
+        completeBtn.disabled = vp.submitting || !has;
+        commentBtn.hidden = !img; // only when a stream is live
       }
 
       async function vpComplete() {
-        if (vp.submitting || vp.proposals.length === 0) return;
+        if (vp.submitting) return;
+        if (vp.proposals.length === 0 && vp.annotations.length === 0) return;
         vp.submitting = true;
         completeBtn.disabled = true;
-        setCompleteNote("Submitting…");
+        setNote("Submitting…");
         const selections = vp.proposals.map((p) => ({
           elementId: p.id,
           variantId: vp.staged[p.id] || null,
@@ -1499,6 +1838,11 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               selections,
+              annotations: vp.annotations.map((a) => ({
+                target: a.target,
+                match: a.match,
+                comment: a.comment,
+              })),
               globalComment: globalCommentEl ? globalCommentEl.value : "",
             }),
           });
@@ -1506,33 +1850,49 @@
           if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
           const picked = selections.filter((s) => s.variantId).length;
           vp.justCompletedRound = vp.round;
-          setCompleteNote(`Sent ${picked}/${selections.length} pick(s) to the agent.`, true);
+          setNote(
+            `Sent ${picked} pick(s) + ${vp.annotations.length} comment(s) to the agent.`,
+            "ok"
+          );
         } catch (err) {
-          setCompleteNote(`Failed: ${err.message || err}`);
+          setNote(`Failed: ${err.message || err}`, "err");
         } finally {
           vp.submitting = false;
-          completeBtn.disabled = vp.proposals.length === 0;
+          completeBtn.disabled = false;
         }
       }
 
+      // Called by teardownStream when the stream is torn down.
+      function vpResetOverlay() {
+        vp.cards.clear();
+        if (cardsEl) cardsEl.innerHTML = "";
+        if (connEl) while (connEl.firstChild) connEl.removeChild(connEl.firstChild);
+        if (vp.spot) {
+          vp.spot.root.remove();
+          vp.spot = null;
+        }
+        if (popEl) popEl.hidden = true;
+        vp.focus = null;
+        vp.commentFor = null;
+      }
+
+      commentBtn.addEventListener("click", () => setInspect(!vp.inspect));
       completeBtn.addEventListener("click", vpComplete);
-      // The stream itself is a drop target so a chip dropped anywhere on the
-      // device stages that chip's own element (matches "drag onto the stream").
-      const viewportEl = document.getElementById("viewport");
-      viewportEl.addEventListener("dragover", (ev) => {
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && vp.inspect) setInspect(false);
+      });
+      viewport.addEventListener("dragover", (ev) => {
         if (vp.proposals.length) ev.preventDefault();
       });
-      viewportEl.addEventListener("drop", (ev) => {
+      viewport.addEventListener("drop", (ev) => {
         ev.preventDefault();
-        const data = vpReadDrag(ev);
+        let data = null;
+        try {
+          data = JSON.parse(ev.dataTransfer.getData("application/json"));
+        } catch {}
         if (data) vpStage(data.elementId, data.variantId);
       });
-      window.addEventListener("resize", () => {
-        // Re-anchor auto-positioned bubbles to the new stage rect; keep any
-        // bubbles the user manually dragged where they put them (don't discard
-        // deliberate placement on an incidental resize / soft-keyboard).
-        vpRender();
-      });
+      window.addEventListener("resize", () => vpRender());
       setInterval(vpPoll, 1500);
       vpPoll();
 

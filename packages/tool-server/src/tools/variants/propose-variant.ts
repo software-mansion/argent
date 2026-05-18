@@ -51,6 +51,15 @@ const zodSchema = z.object({
         .max(1_000)
         .optional()
         .describe("Optional path to a file containing the variant implementation."),
+      previewImage: z
+        .string()
+        .max(2_000)
+        .optional()
+        .describe(
+          "Optional preview of how the variant looks, shown on the floating card. An http(s) " +
+            "URL, a data: URI, or a local image file path (e.g. a screenshot path returned by " +
+            "the screenshot tool after you rendered the variant)."
+        ),
     })
     .describe("The variant being proposed for `element`."),
 });
@@ -64,8 +73,9 @@ export const proposeVariantTool: ToolDefinition<Params> = {
 Use when you have produced multiple alternative designs for an element and want the human to pick.
 Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Foo", v2),
 propose_variant("Bar", v1)…  Variants accumulate per element and across elements. The agent is NOT
-blocked — keep proposing and keep working. The proposals appear live as floating, draggable bubbles
-over the streamed simulator in the Argent preview UI (off-screen elements show as a corner badge).
+blocked — keep proposing and keep working. Each element appears live in the Argent preview UI as a
+floating card beside the streamed simulator, with a thin line connecting it to the matched on-screen
+element; pass variant.previewImage (e.g. a screenshot path) to show how each variant looks.
 
 When you have proposed every variant for every element, call \`await_user_selection\` once — that is
 the single blocking call that waits for the human's picks.
