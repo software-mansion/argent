@@ -203,10 +203,6 @@ async function bootIos(
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
-  // If env-init has already exhausted its budget on a prior session against
-  // this UDID (rare — would mean the sim stayed booted through 3 retries and
-  // the registry returned the cached, already-given-up api) surface the
-  // terminal error as a structured init_failed result.
   const initFailure = ndApi.getInitFailure();
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);

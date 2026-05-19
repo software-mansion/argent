@@ -25,11 +25,6 @@ async function getBootedUdids(): Promise<Set<string>> {
   return udids;
 }
 
-/**
- * Resolve the native-devtools service for a freshly-seen UDID. The factory
- * tolerates env-init failure, so a throw here means a structural problem
- * (wrong platform, bad options) — nothing useful to retry.
- */
 async function initUdid(
   registry: Registry,
   udid: string,
@@ -39,7 +34,7 @@ async function initUdid(
   try {
     apis.set(udid, await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options));
   } catch {
-    // Structural failure — nothing useful to retry.
+    // Factory tolerates env-init failure; a throw here is structural.
   }
 }
 
@@ -58,12 +53,9 @@ export function startSimulatorWatcher(registry: Registry): {
       return;
     }
 
-    // (a) Newly-booted simulators → factory init (once per boot lifetime).
     const newUdids = [...booted].filter((u) => !apis.has(u));
     const work: Promise<unknown>[] = newUdids.map((udid) => initUdid(registry, udid, apis));
 
-    // (b) Already-known simulators that are still failing → drive another
-    //     retry. Healthy sims (failure === null) and given-up sims are skipped.
     for (const [udid, api] of apis) {
       if (!booted.has(udid)) continue;
       const failure = api.getInitFailure();
@@ -73,7 +65,6 @@ export function startSimulatorWatcher(registry: Registry): {
     if (awaitInit) await Promise.all(work);
     else work.forEach((p) => p.catch(() => {}));
 
-    // (c) Shut-down simulators → dispose & drop the ref.
     for (const udid of [...apis.keys()]) {
       if (!booted.has(udid)) {
         apis.delete(udid);
@@ -82,12 +73,11 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // First poll is awaited — server startup blocks until ensureEnv has been
-  // attempted for all currently-booted simulators, eliminating the race with
-  // launch-app for the success path.
+  // First poll is awaited so server startup blocks until ensureEnv has been
+  // attempted for all currently-booted simulators — eliminates the launch-app
+  // race on the success path.
   const ready = poll(true);
 
-  // Subsequent polls are fire-and-forget.
   const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
 
   return { stop: () => clearInterval(interval), ready };

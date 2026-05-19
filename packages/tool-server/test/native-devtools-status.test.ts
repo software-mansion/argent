@@ -108,9 +108,6 @@ describe("native-devtools tools — init_failed precheck", () => {
   });
 
   it("native-describe-screen proceeds normally below the cap", async () => {
-    // Below cap → not given up → tool should NOT short-circuit. We trigger a
-    // restart_required response by stubbing requiresAppRestart to true; the
-    // point is to confirm the precheck didn't fire.
     const { api } = makeNativeApi({
       initFailure: {
         attempts: MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS - 1,
@@ -144,9 +141,6 @@ describe("native-devtools tools — init_failed precheck", () => {
   });
 
   it("converts a transient ensureEnvReady throw into init_failed (fail-fast)", async () => {
-    // !givenUp at call time, but ensureEnvReady throws and records a fresh
-    // failure. The precheck must surface the freshly-recorded state as
-    // init_failed instead of letting the raw Error escape to the agent.
     const { api } = makeNativeApi({
       initFailure: {
         attempts: 1,

@@ -28,7 +28,6 @@ export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 export interface NativeDevtoolsInitFailure {
   attempts: number;
   lastError: string;
-  /** True once `attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS` — no more retries. */
   givenUp: boolean;
 }
 
@@ -56,16 +55,6 @@ export type NativeDevtoolsPrecheckBlock =
   | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string };
 
-/**
- * Single decision point for "is this tool blocked from running?". Captures
- * the three failure shapes — already-given-up, transient init failure that
- * just happened, and app-requires-restart — and returns the appropriate
- * structured result. Returns null when the tool may proceed.
- *
- * Pass `bundleId` only for tools that target a specific app; launch/restart
- * tools and the status tool pass `undefined` to skip the restart check (and
- * get a narrower return type that excludes `restart_required`).
- */
 export async function precheckNativeDevtools(
   api: NativeDevtoolsApi,
   udid: string
@@ -80,21 +69,14 @@ export async function precheckNativeDevtools(
   udid: string,
   bundleId?: string
 ): Promise<NativeDevtoolsPrecheckBlock | null> {
-  // Already-given-up state: structured init_failed.
   const existing = api.getInitFailure();
   if (existing?.givenUp) return buildInitFailedResult(udid, existing);
 
-  // Drive an env-init attempt. Fail-fast: if it throws, surface init_failed
-  // using the freshly-recorded failure rather than letting a raw Error
-  // propagate to the agent. Calls before and past the cap look identical
-  // to the caller.
   try {
     await api.ensureEnvReady();
   } catch {
     const failure = api.getInitFailure();
     if (failure) return buildInitFailedResult(udid, failure);
-    // Defensive: ensureEnvReady threw but didn't record state. Should not
-    // happen, but don't pretend everything is fine.
     return buildInitFailedResult(udid, {
       attempts: 1,
       lastError: "ensureEnvReady threw without recording state",
@@ -157,19 +139,7 @@ export interface NativeDevtoolsApi {
   // Simulator-level
   isEnvSetup(): boolean;
   readonly socketPath: string;
-  /**
-   * Attempt env setup if it hasn't already succeeded. Throws on transient
-   * failure. Once `getInitFailure()?.givenUp` is true, this is a silent no-op
-   * — callers should precheck `getInitFailure()` to surface `init_failed` to
-   * the agent.
-   */
   ensureEnvReady(): Promise<void>;
-  /**
-   * Latest init failure state. Returns `null` when env is set up (or has
-   * never failed). Tools precheck this — symmetrically to `requiresAppRestart`
-   * — to short-circuit with a structured `init_failed` result once the
-   * service has given up retrying.
-   */
   getInitFailure(): NativeDevtoolsInitFailure | null;
 
   // App-level — all keyed by bundleId
@@ -386,26 +356,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    // ensureEnvReady is called once during factory init and then repeatedly
-    // by the simulator watcher (every poll) to recover from transient
-    // CoreSimulatorService glitches. Failure state is recorded on `this`
-    // instance so tool handlers (and boot-device) can query `getInitFailure()`
-    // and surface a structured `init_failed` result — symmetric to how they
-    // surface `restart_required` via `requiresAppRestart`.
-    //
-    // Concurrency: the watcher polls every 10s, but on a degraded simulator a
-    // single ensureEnv attempt can exceed that (each simctl spawn is fenced at
-    // SIMCTL_SPAWN_TIMEOUT_MS and ensureEnv runs them serially). Without an
-    // in-flight guard, overlapping polls would each spawn their own simctl
-    // shims and each increment `attempts` on completion, inflating the counter
-    // past MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS. The guard collapses concurrent
-    // callers onto the same in-flight promise so attempts strictly equals the
-    // number of completed ensureEnv invocations.
+    // Concurrency guard: on a degraded simulator a single ensureEnv attempt
+    // can exceed the watcher's 10s poll interval (each simctl spawn is fenced
+    // at SIMCTL_SPAWN_TIMEOUT_MS and ensureEnv runs them serially). Without
+    // collapsing overlapping callers onto one in-flight promise, each poll
+    // would spawn its own attempt and inflate `attempts` past
+    // MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS.
     const ensureEnvReady = (): Promise<void> => {
       if (envSetup) return Promise.resolve();
-      // Past the cap: silently skip. Callers that care precheck getInitFailure()
-      // and return init_failed; callers that don't get a degraded no-op rather
-      // than an opaque thrown error.
       if (initFailure?.givenUp) return Promise.resolve();
       if (inFlight) return inFlight;
 
@@ -563,12 +521,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     server.listen(socketPath);
 
-    // ── ensureEnv — initial attempt at factory init ───────────────────────────
-    // Tolerate failure: the api is still useful (e.g. for `getInitFailure`)
-    // and the watcher will retry on subsequent polls. Letting the factory throw
-    // here would leak the `net.Server` (the registry's `_teardown` skips
-    // dispose because `node.instance` is never set on a throw) and would also
-    // mean repeated retries stack ERROR-state nodes in the registry.
+    // Tolerate ensureEnv failure: throwing here would leak `server` — the
+    // registry's `_teardown` skips dispose when `node.instance` is never set.
+    // The watcher retries on subsequent polls.
     await ensureEnvReady().catch(() => {});
 
     // ── Public API ────────────────────────────────────────────────────────────
