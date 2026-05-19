@@ -25,6 +25,20 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+// Stub the dylib resolver so the test runs on CI runners where the signed
+// native binaries are not downloaded. The path value is never read — ensureEnv
+// only feeds it to the (mocked) simctl spawn invocation.
+vi.mock("@argent/native-devtools-ios", async () => {
+  const actual =
+    await vi.importActual<typeof import("@argent/native-devtools-ios")>(
+      "@argent/native-devtools-ios"
+    );
+  return {
+    ...actual,
+    bootstrapDylibPath: () => "/tmp/fake-bootstrap.dylib",
+  };
+});
+
 import type { DeviceInfo } from "@argent/registry";
 import {
   MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS,
