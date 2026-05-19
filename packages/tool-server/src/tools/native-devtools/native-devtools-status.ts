@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  buildInitFailedResult,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
@@ -9,13 +14,15 @@ const zodSchema = z.object({
 });
 
 type Params = z.infer<typeof zodSchema>;
-type Result = {
-  envSetup: boolean;
-  appRunning: boolean;
-  connected: boolean;
-  requiresRestart: boolean;
-  nextLaunchWillBeInjected: boolean;
-};
+type Result =
+  | NativeDevtoolsInitFailedResult
+  | {
+      envSetup: boolean;
+      appRunning: boolean;
+      connected: boolean;
+      requiresRestart: boolean;
+      nextLaunchWillBeInjected: boolean;
+    };
 
 export const nativeDevtoolsStatusTool: ToolDefinition<Params, Result> = {
   id: "native-devtools-status",
@@ -41,6 +48,10 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
+
+    const initFailure = api.getInitFailure();
+    if (initFailure?.givenUp) return buildInitFailedResult(params.udid, initFailure);
+
     await api.ensureEnvReady();
     const appRunning = await api.isAppRunning(params.bundleId);
     const connected = api.isConnected(params.bundleId);

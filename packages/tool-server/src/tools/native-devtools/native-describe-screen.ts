@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  buildInitFailedResult,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 import {
   parseNativeDescribeScreenResult,
@@ -29,6 +34,7 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 type Result =
+  | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string }
   | ({ status: "ok" } & NativeDescribeScreenResult);
 
@@ -56,6 +62,9 @@ If status is restart_required: call restart-app then retry.`,
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
+
+    const initFailure = api.getInitFailure();
+    if (initFailure?.givenUp) return buildInitFailedResult(params.udid, initFailure);
 
     if (await api.requiresAppRestart(params.bundleId)) {
       return {

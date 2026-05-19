@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
+import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -196,7 +196,18 @@ async function bootIos(
   // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
-  await registry.resolveService(ndRef.urn, ndRef.options);
+  const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  // If env-init has already exhausted its budget on a prior session against
+  // this UDID (rare — would mean the sim stayed booted through 3 retries)
+  // surface the terminal error so the caller knows devtools won't inject.
+  const initFailure = ndApi.getInitFailure();
+  if (initFailure?.givenUp) {
+    throw new Error(
+      `Simulator ${udid} booted, but native devtools have failed to initialize ` +
+        `${initFailure.attempts} times. Last error: ${initFailure.lastError}. ` +
+        `Shut down the simulator and re-boot it, or restart CoreSimulatorService.`
+    );
+  }
   await execFileAsync("defaults", [
     "write",
     "com.apple.iphonesimulator",

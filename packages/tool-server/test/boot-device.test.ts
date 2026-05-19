@@ -38,7 +38,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("waits for boot completion and native-devtools init before returning", async () => {
-    const resolveService = vi.fn(async () => {});
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
     const registry = {
       resolveService,
     } as unknown as Registry;
@@ -93,7 +93,7 @@ describe("boot-device — iOS path", () => {
         return {} as never;
       });
 
-    const resolveService = vi.fn(async () => {});
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
     const registry = { resolveService } as unknown as Registry;
 
     const tool = createBootDeviceTool(registry);

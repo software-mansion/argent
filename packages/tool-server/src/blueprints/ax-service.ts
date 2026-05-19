@@ -13,6 +13,13 @@ import { axServiceBinaryPath } from "@argent/native-devtools-ios";
 
 const execFileAsync = promisify(execFile);
 
+// See note in native-devtools.ts: a hung CoreSimulatorService can cause
+// `xcrun simctl spawn` to block forever. Fence every one-shot spawn with a
+// timeout that is well above any plausible legitimate latency but well below
+// "hung indefinitely", so failures become rejections without false-positiving
+// slow-but-working setups.
+const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
+
 export const AX_SERVICE_NAMESPACE = "AXService";
 
 // Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
@@ -107,17 +114,21 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
 }
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
-  await execFileAsync("xcrun", [
-    "simctl",
-    "spawn",
-    udid,
-    "defaults",
-    "write",
-    "com.apple.Accessibility",
-    "AutomationEnabled",
-    "-bool",
-    "true",
-  ]);
+  await execFileAsync(
+    "xcrun",
+    [
+      "simctl",
+      "spawn",
+      udid,
+      "defaults",
+      "write",
+      "com.apple.Accessibility",
+      "AutomationEnabled",
+      "-bool",
+      "true",
+    ],
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+  );
 }
 
 async function killExistingDaemon(socketPath: string): Promise<void> {

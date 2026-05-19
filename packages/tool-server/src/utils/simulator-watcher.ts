@@ -1,7 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Registry } from "@argent/registry";
-import { NATIVE_DEVTOOLS_NAMESPACE, nativeDevtoolsRef } from "../blueprints/native-devtools";
+import {
+  NATIVE_DEVTOOLS_NAMESPACE,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../blueprints/native-devtools";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,21 +25,29 @@ async function getBootedUdids(): Promise<Set<string>> {
   return udids;
 }
 
-async function initSimulator(
-  registry: Registry,
-  watchedUdids: Set<string>,
-  udid: string
-): Promise<void> {
-  watchedUdids.add(udid);
+/**
+ * Resolve (or re-resolve) the native-devtools service for a single UDID and
+ * drive its env-init retry loop. Retries are bounded inside the api itself —
+ * once `getInitFailure()?.givenUp` is true this is effectively a no-op, which
+ * is how the watcher stops burning work on a persistently-broken simulator.
+ */
+async function tickUdid(registry: Registry, udid: string): Promise<void> {
+  const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
+  let api: NativeDevtoolsApi;
   try {
-    const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
-    await registry.resolveService(ndRef.urn, ndRef.options);
-  } catch (err) {
-    // Service failed to start (e.g. simulator shut down mid-init); retry next tick
-    watchedUdids.delete(udid);
-    process.stderr.write(
-      `[simulator-watcher] initSimulator failed for ${udid}: ${err instanceof Error ? err.message : err}\n`
-    );
+    api = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  } catch {
+    // The factory tolerates env-init failure, so resolveService should only
+    // throw on structural issues (wrong platform, missing options). Either
+    // way nothing useful to retry here.
+    return;
+  }
+  // First resolution already attempted env setup inside the factory. If that
+  // attempt failed and we haven't given up, drive another retry. The api
+  // records attempts internally; once at the cap, ensureEnvReady short-circuits.
+  const failure = api.getInitFailure();
+  if (failure && !failure.givenUp) {
+    await api.ensureEnvReady().catch(() => {});
   }
 }
 
@@ -54,20 +66,24 @@ export function startSimulatorWatcher(registry: Registry): {
       return;
     }
 
-    // New simulators: start NativeDevtools service (sets launchd env + opens socket)
-    const newUdids = [...booted].filter((udid) => !watchedUdids.has(udid));
     if (awaitInit) {
-      // First poll: await all ensureEnv completions so the server is only marked
-      // ready after injection is guaranteed for all currently-booted simulators.
-      await Promise.all(newUdids.map((udid) => initSimulator(registry, watchedUdids, udid)));
+      // First poll: await all resolutions so the server is only marked ready
+      // after every booted simulator has been seen at least once.
+      await Promise.all(
+        [...booted].map((udid) => {
+          watchedUdids.add(udid);
+          return tickUdid(registry, udid);
+        })
+      );
     } else {
       // Subsequent polls: fire-and-forget to avoid blocking the interval tick.
-      newUdids.forEach((udid) => {
-        initSimulator(registry, watchedUdids, udid).catch(() => {});
-      });
+      for (const udid of booted) {
+        watchedUdids.add(udid);
+        tickUdid(registry, udid).catch(() => {});
+      }
     }
 
-    // Simulators that shut down: dispose service and clean up
+    // Simulators that shut down: dispose service. Fresh state on re-boot.
     for (const udid of watchedUdids) {
       if (!booted.has(udid)) {
         watchedUdids.delete(udid);
@@ -76,8 +92,9 @@ export function startSimulatorWatcher(registry: Registry): {
     }
   }
 
-  // First poll is awaited — server startup blocks until ensureEnv completes for
-  // all booted simulators, eliminating the race with launch-app.
+  // First poll is awaited — server startup blocks until ensureEnv has been
+  // attempted for all currently-booted simulators, eliminating the race with
+  // launch-app for the success path.
   const ready = poll(true);
 
   // Subsequent polls are fire-and-forget.
