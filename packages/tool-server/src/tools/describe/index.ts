@@ -90,7 +90,7 @@ For React Native apps, debugger-component-tree returns React component names wit
       android: {
         requires: androidRequires,
         handler: async (_services, params) =>
-          withDescription(await describeAndroid(params.udid, params.bundleId)),
+          withDescription(await describeAndroid(registry, params.udid, params.bundleId)),
       },
     }),
   };
