@@ -17,6 +17,7 @@ import {
   AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
+  getLocallyInstalledVersion,
   isGloballyInstalled,
   isLocallyInstalled,
   isYarnPnp,
@@ -219,7 +220,10 @@ export async function init(args: string[]): Promise<void> {
       try {
         await runShellCommand(cmd);
         spinner.stop(pc.green("Installed as devDependency."));
-        version = getInstalledVersion() ?? version;
+        // Read from the freshly-installed local copy, not the running
+        // module — when init is invoked via `npx`, getInstalledVersion()
+        // would still report the npx cache version.
+        version = getLocallyInstalledVersion(projectRoot) ?? version;
       } catch (err) {
         spinner.stop(pc.red("Installation failed."));
         p.log.error(`${err}`);
@@ -269,7 +273,9 @@ export async function init(args: string[]): Promise<void> {
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed as devDependency."));
-      version = getInstalledVersion() ?? version;
+      // See sibling branch above — read the freshly-installed local
+      // package.json so npx-cache invocations report the right version.
+      version = getLocallyInstalledVersion(projectRoot) ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);

@@ -539,11 +539,44 @@ export function localDevInstallCommand(pm: PackageManager, pkg: string): ShellCo
  * True when `<projectRoot>/node_modules/@swmansion/argent/package.json` is
  * present. Used to short-circuit the install step in the devDep flow if a
  * teammate already ran `npm install` and only the MCP config is missing.
+ *
+ * Cannot be fooled by a transient `npx @swmansion/argent` invocation: npx
+ * caches live under `~/.npm/_npx/<hash>/` (and equivalents for pnpm dlx /
+ * bunx / yarn dlx), never under a user's project. The companion
+ * {@link getLocallyInstalledVersion} reads the package.json found here so
+ * post-install version reporting reflects the real install instead of the
+ * running npx cache.
  */
 export function isLocallyInstalled(projectRoot: string): boolean {
-  return fs.existsSync(
-    path.join(projectRoot, "node_modules", "@swmansion", "argent", "package.json")
-  );
+  return fs.existsSync(localPackageJsonPath(projectRoot));
+}
+
+function localPackageJsonPath(projectRoot: string): string {
+  return path.join(projectRoot, "node_modules", "@swmansion", "argent", "package.json");
+}
+
+/**
+ * Read the version of the argent package installed as a devDependency at
+ * `projectRoot`. Mirrors {@link getGloballyInstalledVersion}: when init
+ * itself runs via `npx @swmansion/argent`, `getInstalledVersion` reads the
+ * npx cache's package.json rather than the freshly-installed local copy.
+ * After running the local install command we use this helper to report
+ * the right version (which especially matters for `--from <tarball>`,
+ * where the installed version can differ from the registry's latest).
+ *
+ * Returns null when the package is not present locally or its package.json
+ * cannot be parsed — callers should treat null as "could not determine"
+ * and fall back to whatever they already had.
+ */
+export function getLocallyInstalledVersion(projectRoot: string): string | null {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(localPackageJsonPath(projectRoot), "utf8")) as {
+      version?: string;
+    };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -37,6 +37,7 @@ import {
   copyDir,
   dirExists,
   detectPackageManager,
+  getLocallyInstalledVersion,
   globalInstallCommand,
   globalUninstallCommand,
   localDevInstallCommand,
@@ -48,6 +49,7 @@ import {
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
+  isTempRunnerPath,
   isYarnPnp,
   listArgentSkillsInLock,
   listBundledSkills,
@@ -659,5 +661,132 @@ describe("isSkillsCliAvailable", () => {
     const opts = execSyncMock.mock.calls[0]![1] as { timeout?: number } | undefined;
     expect(typeof opts?.timeout).toBe("number");
     expect(opts!.timeout!).toBeGreaterThan(0);
+  });
+});
+
+// ── isTempRunnerPath ─────────────────────────────────────────────────────────
+// Regression coverage for the npx/dlx/bunx cache detection. The existing
+// getGlobalBinaryPath() relies on these markers to avoid reporting a
+// transient `npx @swmansion/argent` as a "true" global install. We keep
+// the matchers under test so a future refactor that drops a cache layout
+// shows up here instead of silently making the install check wrong.
+
+describe("isTempRunnerPath", () => {
+  it("matches the standard npm npx cache", () => {
+    expect(isTempRunnerPath("/Users/me/.npm/_npx/abc123/node_modules/.bin/argent")).toBe(true);
+  });
+
+  it("matches pnpm dlx caches (POSIX)", () => {
+    expect(isTempRunnerPath("/Users/me/.local/share/pnpm/dlx-7a8b/node_modules/.bin/argent")).toBe(
+      true
+    );
+  });
+
+  it("matches pnpm dlx caches (Windows backslashes)", () => {
+    expect(isTempRunnerPath("C:\\Users\\me\\AppData\\Local\\pnpm\\dlx-7a8b\\argent.cmd")).toBe(
+      true
+    );
+  });
+
+  it("matches bunx caches", () => {
+    expect(isTempRunnerPath("/Users/me/.bun/install/cache/@swmansion/argent/bin/argent")).toBe(
+      true
+    );
+  });
+
+  it("returns false for a genuine global install (npm prefix)", () => {
+    expect(isTempRunnerPath("/usr/local/lib/node_modules/@swmansion/argent/dist/cli.js")).toBe(
+      false
+    );
+  });
+
+  it("returns false for a project-local node_modules install", () => {
+    expect(isTempRunnerPath("/Users/me/project/node_modules/.bin/argent")).toBe(false);
+  });
+});
+
+// ── npx-cache cannot fool the local install check ────────────────────────────
+// The user's concern: when init runs via `npx @swmansion/argent`, the
+// running module lives in `~/.npm/_npx/<hash>/node_modules/...` — that's a
+// transient cache, not a "real" install. isLocallyInstalled must continue
+// to report only on the project's own node_modules, never on the npx cache.
+
+describe("isLocallyInstalled — npx invocation", () => {
+  it("returns false when the only argent on disk is in an npx cache layout", () => {
+    // Simulate ~/.npm/_npx/<hash>/node_modules/@swmansion/argent without a
+    // project install. The npx cache lives under home, so projectRoot is
+    // some unrelated directory.
+    const fakeNpxCache = path.join(tmpDir, ".npm", "_npx", "abc123");
+    const argentInCache = path.join(fakeNpxCache, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentInCache, { recursive: true });
+    fs.writeFileSync(path.join(argentInCache, "package.json"), '{"name":"@swmansion/argent"}');
+
+    const projectRoot = path.join(tmpDir, "my-project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    expect(isLocallyInstalled(projectRoot)).toBe(false);
+  });
+
+  it("correctly reports a real local install even when an npx cache also exists", () => {
+    // The npx cache copy must not mask the project's own install.
+    const projectRoot = path.join(tmpDir, "my-project");
+    const argentInProject = path.join(projectRoot, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentInProject, { recursive: true });
+    fs.writeFileSync(path.join(argentInProject, "package.json"), '{"name":"@swmansion/argent"}');
+
+    const fakeNpxCache = path.join(tmpDir, ".npm", "_npx", "abc123");
+    const argentInCache = path.join(fakeNpxCache, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentInCache, { recursive: true });
+    fs.writeFileSync(path.join(argentInCache, "package.json"), '{"name":"@swmansion/argent"}');
+
+    expect(isLocallyInstalled(projectRoot)).toBe(true);
+  });
+});
+
+// ── getLocallyInstalledVersion ──────────────────────────────────────────────
+// Companion to isLocallyInstalled. The helper exists specifically so that
+// post-install version reporting reflects what landed on disk, not the npx
+// cache copy that's still running the init flow.
+
+describe("getLocallyInstalledVersion", () => {
+  it("returns null when no local install is present", () => {
+    expect(getLocallyInstalledVersion(tmpDir)).toBeNull();
+  });
+
+  it("returns the version from the project's node_modules", () => {
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(argentDir, "package.json"),
+      '{"name":"@swmansion/argent","version":"0.7.0"}'
+    );
+    expect(getLocallyInstalledVersion(tmpDir)).toBe("0.7.0");
+  });
+
+  it("reports the local version even when invoked via npx (which would otherwise return latest)", () => {
+    // The local devDep is pinned to an older version than what `npx`
+    // would download. The helper must read from the project, not from
+    // the running process's PACKAGE_ROOT.
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(argentDir, "package.json"),
+      '{"name":"@swmansion/argent","version":"0.5.3"}'
+    );
+    expect(getLocallyInstalledVersion(tmpDir)).toBe("0.5.3");
+  });
+
+  it("returns null when the package.json is malformed", () => {
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.writeFileSync(path.join(argentDir, "package.json"), "not json");
+    expect(getLocallyInstalledVersion(tmpDir)).toBeNull();
+  });
+
+  it("returns null when the package.json exists but has no version field", () => {
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.writeFileSync(path.join(argentDir, "package.json"), '{"name":"@swmansion/argent"}');
+    expect(getLocallyInstalledVersion(tmpDir)).toBeNull();
   });
 });
