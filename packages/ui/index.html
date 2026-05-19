@@ -408,12 +408,6 @@
         font-size: 10px;
         color: var(--ok);
       }
-      .vrow .vs {
-        color: var(--muted);
-        font-size: 11px;
-        margin-top: 3px;
-        line-height: 1.35;
-      }
       .vcard-cmt {
         width: 100%;
         background: var(--bg);
@@ -1760,6 +1754,12 @@
           ev.stopPropagation();
           const mr = mainEl.getBoundingClientRect();
           vp.cardDragging = true;
+          // Release-velocity tracking so a flick "throws" the bubble.
+          let lcx = ev.clientX,
+            lcy = ev.clientY,
+            lt = performance.now(),
+            vx = 0,
+            vy = 0;
           const move = (m) => {
             // Resolve the live rec/el each move so a poll-driven rebuild
             // (rare while dragging — guarded) can't strand the drag.
@@ -1767,6 +1767,14 @@
             const node = rec ? rec.el : el;
             const x = m.clientX - mr.left - node.offsetWidth / 2;
             const y = m.clientY - mr.top - 12;
+            // EMA of pointer velocity in px/s (smooths the last-sample spike).
+            const now = performance.now();
+            const dt = Math.max(8, now - lt);
+            vx = ((m.clientX - lcx) / dt) * 1000 * 0.6 + vx * 0.4;
+            vy = ((m.clientY - lcy) / dt) * 1000 * 0.6 + vy * 0.4;
+            lcx = m.clientX;
+            lcy = m.clientY;
+            lt = now;
             if (rec) {
               // Pin where the user drops it; freeze the spring so it doesn't
               // fight the pointer (the rAF tick reads pos/home).
@@ -1782,7 +1790,18 @@
           const up = () => {
             vp.cardDragging = false;
             const rec = vp.cards.get(p.id);
-            if (rec) rec.dragging = false;
+            if (rec) {
+              rec.dragging = false;
+              // Throw: hand the release velocity to the BUB spring, which
+              // carries it briefly then damps it back to rest — the same
+              // toss feel as a bubble spawning in. Clamp so a hard flick
+              // can't fling it across the screen.
+              const cap = 1500;
+              const cl = (v) => (v < -cap ? -cap : v > cap ? cap : v);
+              if (Math.abs(vx) > 40 || Math.abs(vy) > 40) {
+                rec.vel = { x: cl(vx), y: cl(vy) };
+              }
+            }
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
             window.removeEventListener("pointercancel", up);
@@ -1848,13 +1867,11 @@
             tag.textContent = "✓ staged";
             vn.appendChild(tag);
           }
-          const vs = document.createElement("div");
-          vs.className = "vs";
-          vs.textContent = v.summary || "";
-          meta.append(vn, vs);
-          // Intentionally NOT rendering v.code / v.filePath: the human is
-          // picking a look, not reviewing a diff. The agent still keeps that
-          // metadata in the proposal for when it applies the choice.
+          meta.append(vn);
+          // Intentionally NOT rendering v.summary / v.code / v.filePath: the
+          // human is picking a look from the preview + name, not reading a
+          // spec. The agent still keeps that metadata in the proposal for
+          // when it applies the choice.
           row.appendChild(meta);
           body.appendChild(row);
         }
@@ -1883,10 +1900,7 @@
       // per-card comment box keeps focus and the variant list keeps its
       // scroll position).
       function cardSig(p) {
-        return JSON.stringify([
-          p.element,
-          p.variants.map((v) => [v.id, v.name, v.summary, v.previewImage]),
-        ]);
+        return JSON.stringify([p.element, p.variants.map((v) => [v.id, v.name, v.previewImage])]);
       }
       // In-place refresh of the mutable bits (staged highlight, on/off-screen
       // badge) without rebuilding the card DOM.
