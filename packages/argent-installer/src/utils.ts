@@ -476,12 +476,56 @@ export function formatShellCommand(cmd: ShellCommand): string {
   return parts.join(" ");
 }
 
-export function detectPackageManager(): PackageManager {
+/**
+ * Detect which package manager the user is driving.
+ *
+ * Resolution order:
+ *   1. `projectRoot`'s lockfile, when supplied. A project that ships
+ *      yarn.lock / pnpm-lock.yaml / bun.lock is unambiguously managed by
+ *      that PM regardless of what's currently invoking init. This is the
+ *      load-bearing signal for the `--devdep` flow: running `npx
+ *      @swmansion/argent init` from inside a yarn workspace will set
+ *      `npm_config_user_agent=npm/...` because npx itself is npm-based,
+ *      so without the lockfile probe we'd issue `npm install --save-dev`
+ *      against a yarn project. Yarn's `link:` protocol then fails the
+ *      whole install (EUNSUPPORTEDPROTOCOL), as bsky's social-app shows.
+ *   2. `npm_config_user_agent`. Honoured when no lockfile is present
+ *      (fresh workspace) or when the caller didn't pass projectRoot.
+ *   3. `npm`. Safe default.
+ *
+ * `projectRoot` is optional so call sites that don't have a path handy
+ * (e.g. tests that only care about user-agent parsing) keep working.
+ */
+export function detectPackageManager(projectRoot?: string): PackageManager {
+  if (projectRoot) {
+    const fromLockfile = detectFromLockfile(projectRoot);
+    if (fromLockfile) return fromLockfile;
+  }
   const agent = process.env.npm_config_user_agent ?? "";
   if (agent.startsWith("yarn")) return "yarn";
   if (agent.startsWith("pnpm")) return "pnpm";
   if (agent.startsWith("bun")) return "bun";
   return "npm";
+}
+
+// Mapping is ordered by specificity. pnpm-lock.yaml and bun.lock are
+// unique to their respective managers; yarn.lock is unambiguous; npm's
+// package-lock.json is the last fallback (npm projects also coexist
+// with shrinkwrap.json — both signal npm).
+const LOCKFILE_TO_PM: ReadonlyArray<readonly [string, PackageManager]> = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["bun.lock", "bun"],
+  ["bun.lockb", "bun"],
+  ["yarn.lock", "yarn"],
+  ["package-lock.json", "npm"],
+  ["npm-shrinkwrap.json", "npm"],
+];
+
+function detectFromLockfile(projectRoot: string): PackageManager | null {
+  for (const [lockfile, pm] of LOCKFILE_TO_PM) {
+    if (fs.existsSync(path.join(projectRoot, lockfile))) return pm;
+  }
+  return null;
 }
 
 export function globalInstallCommand(pm: PackageManager, pkg: string): ShellCommand {

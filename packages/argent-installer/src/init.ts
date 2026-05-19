@@ -226,15 +226,20 @@ export async function init(args: string[]): Promise<void> {
         process.exit(1);
       }
 
-      const pm = detectPackageManager();
+      // Detect the project's package manager from its lockfile first.
+      // Under `npx`, the user-agent is always npm regardless of the
+      // project's actual PM — using the wrong one against a yarn/pnpm
+      // workspace can fail catastrophically (e.g., yarn's `link:`
+      // protocol is rejected by npm with EUNSUPPORTEDPROTOCOL).
+      const pm = detectPackageManager(projectRoot);
       const installTarget = fromTar ?? PACKAGE_NAME;
       const cmd = localDevInstallCommand(pm, installTarget);
       const cmdStr = formatShellCommand(cmd);
       const spinner = p.spinner();
-      spinner.start(`Installing ${PACKAGE_NAME} as a devDependency...`);
+      spinner.start(`Installing ${PACKAGE_NAME} as a devDependency with ${pm}...`);
       try {
         await runShellCommand(cmd);
-        spinner.stop(pc.green("Installed as devDependency."));
+        spinner.stop(pc.green(`Installed as devDependency (via ${pm}).`));
         // Read from the freshly-installed local copy, not the running
         // module — when init is invoked via `npx`, getInstalledVersion()
         // would still report the npx cache version.

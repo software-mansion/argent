@@ -233,6 +233,75 @@ describe("detectPackageManager", () => {
   });
 });
 
+// ── detectPackageManager — lockfile-based ──────────────────────────────────
+// Resolution must prefer the project's lockfile over the runtime user
+// agent. Without this, `npx @swmansion/argent init` from a yarn or pnpm
+// workspace would try to drive npm (npx sets npm_config_user_agent to
+// npm/...), and yarn-only protocols like `link:` fail under npm. The
+// regression that motivated this was bsky/social-app (yarn project
+// shipping `link:./eslint`).
+
+describe("detectPackageManager — lockfile-based detection", () => {
+  const original = process.env.npm_config_user_agent;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = original;
+  });
+
+  it("returns yarn when yarn.lock is present, regardless of user-agent", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0"; // hostile: pretend npx is driving
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectPackageManager(tmpDir)).toBe("yarn");
+  });
+
+  it("returns pnpm when pnpm-lock.yaml is present", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    expect(detectPackageManager(tmpDir)).toBe("pnpm");
+  });
+
+  it("returns bun for bun.lock (text format, Bun 1.1+)", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    fs.writeFileSync(path.join(tmpDir, "bun.lock"), "");
+    expect(detectPackageManager(tmpDir)).toBe("bun");
+  });
+
+  it("returns bun for bun.lockb (legacy binary format)", () => {
+    process.env.npm_config_user_agent = "npm/10.0.0";
+    fs.writeFileSync(path.join(tmpDir, "bun.lockb"), "");
+    expect(detectPackageManager(tmpDir)).toBe("bun");
+  });
+
+  it("returns npm when package-lock.json is present", () => {
+    delete process.env.npm_config_user_agent;
+    fs.writeFileSync(path.join(tmpDir, "package-lock.json"), "{}");
+    expect(detectPackageManager(tmpDir)).toBe("npm");
+  });
+
+  it("returns npm when npm-shrinkwrap.json is present", () => {
+    delete process.env.npm_config_user_agent;
+    fs.writeFileSync(path.join(tmpDir, "npm-shrinkwrap.json"), "{}");
+    expect(detectPackageManager(tmpDir)).toBe("npm");
+  });
+
+  it("prefers pnpm over yarn when both lockfiles exist (migration leftover)", () => {
+    fs.writeFileSync(path.join(tmpDir, "pnpm-lock.yaml"), "");
+    fs.writeFileSync(path.join(tmpDir, "yarn.lock"), "");
+    expect(detectPackageManager(tmpDir)).toBe("pnpm");
+  });
+
+  it("falls through to user-agent when no lockfile exists", () => {
+    process.env.npm_config_user_agent = "yarn/4.0.0";
+    expect(detectPackageManager(tmpDir)).toBe("yarn");
+  });
+
+  it("falls through to npm default when neither lockfile nor user-agent helps", () => {
+    delete process.env.npm_config_user_agent;
+    expect(detectPackageManager(tmpDir)).toBe("npm");
+  });
+});
+
 // ── globalInstallCommand / globalUninstallCommand ─────────────────────────────
 
 describe("globalInstallCommand", () => {
