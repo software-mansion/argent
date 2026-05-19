@@ -324,6 +324,20 @@ export async function init(args: string[]): Promise<void> {
         `MCP configs point at ${pc.cyan("./node_modules/.bin/argent")}.\n` +
         `  Commit the changed files (package.json, lockfile, MCP configs) so the team shares this setup.`
     );
+    // The committed config relies on each MCP client launching the server
+    // with its working directory at the project root. Only Claude Code
+    // formally documents this (via `${CLAUDE_PROJECT_DIR}`); the other
+    // editors we support write a plain relative path that works in
+    // practice but is not contractually guaranteed. Surfacing the caveat
+    // here gives teammates a starting point when a setup fails.
+    p.log.warn(
+      `Only Claude Code formally documents project-relative MCP command paths ` +
+        `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, Codex, ` +
+        `opencode, and Gemini the recipe relies on the MCP client launching the ` +
+        `server from the project root — supported in practice but not contractually ` +
+        `guaranteed. If a teammate's editor fails to start argent, verify its ` +
+        `working directory first.`
+    );
   }
 
   // In local-install mode, restrict the adapter universe to ones that have
