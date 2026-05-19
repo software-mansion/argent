@@ -248,6 +248,33 @@
         pointer-events: none;
         z-index: 5;
       }
+
+      /* Minimal off-screen reminder: when a variant element scrolls out of
+         the device viewport its card fades away; these tiny non-interactive
+         pills stay docked at the stream's top/bottom edge so the user keeps
+         seeing that N choices still exist and which way to scroll. */
+      .os-pill {
+        position: absolute;
+        z-index: 9;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 11px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #06122b;
+        background: var(--accent);
+        border-radius: 999px;
+        box-shadow: 0 4px 14px #0008;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.2s ease;
+        white-space: nowrap;
+      }
+      .os-pill.show {
+        opacity: 0.92;
+      }
       .vcard {
         position: absolute;
         width: 232px;
@@ -422,11 +449,15 @@
         border-radius: 4px;
         box-shadow: 0 0 0 1px #000a;
         pointer-events: none;
+        /* Match .spot's clip-path transition exactly (same duration + same
+           easing) so the ring and the no-blur hole move in perfect lockstep.
+           A different curve/duration here makes the ring overshoot and bounce
+           while the hole glides, which reads as the ring lagging the hole. */
         transition:
-          left 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
-          top 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
-          width 0.26s cubic-bezier(0.34, 1.56, 0.64, 1),
-          height 0.26s cubic-bezier(0.34, 1.56, 0.64, 1);
+          left 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+          top 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+          width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+          height 0.28s cubic-bezier(0.22, 1, 0.36, 1);
       }
       .spot-ring .lab {
         position: absolute;
@@ -529,6 +560,89 @@
         z-index: 7;
       }
 
+      /* Review popover for a saved annotation — fades/slides in right above
+         its pin (replaces the old native confirm()). */
+      .ann-pop {
+        position: absolute;
+        z-index: 10;
+        width: 232px;
+        background: var(--surface);
+        border: 1px solid var(--accent);
+        border-radius: 10px;
+        box-shadow: 0 12px 36px #000b;
+        padding: 10px;
+        transform-origin: 50% 100%;
+        transform: translate(-50%, calc(-100% - 8px));
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.18s ease,
+          transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .ann-pop.show {
+        transform: translate(-50%, calc(-100% - 14px));
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .ann-pop h4 {
+        margin: 0 0 6px;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .ann-pop .txt {
+        font-size: 12.5px;
+        line-height: 1.45;
+        color: var(--fg);
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-height: 160px;
+        overflow: auto;
+      }
+      .ann-pop textarea {
+        width: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 6px 8px;
+        font: inherit;
+        font-size: 12px;
+        resize: vertical;
+        min-height: 64px;
+      }
+      .ann-pop .row {
+        display: flex;
+        gap: 6px;
+        margin-top: 9px;
+      }
+      .ann-pop button {
+        flex: 1;
+        border: 0;
+        border-radius: 5px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .ann-pop .edit {
+        background: var(--accent);
+        color: #06122b;
+      }
+      .ann-pop .del {
+        background: #7a2230;
+        color: #ffd9df;
+      }
+      .ann-pop .cancel {
+        background: var(--border);
+        color: var(--fg);
+      }
+
       /* Slim bottom action bar (replaces the old sidebar foot). */
       .footbar {
         position: absolute;
@@ -608,7 +722,10 @@
         </div>
         <svg class="connectors" id="connectors" aria-hidden="true"></svg>
         <div class="cards" id="cards"></div>
+        <div class="os-pill" id="os-top"></div>
+        <div class="os-pill" id="os-bot"></div>
         <div class="comment-pop" id="comment-pop" hidden></div>
+        <div class="ann-pop" id="ann-pop" hidden></div>
         <div class="footbar" id="footbar" hidden>
           <textarea
             id="global-comment"
@@ -1280,6 +1397,9 @@
       const cardsEl = document.getElementById("cards");
       const connEl = document.getElementById("connectors");
       const popEl = document.getElementById("comment-pop");
+      const annPop = document.getElementById("ann-pop");
+      const osTop = document.getElementById("os-top");
+      const osBot = document.getElementById("os-bot");
       const footEl = document.getElementById("footbar");
       const commentBtn = document.getElementById("comment-btn");
       const roundBadge = document.getElementById("round-badge");
@@ -1309,6 +1429,8 @@
         focus: null, // describe node currently spotlighted
         commentFor: null, // describe node a comment-pop is open for
         spot: null, // spotlight layer root (child of mainEl)
+        pinAnim: new Map(), // annId -> { p:{x,y}, v:{x,y} } spring-eased pin
+        annPopFor: null, // annotation id whose review popover is open
       };
 
       function nodeText(n) {
@@ -1831,6 +1953,7 @@
             rec.everMatched = true;
             rec.lostAt = 0;
             rec.target = p._node.frame;
+            rec.lastCY = p._node.frame.y + p._node.frame.height / 2;
           } else if (rec.everMatched && !rec.lostAt) {
             rec.lostAt = now;
           }
@@ -2004,7 +2127,25 @@
           if (!r || !vp.tree || vp.commentFor) return;
           const x = (ev.clientX - mainEl.getBoundingClientRect().left - r.x) / r.w;
           const y = (ev.clientY - mainEl.getBoundingClientRect().top - r.y) / r.h;
-          vp.focus = vpNodeAtPoint(vp.tree, x, y);
+          const node = vpNodeAtPoint(vp.tree, x, y);
+          // Only move the spotlight when the pointer is actually over an
+          // element. Empty space *between* elements (a thin gap) returns
+          // null — resetting focus there would blow the hole up to the
+          // whole screen and back as the pointer crosses the gap, a violent
+          // snap. Hold the last element until another one is hit; the
+          // full-screen reset is reserved for pointerleave (left the stream).
+          if (node && node !== vp.focus) {
+            vp.focus = node;
+            paintSpot();
+          }
+        });
+        hit.addEventListener("pointerleave", () => {
+          // Pointer left the stream rect → drop the hover focus so the
+          // spotlight resets to the whole-stream (no-blur) state instead of
+          // freezing the ring/hole on the last element. A locked comment
+          // target (vp.commentFor) stays put, mirroring pointermove's guard.
+          if (vp.commentFor) return;
+          vp.focus = null;
           paintSpot();
         });
         hit.addEventListener("click", (ev) => {
@@ -2133,6 +2274,14 @@
         popEl.style.left = px + "px";
         popEl.style.top = py + "px";
         ta.focus();
+        ta.addEventListener("keydown", (ev) => {
+          // ⌘/Ctrl+Enter submits; plain Enter keeps inserting newlines.
+          // !isComposing so an IME commit-Enter never submits.
+          if (!ev.isComposing && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+            ev.preventDefault();
+            save.click();
+          }
+        });
         const close = () => {
           popEl.hidden = true;
           vp.commentFor = null;
@@ -2166,6 +2315,7 @@
           if (!live.has(id)) {
             el.remove();
             vp.pinEls.delete(id);
+            vp.pinAnim.delete(id);
           }
         }
         vp.annotations.forEach((a, i) => {
@@ -2173,11 +2323,10 @@
           if (!el) {
             el = document.createElement("div");
             el.className = "ann-pin";
-            el.addEventListener("click", () => {
-              if (confirm(`Remove comment on "${a.target}"?\n\n“${a.comment}”`)) {
-                vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
-                vpRender();
-              }
+            el.addEventListener("click", (ev) => {
+              ev.stopPropagation();
+              if (vp.annPopFor === a.id) closeAnnPop();
+              else openAnnPop(a);
             });
             cardsEl.appendChild(el);
             vp.pinEls.set(String(a.id), el);
@@ -2186,22 +2335,192 @@
           el.title = a.target + ": " + a.comment;
         });
       }
-      // Per-frame: glide each pin to its element's latest position.
+      // Per-frame: place each pin at its spring-eased position (integrated in
+      // vpTick from the latest describe sample). No raw poll coords here, so
+      // the pin glides continuously and never snaps between polls.
       function positionPins() {
-        if (!vp.tree) return;
         for (const a of vp.annotations) {
           const el = vp.pinEls.get(String(a.id));
           if (!el) continue;
-          const n = vpMatchNode(vp.tree, a.match);
-          const pt = n && elementPoint(n.frame);
-          if (!pt) {
+          const key = String(a.id);
+          const pa = vp.pinAnim.get(key);
+          const hasTarget = !!(vp._pinT && vp._pinT.has(key));
+          if (!pa || !hasTarget) {
             el.style.display = "none";
             continue;
           }
           el.style.display = "";
-          el.style.left = pt.x + "px";
-          el.style.top = pt.y + "px";
+          el.style.left = pa.p.x + "px";
+          el.style.top = pa.p.y + "px";
         }
+        placeAnnPop();
+      }
+
+      // ── Saved-annotation review popover ─────────────────────────────────
+      // The pin's eased on-screen point (same source positionPins uses), so
+      // the popover tracks the pin smoothly while the device scrolls.
+      function annPopAnchor(a) {
+        const pa = vp.pinAnim.get(String(a.id));
+        if (pa) return { x: pa.p.x, y: pa.p.y };
+        const n = vp.tree && vpMatchNode(vp.tree, a.match);
+        return n ? elementPoint(n.frame) : null;
+      }
+      function placeAnnPop() {
+        if (vp.annPopFor == null) return;
+        const a = vp.annotations.find((x) => x.id === vp.annPopFor);
+        if (!a) {
+          closeAnnPop();
+          return;
+        }
+        const pt = annPopAnchor(a);
+        if (!pt) {
+          // element scrolled away → dismiss the review popover
+          closeAnnPop();
+          return;
+        }
+        annPop.style.left = pt.x + "px";
+        annPop.style.top = pt.y + "px";
+      }
+      function renderAnnRead(a) {
+        annPop.innerHTML = "";
+        const h = document.createElement("h4");
+        h.textContent = a.target || "Comment";
+        const txt = document.createElement("div");
+        txt.className = "txt";
+        txt.textContent = a.comment;
+        const row = document.createElement("div");
+        row.className = "row";
+        const edit = document.createElement("button");
+        edit.className = "edit";
+        edit.textContent = "Edit";
+        const del = document.createElement("button");
+        del.className = "del";
+        del.textContent = "Remove";
+        row.append(edit, del);
+        annPop.append(h, txt, row);
+        edit.addEventListener("click", (e) => {
+          e.stopPropagation();
+          renderAnnEdit(a);
+        });
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
+          closeAnnPop();
+          vpRender();
+        });
+      }
+      function renderAnnEdit(a) {
+        annPop.innerHTML = "";
+        const h = document.createElement("h4");
+        h.textContent = a.target || "Comment";
+        const ta = document.createElement("textarea");
+        ta.value = a.comment;
+        const row = document.createElement("div");
+        row.className = "row";
+        const saveB = document.createElement("button");
+        saveB.className = "edit";
+        saveB.textContent = "Save";
+        const cancelB = document.createElement("button");
+        cancelB.className = "cancel";
+        cancelB.textContent = "Cancel";
+        row.append(saveB, cancelB);
+        annPop.append(h, ta, row);
+        ta.focus();
+        ta.setSelectionRange(ta.value.length, ta.value.length);
+        const commit = () => {
+          const v = ta.value.trim();
+          if (v) {
+            a.comment = v;
+            renderAnnRead(a);
+            vpRender();
+          }
+        };
+        ta.addEventListener("keydown", (ev) => {
+          // ⌘/Ctrl+Enter submits; plain Enter keeps inserting newlines.
+          // !isComposing so an IME commit-Enter never submits.
+          if (!ev.isComposing && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
+            ev.preventDefault();
+            commit();
+          }
+        });
+        saveB.addEventListener("click", (e) => {
+          e.stopPropagation();
+          commit();
+        });
+        cancelB.addEventListener("click", (e) => {
+          e.stopPropagation();
+          renderAnnRead(a);
+        });
+      }
+      function annPopEsc(ev) {
+        if (ev.key === "Escape") closeAnnPop();
+      }
+      function detachAnnGlobal() {
+        if (vp._annPopDown) {
+          window.removeEventListener("pointerdown", vp._annPopDown, true);
+          vp._annPopDown = null;
+        }
+        window.removeEventListener("keydown", annPopEsc);
+      }
+      function openAnnPop(a) {
+        detachAnnGlobal(); // switching pins → drop the previous closer
+        vp.annPopFor = a.id;
+        annPop.hidden = false;
+        renderAnnRead(a);
+        placeAnnPop();
+        // force a reflow so the pre-state (opacity 0) is committed before
+        // .show flips it → the fade/slide-in actually transitions.
+        void annPop.offsetWidth;
+        annPop.classList.add("show");
+        const onDown = (ev) => {
+          if (annPop.contains(ev.target)) return;
+          if (ev.target.classList && ev.target.classList.contains("ann-pin")) return;
+          closeAnnPop();
+        };
+        vp._annPopDown = onDown;
+        window.addEventListener("pointerdown", onDown, true);
+        window.addEventListener("keydown", annPopEsc);
+      }
+      function closeAnnPop() {
+        if (vp.annPopFor == null) return;
+        vp.annPopFor = null;
+        annPop.classList.remove("show");
+        detachAnnGlobal();
+        // hide only after the fade-out so it can't swallow clicks meanwhile
+        setTimeout(() => {
+          if (vp.annPopFor == null) annPop.hidden = true;
+        }, 240);
+      }
+
+      // Minimal off-screen reminder: count proposal cards whose element has
+      // scrolled out of the device viewport (rec.gone, and it was actually
+      // seen at least once) and surface a tiny pill at the stream's top or
+      // bottom edge so pending choices are never silently invisible.
+      // Direction comes from the element's last on-screen vertical centre.
+      function updateOffscreenHint() {
+        const r = streamRect();
+        const top = [],
+          bot = [];
+        if (r) {
+          for (const p of vp.proposals) {
+            const rec = vp.cards.get(p.id);
+            if (!rec || !rec.gone || !rec.everMatched) continue;
+            (rec.lastCY != null && rec.lastCY < 0.5 ? top : bot).push(p.element || "element");
+          }
+        }
+        const paint = (el, list, arrow, y) => {
+          if (!r || !list.length) {
+            el.classList.remove("show");
+            return;
+          }
+          el.textContent = `${arrow} ${list.length} choice${list.length > 1 ? "s" : ""} off-screen`;
+          el.title = list.join(", ");
+          el.style.left = r.x + r.w / 2 + "px";
+          el.style.top = y + "px";
+          el.classList.add("show");
+        };
+        paint(osTop, top, "▲", r ? r.y + 8 : 0);
+        paint(osBot, bot, "▼", r ? r.y + r.h - 30 : 0);
       }
 
       // Structural pass (poll / resize / stage cadence). Positions, connector
@@ -2216,7 +2535,15 @@
         }
         layoutCards();
         ensurePins();
+        // Reconcile the review popover in the structural pass (like
+        // ensurePins does for pins): if its annotation is gone — e.g. a new
+        // round cleared vp.annotations — close it here, not only via the
+        // rAF self-heal (vpTick can be idle and skip placeAnnPop).
+        if (vp.annPopFor != null && !vp.annotations.some((a) => a.id === vp.annPopFor)) {
+          closeAnnPop();
+        }
         if (vp.inspect) paintSpot();
+        updateOffscreenHint();
 
         const has = vp.proposals.length > 0 || vp.annotations.length > 0;
         footEl.hidden = !has;
@@ -2255,6 +2582,17 @@
         vpLastT = t;
         vpAcc += dt;
         let steps = 0;
+        // Resolve each pin's target element point ONCE per frame (tree only
+        // changes per describe poll); the spring below glides toward it.
+        const pinT = vp._pinT || (vp._pinT = new Map());
+        pinT.clear();
+        if (vp.annotations.length && vp.tree) {
+          for (const a of vp.annotations) {
+            const n = vpMatchNode(vp.tree, a.match);
+            const pt = n && elementPoint(n.frame);
+            if (pt) pinT.set(String(a.id), pt);
+          }
+        }
         while (vpAcc >= VP_DT && steps < 30) {
           vpAcc -= VP_DT;
           steps++;
@@ -2279,6 +2617,20 @@
               vpSpr(rec.pos, rec.vel, "x", rec.home.x, BUB_K, BUB_C);
               vpSpr(rec.pos, rec.vel, "y", rec.home.y, BUB_K, BUB_C);
             }
+          }
+          // Pins use the same fast, zero-overshoot spring as connectors so
+          // they track every animation frame and never snap between polls.
+          for (const a of vp.annotations) {
+            const key = String(a.id);
+            const tp = pinT.get(key);
+            if (!tp) continue;
+            const pa = vp.pinAnim.get(key);
+            if (!pa) {
+              vp.pinAnim.set(key, { p: { x: tp.x, y: tp.y }, v: { x: 0, y: 0 } });
+              continue;
+            }
+            vpSpr(pa.p, pa.v, "x", tp.x, CON_K, CON_C);
+            vpSpr(pa.p, pa.v, "y", tp.y, CON_K, CON_C);
           }
         }
         if (steps >= 30) vpAcc = 0; // shed backlog after a long stall
@@ -2348,6 +2700,11 @@
           vp.spot = null;
         }
         if (popEl) popEl.hidden = true;
+        // Deterministic teardown — don't rely on the rAF self-heal here.
+        closeAnnPop();
+        if (annPop) annPop.hidden = true;
+        vp.pinAnim.clear();
+        if (vp._pinT) vp._pinT.clear();
         vp.focus = null;
         vp.commentFor = null;
         // Fully exit inspect mode so a stream re-attach doesn't leave a
