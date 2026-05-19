@@ -119,6 +119,18 @@ export async function init(args: string[]): Promise<void> {
 
   if (!globallyInstalled && !locallyInstalled) {
     if (!nonInteractive) {
+      // Surface the cross-editor relative-path caveat BEFORE the user
+      // picks a mode — by Step 1 they've already committed, so the
+      // warning is most useful here as decision context.
+      p.log.warn(
+        `Before choosing ${pc.bold("Local")}: only Claude Code formally documents ` +
+          `project-relative MCP command paths (via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). ` +
+          `For Cursor, VS Code, Zed, Codex, opencode, and Gemini the recipe relies on ` +
+          `the MCP client launching the server from the project root — supported in ` +
+          `practice but not contractually guaranteed. If a teammate's editor fails to ` +
+          `start argent, verify its working directory first.`
+      );
+
       const installChoice = await p.select({
         message: "Argent isn't installed yet. How would you like to set it up?",
         // Global is the recommended default — it's the broadest install
@@ -319,24 +331,12 @@ export async function init(args: string[]): Promise<void> {
   p.log.step(pc.bold("Step 1: MCP Server Configuration"));
 
   if (installMode === "local") {
+    // The cross-editor relative-path caveat is surfaced at the Step-0
+    // prompt where the user actually picks the mode — see above.
     p.log.info(
       `${pc.dim("Mode:")} Local devDependency — argent is pinned in ${pc.cyan("package.json")}, ` +
         `MCP configs point at ${pc.cyan("./node_modules/.bin/argent")}.\n` +
         `  Commit the changed files (package.json, lockfile, MCP configs) so the team shares this setup.`
-    );
-    // The committed config relies on each MCP client launching the server
-    // with its working directory at the project root. Only Claude Code
-    // formally documents this (via `${CLAUDE_PROJECT_DIR}`); the other
-    // editors we support write a plain relative path that works in
-    // practice but is not contractually guaranteed. Surfacing the caveat
-    // here gives teammates a starting point when a setup fails.
-    p.log.warn(
-      `Only Claude Code formally documents project-relative MCP command paths ` +
-        `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, Codex, ` +
-        `opencode, and Gemini the recipe relies on the MCP client launching the ` +
-        `server from the project root — supported in practice but not contractually ` +
-        `guaranteed. If a teammate's editor fails to start argent, verify its ` +
-        `working directory first.`
     );
   }
 
