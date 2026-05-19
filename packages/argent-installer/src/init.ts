@@ -104,96 +104,111 @@ export async function init(args: string[]): Promise<void> {
   const projectRoot = resolveProjectRoot(process.cwd());
   const locallyInstalled = isLocallyInstalled(projectRoot);
 
-  let installMode: InstallMode;
-  if (devdepFlagRequested) {
-    installMode = "local";
-  } else if (locallyInstalled && !globallyInstalled) {
-    // A devDep is already on disk but nothing global — assume the user
-    // re-running init wants to refresh the existing local setup, not
-    // suddenly switch to a global install. Stays opt-in: the prompt below
-    // still appears the first time, and `--devdep` is still the canonical
-    // non-interactive selector.
-    installMode = "local";
-  } else {
-    installMode = "global";
-  }
+  // Mode is decided in two stages. The default is global (matches the
+  // old single-mode behavior); `--devdep` forces local; otherwise the
+  // interactive prompt below may override the default. We deliberately
+  // do NOT auto-pick local just because we found node_modules/@swmansion/
+  // argent at the project root — that surprised users who ran the init
+  // via `npx ./tarball init` from a directory whose resolved project
+  // root happened to have argent installed (e.g. home + ~/.claude or a
+  // workspace ancestor).
+  let installMode: InstallMode = devdepFlagRequested ? "local" : "global";
 
-  if (!globallyInstalled && !locallyInstalled) {
-    if (!nonInteractive) {
-      // Loop so the Local-mode confirm step can route the user back to
-      // the install-mode select instead of forcing them to abort init
-      // and start over. Only Esc/Ctrl+C (p.isCancel) actually cancels.
-      while (true) {
-        const installChoice = await p.select({
-          message: "Argent isn't installed yet. How would you like to set it up?",
-          // Global is the recommended default — it's the broadest
-          // install topology and works for every workflow. Local is
-          // offered as an opt-in for teams that want to commit their
-          // argent version + MCP config alongside the rest of the
-          // project.
-          initialValue: "global" as const,
-          options: [
-            {
-              value: "global" as const,
-              label: "Global (recommended)",
-              hint: "Makes the argent command available everywhere",
-            },
-            {
-              value: "local" as const,
-              label: "Local (devDependency)",
-              hint: "Might be used by teams to share configuration",
-            },
-            {
-              value: "cancel" as const,
-              label: "Cancel installation",
-            },
-          ],
+  // The Step-0 prompt fires whenever argent isn't on PATH globally — both
+  // for "no install at all" and for "already installed locally, decide
+  // what to do next". `--devdep` is the non-interactive equivalent.
+  if (!globallyInstalled && !nonInteractive && !devdepFlagRequested) {
+    // Loop so the Local-mode confirm step can route the user back to
+    // the install-mode select instead of forcing them to abort init
+    // and start over. Only Esc/Ctrl+C (p.isCancel) actually cancels.
+    while (true) {
+      const installChoice = await p.select({
+        message: locallyInstalled
+          ? "How would you like to configure argent?"
+          : "Argent isn't installed yet. How would you like to set it up?",
+        // Global is the recommended default — it's the broadest install
+        // topology and works for every workflow. Local is offered as an
+        // opt-in for teams that want to commit their argent version +
+        // MCP config alongside the rest of the project.
+        initialValue: "global" as const,
+        options: [
+          {
+            value: "global" as const,
+            label: "Global (recommended)",
+            hint: "Makes the argent command available everywhere",
+          },
+          {
+            value: "local" as const,
+            label: locallyInstalled
+              ? "Local (devDependency, already installed)"
+              : "Local (devDependency)",
+            hint: "Might be used by teams to share configuration",
+          },
+          {
+            value: "cancel" as const,
+            label: "Cancel installation",
+          },
+        ],
+      });
+
+      if (p.isCancel(installChoice) || installChoice === "cancel") {
+        p.cancel("Installation cancelled.");
+        process.exit(0);
+      }
+
+      // Surface the cross-editor relative-path caveat only after the
+      // user has picked Local. The vast majority of users go global
+      // and never see this; for the team-share path we add a single
+      // confirm prompt so the caveat lands as decision context, not
+      // noise.
+      if (installChoice === "local") {
+        p.log.warn(
+          `Only Claude Code formally documents project-relative MCP command paths ` +
+            `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, ` +
+            `Codex, opencode, and Gemini the recipe relies on the MCP client ` +
+            `launching the server from the project root — supported in practice ` +
+            `but not contractually guaranteed. If a teammate's editor fails to ` +
+            `start argent, verify its working directory first.`
+        );
+
+        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+        const confirmLocal = await p.confirm({
+          message: "Proceed with the Local devDependency install?",
+          initialValue: true,
         });
-
-        if (p.isCancel(installChoice) || installChoice === "cancel") {
+        if (p.isCancel(confirmLocal)) {
+          // Esc / Ctrl+C — treat as a hard cancel.
           p.cancel("Installation cancelled.");
           process.exit(0);
         }
-
-        // Surface the cross-editor relative-path caveat only after the
-        // user has picked Local. The vast majority of users go global
-        // and never see this; for the team-share path we add a single
-        // confirm prompt so the caveat lands as decision context, not
-        // noise.
-        if (installChoice === "local") {
-          p.log.warn(
-            `Only Claude Code formally documents project-relative MCP command paths ` +
-              `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, ` +
-              `Codex, opencode, and Gemini the recipe relies on the MCP client ` +
-              `launching the server from the project root — supported in practice ` +
-              `but not contractually guaranteed. If a teammate's editor fails to ` +
-              `start argent, verify its working directory first.`
-          );
-
-          p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-          const confirmLocal = await p.confirm({
-            message: "Proceed with the Local devDependency install?",
-            initialValue: true,
-          });
-          if (p.isCancel(confirmLocal)) {
-            // Esc / Ctrl+C — treat as a hard cancel.
-            p.cancel("Installation cancelled.");
-            process.exit(0);
-          }
-          if (!confirmLocal) {
-            // User backed out of Local — re-prompt the install mode.
-            continue;
-          }
+        if (!confirmLocal) {
+          // User backed out of Local — re-prompt the install mode.
+          continue;
         }
-
-        installMode = installChoice;
-        break;
       }
-    }
 
-    if (installMode === "local") {
-      // Refuse early when the workspace can't host a devDep — better than
-      // letting `npm install` fail with a noisy stack a step later.
+      installMode = installChoice;
+      break;
+    }
+  }
+
+  // ── Step 0a: actually install (or skip if already in the right state) ──
+  // Splitting "decide mode" from "run install" lets us be honest about
+  // the two states each mode can be in: already-installed (skip) and
+  // not-yet-installed (run command). Previously these were tangled into
+  // one branchy block that double-counted some cases and never reached
+  // the prompt when a stale local install was lying around.
+
+  if (installMode === "local") {
+    if (locallyInstalled) {
+      p.log.info(
+        `Argent is already installed as a devDependency at ` +
+          `${pc.dim(`${projectRoot}/node_modules/@swmansion/argent`)}. Skipping install step.`
+      );
+      version = getLocallyInstalledVersion(projectRoot) ?? version;
+    } else {
+      // Refuse early when the workspace can't host a devDep — better
+      // than letting `npm install` fail with a noisy stack a step later.
       if (!hasPackageJson(projectRoot)) {
         p.log.error(
           `No package.json found at ${pc.dim(projectRoot)}.\n` +
@@ -230,55 +245,22 @@ export async function init(args: string[]): Promise<void> {
         p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
         process.exit(1);
       }
-    } else {
-      const pm = detectPackageManager();
-      const installTarget = fromTar ?? PACKAGE_NAME;
-      const cmd = globalInstallCommand(pm, installTarget);
-      const cmdStr = formatShellCommand(cmd);
-      const spinner = p.spinner();
-      spinner.start(`Installing ${PACKAGE_NAME} globally...`);
-      try {
-        await runShellCommand(cmd);
-        spinner.stop(pc.green("Installed globally."));
-        version = getInstalledVersion() ?? version;
-      } catch (err) {
-        spinner.stop(pc.red("Installation failed."));
-        p.log.error(`${err}`);
-        p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
-        process.exit(1);
-      }
     }
-  } else if (installMode === "local" && !locallyInstalled) {
-    // `--devdep` was requested but only the global binary is present. Run
-    // the local install on top of what's already there — both can coexist.
-    if (!hasPackageJson(projectRoot)) {
-      p.log.error(
-        `No package.json found at ${pc.dim(projectRoot)}.\n` +
-          `  Run ${pc.cyan("npm init -y")} first, then re-run ${pc.cyan("argent init --devdep")}.`
-      );
-      process.exit(1);
-    }
-    if (isYarnPnp(projectRoot)) {
-      p.log.error(
-        `Yarn PnP detected (.pnp.cjs at ${pc.dim(projectRoot)}).\n` +
-          `  The devDep flow needs a real node_modules/.bin directory.`
-      );
-      process.exit(1);
-    }
+  } else if (installMode === "global" && !globallyInstalled) {
     const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
-    const cmd = localDevInstallCommand(pm, installTarget);
+    const cmd = globalInstallCommand(pm, installTarget);
+    const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
-    spinner.start(`Installing ${PACKAGE_NAME} as a devDependency...`);
+    spinner.start(`Installing ${PACKAGE_NAME} globally...`);
     try {
       await runShellCommand(cmd);
-      spinner.stop(pc.green("Installed as devDependency."));
-      // See sibling branch above — read the freshly-installed local
-      // package.json so npx-cache invocations report the right version.
-      version = getLocallyInstalledVersion(projectRoot) ?? version;
+      spinner.stop(pc.green("Installed globally."));
+      version = getInstalledVersion() ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
+      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
   } else if (installMode === "global" && fromTar) {
