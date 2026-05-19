@@ -17,7 +17,7 @@
   --color-bg: #0e0e10;
   --color-fg: #eaeaea;
   --color-muted: #8a8a90;
-  --color-accent: #6aa6ff;
+  --color-accent: #9bc7f0; /* brand sky-blue (argent homepage wordmark) */
   --color-on-accent: #06122b; /* ink on accent-filled surfaces */
   --color-border: #2a2a2e;
   --color-surface: #16161a; /* panels (toolbar, cards, pops) */
@@ -34,9 +34,9 @@
 
   /* ── Translucent effect colours ──────────────────────────────────────── */
   --color-row-staged: rgba(92, 220, 139, 0.13); /* ok tint on staged row */
-  --touch-fill: rgba(106, 166, 255, 0.25); /* multi-touch dot body */
-  --touch-fill-pressed: rgba(106, 166, 255, 0.55);
-  --touch-stroke: rgba(106, 166, 255, 0.9); /* multi-touch dot ring */
+  --touch-fill: rgba(155, 199, 240, 0.25); /* multi-touch dot body (accent) */
+  --touch-fill-pressed: rgba(155, 199, 240, 0.55);
+  --touch-stroke: rgba(155, 199, 240, 0.9); /* multi-touch dot ring */
   --touch-anchor-fill: rgba(255, 200, 80, 0.9); /* anchored-touch dot */
   --touch-anchor-stroke: rgba(255, 200, 80, 1);
   --spotlight-scrim: rgba(8, 8, 10, 0.55); /* dim/blur over the stream */
@@ -49,7 +49,7 @@
   --shadow-pin: 0 3px 10px #0008;
   --shadow-pop: 0 12px 36px #000b;
   --ring-outline: 0 0 0 1px #000a; /* spotlight ring edge */
-  --touch-glow: 0 0 12px rgba(106, 166, 255, 0.5);
+  --touch-glow: 0 0 12px rgba(155, 199, 240, 0.5);
   --dot-glow: 0 0 8px var(--color-ok);
 
   /* ── Typography ──────────────────────────────────────────────────────── */
@@ -71,12 +71,15 @@
   --tracking-where: 0.03em;
 
   /* ── Radii (by role) ─────────────────────────────────────────────────── */
-  --radius-chip: 3px;
-  --radius-control: 4px; /* toolbar controls, spot ring */
-  --radius-input: 5px; /* textareas, pop buttons */
-  --radius-button: 6px;
-  --radius-item: 8px; /* device-picker item */
-  --radius-card: 10px; /* stream, cards, popovers, footbar */
+  /* Brand geometry: the argent site rounds generously (terminal card, pills).
+     Mid radii bumped a notch toward that softer feel; tiny tags and the
+     pin-tail teardrop stay tight so their shape doesn't distort. */
+  --radius-chip: 4px;
+  --radius-control: 6px; /* toolbar controls, spot ring */
+  --radius-input: 7px; /* textareas, pop buttons */
+  --radius-button: 8px;
+  --radius-item: 10px; /* device-picker item */
+  --radius-card: 14px; /* stream, cards, popovers, footbar */
   --radius-pin-tail: 2px; /* annotation-pin teardrop corner */
   --radius-round: 50%;
   --radius-pill: 999px;
@@ -187,4 +190,6 @@
   --poll-interval-ms: 1200; /* /preview/variants poll cadence */
   --tree-stale-ms: 6000; /* drop the describe tree if older than this */
   --flick-max-vel: 1500; /* clamp thrown-card release velocity (px/s) */
+  --spot-idle-dismiss-ms: 200; /* lost-element grace before releasing spotlight */
+  --annpop-hover-grace-ms: 280; /* hover-card grace: pin ↔ popover travel */
 }
