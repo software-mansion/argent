@@ -381,6 +381,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     let nextRpcId = 1;
     let envSetup = false;
     let initFailure: NativeDevtoolsInitFailure | null = null;
+    let inFlight: Promise<void> | null = null;
 
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
@@ -391,32 +392,50 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // instance so tool handlers (and boot-device) can query `getInitFailure()`
     // and surface a structured `init_failed` result — symmetric to how they
     // surface `restart_required` via `requiresAppRestart`.
-    const ensureEnvReady = async (): Promise<void> => {
-      if (envSetup) return;
+    //
+    // Concurrency: the watcher polls every 10s, but on a degraded simulator a
+    // single ensureEnv attempt can exceed that (each simctl spawn is fenced at
+    // SIMCTL_SPAWN_TIMEOUT_MS and ensureEnv runs them serially). Without an
+    // in-flight guard, overlapping polls would each spawn their own simctl
+    // shims and each increment `attempts` on completion, inflating the counter
+    // past MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS. The guard collapses concurrent
+    // callers onto the same in-flight promise so attempts strictly equals the
+    // number of completed ensureEnv invocations.
+    const ensureEnvReady = (): Promise<void> => {
+      if (envSetup) return Promise.resolve();
       // Past the cap: silently skip. Callers that care precheck getInitFailure()
       // and return init_failed; callers that don't get a degraded no-op rather
       // than an opaque thrown error.
-      if (initFailure?.givenUp) return;
-      try {
-        await ensureEnv(udid, socketPath);
-        envSetup = true;
-        initFailure = null;
-      } catch (err) {
-        const lastError = err instanceof Error ? err.message : String(err);
-        const attempts = (initFailure?.attempts ?? 0) + 1;
-        const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
-        initFailure = { attempts, lastError, givenUp };
-        if (givenUp) {
-          process.stderr.write(
-            `[native-devtools] giving up on ${udid} after ${attempts} attempts: ${lastError}\n`
-          );
-        } else {
-          process.stderr.write(
-            `[native-devtools] init attempt ${attempts}/${MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS} failed for ${udid}: ${lastError}\n`
-          );
+      if (initFailure?.givenUp) return Promise.resolve();
+      if (inFlight) return inFlight;
+
+      const attempt = (async () => {
+        try {
+          await ensureEnv(udid, socketPath);
+          envSetup = true;
+          initFailure = null;
+        } catch (err) {
+          const lastError = err instanceof Error ? err.message : String(err);
+          const attempts = (initFailure?.attempts ?? 0) + 1;
+          const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
+          initFailure = { attempts, lastError, givenUp };
+          if (givenUp) {
+            process.stderr.write(
+              `[native-devtools] giving up on ${udid} after ${attempts} attempts: ${lastError}\n`
+            );
+          } else {
+            process.stderr.write(
+              `[native-devtools] init attempt ${attempts}/${MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS} failed for ${udid}: ${lastError}\n`
+            );
+          }
+          throw err;
+        } finally {
+          inFlight = null;
         }
-        throw err;
-      }
+      })();
+
+      inFlight = attempt;
+      return attempt;
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {

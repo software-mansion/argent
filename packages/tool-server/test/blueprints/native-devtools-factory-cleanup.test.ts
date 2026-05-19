@@ -102,4 +102,61 @@ describe("nativeDevtoolsBlueprint factory — failure tolerance", () => {
     await instance.dispose();
     expect(fs.existsSync(SOCKET_PATH)).toBe(false);
   });
+
+  it("collapses overlapping ensureEnvReady calls onto a single in-flight attempt", async () => {
+    // Hang-mode failure shape: each simctl spawn hangs until the execFile
+    // timeout fires (~10 s in production). The watcher polls every 10 s, so
+    // without an in-flight guard each poll would launch its own ensureEnv
+    // during the prior attempt, each completion would increment `attempts`,
+    // and the counter would overshoot MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS. The
+    // guard collapses concurrent callers onto the same promise so `attempts`
+    // strictly equals the number of completed ensureEnv invocations.
+
+    // Phase 1: let factory init complete with a fast failure so the api is
+    // available before we begin the overlap.
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd !== "xcrun") return { stdout: "", stderr: "" };
+      if (args.includes("getenv")) return { stdout: "", stderr: "" };
+      return new Error("simctl spawn failed: factory-init phase");
+    });
+    const instance = await nativeDevtoolsBlueprint.factory({}, UDID, { device });
+    expect(instance.api.getInitFailure()?.attempts).toBe(1);
+
+    // Phase 2: swap to a deferred-rejection mock. The setenv promise stays
+    // pending until we explicitly reject it — modelling a hang. The mock
+    // wrapper passes whatever execFileMock returns to the promisified
+    // execFile's callback; awaiting that Promise inside ensureEnv suspends
+    // until the inner Promise settles.
+    let setenvCallCount = 0;
+    let rejectSetenv: ((err: Error) => void) | null = null;
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd !== "xcrun") return { stdout: "", stderr: "" };
+      if (args.includes("getenv")) return { stdout: "", stderr: "" };
+      setenvCallCount++;
+      return new Promise<{ stdout: string; stderr: string }>((_resolve, reject) => {
+        rejectSetenv = reject;
+      });
+    });
+
+    // Three overlapping callers must all share the same in-flight attempt.
+    const p1 = instance.api.ensureEnvReady();
+    const p2 = instance.api.ensureEnvReady();
+    const p3 = instance.api.ensureEnvReady();
+
+    // Let microtasks drain so the first attempt reaches the suspended setenv.
+    await new Promise<void>((r) => setImmediate(r));
+    expect(setenvCallCount).toBe(1);
+
+    // Reject the pending setenv. All three callers share the rejection;
+    // `attempts` ticks from 1 to 2 exactly once.
+    expect(rejectSetenv).not.toBeNull();
+    rejectSetenv!(new Error("simctl spawn failed: hang-mode timeout"));
+    const settled = await Promise.allSettled([p1, p2, p3]);
+    expect(settled.every((r) => r.status === "rejected")).toBe(true);
+
+    expect(instance.api.getInitFailure()?.attempts).toBe(2);
+    expect(setenvCallCount).toBe(1);
+
+    await instance.dispose();
+  });
 });
