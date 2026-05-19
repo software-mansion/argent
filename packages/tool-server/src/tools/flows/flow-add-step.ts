@@ -10,6 +10,12 @@ const zodSchema = z.object({
     .describe(
       'Tool arguments as a JSON string, e.g. \'{"udid": "ABC", "x": 0.5, "y": 0.3}\'. Omit for tools with no arguments.'
     ),
+  delayMs: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("Milliseconds to sleep before executing this step during replay."),
 });
 
 export function createFlowAddStepTool(
@@ -34,6 +40,7 @@ export function createFlowAddStepTool(
         kind: "tool",
         name: params.command,
         args,
+        delayMs: params.delayMs,
       });
 
       return {

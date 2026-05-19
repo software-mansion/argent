@@ -17,6 +17,6 @@
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
   },
   "devDependencies": {
-    "prettier": "^3.0.0"
+    "prettier": "^3.8.3"
   }
 }

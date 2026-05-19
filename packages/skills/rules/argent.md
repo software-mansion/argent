@@ -36,6 +36,16 @@ If `describe` fails, **read the exact error before reacting**, follow the recove
 Before starting to interact with the app, read the `argent-device-interact` skill first.
 </tapping_rule>
 
+<device_selection_rule>
+Before booting, running, or interacting with any app, call `list-devices` first - prefer running devices.
+
+Decision order:
+
+1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`.
+3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
+   </device_selection_rule>
+
 <skill_reading_rule>
 <important>Always read relevant skills for guidance before executing argent-mcp tool - read skill_routing reference</important>
 </skill_reading_rule>
@@ -48,10 +58,10 @@ Before starting to interact with the app, read the `argent-device-interact` skil
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
+- Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
@@ -68,6 +78,9 @@ When `is_react_native` is true: load `argent-react-native-app-workflow` skill. U
 <skill_routing>
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
+
+PLATFORM DETECTION
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS.
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
