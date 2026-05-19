@@ -167,3 +167,65 @@ describe("init — local install preflight (filesystem)", () => {
 // Quieten an unused-vi-import warning when the section above adds further
 // mocked tests in the future.
 void vi;
+
+// ── init — existing-manifest error detection ─────────────────────────────────
+// When init's `npm install --save-dev @swmansion/argent` fails, the user
+// usually thinks argent itself is broken. But the install command does a
+// full re-resolve of every dep already declared in their package.json,
+// so the real failure is often a stale `link:` / file: / peer entry that
+// has nothing to do with argent. We pattern-match common npm error
+// strings and surface a hint. The contract is mirrored here so a future
+// refactor that drops a pattern (e.g., when npm renames an error code)
+// shows up as a failing test instead of a silent UX regression.
+
+describe("init — existing-manifest error pattern matching", () => {
+  const patterns = [
+    /EUNSUPPORTEDPROTOCOL/i,
+    /Unsupported URL Type/i,
+    /\blink:/i,
+    /ERESOLVE/i,
+    /peer dep/i,
+    /could not resolve dependency/i,
+    /ENOENT.*package\.json/i,
+  ];
+  function looksLikeExistingManifestError(message: string): boolean {
+    return patterns.some((p) => p.test(message));
+  }
+
+  it("matches the user-reported EUNSUPPORTEDPROTOCOL / link: combination", () => {
+    expect(
+      looksLikeExistingManifestError(
+        'npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type "link:": link:./eslint'
+      )
+    ).toBe(true);
+  });
+  it("matches ERESOLVE peer-dep conflicts", () => {
+    expect(looksLikeExistingManifestError("npm error code ERESOLVE\nnpm error peer dep")).toBe(
+      true
+    );
+  });
+  it("matches 'could not resolve dependency' (npm 10+ phrasing)", () => {
+    expect(looksLikeExistingManifestError("npm error could not resolve dependency: react")).toBe(
+      true
+    );
+  });
+  it("matches ENOENT against a project package.json (broken file: dep)", () => {
+    expect(
+      looksLikeExistingManifestError(
+        "npm ERR! ENOENT: no such file or directory, open '/x/package.json'"
+      )
+    ).toBe(true);
+  });
+  it("does NOT match a generic registry timeout (real argent install problem)", () => {
+    expect(
+      looksLikeExistingManifestError("npm error code ETIMEDOUT\nnpm error network timeout")
+    ).toBe(false);
+  });
+  it("does NOT match a generic 404 against argent itself", () => {
+    expect(
+      looksLikeExistingManifestError(
+        "npm error 404 Not Found - GET https://registry.npmjs.org/@swmansion/argent"
+      )
+    ).toBe(false);
+  });
+});

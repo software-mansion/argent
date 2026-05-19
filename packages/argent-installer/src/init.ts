@@ -241,8 +241,7 @@ export async function init(args: string[]): Promise<void> {
         version = getLocallyInstalledVersion(projectRoot) ?? version;
       } catch (err) {
         spinner.stop(pc.red("Installation failed."));
-        p.log.error(`${err}`);
-        p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+        reportLocalInstallFailure(err, cmdStr, projectRoot);
         process.exit(1);
       }
     }
@@ -760,6 +759,51 @@ export async function init(args: string[]): Promise<void> {
     pc.bgGreen(pc.black(" Get Started "))
   );
   p.outro("Done.");
+}
+
+// Patterns that signal the install failure was caused by something in
+// the user's existing manifest (broken protocol, unreachable file: dep,
+// peer-dep mismatch), rather than by anything to do with argent's own
+// package. We use these to add a "check your existing dependencies"
+// hint without misleading the user into blaming argent.
+const EXISTING_MANIFEST_ERROR_PATTERNS = [
+  /EUNSUPPORTEDPROTOCOL/i,
+  /Unsupported URL Type/i,
+  /\blink:/i, // `link:./foo` and friends
+  /ERESOLVE/i,
+  /peer dep/i,
+  /could not resolve dependency/i,
+  /ENOENT.*package\.json/i,
+];
+
+function looksLikeExistingManifestError(message: string): boolean {
+  return EXISTING_MANIFEST_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * Print the local-install failure with the most useful context we can
+ * surface from a child-process error. npm's `EUNSUPPORTEDPROTOCOL` and
+ * friends fire when init's `npm install --save-dev` triggers a full
+ * re-resolve of the user's existing deps — so the failure is in their
+ * manifest, not in argent itself. Calling that out keeps the user from
+ * filing the bug against the wrong project.
+ */
+function reportLocalInstallFailure(err: unknown, cmdStr: string, projectRoot: string): void {
+  const message = err instanceof Error ? err.message : String(err);
+  p.log.error(message);
+
+  if (looksLikeExistingManifestError(message)) {
+    p.log.info(
+      `${pc.yellow("Note:")} this looks like a problem with an existing dependency in ` +
+        `${pc.dim(`${projectRoot}/package.json`)}, not with argent itself. ` +
+        `Argent was added to package.json but the wider install ran a re-resolve ` +
+        `of every dep and one of them failed. Fix the offending entry (the error ` +
+        `above names it) and re-run ${pc.cyan("argent init")}, or install argent ` +
+        `globally instead with ${pc.cyan("argent init")} → Global.`
+    );
+  }
+
+  p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
 }
 
 export function printBanner(): void {

@@ -16,6 +16,7 @@
     "format": "prettier --write ."
   },
   "devDependencies": {
+    "@swmansion/argent": "^0.7.1",
     "prettier": "^3.0.0"
   }
 }
