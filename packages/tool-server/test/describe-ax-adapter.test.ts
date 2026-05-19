@@ -165,6 +165,104 @@ describe("describe ax-service adapter", () => {
     expect(root.children[1]?.label).toBe("Don\u2019t Allow");
   });
 
+  it("falls back to systemElements when elements is empty", () => {
+    // Models a Springboard-hosted overlay that did not propagate into
+    // primaryApp — the daemon collected it into systemElements and the
+    // adapter should surface those buttons instead of returning empty.
+    const response: AXDescribeResponse = {
+      alertVisible: true,
+      screenFrame: { width: 440, height: 956 },
+      elements: [],
+      systemElements: [
+        {
+          label: "Sign in",
+          frame: { x: 0.1, y: 0.7, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+        {
+          label: "Cancel",
+          frame: { x: 0.1, y: 0.76, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+    };
+
+    const root = adaptAXDescribeToDescribeResult(response);
+    expect(root.children).toHaveLength(2);
+    expect(root.children[0]?.label).toBe("Sign in");
+    expect(root.children[1]?.label).toBe("Cancel");
+  });
+
+  it("ignores systemElements when elements produced any usable child", () => {
+    // The in-process dialog case (UIAlertController, Settings sheets): both
+    // arrays carry the same buttons, so the fallback would just duplicate.
+    const response: AXDescribeResponse = {
+      alertVisible: true,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "Allow",
+          frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+      systemElements: [
+        {
+          label: "12:14",
+          frame: { x: 0.13, y: 0.025, width: 0.1, height: 0.02 },
+          traits: ["staticText"],
+        },
+        {
+          label: "Allow",
+          frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+    };
+
+    const root = adaptAXDescribeToDescribeResult(response);
+    expect(root.children).toHaveLength(1);
+    expect(root.children[0]?.label).toBe("Allow");
+  });
+
+  it("falls back to systemElements when elements is non-empty but all entries get filtered", () => {
+    // primaryApp returned junk (off-screen / zero-area frames) so the
+    // foreground walk effectively gave us nothing — fallback should fire.
+    const response: AXDescribeResponse = {
+      alertVisible: true,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "Hidden",
+          frame: { x: 1.5, y: 1.5, width: 0.1, height: 0.1 },
+          traits: ["button"],
+        },
+      ],
+      systemElements: [
+        {
+          label: "OK",
+          frame: { x: 0.1, y: 0.5, width: 0.8, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+    };
+
+    const root = adaptAXDescribeToDescribeResult(response);
+    expect(root.children).toHaveLength(1);
+    expect(root.children[0]?.label).toBe("OK");
+  });
+
+  it("returns empty when both elements and systemElements are empty", () => {
+    const response: AXDescribeResponse = {
+      alertVisible: false,
+      elements: [],
+      systemElements: [],
+    };
+
+    const root = adaptAXDescribeToDescribeResult(response);
+    expect(root.children).toHaveLength(0);
+  });
+
   it("filters out elements with no visible area", () => {
     const response: AXDescribeResponse = {
       alertVisible: false,

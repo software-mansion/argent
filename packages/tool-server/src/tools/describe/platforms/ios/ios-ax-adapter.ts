@@ -35,9 +35,21 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
 }
 
 export function adaptAXDescribeToDescribeResult(response: AXDescribeResponse): DescribeNode {
-  const children = response.elements
+  let children = response.elements
     .map(adaptAXElement)
     .filter((n): n is DescribeNode => n !== null);
+
+  // Springboard-hosted overlays (e.g. AKAppleIDAuthentication sheets) can be
+  // invisible to the `primaryApp` AX walk while still being reachable from
+  // `systemApplication`. The daemon already collects that tree as
+  // `systemElements` when `isSystemAppShowingAnAlert` is true, but for every
+  // in-process dialog the same buttons appear in `elements` and we'd just be
+  // duplicating them. Fall back only when the primary walk produced nothing.
+  if (children.length === 0 && response.systemElements && response.systemElements.length > 0) {
+    children = response.systemElements
+      .map(adaptAXElement)
+      .filter((n): n is DescribeNode => n !== null);
+  }
 
   return parseDescribeResult({
     role: "AXGroup",

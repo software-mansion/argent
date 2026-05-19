@@ -45,6 +45,13 @@ export interface AXDescribeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
   elements: AXDescribeElement[];
+  // Populated by the daemon only when `isSystemAppShowingAnAlert` is true.
+  // Walks Springboard's tree, so it picks up dialogs that are not in the
+  // foreground app's `primaryApp` AX tree (e.g. XPC-presented sheets). For
+  // the dialogs `primaryApp` already carries — like a UIAlertController
+  // presented in-process — the same buttons appear in both arrays, so this
+  // field is only consumed by the adapter as a fallback.
+  systemElements?: AXDescribeElement[];
 }
 
 export interface AXServiceApi {
@@ -271,6 +278,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
+          systemElements: result.systemElements ?? [],
         };
       },
 
