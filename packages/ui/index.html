@@ -163,6 +163,105 @@
       .error-box {
         color: var(--error);
       }
+      .dev-picker {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+        max-width: 420px;
+        padding: 24px;
+      }
+      .dev-picker h2 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--fg);
+        text-align: center;
+      }
+      .dev-picker .sub {
+        margin: -4px 0 6px;
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .dev-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .dev-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        text-align: left;
+        background: var(--surface);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px 14px;
+        font-size: 13px;
+        cursor: pointer;
+        transition:
+          border-color 0.15s ease,
+          background 0.15s ease,
+          transform 0.06s ease;
+      }
+      .dev-item:hover {
+        border-color: var(--accent);
+        background: #1c1c22;
+      }
+      .dev-item:active {
+        transform: translateY(1px);
+      }
+      .dev-item:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+      .dev-item:disabled:hover {
+        border-color: var(--border);
+        background: var(--surface);
+      }
+      .dev-item .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--ok);
+        box-shadow: 0 0 8px var(--ok);
+      }
+      .dev-item:disabled .dot {
+        background: var(--muted);
+        box-shadow: none;
+      }
+      .dev-item .nm {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .dev-item .rt {
+        flex: none;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .dev-picker .refresh-row {
+        display: flex;
+        justify-content: center;
+      }
+      .dev-picker .refresh-row button {
+        background: var(--bg);
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 6px 12px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .dev-picker .refresh-row button:hover {
+        color: var(--fg);
+        border-color: var(--accent);
+      }
       code {
         background: var(--surface);
         padding: 2px 6px;
@@ -712,7 +811,7 @@
       </div>
       <div class="main" id="main">
         <div class="viewport" id="viewport">
-          <div class="empty">Connecting…</div>
+          <div class="empty">Loading simulators…</div>
         </div>
         <svg class="connectors" id="connectors" aria-hidden="true"></svg>
         <div class="cards" id="cards"></div>
@@ -1000,6 +1099,78 @@
 
       // ── Simulator list ─────────────────────────────────────────────────
       const simPicker = document.getElementById("sim-picker");
+
+      // Device chooser rendered into the main viewport when there are multiple
+      // booted simulators (or none) and nothing is connected yet. Replaces the
+      // old static "Connecting…" placeholder, which looked stuck because the
+      // only way to pick was a small toolbar dropdown that was easy to miss.
+      function renderDevicePicker(sims) {
+        const booted = sims.filter((s) => s.state === "Booted");
+        const others = sims.filter((s) => s.state !== "Booted");
+
+        const wrap = document.createElement("div");
+        wrap.className = "dev-picker";
+
+        const h = document.createElement("h2");
+        h.textContent = booted.length ? "Choose a simulator" : "No booted simulators";
+        wrap.appendChild(h);
+
+        const sub = document.createElement("div");
+        sub.className = "sub";
+        sub.textContent = booted.length
+          ? `${booted.length} booted device${booted.length === 1 ? "" : "s"} available`
+          : "Boot a simulator, then refresh.";
+        wrap.appendChild(sub);
+
+        const addList = (items, disabled) => {
+          if (!items.length) return;
+          const list = document.createElement("div");
+          list.className = "dev-list";
+          for (const s of items) {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.className = "dev-item";
+            b.disabled = disabled;
+            if (disabled) b.title = "Not booted — boot it first";
+            const dot = document.createElement("span");
+            dot.className = "dot";
+            const nm = document.createElement("span");
+            nm.className = "nm";
+            nm.textContent = s.name;
+            const rt = document.createElement("span");
+            rt.className = "rt";
+            rt.textContent = disabled ? s.state || "" : s.runtime || "";
+            b.append(dot, nm, rt);
+            if (!disabled) {
+              b.addEventListener("click", () => {
+                b.blur();
+                if (select) select.value = s.udid;
+                connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
+              });
+            }
+            list.appendChild(b);
+          }
+          wrap.appendChild(list);
+        };
+        addList(booted, false);
+        addList(others, true);
+
+        const row = document.createElement("div");
+        row.className = "refresh-row";
+        const rb = document.createElement("button");
+        rb.type = "button";
+        rb.textContent = "⟳ Refresh";
+        rb.addEventListener("click", () => {
+          rb.blur();
+          refreshSimulators();
+        });
+        row.appendChild(rb);
+        wrap.appendChild(row);
+
+        viewport.innerHTML = "";
+        viewport.appendChild(wrap);
+      }
+
       async function refreshSimulators() {
         setStatus("loading simulators…");
         try {
@@ -1026,27 +1197,36 @@
           simPicker.hidden = false;
           simLabel.hidden = true;
           select.innerHTML = "";
-          if (!simulators || simulators.length === 0) {
+          const all = simulators || [];
+          const bootedCount = all.filter((s) => s.state === "Booted").length;
+          if (all.length === 0) {
             const opt = document.createElement("option");
             opt.textContent = "(no simulators found)";
             select.appendChild(opt);
             select.disabled = true;
             setStatus("no simulators", "error");
-            return;
+          } else {
+            select.disabled = false;
+            const placeholder = document.createElement("option");
+            placeholder.value = "";
+            placeholder.textContent = "— choose simulator —";
+            select.appendChild(placeholder);
+            for (const s of all) {
+              const opt = document.createElement("option");
+              opt.value = s.udid;
+              opt.textContent = `${s.state === "Booted" ? "● " : "○ "}${s.name}`;
+              opt.disabled = s.state !== "Booted";
+              select.appendChild(opt);
+            }
+            setStatus(
+              bootedCount ? "choose a device" : "no booted simulators",
+              bootedCount ? "" : "error"
+            );
           }
-          select.disabled = false;
-          const placeholder = document.createElement("option");
-          placeholder.value = "";
-          placeholder.textContent = "— choose simulator —";
-          select.appendChild(placeholder);
-          for (const s of simulators) {
-            const opt = document.createElement("option");
-            opt.value = s.udid;
-            opt.textContent = `${s.state === "Booted" ? "● " : "○ "}${s.name}`;
-            opt.disabled = s.state !== "Booted";
-            select.appendChild(opt);
-          }
-          setStatus("idle");
+          // Multiple (or zero) choices and nothing live yet → show the device
+          // list in the main area instead of a misleading "Connecting…". Don't
+          // clobber an active stream when ⟳ is pressed while connected.
+          if (!currentUdid) renderDevicePicker(all);
         } catch (err) {
           setStatus(`failed: ${err.message || err}`, "error");
         }
