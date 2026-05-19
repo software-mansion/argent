@@ -342,18 +342,79 @@ describe("hasPackageJson", () => {
 });
 
 // ── isLocallyInstalled ──────────────────────────────────────────────────────
+// The check is intentionally two-part: the package must be declared as a
+// dependency in the project's package.json AND its files must be on disk
+// under node_modules. The declaration check disambiguates a real consumer
+// from an npm/yarn workspace where node_modules/@swmansion/argent is just
+// a symlink to the workspace source.
+
+function writeProjectPackageJson(
+  dir: string,
+  manifest: Record<string, unknown> = { devDependencies: { "@swmansion/argent": "^0.7.0" } }
+): void {
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify(manifest));
+}
+
+function writeArgentInNodeModules(dir: string): void {
+  const argentDir = path.join(dir, "node_modules", "@swmansion", "argent");
+  fs.mkdirSync(argentDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(argentDir, "package.json"),
+    '{"name":"@swmansion/argent","version":"0.7.0"}'
+  );
+}
 
 describe("isLocallyInstalled", () => {
-  it("returns false when node_modules/@swmansion/argent does not exist", () => {
+  it("returns false when nothing about the project mentions argent", () => {
     expect(isLocallyInstalled(tmpDir)).toBe(false);
   });
-  it("returns true when the package's package.json is on disk", () => {
-    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
-    fs.mkdirSync(argentDir, { recursive: true });
-    fs.writeFileSync(path.join(argentDir, "package.json"), '{"name":"@swmansion/argent"}');
+
+  it("returns true when argent is in devDependencies AND present on disk", () => {
+    writeProjectPackageJson(tmpDir);
+    writeArgentInNodeModules(tmpDir);
     expect(isLocallyInstalled(tmpDir)).toBe(true);
   });
-  it("returns false when the directory exists but the package.json does not", () => {
+
+  it("returns true for dependencies / peerDependencies / optionalDependencies too", () => {
+    for (const field of ["dependencies", "peerDependencies", "optionalDependencies"] as const) {
+      const subDir = fs.mkdtempSync(path.join(os.tmpdir(), `argent-locinst-${field}-`));
+      try {
+        writeProjectPackageJson(subDir, { [field]: { "@swmansion/argent": "^0.7.0" } });
+        writeArgentInNodeModules(subDir);
+        expect(isLocallyInstalled(subDir)).toBe(true);
+      } finally {
+        fs.rmSync(subDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("returns false when the files are on disk but the project doesn't declare argent as a dep", () => {
+    // This is the npm-workspace case that bit us in the field:
+    // node_modules/@swmansion/argent is a workspace symlink to
+    // packages/argent. The root package.json does NOT list argent as
+    // its own dependency, so this is a development checkout, not a
+    // consumer install.
+    writeProjectPackageJson(tmpDir, { name: "my-workspace", workspaces: ["packages/*"] });
+    writeArgentInNodeModules(tmpDir);
+    expect(isLocallyInstalled(tmpDir)).toBe(false);
+  });
+
+  it("returns false when the project declares argent but it isn't installed yet", () => {
+    // User edited package.json but hasn't run npm install. Treating
+    // this as "installed" would skip the install step and leave them
+    // with broken MCP config pointing at a non-existent binary.
+    writeProjectPackageJson(tmpDir);
+    expect(isLocallyInstalled(tmpDir)).toBe(false);
+  });
+
+  it("returns false when the project's package.json is malformed", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "not json");
+    writeArgentInNodeModules(tmpDir);
+    expect(isLocallyInstalled(tmpDir)).toBe(false);
+  });
+
+  it("returns false when node_modules/@swmansion/argent has the directory but no package.json", () => {
+    writeProjectPackageJson(tmpDir);
     const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
     fs.mkdirSync(argentDir, { recursive: true });
     expect(isLocallyInstalled(tmpDir)).toBe(false);
@@ -730,9 +791,9 @@ describe("isLocallyInstalled — npx invocation", () => {
   it("correctly reports a real local install even when an npx cache also exists", () => {
     // The npx cache copy must not mask the project's own install.
     const projectRoot = path.join(tmpDir, "my-project");
-    const argentInProject = path.join(projectRoot, "node_modules", "@swmansion", "argent");
-    fs.mkdirSync(argentInProject, { recursive: true });
-    fs.writeFileSync(path.join(argentInProject, "package.json"), '{"name":"@swmansion/argent"}');
+    fs.mkdirSync(projectRoot, { recursive: true });
+    writeProjectPackageJson(projectRoot);
+    writeArgentInNodeModules(projectRoot);
 
     const fakeNpxCache = path.join(tmpDir, ".npm", "_npx", "abc123");
     const argentInCache = path.join(fakeNpxCache, "node_modules", "@swmansion", "argent");

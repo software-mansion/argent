@@ -536,19 +536,59 @@ export function localDevInstallCommand(pm: PackageManager, pkg: string): ShellCo
 }
 
 /**
- * True when `<projectRoot>/node_modules/@swmansion/argent/package.json` is
- * present. Used to short-circuit the install step in the devDep flow if a
- * teammate already ran `npm install` and only the MCP config is missing.
+ * True when the project at `projectRoot` has actually adopted argent as
+ * one of its dependencies AND that dependency resolves on disk. Both
+ * halves matter:
  *
- * Cannot be fooled by a transient `npx @swmansion/argent` invocation: npx
- * caches live under `~/.npm/_npx/<hash>/` (and equivalents for pnpm dlx /
- * bunx / yarn dlx), never under a user's project. The companion
- * {@link getLocallyInstalledVersion} reads the package.json found here so
- * post-install version reporting reflects the real install instead of the
- * running npx cache.
+ *   1. The `package.json` at projectRoot must list `@swmansion/argent`
+ *      in one of dependencies / devDependencies / peerDependencies /
+ *      optionalDependencies. This is the canonical signal of "the team
+ *      has opted into this version", and it's what the team-share flow
+ *      is built around.
+ *   2. `<projectRoot>/node_modules/@swmansion/argent/package.json` must
+ *      exist on disk (post-install).
+ *
+ * Why both: in an npm/yarn workspace where argent itself is one of the
+ * member packages, `node_modules/@swmansion/argent` is a symlink to the
+ * workspace source — checking only the file would mis-report the
+ * workspace as having argent installed as a dep. Requiring the dep
+ * declaration disambiguates: workspace members don't list themselves in
+ * the root package.json, but a real consumer does.
+ *
+ * Cannot be fooled by a transient `npx @swmansion/argent` invocation:
+ * npx caches live under `~/.npm/_npx/<hash>/` (and equivalents for pnpm
+ * dlx / bunx / yarn dlx), never under a user's project. The companion
+ * {@link getLocallyInstalledVersion} reads the package.json under
+ * node_modules so post-install version reporting reflects the real
+ * install instead of the running npx cache.
  */
 export function isLocallyInstalled(projectRoot: string): boolean {
+  if (!isDeclaredAsDependency(projectRoot)) return false;
   return fs.existsSync(localPackageJsonPath(projectRoot));
+}
+
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+] as const;
+
+/**
+ * True iff `<projectRoot>/package.json` declares `@swmansion/argent` in
+ * any of the standard dependency fields. Returns false when the file
+ * is missing or unparseable — callers treat that as "not a real
+ * consumer of argent", which is the safer default.
+ */
+function isDeclaredAsDependency(projectRoot: string): boolean {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")) as {
+      [field: string]: Record<string, unknown> | undefined;
+    };
+    return DEPENDENCY_FIELDS.some((field) => Boolean(pkg[field]?.[PACKAGE_NAME]));
+  } catch {
+    return false;
+  }
 }
 
 function localPackageJsonPath(projectRoot: string): string {

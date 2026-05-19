@@ -148,7 +148,14 @@ describe("init — local install preflight (filesystem)", () => {
   });
 
   it("skips the local install step when argent is already on disk", async () => {
-    fs.writeFileSync(path.join(tmpDir, "package.json"), '{"name":"x"}');
+    // "Already installed" requires BOTH a dep declaration in the
+    // project's package.json AND the files in node_modules — the
+    // workspace-symlink case (files but no declaration) must NOT count
+    // as installed. See utils.test.ts for the full matrix.
+    fs.writeFileSync(
+      path.join(tmpDir, "package.json"),
+      JSON.stringify({ name: "x", devDependencies: { "@swmansion/argent": "^0.7.0" } })
+    );
     const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
     fs.mkdirSync(argentDir, { recursive: true });
     fs.writeFileSync(path.join(argentDir, "package.json"), '{"name":"@swmansion/argent"}');
