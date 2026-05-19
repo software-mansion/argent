@@ -17,6 +17,12 @@ export function isAllowedSourceMapURL(raw: string): boolean {
     return false;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+  // Metro source-map URLs always end in `.map` (the query string, if any,
+  // lives in parsed.search, not pathname). Requiring it shrinks the residual
+  // loopback-to-loopback surface: an attacker-set sourceMapURL can at most
+  // make us GET a *.map path on a loopback port, not an arbitrary endpoint
+  // (e.g. another local dev tool's /shutdown or /json).
+  if (!parsed.pathname.endsWith(".map")) return false;
   // Node's URL parser keeps the brackets on IPv6 hostnames ("[::1]"), strip
   // them before consulting the allowlist.
   const hostname =
@@ -24,6 +30,43 @@ export function isAllowedSourceMapURL(raw: string): boolean {
       ? parsed.hostname.slice(1, -1)
       : parsed.hostname;
   return ALLOWED_SOURCE_MAP_HOSTS.has(hostname);
+}
+
+// Source-map bodies are buffered into memory before JSON.parse. A malicious
+// loopback responder (the residual SSRF target) could otherwise stream an
+// unbounded body and OOM the tool-server. 64 MiB is well above any real RN
+// bundle's source map (~tens of MiB at most).
+const MAX_SOURCE_MAP_BYTES = 64 * 1024 * 1024;
+
+export async function readCappedJson(
+  res: { headers: { get(name: string): string | null }; body: unknown; json(): Promise<unknown> },
+  maxBytes = MAX_SOURCE_MAP_BYTES
+): Promise<unknown> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`source map body too large (content-length ${declared} > ${maxBytes})`);
+  }
+  const body = res.body as ReadableStream<Uint8Array> | null | undefined;
+  if (!body || typeof body.getReader !== "function") {
+    // No stream available (e.g. a test stub) — fall back to the plain parse.
+    return res.json();
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error(`source map body exceeded ${maxBytes} bytes`);
+      }
+      chunks.push(value);
+    }
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 }
 
 export interface GeneratedPosition {
@@ -176,7 +219,7 @@ export class SourceMapsRegistry {
         // so this is behaviour-preserving for the legitimate path.
         const res = await fetch(sourceMapURL, { redirect: "error" });
         if (!res.ok) return;
-        rawData = await res.json();
+        rawData = await readCappedJson(res);
       }
 
       const consumer = new SourceMapConsumer(rawData as any);

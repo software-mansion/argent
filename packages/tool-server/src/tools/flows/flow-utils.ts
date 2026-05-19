@@ -19,6 +19,13 @@ export function setActiveProjectRoot(root: string): void {
         `the calling agent is working in.`
     );
   }
+  // Reject ".." segments: getFlowsDir()/getFlowPath() join the flows dir under
+  // this root, and path.join collapses "..", so a root like
+  // "/a/../../../etc" would relocate the flows dir (and the validated flow
+  // file) outside the intended project.
+  if (root.split(/[\\/]+/).includes("..")) {
+    throw new Error(`project_root must not contain ".." segments (got "${root}").`);
+  }
   activeProjectRoot = root;
 }
 

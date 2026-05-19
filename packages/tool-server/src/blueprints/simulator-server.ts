@@ -50,6 +50,13 @@ export interface SimulatorServerApi {
   pressKey(direction: "Down" | "Up", keyCode: number): void;
 }
 
+// iOS UDIDs and Android serials (e.g. "emulator-5554", "192.168.1.5:5555",
+// alphanumeric hashes) all match this. It rejects a leading "-" (argv/flag
+// injection into the simulator-server binary) and any shell/space/separator
+// character — defence-in-depth at the spawn sink, independent of the
+// per-tool zod schemas and the /preview device-list check.
+const SAFE_SIMULATOR_DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
 function spawnSimulatorServerProcess(
   udid: string,
   platform: "ios" | "android"
@@ -58,6 +65,11 @@ function spawnSimulatorServerProcess(
   apiUrl: string;
   streamUrl: string;
 }> {
+  if (!SAFE_SIMULATOR_DEVICE_ID.test(udid)) {
+    return Promise.reject(
+      new Error(`Refusing to start simulator-server for unsafe device id "${udid}".`)
+    );
+  }
   const { BINARY_PATH, BINARY_DIR } = getPaths();
   return new Promise((resolve, reject) => {
     const args = [platform, "--id", udid];

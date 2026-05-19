@@ -5,7 +5,7 @@ import * as readline from "node:readline";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
+import { mkdir, writeFile, readFile, unlink, rename, chmod } from "node:fs/promises";
 
 const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
@@ -184,16 +184,24 @@ export async function readState(): Promise<ToolsServerState | null> {
 
 async function writeState(state: ToolsServerState): Promise<void> {
   await mkdir(STATE_DIR, { recursive: true });
-  // Unlink any pre-existing file first: writeFile's `mode` is only applied
-  // when the file is *created*, so writing over a looser-perm file left by
-  // an older launcher / `npm run dev` / a corrupt write would leak the auth
-  // token at the old (e.g. 0644) mode. Removing it first guarantees the new
-  // file is created fresh at 0600 with no world-readable window.
-  await unlink(STATE_FILE).catch(() => {});
-  await writeFile(STATE_FILE, JSON.stringify(state, null, 2) + "\n", {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  // Atomic publish: write a per-process temp file, force 0600 (writeFile's
+  // `mode` only applies on create, so chmod also covers a stale temp), then
+  // rename over STATE_FILE. rename(2) within the same dir is atomic, so a
+  // concurrent reader (another launcher, `argent server status`, the running
+  // global MCP) never observes a missing / half-written / looser-perm state
+  // file, and the auth token is never published at a world-readable mode.
+  const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+  try {
+    await writeFile(tmp, JSON.stringify(state, null, 2) + "\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await chmod(tmp, 0o600);
+    await rename(tmp, STATE_FILE);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }
 
 async function clearState(): Promise<void> {

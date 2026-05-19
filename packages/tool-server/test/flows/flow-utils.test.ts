@@ -219,3 +219,20 @@ describe("getFlowPath name validation", () => {
     expect(() => getFlowPath("")).toThrow(/Invalid flow name/);
   });
 });
+
+// PR #194 follow-up C: project_root must be absolute AND free of ".."
+// segments (path.join collapses ".." and would relocate the flows dir).
+describe("setActiveProjectRoot validation", () => {
+  it("rejects a relative project_root", () => {
+    expect(() => setActiveProjectRoot("relative/path")).toThrow(/absolute path/);
+  });
+
+  it('rejects an absolute project_root containing ".." segments', () => {
+    expect(() => setActiveProjectRoot("/a/../../../etc")).toThrow(/must not contain "\.\."/);
+    expect(() => setActiveProjectRoot("/home/user/../../root")).toThrow(/must not contain "\.\."/);
+  });
+
+  it("accepts a clean absolute project_root", () => {
+    expect(() => setActiveProjectRoot("/tmp/argent-pr194-c-test")).not.toThrow();
+  });
+});
