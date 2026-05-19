@@ -1,7 +1,7 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import {
   detectAdapters,
@@ -604,6 +604,21 @@ export async function init(args: string[]): Promise<void> {
   p.log.step(pc.bold("Step 2: Skills Installation"));
   p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
 
+  // In local-install mode we must point the skills/rules/agents step at
+  // the project's devDep copy of argent, NOT at the bundled paths that
+  // resolve relative to the currently-running module. When init runs
+  // via `npx @swmansion/argent`, the running module lives in
+  // ~/.npm/_npx/<hash>/node_modules/@swmansion/argent — using its
+  // skills directory makes the skills CLI write the npx path into
+  // skills-lock.json, which then gets committed and points at a
+  // directory that doesn't exist on any other developer's machine
+  // (npx caches are per-user and evict themselves over time).
+  const localArgentRoot =
+    installMode === "local" ? join(projectRoot, "node_modules", "@swmansion", "argent") : null;
+  const effectiveSkillsDir = localArgentRoot ? join(localArgentRoot, "skills") : SKILLS_DIR;
+  const effectiveRulesDir = localArgentRoot ? join(localArgentRoot, "rules") : RULES_DIR;
+  const effectiveAgentsDir = localArgentRoot ? join(localArgentRoot, "agents") : AGENTS_DIR;
+
   type SkillsMethod = "default" | "interactive" | "manual";
   let skillsMethod: SkillsMethod;
 
@@ -658,23 +673,23 @@ export async function init(args: string[]): Promise<void> {
     p.note(
       [
         `Skills are bundled at:`,
-        `  ${pc.cyan(SKILLS_DIR)}`,
+        `  ${pc.cyan(effectiveSkillsDir)}`,
         ``,
         `To install manually, copy them to your editor's skills directory:`,
         ``,
         `  ${pc.dim("# Claude Code")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
+        `  cp -r ${effectiveSkillsDir}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
         ``,
         `  ${pc.dim("# Cursor")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
+        `  cp -r ${effectiveSkillsDir}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
         ``,
         `  ${pc.dim("# Or use npx skills directly:")}`,
-        `  npx skills add ${SKILLS_DIR}`,
+        `  npx skills add ${effectiveSkillsDir}`,
       ].join("\n"),
       "Manual Skills Installation"
     );
   } else {
-    const skillsArgs = ["skills", "add", SKILLS_DIR];
+    const skillsArgs = ["skills", "add", effectiveSkillsDir];
 
     if (scope === "global") {
       skillsArgs.push("-g");
@@ -716,8 +731,8 @@ export async function init(args: string[]): Promise<void> {
     selectedAdapters,
     effectiveRoot,
     normalizedScope,
-    RULES_DIR,
-    AGENTS_DIR
+    effectiveRulesDir,
+    effectiveAgentsDir
   );
 
   if (copyResults.length > 0) {
