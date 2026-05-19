@@ -109,7 +109,9 @@ describe("formatScreenshotDiffSummary", () => {
       },
     });
 
-    expect(summary).toContain('- Restyled: "Header" (color, size/layout, weight/stroke, shape/rendering)');
+    expect(summary).toContain(
+      '- Restyled: "Header" (color, size/layout, weight/stroke, shape/rendering)'
+    );
   });
 
   it("distinguishes skipped and unavailable text analysis states", () => {

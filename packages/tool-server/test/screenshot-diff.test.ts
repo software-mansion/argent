@@ -129,7 +129,11 @@ describe("diffPngFiles", () => {
       ...rectPixels(24, 26, 10, 8, { r: 255, g: 0, b: 0 }),
     ]);
 
-    const sameLine = await diffPngFiles({ baselinePath, currentPath: sameLinePath, outputDir: dir });
+    const sameLine = await diffPngFiles({
+      baselinePath,
+      currentPath: sameLinePath,
+      outputDir: dir,
+    });
     const rows = await diffPngFiles({ baselinePath, currentPath: rowsPath, outputDir: dir });
 
     expect(sameLine.regions).toHaveLength(1);

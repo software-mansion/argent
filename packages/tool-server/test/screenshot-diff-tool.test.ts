@@ -3,10 +3,7 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
-import {
-  executeScreenshotDiffTool,
-  screenshotDiffTool,
-} from "../src/tools/screenshot-diff";
+import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 
 describe("screenshotDiffTool", () => {
   it("uses the screenshot-diff output hint", () => {

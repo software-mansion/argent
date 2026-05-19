@@ -137,9 +137,21 @@ describe("text diff", () => {
       textChangeMinConfidence: 0.7,
       baselineRegions: [],
       currentRegions: [
-        { text: "Below threshold", bounds: { x: 10, y: 10, width: 130, height: 20 }, confidence: 0.69 / 0.78 },
-        { text: "Equal threshold", bounds: { x: 10, y: 40, width: 130, height: 20 }, confidence: 0.7 / 0.78 },
-        { text: "Above threshold", bounds: { x: 10, y: 70, width: 130, height: 20 }, confidence: 0.71 / 0.78 },
+        {
+          text: "Below threshold",
+          bounds: { x: 10, y: 10, width: 130, height: 20 },
+          confidence: 0.69 / 0.78,
+        },
+        {
+          text: "Equal threshold",
+          bounds: { x: 10, y: 40, width: 130, height: 20 },
+          confidence: 0.7 / 0.78,
+        },
+        {
+          text: "Above threshold",
+          bounds: { x: 10, y: 70, width: 130, height: 20 },
+          confidence: 0.71 / 0.78,
+        },
         ...Array.from({ length: 12 }, (_, index) => ({
           text: `Noise ${index}`,
           bounds: { x: 10, y: 100 + index * 20, width: 130, height: 20 },

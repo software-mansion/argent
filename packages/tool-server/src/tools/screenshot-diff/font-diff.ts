@@ -126,11 +126,7 @@ export function detectFontGeometryChange(params: {
   const currentFeatures = extractFontGeometryFeatures(params.currentRegion.bounds, currentCrop);
   if (baselineFeatures.glyphDensity === 0 || currentFeatures.glyphDensity === 0) return null;
 
-  const baselineShapeCrop = cropToInkBounds(
-    params.baselineImage,
-    baselineFeatures,
-    baselineCrop
-  );
+  const baselineShapeCrop = cropToInkBounds(params.baselineImage, baselineFeatures, baselineCrop);
   const currentShapeCrop = cropToInkBounds(params.currentImage, currentFeatures, currentCrop);
   const baselineNormalized = resampleGrayscalePreservingAspect(baselineShapeCrop, RESAMPLED_SIZE);
   const currentNormalized = resampleGrayscalePreservingAspect(currentShapeCrop, RESAMPLED_SIZE);
