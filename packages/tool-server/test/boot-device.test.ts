@@ -94,10 +94,7 @@ describe("boot-device — iOS path", () => {
 
     const tool = createBootDeviceTool(registry);
 
-    const result = await tool.execute!(
-      {},
-      { udid: "33333333-3333-3333-3333-333333333333" }
-    );
+    const result = await tool.execute!({}, { udid: "33333333-3333-3333-3333-333333333333" });
     expect(result).toMatchObject({ status: "init_failed", attempts: 3 });
     if ("status" in result && result.status === "init_failed") {
       expect(result.message).toContain("33333333-3333-3333-3333-333333333333");
