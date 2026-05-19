@@ -17,15 +17,16 @@ import type { DescribeTreeData } from "./tools/describe/contract";
 import { describeIos } from "./tools/describe/platforms/ios";
 import { describeAndroid } from "./tools/describe/platforms/android";
 
-function findUiHtml(): string | null {
-  // Candidate paths (first match wins):
-  //   1. bundled: sibling `preview-ui/index.html` next to the compiled bundle
-  //   2. dev (built tool-server): `packages/ui/index.html` at workspace root
-  //   3. dev (ts-node src): `packages/ui/index.html` at workspace root
+// Resolve a file from the preview-UI directory. Candidate roots (first match
+// wins): (1) bundled `preview-ui/` sibling to the compiled bundle, (2) built
+// tool-server's `packages/ui/`, (3) ts-node `src` run's `packages/ui/`. Used
+// for both index.html and its externalised theme.css with identical
+// resolution, so the stylesheet is always found right next to the page.
+function findUiFile(name: string): string | null {
   const candidates = [
-    path.join(__dirname, "preview-ui", "index.html"),
-    path.resolve(__dirname, "..", "..", "..", "ui", "index.html"),
-    path.resolve(__dirname, "..", "..", "ui", "index.html"),
+    path.join(__dirname, "preview-ui", name),
+    path.resolve(__dirname, "..", "..", "..", "ui", name),
+    path.resolve(__dirname, "..", "..", "ui", name),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
@@ -255,8 +256,21 @@ export function createPreviewRouter(registry: Registry): Router {
     }
   });
 
+  // Externalised stylesheet — the single theme source. Same path resolution
+  // and no-cache as index.html so edits show on reload. `GET "/"` only matches
+  // the exact root, so this is not shadowed by it.
+  router.get("/theme.css", (_req: Request, res: Response) => {
+    const p = findUiFile("theme.css");
+    if (!p) {
+      res.status(404).type("text/plain").send("theme.css not found");
+      return;
+    }
+    res.set("Cache-Control", "no-store, must-revalidate");
+    res.type("text/css").sendFile(p);
+  });
+
   router.get("/", (_req: Request, res: Response) => {
-    const p = findUiHtml();
+    const p = findUiFile("index.html");
     if (!p) {
       res.status(404).type("text/plain").send("Preview UI not found");
       return;

@@ -4,18 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Argent Preview</title>
+    <link rel="stylesheet" href="theme.css" />
     <style>
-      :root {
-        color-scheme: light dark;
-        --bg: #0e0e10;
-        --fg: #eaeaea;
-        --muted: #8a8a90;
-        --accent: #6aa6ff;
-        --border: #2a2a2e;
-        --surface: #16161a;
-        --error: #ff8080;
-        --ok: #5cdc8b;
-      }
       * {
         box-sizing: border-box;
       }
@@ -24,11 +14,10 @@
         margin: 0;
         padding: 0;
         height: 100%;
-        background: var(--bg);
-        color: var(--fg);
-        font-family:
-          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        font-size: 13px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        font-family: var(--font-sans);
+        font-size: var(--fs-body);
       }
       #root {
         display: flex;
@@ -38,61 +27,61 @@
       .toolbar {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 8px 12px;
-        border-bottom: 1px solid var(--border);
-        background: var(--surface);
+        gap: var(--gap-bar);
+        padding: var(--pad-bar);
+        border-bottom: var(--border-hairline) solid var(--color-border);
+        background: var(--color-surface);
         flex-shrink: 0;
       }
       .toolbar label {
-        color: var(--muted);
-        font-size: 11px;
+        color: var(--color-muted);
+        font-size: var(--fs-label);
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: var(--tracking-label);
       }
       .toolbar select,
       .toolbar button {
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 13px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        padding: var(--pad-control);
+        border-radius: var(--radius-control);
+        font-size: var(--fs-body);
       }
       .toolbar select {
-        min-width: 240px;
+        min-width: var(--select-min-width);
       }
       .toolbar button {
         cursor: pointer;
       }
       .toolbar .status {
         margin-left: auto;
-        color: var(--muted);
-        font-size: 12px;
+        color: var(--color-muted);
+        font-size: var(--fs-note);
       }
       .toolbar .debug {
-        color: var(--muted);
-        font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-        font-size: 11px;
-        min-width: 220px;
+        color: var(--color-muted);
+        font-family: var(--font-mono);
+        font-size: var(--fs-label);
+        min-width: var(--debug-min-width);
         text-align: right;
       }
       .status.live::before,
       .status.error::before {
         content: "";
         display: inline-block;
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        margin-right: 6px;
+        width: var(--dot-size);
+        height: var(--dot-size);
+        border-radius: var(--radius-round);
+        margin-right: var(--gap-inline);
         vertical-align: middle;
       }
       .status.live::before {
-        background: var(--ok);
-        animation: pulse 1.6s ease-in-out infinite;
+        background: var(--color-ok);
+        animation: pulse var(--dur-pulse) ease-in-out infinite;
       }
       .status.error::before {
-        background: var(--error);
+        background: var(--color-error);
       }
       @keyframes pulse {
         0%,
@@ -100,7 +89,7 @@
           opacity: 1;
         }
         50% {
-          opacity: 0.4;
+          opacity: var(--opacity-pulse-dim);
         }
       }
       .viewport {
@@ -108,7 +97,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 12px;
+        padding: var(--pad-view);
         min-height: 0;
         position: relative;
       }
@@ -120,10 +109,10 @@
       }
       .stage img {
         max-width: 100%;
-        max-height: 80vh;
+        max-height: var(--stream-max-h);
         object-fit: contain;
-        border-radius: 10px;
-        box-shadow: 0 10px 48px #0008;
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-stream);
         user-select: none;
         -webkit-user-drag: none;
         -webkit-user-select: none;
@@ -139,99 +128,99 @@
         width: var(--size);
         height: var(--size);
         transform: translate(-50%, -50%);
-        border-radius: 50%;
-        background: rgba(106, 166, 255, 0.25);
-        border: 2px solid rgba(106, 166, 255, 0.9);
+        border-radius: var(--radius-round);
+        background: var(--touch-fill);
+        border: var(--border-strong) solid var(--touch-stroke);
         pointer-events: none;
-        box-shadow: 0 0 12px rgba(106, 166, 255, 0.5);
+        box-shadow: var(--touch-glow);
       }
       .touch-dot.pressed {
-        background: rgba(106, 166, 255, 0.55);
+        background: var(--touch-fill-pressed);
       }
       .touch-dot.anchor {
-        background: rgba(255, 200, 80, 0.9);
-        border-color: rgba(255, 200, 80, 1);
+        background: var(--touch-anchor-fill);
+        border-color: var(--touch-anchor-stroke);
       }
       .empty,
       .error-box {
-        color: var(--muted);
+        color: var(--color-muted);
         text-align: center;
-        padding: 32px;
-        max-width: 480px;
-        line-height: 1.5;
+        padding: var(--pad-empty);
+        max-width: var(--empty-max-width);
+        line-height: var(--lh-normal);
       }
       .error-box {
-        color: var(--error);
+        color: var(--color-error);
       }
       .dev-picker {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: var(--gap-stack);
         width: 100%;
-        max-width: 420px;
-        padding: 24px;
+        max-width: var(--picker-max-width);
+        padding: var(--pad-picker);
       }
       .dev-picker h2 {
         margin: 0;
-        font-size: 15px;
-        font-weight: 600;
-        color: var(--fg);
+        font-size: var(--fs-title);
+        font-weight: var(--fw-semibold);
+        color: var(--color-fg);
         text-align: center;
       }
       .dev-picker .sub {
-        margin: -4px 0 6px;
-        font-size: 12px;
-        color: var(--muted);
+        margin: var(--sub-margin);
+        font-size: var(--fs-note);
+        color: var(--color-muted);
         text-align: center;
       }
       .dev-list {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: var(--gap-list);
       }
       .dev-item {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: var(--gap-bar);
         width: 100%;
         text-align: left;
-        background: var(--surface);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 12px 14px;
-        font-size: 13px;
+        background: var(--color-surface);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-item);
+        padding: var(--pad-item);
+        font-size: var(--fs-body);
         cursor: pointer;
         transition:
-          border-color 0.15s ease,
-          background 0.15s ease,
-          transform 0.06s ease;
+          border-color var(--dur-hover) ease,
+          background var(--dur-hover) ease,
+          transform var(--dur-press) ease;
       }
       .dev-item:hover {
-        border-color: var(--accent);
-        background: #1c1c22;
+        border-color: var(--color-accent);
+        background: var(--color-surface-hover);
       }
       .dev-item:active {
-        transform: translateY(1px);
+        transform: translateY(var(--press-shift));
       }
       .dev-item:disabled {
         cursor: not-allowed;
-        opacity: 0.45;
+        opacity: var(--opacity-disabled);
       }
       .dev-item:disabled:hover {
-        border-color: var(--border);
-        background: var(--surface);
+        border-color: var(--color-border);
+        background: var(--color-surface);
       }
       .dev-item .dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
+        width: var(--dot-size);
+        height: var(--dot-size);
+        border-radius: var(--radius-round);
         flex: none;
-        background: var(--ok);
-        box-shadow: 0 0 8px var(--ok);
+        background: var(--color-ok);
+        box-shadow: var(--dot-glow);
       }
       .dev-item:disabled .dot {
-        background: var(--muted);
+        background: var(--color-muted);
         box-shadow: none;
       }
       .dev-item .nm {
@@ -242,31 +231,31 @@
       }
       .dev-item .rt {
         flex: none;
-        color: var(--muted);
-        font-size: 11px;
+        color: var(--color-muted);
+        font-size: var(--fs-label);
       }
       .dev-picker .refresh-row {
         display: flex;
         justify-content: center;
       }
       .dev-picker .refresh-row button {
-        background: var(--bg);
-        color: var(--muted);
-        border: 1px solid var(--border);
-        border-radius: 4px;
-        padding: 6px 12px;
-        font-size: 12px;
+        background: var(--color-bg);
+        color: var(--color-muted);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-control);
+        padding: var(--pad-refresh);
+        font-size: var(--fs-note);
         cursor: pointer;
       }
       .dev-picker .refresh-row button:hover {
-        color: var(--fg);
-        border-color: var(--accent);
+        color: var(--color-fg);
+        border-color: var(--color-accent);
       }
       code {
-        background: var(--surface);
-        padding: 2px 6px;
-        border-radius: 3px;
-        font-size: 12px;
+        background: var(--color-surface);
+        padding: var(--pad-code);
+        border-radius: var(--radius-chip);
+        font-size: var(--fs-note);
       }
 
       /* ── Variant proposals + inspector ─────────────────────────────── */
@@ -285,40 +274,40 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 12px;
+        padding: var(--pad-view);
         min-height: 0;
         position: relative;
       }
       #sim-picker {
         display: inline-flex;
         align-items: center;
-        gap: 10px;
+        gap: var(--gap-bar);
       }
       #sim-label {
-        color: var(--fg);
-        font-size: 13px;
+        color: var(--color-fg);
+        font-size: var(--fs-body);
       }
       .round-badge {
-        color: var(--muted);
-        font-size: 11px;
+        color: var(--color-muted);
+        font-size: var(--fs-label);
       }
       .tool-toggle {
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        padding: 4px 12px;
-        border-radius: 4px;
-        font-size: 13px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        padding: var(--pad-toggle);
+        border-radius: var(--radius-control);
+        font-size: var(--fs-body);
         cursor: pointer;
       }
       .tool-toggle:hover {
-        border-color: var(--accent);
+        border-color: var(--color-accent);
       }
       .tool-toggle.active {
-        background: var(--accent);
-        color: #06122b;
-        border-color: var(--accent);
-        font-weight: 700;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        border-color: var(--color-accent);
+        font-weight: var(--fw-bold);
       }
 
       /* SVG layer for thin connector lines between cards and elements. */
@@ -328,16 +317,16 @@
         width: 100%;
         height: 100%;
         pointer-events: none;
-        z-index: 4;
+        z-index: var(--z-connectors);
       }
       .connectors path {
         fill: none;
-        stroke: var(--accent);
-        stroke-width: 1.5;
-        opacity: 0.7;
+        stroke: var(--color-accent);
+        stroke-width: var(--connector-width);
+        opacity: var(--opacity-connector);
       }
       .connectors circle {
-        fill: var(--accent);
+        fill: var(--color-accent);
       }
 
       /* Floating variant cards, absolutely placed around the stream. */
@@ -345,7 +334,7 @@
         position: absolute;
         inset: 0;
         pointer-events: none;
-        z-index: 5;
+        z-index: var(--z-cards);
       }
 
       /* Minimal off-screen reminder: when a variant element scrolls out of
@@ -354,81 +343,81 @@
          seeing that N choices still exist and which way to scroll. */
       .os-pill {
         position: absolute;
-        z-index: 9;
+        z-index: var(--z-pop);
         transform: translateX(-50%);
         display: flex;
         align-items: center;
-        gap: 5px;
-        padding: 3px 11px;
-        font-size: 11px;
-        font-weight: 700;
-        color: #06122b;
-        background: var(--accent);
-        border-radius: 999px;
-        box-shadow: 0 4px 14px #0008;
+        gap: var(--gap-tight);
+        padding: var(--pad-pill);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-bold);
+        color: var(--color-on-accent);
+        background: var(--color-accent);
+        border-radius: var(--radius-pill);
+        box-shadow: var(--shadow-pill);
         pointer-events: none;
         opacity: 0;
-        transition: opacity 0.2s ease;
+        transition: opacity var(--dur-pill) ease;
         white-space: nowrap;
       }
       .os-pill.show {
-        opacity: 0.92;
+        opacity: var(--opacity-pill);
       }
       .vcard {
         position: absolute;
-        width: 232px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        box-shadow: 0 10px 30px #0009;
+        width: var(--card-width);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
         pointer-events: auto;
         overflow: hidden;
         transform-origin: center center;
         /* left/top are JS spring-driven; scale+opacity pop via CSS. */
         transition:
-          opacity 0.22s ease,
-          transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+          opacity var(--dur-card-in) ease,
+          transform var(--dur-card-move) var(--ease-pop);
       }
       .vcard.gone {
         opacity: 0;
-        transform: scale(0.8);
+        transform: scale(var(--card-gone-scale));
         pointer-events: none;
       }
       .vcard-head {
         display: flex;
         align-items: center;
-        gap: 6px;
-        padding: 7px 10px;
-        border-bottom: 1px solid var(--border);
+        gap: var(--gap-inline);
+        padding: var(--pad-card-head);
+        border-bottom: var(--border-hairline) solid var(--color-border);
         cursor: move;
-        background: #1c1c21;
+        background: var(--color-surface-raised);
       }
       .vcard-head .dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: var(--accent);
+        width: var(--card-dot-size);
+        height: var(--card-dot-size);
+        border-radius: var(--radius-round);
+        background: var(--color-accent);
         flex-shrink: 0;
       }
       .vcard-head .nm {
-        font-weight: 600;
+        font-weight: var(--fw-semibold);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
       .vcard-head .where {
         margin-left: auto;
-        font-size: 10px;
+        font-size: var(--fs-tag);
         text-transform: uppercase;
-        letter-spacing: 0.03em;
-        color: var(--muted);
+        letter-spacing: var(--tracking-where);
+        color: var(--color-muted);
         flex-shrink: 0;
       }
       .vcard-head .where.on {
-        color: var(--ok);
+        color: var(--color-ok);
       }
       .vcard-body {
-        max-height: 320px;
+        max-height: var(--vcard-body-max-h);
         overflow-y: auto;
         /* Reserve the scrollbar space whether or not it's shown so the row
            content width is invariant — keeps the JS-sized previews from
@@ -437,9 +426,9 @@
       }
       .vrow {
         display: flex;
-        gap: 8px;
-        padding: 8px 10px;
-        border-bottom: 1px solid var(--border);
+        gap: var(--gap-list);
+        padding: var(--pad-row);
+        border-bottom: var(--border-hairline) solid var(--color-border);
         cursor: grab;
         user-select: none;
       }
@@ -447,16 +436,16 @@
         border-bottom: 0;
       }
       .vrow:hover {
-        background: #20202a;
+        background: var(--color-row-hover);
       }
       .vrow:active {
         cursor: grabbing;
       }
       .vrow.dragging {
-        opacity: 0.45;
+        opacity: var(--opacity-disabled);
       }
       .vrow.staged {
-        background: rgba(92, 220, 139, 0.13);
+        background: var(--color-row-staged);
       }
       /* Wide/square previews read better stacked (image above text); only
          clearly-portrait previews keep the side-by-side row. */
@@ -468,13 +457,13 @@
       }
       .vrow .thumb {
         position: relative;
-        width: 96px;
-        height: 96px;
+        width: var(--thumb-size);
+        height: var(--thumb-size);
         flex-shrink: 0;
-        border-radius: 4px;
-        border: 1px solid var(--border);
+        border-radius: var(--radius-control);
+        border: var(--border-hairline) solid var(--color-border);
         overflow: hidden;
-        background: #000;
+        background: var(--color-thumb-bg);
       }
       .vrow .thumb-img {
         position: absolute;
@@ -489,8 +478,8 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        color: var(--muted);
-        font-size: 9px;
+        color: var(--color-muted);
+        font-size: var(--fs-mini);
         text-align: center;
       }
       .vrow .meta {
@@ -498,26 +487,26 @@
         flex: 1;
       }
       .vrow .vn {
-        font-weight: 600;
+        font-weight: var(--fw-semibold);
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: var(--gap-inline);
       }
       .vrow .vn .tag {
-        font-size: 10px;
-        color: var(--ok);
+        font-size: var(--fs-tag);
+        color: var(--color-ok);
       }
       .vcard-cmt {
         width: 100%;
-        background: var(--bg);
-        color: var(--fg);
+        background: var(--color-bg);
+        color: var(--color-fg);
         border: 0;
-        border-top: 1px solid var(--border);
-        padding: 6px 10px;
+        border-top: var(--border-hairline) solid var(--color-border);
+        padding: var(--pad-cmt);
         font: inherit;
-        font-size: 11px;
+        font-size: var(--fs-label);
         resize: vertical;
-        min-height: 28px;
+        min-height: var(--cmt-min-h);
       }
 
       /* Element-inspector spotlight: ONE blur+dim layer over the stream with
@@ -527,50 +516,50 @@
          structure so the clip-path transition interpolates smoothly. */
       .spot {
         position: absolute;
-        background: rgba(8, 8, 10, 0.55);
-        backdrop-filter: blur(5px);
-        -webkit-backdrop-filter: blur(5px);
+        background: var(--spotlight-scrim);
+        backdrop-filter: blur(var(--backdrop-blur));
+        -webkit-backdrop-filter: blur(var(--backdrop-blur));
         pointer-events: none;
         will-change: clip-path;
         transition:
-          clip-path 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-          opacity 0.18s ease;
+          clip-path var(--dur-spot) var(--ease-out),
+          opacity var(--dur-fade) ease;
       }
       .spot-ring {
         position: absolute;
-        border: 2px solid var(--accent);
-        border-radius: 4px;
-        box-shadow: 0 0 0 1px #000a;
+        border: var(--border-strong) solid var(--color-accent);
+        border-radius: var(--radius-control);
+        box-shadow: var(--ring-outline);
         pointer-events: none;
         /* Match .spot's clip-path transition exactly (same duration + same
            easing) so the ring and the no-blur hole move in perfect lockstep.
            A different curve/duration here makes the ring overshoot and bounce
            while the hole glides, which reads as the ring lagging the hole. */
         transition:
-          left 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-          top 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-          width 0.28s cubic-bezier(0.22, 1, 0.36, 1),
-          height 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+          left var(--dur-spot) var(--ease-out),
+          top var(--dur-spot) var(--ease-out),
+          width var(--dur-spot) var(--ease-out),
+          height var(--dur-spot) var(--ease-out);
       }
       .spot-ring .lab {
         position: absolute;
-        top: -22px;
+        top: var(--lab-top);
         left: 0;
-        background: var(--accent);
-        color: #06122b;
-        font-size: 11px;
-        font-weight: 700;
-        padding: 1px 7px;
-        border-radius: 4px;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-bold);
+        padding: var(--pad-lab);
+        border-radius: var(--radius-control);
         white-space: nowrap;
-        max-width: 240px;
+        max-width: var(--lab-max-width);
         overflow: hidden;
         text-overflow: ellipsis;
       }
       .spot-hit {
         position: absolute;
         cursor: crosshair;
-        z-index: 8;
+        z-index: var(--z-spot-hit);
         /* The spotlight root sets pointer-events:none; this capture layer must
            opt back in or hover/click never reaches it and nothing un-blurs. */
         pointer-events: auto;
@@ -582,215 +571,216 @@
       /* Comment box bubble anchored next to the inspected element. */
       .comment-pop {
         position: absolute;
-        z-index: 9;
-        width: 248px;
-        background: var(--surface);
-        border: 1px solid var(--accent);
-        border-radius: 10px;
-        box-shadow: 0 12px 36px #000b;
-        padding: 10px;
+        z-index: var(--z-pop);
+        width: var(--comment-pop-width);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        padding: var(--pad-pop);
       }
       .comment-pop h3 {
-        margin: 0 0 7px;
-        font-size: 12px;
-        font-weight: 600;
+        margin: 0 0 var(--comment-title-gap);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
       }
       .comment-pop h3 span {
-        color: var(--accent);
+        color: var(--color-accent);
       }
       .comment-pop textarea {
         width: 100%;
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        border-radius: 5px;
-        padding: 6px 8px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-input);
+        padding: var(--pad-input);
         font: inherit;
-        font-size: 12px;
+        font-size: var(--fs-note);
         resize: vertical;
-        min-height: 64px;
+        min-height: var(--textarea-min-h);
       }
       .comment-pop .row {
         display: flex;
-        gap: 6px;
-        margin-top: 8px;
+        gap: var(--gap-inline);
+        margin-top: var(--gap-list);
       }
       .comment-pop button {
         flex: 1;
         border: 0;
-        border-radius: 5px;
-        padding: 6px 10px;
-        font-size: 12px;
-        font-weight: 600;
+        border-radius: var(--radius-input);
+        padding: var(--pad-btn);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
         cursor: pointer;
       }
       .comment-pop .save {
-        background: var(--accent);
-        color: #06122b;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
       }
       .comment-pop .cancel {
-        background: var(--border);
-        color: var(--fg);
+        background: var(--color-border);
+        color: var(--color-fg);
       }
 
       /* Saved-annotation pin shown on its element. */
       .ann-pin {
         position: absolute;
         transform: translate(-50%, -50%);
-        width: 20px;
-        height: 20px;
-        border-radius: 50% 50% 50% 2px;
-        background: #d8a657;
-        color: #1a1205;
-        font-size: 11px;
-        font-weight: 800;
+        width: var(--pin-size);
+        height: var(--pin-size);
+        border-radius: var(--radius-round) var(--radius-round) var(--radius-round)
+          var(--radius-pin-tail);
+        background: var(--color-pin-bg);
+        color: var(--color-pin-fg);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-extrabold);
         display: flex;
         align-items: center;
         justify-content: center;
-        box-shadow: 0 3px 10px #0008;
+        box-shadow: var(--shadow-pin);
         pointer-events: auto;
         cursor: help;
-        z-index: 7;
+        z-index: var(--z-pin);
       }
 
       /* Review popover for a saved annotation — fades/slides in right above
          its pin (replaces the old native confirm()). */
       .ann-pop {
         position: absolute;
-        z-index: 10;
-        width: 232px;
-        background: var(--surface);
-        border: 1px solid var(--accent);
-        border-radius: 10px;
-        box-shadow: 0 12px 36px #000b;
-        padding: 10px;
+        z-index: var(--z-overlay);
+        width: var(--annpop-width);
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        padding: var(--pad-pop);
         transform-origin: 50% 100%;
-        transform: translate(-50%, calc(-100% - 8px));
+        transform: translate(-50%, calc(-100% - var(--annpop-gap)));
         opacity: 0;
         pointer-events: none;
         transition:
-          opacity 0.18s ease,
-          transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+          opacity var(--dur-fade) ease,
+          transform var(--dur-fade) var(--ease-out);
       }
       .ann-pop.show {
-        transform: translate(-50%, calc(-100% - 14px));
+        transform: translate(-50%, calc(-100% - var(--annpop-gap-show)));
         opacity: 1;
         pointer-events: auto;
       }
       .ann-pop h4 {
-        margin: 0 0 6px;
-        font-size: 11px;
-        font-weight: 700;
-        color: var(--accent);
+        margin: 0 0 var(--gap-inline);
+        font-size: var(--fs-label);
+        font-weight: var(--fw-bold);
+        color: var(--color-accent);
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: var(--tracking-label);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
       }
       .ann-pop .txt {
-        font-size: 12.5px;
-        line-height: 1.45;
-        color: var(--fg);
+        font-size: var(--fs-read);
+        line-height: var(--lh-snug);
+        color: var(--color-fg);
         white-space: pre-wrap;
         word-break: break-word;
-        max-height: 160px;
+        max-height: var(--annpop-txt-max-h);
         overflow: auto;
       }
       .ann-pop textarea {
         width: 100%;
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        border-radius: 5px;
-        padding: 6px 8px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-input);
+        padding: var(--pad-input);
         font: inherit;
-        font-size: 12px;
+        font-size: var(--fs-note);
         resize: vertical;
-        min-height: 64px;
+        min-height: var(--textarea-min-h);
       }
       .ann-pop .row {
         display: flex;
-        gap: 6px;
-        margin-top: 9px;
+        gap: var(--gap-inline);
+        margin-top: var(--annrow-mt);
       }
       .ann-pop button {
         flex: 1;
         border: 0;
-        border-radius: 5px;
-        padding: 6px 10px;
-        font-size: 12px;
-        font-weight: 600;
+        border-radius: var(--radius-input);
+        padding: var(--pad-btn);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
         cursor: pointer;
       }
       .ann-pop .edit {
-        background: var(--accent);
-        color: #06122b;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
       }
       .ann-pop .del {
-        background: #7a2230;
-        color: #ffd9df;
+        background: var(--color-danger-bg);
+        color: var(--color-danger-fg);
       }
       .ann-pop .cancel {
-        background: var(--border);
-        color: var(--fg);
+        background: var(--color-border);
+        color: var(--color-fg);
       }
 
       /* Slim bottom action bar (replaces the old sidebar foot). */
       .footbar {
         position: absolute;
         left: 50%;
-        bottom: 14px;
+        bottom: var(--footbar-bottom);
         transform: translateX(-50%);
         display: flex;
         align-items: center;
-        gap: 8px;
-        background: rgba(22, 22, 26, 0.94);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 8px 10px;
-        box-shadow: 0 10px 30px #0009;
-        z-index: 10;
-        max-width: 70%;
+        gap: var(--gap-list);
+        background: var(--footbar-bg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        padding: var(--pad-footbar);
+        box-shadow: var(--shadow-card);
+        z-index: var(--z-overlay);
+        max-width: var(--footbar-max-width);
       }
       .footbar textarea {
-        background: var(--bg);
-        color: var(--fg);
-        border: 1px solid var(--border);
-        border-radius: 5px;
-        padding: 6px 9px;
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-input);
+        padding: var(--pad-footbar-input);
         font: inherit;
-        font-size: 12px;
+        font-size: var(--fs-note);
         resize: none;
-        width: 260px;
-        height: 32px;
+        width: var(--footbar-input-width);
+        height: var(--footbar-input-h);
       }
       .complete-btn {
-        background: var(--accent);
-        color: #06122b;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
         border: 0;
-        border-radius: 6px;
-        padding: 8px 14px;
-        font-size: 13px;
-        font-weight: 700;
+        border-radius: var(--radius-button);
+        padding: var(--pad-complete);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
         cursor: pointer;
         white-space: nowrap;
       }
       .complete-btn:disabled {
-        background: var(--border);
-        color: var(--muted);
+        background: var(--color-border);
+        color: var(--color-muted);
         cursor: not-allowed;
       }
       .complete-note {
-        color: var(--muted);
-        font-size: 11px;
-        max-width: 200px;
+        color: var(--color-muted);
+        font-size: var(--fs-label);
+        max-width: var(--complete-note-max-width);
       }
       .complete-note.ok {
-        color: var(--ok);
+        color: var(--color-ok);
       }
       .complete-note.err {
-        color: var(--error);
+        color: var(--color-error);
       }
     </style>
   </head>
@@ -843,6 +833,29 @@
         (window.location.origin.startsWith("http")
           ? window.location.origin
           : "http://127.0.0.1:3001");
+
+      // ── Theme bridge ───────────────────────────────────────────────────
+      // Visual + motion *feel* lives in theme.css (the single source). The few
+      // values the physics/timing JS needs are read from there once at boot,
+      // so there is still no hardcoded look/feel in this script. Fallbacks
+      // equal the prior literals, so a missing/unloaded theme.css cannot
+      // change behaviour.
+      const cssNum = (name, fallback) => {
+        const raw = getComputedStyle(document.documentElement).getPropertyValue(name);
+        const n = parseFloat(raw);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const THEME = {
+        bubbleOmega: cssNum("--spring-bubble-omega", 4.2),
+        bubbleZeta: cssNum("--spring-bubble-zeta", 0.9),
+        tightOmega: cssNum("--spring-tight-omega", 26),
+        tightZeta: cssNum("--spring-tight-zeta", 1),
+        goneGraceMs: cssNum("--card-gone-grace-ms", 550),
+        pollMs: cssNum("--poll-interval-ms", 1200),
+        treeStaleMs: cssNum("--tree-stale-ms", 6000),
+        flickMaxVel: cssNum("--flick-max-vel", 1500),
+        cardWidth: cssNum("--card-width", 232),
+      };
 
       // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
       // sim-server's `key` command expects these raw HID codes — shift/modifier
@@ -1766,7 +1779,7 @@
             describeInFlight = false;
           }
         }
-        if (Date.now() - vp.treeAt > 6000) vp.tree = null;
+        if (Date.now() - vp.treeAt > THEME.treeStaleMs) vp.tree = null;
         vpRender();
       }
       // Interruptible delay: an un-skippable floor (rate ceiling), then a
@@ -1976,7 +1989,7 @@
               // carries it briefly then damps it back to rest — the same
               // toss feel as a bubble spawning in. Clamp so a hard flick
               // can't fling it across the screen.
-              const cap = 1500;
+              const cap = THEME.flickMaxVel;
               const cl = (v) => (v < -cap ? -cap : v > cap ? cap : v);
               if (Math.abs(vx) > 40 || Math.abs(vy) > 40) {
                 rec.vel = { x: cl(vx), y: cl(vy) };
@@ -2120,12 +2133,12 @@
       // physics tick (vpTick); here we just (re)build DOM, toggle the
       // off-screen fade, and compute each visible card's spring "home"
       // anchored to its element (vertical de-overlap) — not a rigid column.
-      const GONE_GRACE_MS = 550; // ride out brief edge drop-outs before fading
+      const GONE_GRACE_MS = THEME.goneGraceMs; // ride out brief edge drop-outs before fading
       function layoutCards() {
         const now = Date.now();
         const mr = mainEl.getBoundingClientRect();
         const r = streamRect();
-        const cardW = 232;
+        const cardW = THEME.cardWidth;
         const live = new Set();
         for (const p of vp.proposals) {
           live.add(p.id);
@@ -2753,10 +2766,11 @@
       // spring so the line glides *continuously* between describe samples
       // (no arrive-wait-jump) and locks onto a fresh sample without wobble.
       const VP_DT = 1 / 120;
-      const BUB_K = 4.2 * 4.2, // ω=4.2 rad/s, ζ=0.9 → ~1.05s floaty settle,
-        BUB_C = 2 * 0.9 * 4.2; //   one whisper of overshoot (not jiggly)
-      const CON_K = 26 * 26, // ω=26 rad/s, ζ=1 → ~0.15s, tight, no overshoot
-        CON_C = 2 * 1 * 26;
+      // Spring feel comes from theme.css (ω rad/s, ζ damping); K = ω², C = 2ζω.
+      const BUB_K = THEME.bubbleOmega * THEME.bubbleOmega,
+        BUB_C = 2 * THEME.bubbleZeta * THEME.bubbleOmega;
+      const CON_K = THEME.tightOmega * THEME.tightOmega,
+        CON_C = 2 * THEME.tightZeta * THEME.tightOmega;
       function vpSpr(s, v, key, target, k, c) {
         const a = -k * (s[key] - target) - c * v[key];
         v[key] += a * VP_DT;
@@ -2937,7 +2951,7 @@
         if (data) vpStage(data.elementId, data.variantId);
       });
       window.addEventListener("resize", () => vpRender());
-      setInterval(pollVariants, 1200);
+      setInterval(pollVariants, THEME.pollMs);
       pollVariants();
       pollDescribe(); // arms the single fast describe loop
 
