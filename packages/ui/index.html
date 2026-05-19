@@ -304,6 +304,10 @@
       .vcard-body {
         max-height: 320px;
         overflow-y: auto;
+        /* Reserve the scrollbar space whether or not it's shown so the row
+           content width is invariant — keeps the JS-sized previews from
+           overhanging / oscillating when a 2nd tall variant adds a scrollbar. */
+        scrollbar-gutter: stable;
       }
       .vrow {
         display: flex;
@@ -327,6 +331,14 @@
       }
       .vrow.staged {
         background: rgba(92, 220, 139, 0.13);
+      }
+      /* Wide/square previews read better stacked (image above text); only
+         clearly-portrait previews keep the side-by-side row. */
+      .vrow.col {
+        flex-direction: column;
+      }
+      .vrow.col .thumb {
+        align-self: center;
       }
       .vrow .thumb {
         position: relative;
@@ -374,16 +386,6 @@
         font-size: 11px;
         margin-top: 3px;
         line-height: 1.35;
-      }
-      .vrow .vcode {
-        margin: 5px 0 0;
-        padding: 5px 7px;
-        background: #000;
-        border-radius: 4px;
-        font-size: 10px;
-        max-height: 90px;
-        overflow: auto;
-        white-space: pre-wrap;
       }
       .vcard-cmt {
         width: 100%;
@@ -1572,18 +1574,39 @@
           fw = Math.max(0.02, Math.min(1 - fx, frame.width));
           fh = Math.max(0.02, Math.min(1 - fy, frame.height));
         }
+        // Arrangement follows the *shown* (cropped) image aspect: stack the
+        // image above the text (column) unless the preview is clearly
+        // portrait — at least 1.2× taller than wide — where a side-by-side
+        // row reads better. rw=fw*NW, rh=fh*NH (cropped region, px).
+        const _vr = tw.closest(".vrow");
+        if (_vr) _vr.classList.toggle("col", !(fh * NH >= 1.2 * (fw * NW)));
         const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}`;
         if (tw._cropKey === key) return; // unchanged — avoid layout thrash
         tw._cropKey = key;
-        const THUMB_W = 96,
-          MIN_H = 44,
-          MAX_H = 150;
         const rw = fw * NW,
           rh = fh * NH,
           rx = fx * NW,
           ry = fy * NH;
-        const W = THUMB_W;
-        const H = Math.round(Math.max(MIN_H, Math.min(MAX_H, W / (rw / rh))));
+        const ar = rw / rh; // shown (cropped) aspect, width / height
+        // Fill the space the bubble actually gives the preview instead of a
+        // fixed 96px chip: the full row content width when stacked (column),
+        // a generous height when side-by-side (row). The card width is fixed
+        // (232px) and .vcard-body reserves a stable scrollbar gutter, so the
+        // row's content box is invariant to scrollbar state — the
+        // geometry-only cache key above stays correct (no re-fit needed,
+        // no scrollbar-feedback oscillation).
+        const colMode = _vr ? _vr.classList.contains("col") : false;
+        const availW = Math.max(120, (_vr ? _vr.clientWidth : 212) - 20);
+        let W, H;
+        if (colMode) {
+          W = availW;
+          H = Math.round(W / ar);
+          H = Math.max(56, Math.min(H, Math.round(W * 1.25)));
+        } else {
+          H = 160;
+          W = Math.round(H * ar);
+          W = Math.max(56, Math.min(W, Math.round(availW * 0.46)));
+        }
         tw.style.width = W + "px";
         tw.style.height = H + "px";
         const s = Math.min(W / rw, H / rh); // contain element region (letterbox)
@@ -1707,18 +1730,9 @@
           vs.className = "vs";
           vs.textContent = v.summary || "";
           meta.append(vn, vs);
-          if (v.code) {
-            const pre = document.createElement("pre");
-            pre.className = "vcode";
-            pre.textContent = v.code;
-            meta.appendChild(pre);
-          }
-          if (v.filePath) {
-            const fp = document.createElement("div");
-            fp.className = "vs";
-            fp.textContent = "↳ " + v.filePath;
-            meta.appendChild(fp);
-          }
+          // Intentionally NOT rendering v.code / v.filePath: the human is
+          // picking a look, not reviewing a diff. The agent still keeps that
+          // metadata in the proposal for when it applies the choice.
           row.appendChild(meta);
           body.appendChild(row);
         }
@@ -1749,7 +1763,7 @@
       function cardSig(p) {
         return JSON.stringify([
           p.element,
-          p.variants.map((v) => [v.id, v.name, v.summary, v.code, v.filePath, v.previewImage]),
+          p.variants.map((v) => [v.id, v.name, v.summary, v.previewImage]),
         ]);
       }
       // In-place refresh of the mutable bits (staged highlight, on/off-screen
@@ -1796,9 +1810,6 @@
         const mr = mainEl.getBoundingClientRect();
         const r = streamRect();
         const cardW = 232;
-        const gx = r
-          ? Math.min(mr.width - cardW - 14, r.x + r.w + 26)
-          : Math.max(14, mr.width - cardW - 14);
         const live = new Set();
         for (const p of vp.proposals) {
           live.add(p.id);
@@ -1852,33 +1863,59 @@
             vp.cards.delete(id);
           }
         }
-        // Dynamic homes: align each visible card's vertical centre with its
-        // element, then push apart any that would overlap.
-        if (!r) return;
-        const want = [];
+        // Dynamic homes: distribute cards on BOTH sides of the central
+        // stream so they surround the simulator instead of stacking in one
+        // column. Each card aligns vertically with its element when matched;
+        // otherwise it falls back to an even spread. When the video stream
+        // isn't up yet (streamRect null) we arrange around the main area's
+        // centre — a card must NEVER be left unpositioned at the (0,0)
+        // origin (that was the "everything piles into the top-left" bug,
+        // which appeared whenever describe matched but no stream existed).
+        const mw = mr.width,
+          mh = mr.height;
+        const cx = r ? r.x + r.w / 2 : mw / 2;
+        const rightX = Math.min(mw - cardW - 14, (r ? r.x + r.w : cx) + 26);
+        const leftX = Math.max(14, (r ? r.x : cx) - cardW - 26);
+        const vis = [];
         for (const p of vp.proposals) {
           const rec = vp.cards.get(p.id);
-          if (!rec || rec.gone || !rec.target) continue;
-          const ch = rec.el.offsetHeight || 132;
-          const cy = r.y + (rec.target.y + rec.target.height / 2) * r.h;
-          want.push({
-            rec,
-            ch,
-            y: Math.max(8, Math.min(mr.height - ch - 8, cy - ch / 2)),
-          });
+          if (rec && !rec.gone) vis.push(rec);
         }
-        want.sort((a, b) => a.y - b.y);
-        let prevBottom = -Infinity;
+        const want = vis.map((rec, i) => {
+          const ch = rec.el.offsetHeight || 132;
+          // Side: follow the element's own half of the stream when matched,
+          // else alternate so the two columns stay balanced.
+          const ecx = rec.target && r ? r.x + (rec.target.x + rec.target.width / 2) * r.w : null;
+          const side = ecx != null ? (ecx < cx ? "L" : "R") : i % 2 ? "L" : "R";
+          // Vertical anchor: element centre when matched, else even spread.
+          const cy =
+            rec.target && r
+              ? r.y + (rec.target.y + rec.target.height / 2) * r.h
+              : 24 + ((i + 0.5) / Math.max(1, vis.length)) * (mh - 48);
+          return { rec, ch, side, y: Math.max(8, Math.min(mh - ch - 8, cy - ch / 2)) };
+        });
+        // De-overlap each column independently (top → down push).
+        for (const col of ["L", "R"]) {
+          const cwant = want.filter((w) => w.side === col).sort((a, b) => a.y - b.y);
+          let prevBottom = -Infinity;
+          for (const w of cwant) {
+            if (w.y < prevBottom + 12) w.y = prevBottom + 12;
+            prevBottom = w.y + w.ch;
+          }
+        }
         for (const w of want) {
-          if (w.y < prevBottom + 12) w.y = prevBottom + 12;
-          prevBottom = w.y + w.ch;
-          w.rec.home = w.rec.pinned && w.rec.pos ? w.rec.pos : { x: gx, y: w.y };
+          const hx = w.side === "L" ? leftX : rightX;
+          w.rec.home = w.rec.pinned && w.rec.pos ? w.rec.pos : { x: hx, y: w.y };
           if (!w.rec.pos) {
-            // First appearance: spawn a touch below home with a gentle upward
-            // drift so it floats into place like a cloud (px/s — the spring
-            // tick is time-based, not per-frame).
-            w.rec.pos = { x: w.rec.home.x + (Math.random() * 20 - 10), y: w.rec.home.y + 22 };
-            w.rec.vel = { x: Math.random() * 20 - 10, y: -(28 + Math.random() * 34) };
+            // First appearance: drift in from just outside its own side
+            // toward home so it floats into place like a cloud (px/s — the
+            // spring tick is time-based, not per-frame).
+            const off = w.side === "L" ? -28 : 28;
+            w.rec.pos = { x: w.rec.home.x + off, y: w.rec.home.y + 18 };
+            w.rec.vel = {
+              x: (w.side === "L" ? 1 : -1) * (12 + Math.random() * 16),
+              y: -(24 + Math.random() * 30),
+            };
             // Place immediately so it doesn't flash at (0,0) before vpTick.
             w.rec.el.style.left = w.rec.pos.x + "px";
             w.rec.el.style.top = w.rec.pos.y + "px";
@@ -1887,8 +1924,8 @@
             w.rec.spawned = true;
             // A whisper of extra drift so multiple bubbles don't move in
             // lockstep — soft enough to stay cloud-like.
-            w.rec.vel.x += Math.random() * 24 - 12;
-            w.rec.vel.y += Math.random() * 20 - 12;
+            w.rec.vel.x += Math.random() * 22 - 11;
+            w.rec.vel.y += Math.random() * 18 - 9;
           }
         }
       }
@@ -2005,16 +2042,20 @@
         const n = vp.commentFor || vp.focus;
         const f = n && n.frame;
         // No focus (or a frame the describe tree somehow didn't validate) →
-        // collapse the hole to a point at centre (full blur, no cutout) while
-        // keeping the SAME path segment structure so the clip-path transition
-        // still interpolates. Mirrors applyThumbCrop's finite guard so a
-        // non-finite frame can never emit NaN CSS.
+        // expand the hole to the WHOLE stream so nothing is blurred until the
+        // user actually hovers an element (the even-odd inner rect then equals
+        // the outer rect and cancels the entire dim layer). Keeps the SAME
+        // path segment structure so the clip-path transition still
+        // interpolates. Mirrors applyThumbCrop's finite guard so a non-finite
+        // frame can never emit NaN CSS.
         const validFrame =
           f && [f.x, f.y, f.width, f.height].every((v) => typeof v === "number" && isFinite(v));
         let hx, hy, hx2, hy2;
         if (!validFrame) {
-          hx = hx2 = W / 2;
-          hy = hy2 = H / 2;
+          hx = 0;
+          hy = 0;
+          hx2 = W;
+          hy2 = H;
           s.ring.style.display = "none";
         } else {
           const ex = f.x * W,
