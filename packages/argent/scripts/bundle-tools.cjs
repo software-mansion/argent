@@ -168,16 +168,22 @@ if (fs.existsSync(DYLIBS_SRC)) {
 
 // Copy preview UI (@argent/ui) next to the bundled tool-server so that
 // tool-server's /preview/ endpoint can locate it via __dirname lookup.
-const UI_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/index.html");
+// index.html AND its externalised theme.css must both ship — a partial copy
+// would 404 /preview/theme.css and serve an unstyled UI.
+const UI_SRC_DIR = path.resolve(WORKSPACE_ROOT, "packages/ui");
 const UI_DEST_DIR = path.resolve(__dirname, "../dist/preview-ui");
-const UI_DEST = path.join(UI_DEST_DIR, "index.html");
+const UI_ASSETS = ["index.html", "theme.css"];
 
-if (fs.existsSync(UI_SRC)) {
+if (fs.existsSync(path.join(UI_SRC_DIR, "index.html"))) {
   fs.mkdirSync(UI_DEST_DIR, { recursive: true });
-  fs.copyFileSync(UI_SRC, UI_DEST);
-  console.log(`✓ Copied preview UI → ${path.relative(process.cwd(), UI_DEST)}`);
+  for (const asset of UI_ASSETS) {
+    fs.copyFileSync(path.join(UI_SRC_DIR, asset), path.join(UI_DEST_DIR, asset));
+  }
+  console.log(
+    `✓ Copied preview UI (${UI_ASSETS.join(", ")}) → ${path.relative(process.cwd(), UI_DEST_DIR)}`
+  );
 } else {
-  console.warn(`⚠ Preview UI not found at ${UI_SRC} — skipping copy`);
+  console.warn(`⚠ Preview UI not found at ${UI_SRC_DIR} — skipping copy`);
 }
 
 // Copy Argent.tracetemplate so native-profiler-start can find it at runtime.

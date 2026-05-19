@@ -1,0 +1,190 @@
+/* =============================================================================
+ * Argent Preview — THEME
+ *
+ * The ONE place every visual value lives. index.html must not contain a single
+ * hardcoded colour, pixel, duration, easing, z-index or opacity — only
+ * var(--token) references into this file. Tokens are named for what they ARE
+ * (their role), not an abstract scale, and shared only when they represent the
+ * same design decision. The "Motion & feel" block at the bottom is also read
+ * by the JS at boot (getComputedStyle), so animation feel is configured here
+ * too — not buried in the script.
+ * ========================================================================== */
+
+:root {
+  color-scheme: light dark;
+
+  /* ── Palette ─────────────────────────────────────────────────────────── */
+  --color-bg: #0e0e10;
+  --color-fg: #eaeaea;
+  --color-muted: #8a8a90;
+  --color-accent: #6aa6ff;
+  --color-on-accent: #06122b; /* ink on accent-filled surfaces */
+  --color-border: #2a2a2e;
+  --color-surface: #16161a; /* panels (toolbar, cards, pops) */
+  --color-surface-raised: #1c1c21; /* card header — lifted off surface */
+  --color-surface-hover: #1c1c22; /* hovered list item */
+  --color-row-hover: #20202a; /* hovered variant row */
+  --color-ok: #5cdc8b;
+  --color-error: #ff8080;
+  --color-thumb-bg: #000000; /* letterbox behind variant previews */
+  --color-pin-bg: #d8a657; /* saved-annotation pin */
+  --color-pin-fg: #1a1205;
+  --color-danger-bg: #7a2230; /* destructive (delete) button */
+  --color-danger-fg: #ffd9df;
+
+  /* ── Translucent effect colours ──────────────────────────────────────── */
+  --color-row-staged: rgba(92, 220, 139, 0.13); /* ok tint on staged row */
+  --touch-fill: rgba(106, 166, 255, 0.25); /* multi-touch dot body */
+  --touch-fill-pressed: rgba(106, 166, 255, 0.55);
+  --touch-stroke: rgba(106, 166, 255, 0.9); /* multi-touch dot ring */
+  --touch-anchor-fill: rgba(255, 200, 80, 0.9); /* anchored-touch dot */
+  --touch-anchor-stroke: rgba(255, 200, 80, 1);
+  --spotlight-scrim: rgba(8, 8, 10, 0.55); /* dim/blur over the stream */
+  --footbar-bg: rgba(22, 22, 26, 0.94); /* surface, semi-opaque */
+
+  /* ── Elevation (full box-shadow values, by purpose) ──────────────────── */
+  --shadow-stream: 0 10px 48px #0008;
+  --shadow-pill: 0 4px 14px #0008;
+  --shadow-card: 0 10px 30px #0009;
+  --shadow-pin: 0 3px 10px #0008;
+  --shadow-pop: 0 12px 36px #000b;
+  --ring-outline: 0 0 0 1px #000a; /* spotlight ring edge */
+  --touch-glow: 0 0 12px rgba(106, 166, 255, 0.5);
+  --dot-glow: 0 0 8px var(--color-ok);
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --fs-title: 15px;
+  --fs-body: 13px;
+  --fs-note: 12px;
+  --fs-read: 12.5px;
+  --fs-label: 11px;
+  --fs-tag: 10px;
+  --fs-mini: 9px;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-extrabold: 800;
+  --lh-normal: 1.5;
+  --lh-snug: 1.45;
+  --tracking-label: 0.04em;
+  --tracking-where: 0.03em;
+
+  /* ── Radii (by role) ─────────────────────────────────────────────────── */
+  --radius-chip: 3px;
+  --radius-control: 4px; /* toolbar controls, spot ring */
+  --radius-input: 5px; /* textareas, pop buttons */
+  --radius-button: 6px;
+  --radius-item: 8px; /* device-picker item */
+  --radius-card: 10px; /* stream, cards, popovers, footbar */
+  --radius-pin-tail: 2px; /* annotation-pin teardrop corner */
+  --radius-round: 50%;
+  --radius-pill: 999px;
+
+  /* ── Borders ─────────────────────────────────────────────────────────── */
+  --border-hairline: 1px;
+  --border-strong: 2px; /* spotlight ring, touch dot */
+  --connector-width: 1.5; /* SVG stroke-width (unitless) */
+
+  /* ── Spacing — gaps (recurring roles) ────────────────────────────────── */
+  --gap-tight: 5px;
+  --gap-inline: 6px;
+  --gap-list: 8px;
+  --gap-bar: 10px;
+  --gap-stack: 12px;
+
+  /* ── Spacing — padding (per role) ────────────────────────────────────── */
+  --pad-bar: 8px 12px; /* toolbar */
+  --pad-control: 4px 10px; /* select / button */
+  --pad-toggle: 4px 12px;
+  --pad-view: 12px; /* viewport */
+  --pad-empty: 32px;
+  --pad-picker: 24px;
+  --pad-item: 12px 14px; /* device-picker item */
+  --pad-refresh: 6px 12px;
+  --pad-code: 2px 6px;
+  --pad-pill: 3px 11px;
+  --pad-card-head: 7px 10px;
+  --pad-row: 8px 10px;
+  --pad-cmt: 6px 10px; /* in-card comment box */
+  --pad-input: 6px 8px; /* popover textareas */
+  --pad-pop: 10px; /* comment / annotation popover */
+  --pad-btn: 6px 10px; /* popover buttons */
+  --pad-lab: 1px 7px; /* spotlight ring label */
+  --pad-footbar: 8px 10px;
+  --pad-footbar-input: 6px 9px;
+  --pad-complete: 8px 14px;
+
+  /* one-off margins / nudges (kept named by what they position) */
+  --sub-margin: -4px 0 6px; /* device-picker caption */
+  --comment-title-gap: 7px; /* comment popover heading → body */
+  --annrow-mt: 9px; /* annotation popover button row */
+  --annpop-gap: 8px; /* popover ↔ pin gap, resting */
+  --annpop-gap-show: 14px; /* popover ↔ pin gap, shown */
+  --press-shift: 1px; /* :active downward nudge */
+
+  /* ── Component sizes ─────────────────────────────────────────────────── */
+  --card-width: 232px;
+  --vcard-body-max-h: 320px;
+  --thumb-size: 96px;
+  --pin-size: 20px;
+  --dot-size: 8px; /* status dot, device-picker dot */
+  --card-dot-size: 7px; /* card-header dot */
+  --comment-pop-width: 248px;
+  --annpop-width: 232px;
+  --annpop-txt-max-h: 160px;
+  --textarea-min-h: 64px;
+  --cmt-min-h: 28px;
+  --footbar-input-width: 260px;
+  --footbar-input-h: 32px;
+  --footbar-bottom: 14px;
+  --footbar-max-width: 70%;
+  --select-min-width: 240px;
+  --debug-min-width: 220px;
+  --empty-max-width: 480px;
+  --picker-max-width: 420px;
+  --lab-max-width: 240px;
+  --lab-top: -22px;
+  --complete-note-max-width: 200px;
+  --stream-max-h: 80vh;
+  --backdrop-blur: 5px;
+
+  /* ── Opacities ───────────────────────────────────────────────────────── */
+  --opacity-disabled: 0.45;
+  --opacity-connector: 0.7;
+  --opacity-pill: 0.92;
+  --opacity-pulse-dim: 0.4;
+
+  /* ── Z-index layers ──────────────────────────────────────────────────── */
+  --z-connectors: 4;
+  --z-cards: 5;
+  --z-pin: 7;
+  --z-spot-hit: 8;
+  --z-pop: 9; /* off-screen pill, comment popover */
+  --z-overlay: 10; /* annotation popover, footbar */
+
+  /* ── Motion & feel (CSS transitions AND read by JS at boot) ──────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-press: 0.06s;
+  --dur-hover: 0.15s;
+  --dur-fade: 0.18s;
+  --dur-pill: 0.2s;
+  --dur-card-in: 0.22s;
+  --dur-spot: 0.28s;
+  --dur-card-move: 0.34s;
+  --dur-pulse: 1.6s;
+  --card-gone-scale: 0.8; /* shrink as a card pops away */
+
+  /* Spring feel — JS integrates these (ω rad/s, ζ damping ratio). The bubble
+     spring is slow & barely-overshooting (cards drift into place); the tight
+     spring is fast & critically damped (connectors/pins track every frame). */
+  --spring-bubble-omega: 4.2;
+  --spring-bubble-zeta: 0.9;
+  --spring-tight-omega: 26;
+  --spring-tight-zeta: 1;
+  --card-gone-grace-ms: 550; /* ride out brief edge drop-outs before fading */
+  --poll-interval-ms: 1200; /* /preview/variants poll cadence */
+  --tree-stale-ms: 6000; /* drop the describe tree if older than this */
+  --flick-max-vel: 1500; /* clamp thrown-card release velocity (px/s) */
+}
