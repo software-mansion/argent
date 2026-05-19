@@ -486,12 +486,8 @@ describe("formatDescribeTree", () => {
     expect(elementLines(out)).toHaveLength(0);
   });
 
-  // Regression: Android's native-devtools helper APK reports source as
-  // "android-devtools", but format-tree previously only switched to nested
-  // mode for "uiautomator". The flat renderer never recurses into children,
-  // so a real Bluesky feed under a top-level ScrollView collapsed to just the
-  // bottom-nav buttons + "Close drawer" overlay — six elements instead of
-  // the ~45 the parser had produced.
+  // Regression: nested mode previously keyed on "uiautomator" only, so
+  // "android-devtools" responses rendered flat and lost all descendants.
   it("renders android-devtools source in nested mode", () => {
     const root: DescribeNode = {
       role: "Screen",

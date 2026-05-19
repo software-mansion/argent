@@ -22,13 +22,9 @@ interface InstalledVersionProbe {
 }
 
 /**
- * Probe the installed version code via the same shell command Appium
- * uses. Returns `{ installed: false }` when the
- * package is missing; `{ installed: true, versionCode: N }` when present.
- *
- * `cmd package list packages --show-versioncode` is faster than `pm path`
- * and gives us the version in the same round-trip, so we can compare it to
- * the bundled manifest without a second `dumpsys package` call.
+ * Probe the installed version code via `cmd package list packages
+ * --show-versioncode` — faster than `pm path` and returns the version in
+ * the same round-trip, avoiding a second `dumpsys package` call.
  */
 async function probeInstalledVersion(
   serial: string,
@@ -64,7 +60,7 @@ async function probeInstalledVersion(
  * Ensure the helper APK is installed on the device with at least the
  * bundled versionCode. On `INSTALL_FAILED_UPDATE_INCOMPATIBLE` we
  * `pm uninstall` and retry once — that path fires when the local debug
- * keystore differs from whatever was last installed (e.g. a developer
+ * keystore differs from whatever was last installed (e.g. the developer
  * rotated their keystore).
  */
 export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<void> {
