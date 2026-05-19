@@ -14,6 +14,7 @@ import {
   type VariantMatch,
 } from "./utils/variant-proposals";
 import type { DescribeResult } from "./tools/describe/contract";
+import { buildRnPreviewTree } from "./tools/describe/preview-rn-tree";
 
 function findUiHtml(): string | null {
   // Candidate paths (first match wins):
@@ -233,8 +234,23 @@ export function createPreviewRouter(registry: Registry): Router {
   // corner notifications).
   router.get("/describe/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
+    const port = Number(req.query.port) || 8081;
     try {
-      const data = await registry.invokeTool<DescribeResult>("describe", { udid });
+      // Prefer the full RN fiber tree (every element, incl. non-accessibility
+      // containers) so the preview can anchor cards / the comment spotlight to
+      // the real element — not the coarse interactive-only ax-service subset.
+      // Falls back to the regular `describe` tool for non-RN apps or when
+      // Metro isn't reachable: never a regression, and `describe` itself is
+      // left untouched.
+      let data: DescribeResult | null = null;
+      try {
+        data = await buildRnPreviewTree(registry, udid, port);
+      } catch {
+        data = null;
+      }
+      if (!data) {
+        data = await registry.invokeTool<DescribeResult>("describe", { udid });
+      }
       res.set("Cache-Control", "no-store");
       res.json(data);
     } catch (err) {
