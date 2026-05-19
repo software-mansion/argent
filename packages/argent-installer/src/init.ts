@@ -121,16 +121,21 @@ export async function init(args: string[]): Promise<void> {
     if (!nonInteractive) {
       const installChoice = await p.select({
         message: "Argent isn't installed yet. How would you like to set it up?",
+        // Global is the recommended default — it's the broadest install
+        // topology and works for every workflow. Local is offered as an
+        // opt-in for teams that want to commit their argent version + MCP
+        // config alongside the rest of the project.
+        initialValue: "global" as const,
         options: [
           {
-            value: "local" as const,
-            label: "Local (devDependency, recommended for teams)",
-            hint: "Pins argent in package.json so the team shares one version",
+            value: "global" as const,
+            label: "Global (recommended)",
+            hint: "Makes the argent command available everywhere",
           },
           {
-            value: "global" as const,
-            label: "Global",
-            hint: "Makes the argent command available everywhere",
+            value: "local" as const,
+            label: "Local (devDependency)",
+            hint: "Might be used by teams to share configuration",
           },
           {
             value: "cancel" as const,
