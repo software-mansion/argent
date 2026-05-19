@@ -13,8 +13,9 @@ import {
   type ElementAnnotation,
   type VariantMatch,
 } from "./utils/variant-proposals";
-import type { DescribeResult } from "./tools/describe/contract";
-import { buildRnPreviewTree } from "./tools/describe/preview-rn-tree";
+import type { DescribeTreeData } from "./tools/describe/contract";
+import { describeIos } from "./tools/describe/platforms/ios";
+import { describeAndroid } from "./tools/describe/platforms/android";
 
 function findUiHtml(): string | null {
   // Candidate paths (first match wins):
@@ -229,28 +230,24 @@ export function createPreviewRouter(registry: Registry): Router {
   });
 
   // Accessibility tree for the streamed device so the UI can anchor each
-  // floating variant bubble to its element's on-screen frame. Thin proxy over
-  // the `describe` tool; failures are non-fatal for the UI (it falls back to
-  // corner notifications).
+  // floating variant bubble to its element's on-screen frame, and the
+  // comment-mode spotlight to a hovered element.
+  //
+  // `describe`'s public tool output is now a token-efficient *text* rendering
+  // (the JSON tree is dropped before it replies — see describe/index.ts). The
+  // preview UI needs the structured tree, so this route calls the same
+  // per-platform adapter the `describe` tool uses, minus the text formatter,
+  // and returns the structured `DescribeTreeData` ({ tree, source }) the UI
+  // parses. The `describe` tool itself is intentionally left untouched.
+  // Failures are non-fatal for the UI (it falls back to corner notifications).
   router.get("/describe/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
-    const port = Number(req.query.port) || 8081;
     try {
-      // Prefer the full RN fiber tree (every element, incl. non-accessibility
-      // containers) so the preview can anchor cards / the comment spotlight to
-      // the real element — not the coarse interactive-only ax-service subset.
-      // Falls back to the regular `describe` tool for non-RN apps or when
-      // Metro isn't reachable: never a regression, and `describe` itself is
-      // left untouched.
-      let data: DescribeResult | null = null;
-      try {
-        data = await buildRnPreviewTree(registry, udid, port);
-      } catch {
-        data = null;
-      }
-      if (!data) {
-        data = await registry.invokeTool<DescribeResult>("describe", { udid });
-      }
+      const device = resolveDevice(udid);
+      const data: DescribeTreeData =
+        device.platform === "ios"
+          ? await describeIos(registry, device, {})
+          : await describeAndroid(udid);
       res.set("Cache-Control", "no-store");
       res.json(data);
     } catch (err) {
