@@ -119,61 +119,74 @@ export async function init(args: string[]): Promise<void> {
 
   if (!globallyInstalled && !locallyInstalled) {
     if (!nonInteractive) {
-      const installChoice = await p.select({
-        message: "Argent isn't installed yet. How would you like to set it up?",
-        // Global is the recommended default — it's the broadest install
-        // topology and works for every workflow. Local is offered as an
-        // opt-in for teams that want to commit their argent version + MCP
-        // config alongside the rest of the project.
-        initialValue: "global" as const,
-        options: [
-          {
-            value: "global" as const,
-            label: "Global (recommended)",
-            hint: "Makes the argent command available everywhere",
-          },
-          {
-            value: "local" as const,
-            label: "Local (devDependency)",
-            hint: "Might be used by teams to share configuration",
-          },
-          {
-            value: "cancel" as const,
-            label: "Cancel installation",
-          },
-        ],
-      });
-
-      if (p.isCancel(installChoice) || installChoice === "cancel") {
-        p.cancel("Installation cancelled.");
-        process.exit(0);
-      }
-
-      installMode = installChoice;
-
-      // Surface the cross-editor relative-path caveat only after the
-      // user has picked Local. The vast majority of users go global and
-      // never see this; for the team-share path we add a single confirm
-      // prompt so the caveat lands as decision context, not noise.
-      if (installMode === "local") {
-        p.log.warn(
-          `Only Claude Code formally documents project-relative MCP command paths ` +
-            `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, Codex, ` +
-            `opencode, and Gemini the recipe relies on the MCP client launching the ` +
-            `server from the project root — supported in practice but not contractually ` +
-            `guaranteed. If a teammate's editor fails to start argent, verify its ` +
-            `working directory first.`
-        );
-
-        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-        const confirmLocal = await p.confirm({
-          message: "Proceed with the Local devDependency install?",
-          initialValue: true,
+      // Loop so the Local-mode confirm step can route the user back to
+      // the install-mode select instead of forcing them to abort init
+      // and start over. Only Esc/Ctrl+C (p.isCancel) actually cancels.
+      while (true) {
+        const installChoice = await p.select({
+          message: "Argent isn't installed yet. How would you like to set it up?",
+          // Global is the recommended default — it's the broadest
+          // install topology and works for every workflow. Local is
+          // offered as an opt-in for teams that want to commit their
+          // argent version + MCP config alongside the rest of the
+          // project.
+          initialValue: "global" as const,
+          options: [
+            {
+              value: "global" as const,
+              label: "Global (recommended)",
+              hint: "Makes the argent command available everywhere",
+            },
+            {
+              value: "local" as const,
+              label: "Local (devDependency)",
+              hint: "Might be used by teams to share configuration",
+            },
+            {
+              value: "cancel" as const,
+              label: "Cancel installation",
+            },
+          ],
         });
-        if (p.isCancel(confirmLocal) || !confirmLocal) {
-          p.cancel("Installation cancelled. Re-run `argent init` to choose a different mode.");
+
+        if (p.isCancel(installChoice) || installChoice === "cancel") {
+          p.cancel("Installation cancelled.");
           process.exit(0);
         }
+
+        // Surface the cross-editor relative-path caveat only after the
+        // user has picked Local. The vast majority of users go global
+        // and never see this; for the team-share path we add a single
+        // confirm prompt so the caveat lands as decision context, not
+        // noise.
+        if (installChoice === "local") {
+          p.log.warn(
+            `Only Claude Code formally documents project-relative MCP command paths ` +
+              `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, ` +
+              `Codex, opencode, and Gemini the recipe relies on the MCP client ` +
+              `launching the server from the project root — supported in practice ` +
+              `but not contractually guaranteed. If a teammate's editor fails to ` +
+              `start argent, verify its working directory first.`
+          );
+
+          p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+          const confirmLocal = await p.confirm({
+            message: "Proceed with the Local devDependency install?",
+            initialValue: true,
+          });
+          if (p.isCancel(confirmLocal)) {
+            // Esc / Ctrl+C — treat as a hard cancel.
+            p.cancel("Installation cancelled.");
+            process.exit(0);
+          }
+          if (!confirmLocal) {
+            // User backed out of Local — re-prompt the install mode.
+            continue;
+          }
+        }
+
+        installMode = installChoice;
+        break;
       }
     }
 
