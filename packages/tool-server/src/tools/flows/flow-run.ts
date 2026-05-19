@@ -45,7 +45,7 @@ export function createRunFlowTool(
 Each step is executed in order: tool calls are dispatched through the registry,
 echo steps print a message. A tool step may carry \`delayMs: <ms>\` to sleep
 that long before the step runs. Returns the result of every step, including images.
-Use when you want to replay a recorded flow or run a scripted sequence of simulator actions.
+Use when you want to replay a recorded flow or run a scripted sequence of device actions.
 Fails if the flow file does not exist or a step tool raises an error (execution stops at that step).
 
 If the flow has an execution prerequisite and prerequisiteAcknowledged is not

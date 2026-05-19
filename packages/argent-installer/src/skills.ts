@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import {
+  buildArgentSkillsSource,
   getGlobalSkillLockPath,
+  getInstalledVersion,
   getProjectSkillLockPath,
   listArgentSkillsInLock,
   listBundledSkills,
@@ -25,7 +27,7 @@ export interface SkillScopeResult {
 interface ScopeSpec {
   scope: SkillScope;
   lockPath: string;
-  addArgs: string[];
+  buildAddArgs: (source: string) => string[];
   removeArgs: string[];
 }
 
@@ -34,13 +36,13 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
     {
       scope: "project",
       lockPath: getProjectSkillLockPath(projectRoot),
-      addArgs: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y"],
+      buildAddArgs: (source) => ["skills", "add", source, "--skill", "*", "-y"],
       removeArgs: ["skills", "remove", "-y"],
     },
     {
       scope: "global",
       lockPath: getGlobalSkillLockPath(),
-      addArgs: ["skills", "add", SKILLS_DIR, "--skill", "*", "-y", "-g"],
+      buildAddArgs: (source) => ["skills", "add", source, "--skill", "*", "-y", "-g"],
       removeArgs: ["skills", "remove", "-y", "-g"],
     },
   ];
@@ -52,14 +54,20 @@ function getScopeSpecs(projectRoot: string): ScopeSpec[] {
 // with nothing tracked is skipped, so this never creates a
 // `skills-lock.json` in an unrelated working directory.
 //
+// Sync prefers the GitHub-pinned source (`<repo>/packages/skills/skills#v<ver>`)
+// so the lockfile entry stays portable across machines. If the
+// network install fails, it retries with the bundled SKILLS_DIR so offline
+// users still get re-synced.
+//
 // The choice of `skills add` rather than `skills update` is deliberate:
-// argent ships skills with sourceType="local", and the skills CLI's update
-// command silently skips every local-sourced entry. `skills add` hashes the
-// source on disk and reinstalls anything that changed, which is exactly the
+// `skills update` silently skips any entry with sourceType="local", so a
+// previous-version lock written from SKILLS_DIR would never refresh. `skills
+// add` rewrites the entry from the source we pass, which is exactly the
 // behavior we want after `npm i -g @swmansion/argent@new`.
 export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
   const bundled = new Set(listBundledSkills());
   const results: SkillScopeResult[] = [];
+  const primarySource = buildArgentSkillsSource(getInstalledVersion());
 
   for (const spec of getScopeSpecs(projectRoot)) {
     const tracked = listArgentSkillsInLock(spec.lockPath);
@@ -76,10 +84,27 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (bundled.size > 0) {
       try {
-        execFileSync("npx", spec.addArgs, { stdio: ["ignore", "pipe", "pipe"] });
+        execFileSync("npx", spec.buildAddArgs(primarySource), {
+          stdio: ["ignore", "pipe", "pipe"],
+        });
         result.synced = bundled.size;
-      } catch (err) {
-        result.syncError = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      } catch (primaryErr) {
+        if (primarySource === SKILLS_DIR) {
+          result.syncError =
+            primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
+        } else {
+          try {
+            execFileSync("npx", spec.buildAddArgs(SKILLS_DIR), {
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            result.synced = bundled.size;
+          } catch (fallbackErr) {
+            result.syncError =
+              fallbackErr instanceof Error
+                ? fallbackErr.message.split("\n")[0]
+                : String(fallbackErr);
+          }
+        }
       }
     }
 

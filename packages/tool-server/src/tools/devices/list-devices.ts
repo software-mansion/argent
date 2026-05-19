@@ -38,6 +38,13 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
   return aEmu - bEmu;
 }
 
+// Float booted/ready devices to the top of the merged list regardless of
+// platform — without this, all iOS entries are emitted before any Android.
+function readinessRank(d: IosDevice | AndroidDevice): number {
+  if (d.platform === "ios") return d.state === "Booted" ? 0 : 1;
+  return d.state === "device" ? 0 : 1;
+}
+
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
@@ -69,6 +76,9 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     }));
     androidTagged.sort(sortAndroid);
 
-    return { devices: [...iosTagged, ...androidTagged], avds };
+    const devices: Array<IosDevice | AndroidDevice> = [...iosTagged, ...androidTagged];
+    devices.sort((a, b) => readinessRank(a) - readinessRank(b));
+
+    return { devices, avds };
   },
 };

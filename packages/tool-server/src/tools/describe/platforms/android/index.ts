@@ -1,12 +1,12 @@
 import type { ToolDependency } from "@argent/registry";
-import type { DescribeResult } from "../../contract";
+import type { DescribeTreeData } from "../../contract";
 import { adbExecOutBinary } from "../../../../utils/adb";
 import { getAndroidScreenSize } from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
 
 export const androidRequires: ToolDependency[] = ["adb"];
 
-export async function describeAndroid(udid: string, _bundleId?: string): Promise<DescribeResult> {
+export async function describeAndroid(udid: string, _bundleId?: string): Promise<DescribeTreeData> {
   // Per-call dump path so concurrent describes on the same serial don't race
   // on /sdcard/window_dump.xml (one call's cat would read the other's dump
   // mid-write). `uiautomator` rejects unwritable paths, so we target
