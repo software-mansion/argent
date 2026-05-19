@@ -2,7 +2,12 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  buildInitFailedResult,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -52,7 +57,8 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
-  | { platform: "android"; serial: string; avdName: string; booted: true };
+  | { platform: "android"; serial: string; avdName: string; booted: true }
+  | NativeDevtoolsInitFailedResult;
 
 // Each stage has its own sub-budget so a hang in one stage cannot consume the
 // entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
@@ -184,7 +190,7 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
 async function bootIos(
   udid: string,
   registry: Registry
-): Promise<{ platform: "ios"; udid: string; booted: true }> {
+): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   await ensureDep("xcrun");
   await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -198,15 +204,12 @@ async function bootIos(
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
   // If env-init has already exhausted its budget on a prior session against
-  // this UDID (rare — would mean the sim stayed booted through 3 retries)
-  // surface the terminal error so the caller knows devtools won't inject.
+  // this UDID (rare — would mean the sim stayed booted through 3 retries and
+  // the registry returned the cached, already-given-up api) surface the
+  // terminal error as a structured init_failed result.
   const initFailure = ndApi.getInitFailure();
   if (initFailure?.givenUp) {
-    throw new Error(
-      `Simulator ${udid} booted, but native devtools have failed to initialize ` +
-        `${initFailure.attempts} times. Last error: ${initFailure.lastError}. ` +
-        `Shut down the simulator and re-boot it, or restart CoreSimulatorService.`
-    );
+    return buildInitFailedResult(udid, initFailure);
   }
   await execFileAsync("defaults", [
     "write",

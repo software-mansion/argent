@@ -142,4 +142,29 @@ describe("native-devtools tools — init_failed precheck", () => {
     );
     expect(result).toMatchObject({ status: "init_failed" });
   });
+
+  it("converts a transient ensureEnvReady throw into init_failed (fail-fast)", async () => {
+    // !givenUp at call time, but ensureEnvReady throws and records a fresh
+    // failure. The precheck must surface the freshly-recorded state as
+    // init_failed instead of letting the raw Error escape to the agent.
+    const { api } = makeNativeApi({
+      initFailure: {
+        attempts: 1,
+        lastError: "first attempt failed",
+        givenUp: false,
+      },
+    });
+    api.ensureEnvReady = async () => {
+      throw new Error("transient ensureEnv failure");
+    };
+
+    const result = await nativeDescribeScreenTool.execute(
+      { nativeDevtools: api },
+      { udid: FAILED_UDID, bundleId: "com.example.app" }
+    );
+    expect(result).toMatchObject({ status: "init_failed", attempts: 1 });
+    if (result.status === "init_failed") {
+      expect(result.message).toContain(FAILED_UDID);
+    }
+  });
 });

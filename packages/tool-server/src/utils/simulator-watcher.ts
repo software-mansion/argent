@@ -26,28 +26,20 @@ async function getBootedUdids(): Promise<Set<string>> {
 }
 
 /**
- * Resolve (or re-resolve) the native-devtools service for a single UDID and
- * drive its env-init retry loop. Retries are bounded inside the api itself —
- * once `getInitFailure()?.givenUp` is true this is effectively a no-op, which
- * is how the watcher stops burning work on a persistently-broken simulator.
+ * Resolve the native-devtools service for a freshly-seen UDID. The factory
+ * tolerates env-init failure, so a throw here means a structural problem
+ * (wrong platform, bad options) — nothing useful to retry.
  */
-async function tickUdid(registry: Registry, udid: string): Promise<void> {
+async function initUdid(
+  registry: Registry,
+  udid: string,
+  apis: Map<string, NativeDevtoolsApi>
+): Promise<void> {
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
-  let api: NativeDevtoolsApi;
   try {
-    api = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+    apis.set(udid, await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options));
   } catch {
-    // The factory tolerates env-init failure, so resolveService should only
-    // throw on structural issues (wrong platform, missing options). Either
-    // way nothing useful to retry here.
-    return;
-  }
-  // First resolution already attempted env setup inside the factory. If that
-  // attempt failed and we haven't given up, drive another retry. The api
-  // records attempts internally; once at the cap, ensureEnvReady short-circuits.
-  const failure = api.getInitFailure();
-  if (failure && !failure.givenUp) {
-    await api.ensureEnvReady().catch(() => {});
+    // Structural failure — nothing useful to retry.
   }
 }
 
@@ -55,7 +47,7 @@ export function startSimulatorWatcher(registry: Registry): {
   stop: () => void;
   ready: Promise<void>;
 } {
-  const watchedUdids = new Set<string>();
+  const apis = new Map<string, NativeDevtoolsApi>();
 
   async function poll(awaitInit: boolean): Promise<void> {
     let booted: Set<string>;
@@ -66,27 +58,25 @@ export function startSimulatorWatcher(registry: Registry): {
       return;
     }
 
-    if (awaitInit) {
-      // First poll: await all resolutions so the server is only marked ready
-      // after every booted simulator has been seen at least once.
-      await Promise.all(
-        [...booted].map((udid) => {
-          watchedUdids.add(udid);
-          return tickUdid(registry, udid);
-        })
-      );
-    } else {
-      // Subsequent polls: fire-and-forget to avoid blocking the interval tick.
-      for (const udid of booted) {
-        watchedUdids.add(udid);
-        tickUdid(registry, udid).catch(() => {});
-      }
+    // (a) Newly-booted simulators → factory init (once per boot lifetime).
+    const newUdids = [...booted].filter((u) => !apis.has(u));
+    const work: Promise<unknown>[] = newUdids.map((udid) => initUdid(registry, udid, apis));
+
+    // (b) Already-known simulators that are still failing → drive another
+    //     retry. Healthy sims (failure === null) and given-up sims are skipped.
+    for (const [udid, api] of apis) {
+      if (!booted.has(udid)) continue;
+      const failure = api.getInitFailure();
+      if (failure && !failure.givenUp) work.push(api.ensureEnvReady().catch(() => {}));
     }
 
-    // Simulators that shut down: dispose service. Fresh state on re-boot.
-    for (const udid of watchedUdids) {
+    if (awaitInit) await Promise.all(work);
+    else work.forEach((p) => p.catch(() => {}));
+
+    // (c) Shut-down simulators → dispose & drop the ref.
+    for (const udid of [...apis.keys()]) {
       if (!booted.has(udid)) {
-        watchedUdids.delete(udid);
+        apis.delete(udid);
         registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
       }
     }

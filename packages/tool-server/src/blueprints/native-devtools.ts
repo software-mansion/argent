@@ -11,22 +11,9 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { bootstrapDylibPath } from "@argent/native-devtools-ios";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 const execFileAsync = promisify(execFile);
-
-// Ceiling for any single `xcrun simctl spawn UDID launchctl …` invocation.
-// These calls return in ~0.3 s against a healthy CSS, ~0.7 s under contention
-// from concurrent spawns, and can stretch to several seconds on Intel hosts,
-// cold-start CoreSimulatorService, or a developer machine running Xcode
-// builds in parallel. 30 s is well above any plausible legitimate latency
-// and still well below "hung indefinitely" — the only thing the timeout is
-// there to catch (degraded CoreSimulatorService blocking simctl forever, so
-// the watcher's backoff would never fire). A tighter timeout creates a hard
-// ceiling on legit call latency: any user whose system steadily runs above
-// the ceiling would see every retry fail the same way and have no recovery
-// path. 30 s preserves both: hang mode escapes within ~40 s, and no real
-// user's slow-but-working setup gets broken.
-const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
@@ -63,6 +50,68 @@ export function buildInitFailedResult(
       `Try shutting down and re-booting the simulator, or restart CoreSimulatorService.`,
     attempts: failure.attempts,
   };
+}
+
+export type NativeDevtoolsPrecheckBlock =
+  | NativeDevtoolsInitFailedResult
+  | { status: "restart_required"; message: string };
+
+/**
+ * Single decision point for "is this tool blocked from running?". Captures
+ * the three failure shapes — already-given-up, transient init failure that
+ * just happened, and app-requires-restart — and returns the appropriate
+ * structured result. Returns null when the tool may proceed.
+ *
+ * Pass `bundleId` only for tools that target a specific app; launch/restart
+ * tools and the status tool pass `undefined` to skip the restart check (and
+ * get a narrower return type that excludes `restart_required`).
+ */
+export async function precheckNativeDevtools(
+  api: NativeDevtoolsApi,
+  udid: string
+): Promise<NativeDevtoolsInitFailedResult | null>;
+export async function precheckNativeDevtools(
+  api: NativeDevtoolsApi,
+  udid: string,
+  bundleId: string
+): Promise<NativeDevtoolsPrecheckBlock | null>;
+export async function precheckNativeDevtools(
+  api: NativeDevtoolsApi,
+  udid: string,
+  bundleId?: string
+): Promise<NativeDevtoolsPrecheckBlock | null> {
+  // Already-given-up state: structured init_failed.
+  const existing = api.getInitFailure();
+  if (existing?.givenUp) return buildInitFailedResult(udid, existing);
+
+  // Drive an env-init attempt. Fail-fast: if it throws, surface init_failed
+  // using the freshly-recorded failure rather than letting a raw Error
+  // propagate to the agent. Calls before and past the cap look identical
+  // to the caller.
+  try {
+    await api.ensureEnvReady();
+  } catch {
+    const failure = api.getInitFailure();
+    if (failure) return buildInitFailedResult(udid, failure);
+    // Defensive: ensureEnvReady threw but didn't record state. Should not
+    // happen, but don't pretend everything is fine.
+    return buildInitFailedResult(udid, {
+      attempts: 1,
+      lastError: "ensureEnvReady threw without recording state",
+      givenUp: false,
+    });
+  }
+
+  if (bundleId !== undefined && (await api.requiresAppRestart(bundleId))) {
+    return {
+      status: "restart_required",
+      message:
+        "Native devtools are not injected into the running app. " +
+        "Call restart-app then retry.",
+    };
+  }
+
+  return null;
 }
 
 type NativeDevtoolsFactoryOptions = Record<string, unknown> & { device: DeviceInfo };

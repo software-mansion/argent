@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  buildInitFailedResult,
   nativeDevtoolsRef,
+  precheckNativeDevtools,
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
@@ -49,10 +49,9 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    const initFailure = api.getInitFailure();
-    if (initFailure?.givenUp) return buildInitFailedResult(params.udid, initFailure);
+    const blocked = await precheckNativeDevtools(api, params.udid);
+    if (blocked) return blocked;
 
-    await api.ensureEnvReady();
     const appRunning = await api.isAppRunning(params.bundleId);
     const connected = api.isConnected(params.bundleId);
     const envSetup = api.isEnvSetup();

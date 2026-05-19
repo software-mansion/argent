@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { buildInitFailedResult } from "../../../blueprints/native-devtools";
+import { precheckNativeDevtools } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import type { RestartAppIosServices, RestartAppParams, RestartAppResult } from "../types";
 
@@ -10,9 +10,8 @@ export const iosImpl: PlatformImpl<RestartAppIosServices, RestartAppParams, Rest
   requires: ["xcrun"],
   handler: async (services, params) => {
     const { udid, bundleId } = params;
-    const initFailure = services.nativeDevtools.getInitFailure();
-    if (initFailure?.givenUp) return buildInitFailedResult(udid, initFailure);
-    await services.nativeDevtools.ensureEnvReady();
+    const blocked = await precheckNativeDevtools(services.nativeDevtools, udid);
+    if (blocked) return blocked;
     try {
       await execFileAsync("xcrun", ["simctl", "terminate", udid, bundleId]);
     } catch {

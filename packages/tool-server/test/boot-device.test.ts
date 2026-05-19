@@ -82,6 +82,37 @@ describe("boot-device — iOS path", () => {
     );
   });
 
+  it("returns a structured init_failed result when native-devtools has given up", async () => {
+    // Already-given-up state is only reachable when the registry returns a
+    // cached api that exhausted its retries on a prior watcher pass —
+    // boot-device for an already-booted UDID. Surface it as a structured
+    // value, not a thrown error.
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => ({
+        attempts: 3,
+        lastError: "simctl spawn timed out",
+        givenUp: true,
+      }),
+    }));
+    const registry = { resolveService } as unknown as Registry;
+
+    const tool = createBootDeviceTool(registry);
+
+    const result = await tool.execute!(
+      {},
+      { udid: "33333333-3333-3333-3333-333333333333" }
+    );
+    expect(result).toMatchObject({ status: "init_failed", attempts: 3 });
+    if ("status" in result && result.status === "init_failed") {
+      expect(result.message).toContain("33333333-3333-3333-3333-333333333333");
+      expect(result.message).toContain("simctl spawn timed out");
+    }
+    // We must not still open the Simulator.app after surfacing init_failed —
+    // it would imply success.
+    const calls = mockExecFile.mock.calls.map(([file]) => file);
+    expect(calls).not.toContain("open");
+  });
+
   it("still primes native-devtools when simctl reports the simulator is already booted", async () => {
     mockExecFile
       .mockImplementationOnce((...args: unknown[]) => {

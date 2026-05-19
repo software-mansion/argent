@@ -10,15 +10,9 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { axServiceBinaryPath } from "@argent/native-devtools-ios";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 const execFileAsync = promisify(execFile);
-
-// See note in native-devtools.ts: a hung CoreSimulatorService can cause
-// `xcrun simctl spawn` to block forever. Fence every one-shot spawn with a
-// timeout that is well above any plausible legitimate latency but well below
-// "hung indefinitely", so failures become rejections without false-positiving
-// slow-but-working setups.
-const SIMCTL_SPAWN_TIMEOUT_MS = 10_000;
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 

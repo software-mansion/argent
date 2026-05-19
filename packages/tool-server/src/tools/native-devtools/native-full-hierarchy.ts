@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  buildInitFailedResult,
   nativeDevtoolsRef,
+  precheckNativeDevtools,
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
@@ -72,17 +72,8 @@ Fails if native devtools are not connected or the app is not running.`,
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    const initFailure = api.getInitFailure();
-    if (initFailure?.givenUp) return buildInitFailedResult(params.udid, initFailure);
-
-    if (await api.requiresAppRestart(params.bundleId)) {
-      return {
-        status: "restart_required",
-        message:
-          "Native devtools are not injected into the running app. " +
-          "Call restart-app then retry.",
-      };
-    }
+    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+    if (blocked) return blocked;
 
     const rpcParams: Record<string, unknown> = {};
     if (params.fields !== undefined) rpcParams.fields = params.fields;

@@ -2,15 +2,19 @@
  * The simulator watcher used to retry ensureEnv forever with a 5/10/15s
  * backoff, hiding failures from the agent and leaking a `net.Server` per
  * retry. Failure tracking now lives on the `NativeDevtoolsApi` itself
- * (`getInitFailure()`); the watcher polls and re-calls `ensureEnvReady` until
- * the api reports `givenUp`. Recovery is automatic: when the simulator leaves
- * the booted set the watcher disposes the service so a re-boot starts fresh.
+ * (`getInitFailure()`); the watcher initialises each freshly-booted UDID
+ * exactly once and then drives `ensureEnvReady` retries from the api map
+ * until the api reports `givenUp`. Recovery is automatic: when the simulator
+ * leaves the booted set the watcher disposes the service so a re-boot starts
+ * fresh.
  *
  * This test drives the watcher with a mock registry that returns a stub api
  * whose `ensureEnvReady` always fails, and asserts:
  *   1. The api reaches `givenUp = true` after MAX consecutive failures.
  *   2. Once given up, the watcher stops calling `ensureEnvReady`.
  *   3. When the UDID leaves the booted set, the watcher disposes the service.
+ *   4. A healthy UDID (no failure recorded after init) gets zero further
+ *      `ensureEnvReady` calls on subsequent ticks.
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -154,10 +158,8 @@ describe("simulator-watcher with api-owned init failure state", () => {
       const { ready, stop } = startSimulatorWatcher(registry);
       await ready;
 
-      // The initial resolution called ensureEnv once (attempt 1). The watcher
-      // then called it again on the same tick because getInitFailure was set
-      // and not given up — so attempt 2 happens immediately after attempt 1.
-      // Drive subsequent polls until the cap is hit.
+      // The initial resolution called ensureEnv once (attempt 1) inside the
+      // factory. Each subsequent poll drives one retry while !givenUp.
       while ((api.getInitFailure()?.attempts ?? 0) < MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS) {
         await vi.advanceTimersByTimeAsync(10_000);
       }
@@ -172,6 +174,55 @@ describe("simulator-watcher with api-owned init failure state", () => {
       // Once given up, the watcher's per-tick precheck (`!failure.givenUp`)
       // skips ensureEnvReady — no further attempts.
       expect(ensureCalls()).toBe(callsAtCap);
+
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("makes no further ensureEnvReady calls for a healthy UDID after init", async () => {
+    let bootedUdids: string[] = [UDID];
+    execFileMock.mockImplementation((cmd: string) => {
+      if (cmd === "xcrun") return bootedListResponse(bootedUdids);
+      return { stdout: "", stderr: "" };
+    });
+
+    // Healthy api: ensureEnvReady succeeds, no failure ever recorded.
+    let calls = 0;
+    const api: NativeDevtoolsApi = {
+      isEnvSetup: () => true,
+      socketPath: "/tmp/mock.sock",
+      ensureEnvReady: async () => {
+        calls += 1;
+      },
+      getInitFailure: () => null,
+      isConnected: () => false,
+      isAppRunning: async () => false,
+      listConnectedBundleIds: () => [],
+      requiresAppRestart: async () => true,
+      activateNetworkInspection: () => {},
+      getNetworkLog: () => [],
+      clearNetworkLog: () => {},
+      getAppState: async () => {
+        throw new Error("not implemented");
+      },
+      detectFrontmostBundleId: async () => null,
+      queryViewHierarchy: async () => ({}),
+    };
+    const { registry } = makeRegistry(api);
+
+    vi.useFakeTimers();
+    try {
+      const { ready, stop } = startSimulatorWatcher(registry);
+      await ready;
+      // Factory init called ensureEnvReady once; no failure was recorded.
+      const callsAfterInit = calls;
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      // Subsequent polls must skip ensureEnvReady — failure === null filter.
+      expect(calls).toBe(callsAfterInit);
 
       stop();
     } finally {
