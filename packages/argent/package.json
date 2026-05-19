@@ -36,6 +36,7 @@
     "skills/",
     "agents/",
     "rules/",
+    "manifest.json",
     "scripts/postinstall.cjs"
   ],
   "dependencies": {

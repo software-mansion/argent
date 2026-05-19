@@ -37,6 +37,7 @@ packages/argent/dylibs/
 packages/argent/skills/
 packages/argent/agents/
 packages/argent/rules/
+packages/argent/manifest.json
 packages/argent/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
