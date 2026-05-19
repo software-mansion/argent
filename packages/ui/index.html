@@ -291,6 +291,15 @@
         color: var(--color-muted);
         font-size: var(--fs-label);
       }
+      /* `.hidden-badge` surfaces proposals whose element isn't on screen and
+         whose location is unknown (never matched). Brand-accent + bumped
+         size/weight relative to round-badge so it actually reads as a signal
+         (the user has things they can't see), not muted metadata. */
+      .hidden-badge {
+        color: var(--color-accent);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+      }
       .tool-toggle {
         background: var(--color-bg);
         color: var(--color-fg);
@@ -797,6 +806,7 @@
         <span id="sim-label"></span>
         <button id="comment-btn" class="tool-toggle" hidden>＋ Add comment</button>
         <span id="round-badge" class="round-badge"></span>
+        <span id="hidden-badge" class="hidden-badge" hidden></span>
         <span id="status" class="status">idle</span>
       </div>
       <div class="main" id="main">
@@ -855,6 +865,8 @@
         treeStaleMs: cssNum("--tree-stale-ms", 6000),
         flickMaxVel: cssNum("--flick-max-vel", 1500),
         cardWidth: cssNum("--card-width", 232),
+        spotIdleMs: cssNum("--spot-idle-dismiss-ms", 200),
+        annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
       };
 
       // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
@@ -1590,6 +1602,7 @@
       const footEl = document.getElementById("footbar");
       const commentBtn = document.getElementById("comment-btn");
       const roundBadge = document.getElementById("round-badge");
+      const hiddenBadge = document.getElementById("hidden-badge");
       const completeBtn = document.getElementById("complete-btn");
       const completeNote = document.getElementById("complete-note");
       const globalCommentEl = document.getElementById("global-comment");
@@ -1620,9 +1633,6 @@
         annPopFor: null, // annotation id whose review popover is open
       };
 
-      function nodeText(n) {
-        return (n && (n.label || n.value || n.identifier)) || "";
-      }
       function nodeDesc(n) {
         return (n && (n.identifier || n.label || n.value || (n.role ? n.role : ""))) || "element";
       }
@@ -1669,14 +1679,33 @@
         return best;
       }
 
-      // Smallest node whose frame contains a normalized point (inspector pick).
+      // Smallest on-screen node whose frame contains a normalized point
+      // (inspector pick). Deliberately NOT gated on element text: an icon-only
+      // pressable (a star button, a bare <Pressable>, an image button) has no
+      // label/value/identifier, so the old text gate made it un-hoverable.
+      // "Innermost" falls out of smallest-area, so a labelled child still wins
+      // over its container without any role/interactivity heuristic (those
+      // overfit per-platform and Android/iOS expose traits differently). The
+      // on-screen guard — positive size + centre within the viewport, the same
+      // test vpMatchNode uses — keeps scrolled-away / zero-size tree nodes from
+      // being selected (the earlier "I can pick things that aren't visible"
+      // regression), generalised rather than special-cased.
+      //
+      // The describe ROOT node (an "AXGroup" that spans the whole stream) is
+      // treated as if it did not exist: it contains every point, so without
+      // this it would be the smallest match over empty gaps — making the
+      // whole screen the "element" (instant full-stream focus with no ease-off
+      // because the null path never fires) and visually swallowing small
+      // nested pressables. Skipping it means a gap returns null → the 1s
+      // ease-off applies, and real descendants are still picked normally.
       function vpNodeAtPoint(node, x, y) {
         let best = null,
           bestArea = Infinity;
-        const walk = (n) => {
+        const walk = (n, isRoot) => {
           if (!n || typeof n !== "object") return;
           const f = n.frame;
           if (
+            !isRoot &&
             f &&
             f.width > 0 &&
             f.height > 0 &&
@@ -1685,15 +1714,18 @@
             y >= f.y &&
             y <= f.y + f.height
           ) {
+            const cx = f.x + f.width / 2,
+              cy = f.y + f.height / 2;
+            const onScreen = cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1;
             const a = f.width * f.height;
-            if (a < bestArea && nodeText(n)) {
+            if (onScreen && a < bestArea) {
               bestArea = a;
               best = n;
             }
           }
-          if (Array.isArray(n.children)) n.children.forEach(walk);
+          if (Array.isArray(n.children)) n.children.forEach((c) => walk(c, false));
         };
-        walk(node);
+        walk(node, true);
         return best;
       }
 
@@ -2310,6 +2342,34 @@
       }
 
       // ── Element-comment inspector (spotlight) ───────────────────────────
+      // Spotlight dismissal has two deliberately different rules:
+      //   • pointer LEAVES the stream rect    → reset immediately (the user
+      //     has clearly stopped inspecting; pointerleave handler).
+      //   • a hovered element is lost while still on the stream (a gap or a
+      //     non-hoverable region) → keep the focus box on the last element
+      //     and run a single short ease-off (spotIdleMs); release only if
+      //     nothing new is hovered in that window. Brief crossings covered free.
+      // clearSpotIdle cancels the ease-off (new element hovered, or the
+      // inspector/stream was torn down); armSpotIdle starts it. A locked
+      // comment target (vp.commentFor) is never auto-dismissed by either.
+      function clearSpotIdle() {
+        if (vp._spotIdle) {
+          clearTimeout(vp._spotIdle);
+          vp._spotIdle = null;
+        }
+      }
+      function armSpotIdle() {
+        // Armed once: the countdown runs from the FIRST lost-element moment
+        // and is not reset by further empty moves over the stream. A locked
+        // comment target (vp.commentFor) stays put.
+        if (vp.commentFor || !vp.focus || vp._spotIdle) return;
+        vp._spotIdle = setTimeout(() => {
+          vp._spotIdle = null;
+          if (vp.commentFor) return;
+          vp.focus = null;
+          paintSpot();
+        }, THEME.spotIdleMs);
+      }
       function ensureSpot() {
         if (vp.spot) return vp.spot;
         const root = document.createElement("div");
@@ -2335,22 +2395,28 @@
           const x = (ev.clientX - mainEl.getBoundingClientRect().left - r.x) / r.w;
           const y = (ev.clientY - mainEl.getBoundingClientRect().top - r.y) / r.h;
           const node = vpNodeAtPoint(vp.tree, x, y);
-          // Only move the spotlight when the pointer is actually over an
-          // element. Empty space *between* elements (a thin gap) returns
-          // null — resetting focus there would blow the hole up to the
-          // whole screen and back as the pointer crosses the gap, a violent
-          // snap. Hold the last element until another one is hit; the
-          // full-screen reset is reserved for pointerleave (left the stream).
-          if (node && node !== vp.focus) {
-            vp.focus = node;
-            paintSpot();
+          if (node) {
+            // Over an element → cancel any pending idle release and move the
+            // spotlight there.
+            clearSpotIdle();
+            if (node !== vp.focus) {
+              vp.focus = node;
+              paintSpot();
+            }
+            return;
           }
+          // No element under the pointer — a thin gap between elements, or a
+          // genuinely non-hoverable region. Do NOT dismiss: hold the last
+          // element and run the shared ease-off. Brief gap crossings are
+          // covered for free (returning to an element clears the timer before
+          // it fires); a real "moved off everything" releases after spotIdleMs.
+          armSpotIdle();
         });
         hit.addEventListener("pointerleave", () => {
-          // Pointer left the stream rect → drop the hover focus so the
-          // spotlight resets to the whole-stream (no-blur) state instead of
-          // freezing the ring/hole on the last element. A locked comment
-          // target (vp.commentFor) stays put, mirroring pointermove's guard.
+          // Left the stream rect entirely → reset immediately, by design.
+          // The ease-off (spotIdleMs) is ONLY for losing a hovered element
+          // while the pointer is still on the stream. Locked comment stays.
+          clearSpotIdle();
           if (vp.commentFor) return;
           vp.focus = null;
           paintSpot();
@@ -2431,6 +2497,7 @@
         commentBtn.textContent = on ? "✕ Done commenting" : "＋ Add comment";
         document.getElementById("root").classList.toggle("inspecting", on);
         if (!on) {
+          clearSpotIdle();
           vp.focus = null;
           vp.commentFor = null;
           popEl.hidden = true;
@@ -2530,11 +2597,14 @@
           if (!el) {
             el = document.createElement("div");
             el.className = "ann-pin";
-            el.addEventListener("click", (ev) => {
-              ev.stopPropagation();
-              if (vp.annPopFor === a.id) closeAnnPop();
-              else openAnnPop(a);
+            // Hover opens the comment detail (no click required); leaving the
+            // pin arms the shared grace close (cancelled if the pointer
+            // reaches the popover or another pin). `a` is captured per pin.
+            el.addEventListener("pointerenter", () => {
+              cancelAnnClose();
+              if (vp.annPopFor !== a.id) openAnnPop(a);
             });
+            el.addEventListener("pointerleave", scheduleAnnClose);
             cardsEl.appendChild(el);
             vp.pinEls.set(String(a.id), el);
           }
@@ -2669,6 +2739,27 @@
         }
         window.removeEventListener("keydown", annPopEsc);
       }
+      // Hover-driven open/close for saved-comment pins. The popover opens on
+      // pointerenter (no click needed) and stays open while the pointer is
+      // over the pin OR the popover; leaving either arms a short grace timer
+      // so the user can travel the pin↔popover gap without it vanishing.
+      // Focus inside the popover (i.e. editing) suppresses the auto-close —
+      // Esc / outside-click still dismiss that path.
+      function cancelAnnClose() {
+        if (vp._annHoverClose) {
+          clearTimeout(vp._annHoverClose);
+          vp._annHoverClose = null;
+        }
+      }
+      function scheduleAnnClose() {
+        cancelAnnClose();
+        if (annPop.contains(document.activeElement)) return;
+        vp._annHoverClose = setTimeout(() => {
+          vp._annHoverClose = null;
+          if (annPop.contains(document.activeElement)) return;
+          closeAnnPop();
+        }, THEME.annpopGraceMs);
+      }
       function openAnnPop(a) {
         detachAnnGlobal(); // switching pins → drop the previous closer
         vp.annPopFor = a.id;
@@ -2691,6 +2782,7 @@
       function closeAnnPop() {
         if (vp.annPopFor == null) return;
         vp.annPopFor = null;
+        cancelAnnClose();
         annPop.classList.remove("show");
         detachAnnGlobal();
         // hide only after the fade-out so it can't swallow clicks meanwhile
@@ -2698,21 +2790,35 @@
           if (vp.annPopFor == null) annPop.hidden = true;
         }, 240);
       }
+      // Keep the popover alive while the pointer is inside it; re-arm the
+      // grace close on leave. Bound once — annPop is a stable element.
+      annPop.addEventListener("pointerenter", cancelAnnClose);
+      annPop.addEventListener("pointerleave", scheduleAnnClose);
 
-      // Minimal off-screen reminder: count proposal cards whose element has
-      // scrolled out of the device viewport (rec.gone, and it was actually
-      // seen at least once) and surface a tiny pill at the stream's top or
-      // bottom edge so pending choices are never silently invisible.
-      // Direction comes from the element's last on-screen vertical centre.
+      // Surface proposals that have no visible anchor, split by whether a
+      // scroll direction is meaningful:
+      //   • Seen then scrolled away (everMatched, has lastCY) → ▲/▼ pill on
+      //     the stream edge. The arrow IS a scroll-direction cue — the user
+      //     can scroll there to reveal it. This is the original "off-screen"
+      //     reminder, untouched.
+      //   • Never matched (no anchor ever found in the describe tree) → a
+      //     non-directional "◌ N hidden" badge in the top toolbar. No arrow:
+      //     scrolling would not reveal it (it isn't on the device screen at
+      //     all, just queued). The badge sits next to the round badge so the
+      //     user always knows N pending choices exist, even when no stream
+      //     is connected to position the directional pills.
       function updateOffscreenHint() {
         const r = streamRect();
         const top = [],
-          bot = [];
-        if (r) {
-          for (const p of vp.proposals) {
-            const rec = vp.cards.get(p.id);
-            if (!rec || !rec.gone || !rec.everMatched) continue;
+          bot = [],
+          hidden = [];
+        for (const p of vp.proposals) {
+          const rec = vp.cards.get(p.id);
+          if (!rec || !rec.gone) continue;
+          if (rec.everMatched) {
             (rec.lastCY != null && rec.lastCY < 0.5 ? top : bot).push(p.element || "element");
+          } else {
+            hidden.push(p.element || "element");
           }
         }
         const paint = (el, list, arrow, y) => {
@@ -2728,6 +2834,13 @@
         };
         paint(osTop, top, "▲", r ? r.y + 8 : 0);
         paint(osBot, bot, "▼", r ? r.y + r.h - 30 : 0);
+        if (hidden.length) {
+          hiddenBadge.textContent = `◌ ${hidden.length} hidden`;
+          hiddenBadge.title = hidden.join(", ");
+          hiddenBadge.hidden = false;
+        } else {
+          hiddenBadge.hidden = true;
+        }
       }
 
       // Structural pass (poll / resize / stage cadence). Positions, connector
@@ -2913,6 +3026,7 @@
         if (annPop) annPop.hidden = true;
         vp.pinAnim.clear();
         if (vp._pinT) vp._pinT.clear();
+        clearSpotIdle();
         vp.focus = null;
         vp.commentFor = null;
         // Fully exit inspect mode so a stream re-attach doesn't leave a
