@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing a UI flow, verifying login works, testing navigation, or running an end-to-end UI test scenario.
+description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, navigation, manual QA steps, visible UI changes, visual behavior, visual regression checks, screenshot-diff checks, or before/after comparisons.
 ---
 
 ## Platform-agnostic
@@ -20,14 +20,31 @@ Once a platform is chosen, the per-platform setup skill takes over:
 
 All interactions go through argent MCP tools. Ensure the simulator/emulator is ready before starting.
 
-1. **Baseline screenshot**: Call `screenshot` to see the current UI state.
+For implementation tasks that modify visible UI, this workflow can also serve as a visual acceptance path.
+
+### QA preflight
+
+Before running a QA flow, classify each expected result and choose the evidence to collect:
+
+- **Visual**: pixel-visible layout, position, size, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering. Use screenshots, visual inspection, frame/attribute checks, and `screenshot-diff` when stable comparable images are available.
+- **Structural**: navigation state, element existence, accessibility labels/values, selection state, hierarchy, or route changes. Use `describe`, `native-describe-screen`, `debugger-component-tree`, source/frame inspection, or app state checks.
+- **Runtime/log/network**: console errors, API calls, persistence, side effects, timing, or data flow. Use logs, network tools, debugger evaluation, or targeted tests.
+- **Mixed**: any assertion that combines visual behavior with structural, runtime, log, or network state. Collect evidence for each relevant class.
+
+Treat `screenshot-diff` as supporting visual evidence, not the sole oracle. For exact use cases, parameter choices, and full-resolution screenshot guidance, follow `argent-device-interact` §7. If the user explicitly asks for screenshot diffing or before/after visual comparison, use it unless no stable comparable screenshots can be produced.
+
+1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
    - **Standard app screens and in-app modals**: use `describe`. On iOS this returns the AX tree (falls back to native-devtools when AX is empty); on Android it returns the uiautomator tree in the same DescribeNode shape.
    - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
-4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with `screenshot`.
+4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with normal downscaled `screenshot`.
+   - For visual or mixed assertions, use `screenshot-diff` when a stable baseline/current pair is available.
+   - For structural assertions, verify with the accessibility/component tree or app state.
+   - For runtime/log/network assertions, verify with logs, network tools, debugger evaluation, or targeted tests.
+   - Report the combined verdict: expected behavior, observed behavior, evidence used, and any blocker for requested visual diffing.
 5. **Repeat** for each step in the flow.
 
 ## 2. Template
@@ -36,10 +53,12 @@ All interactions go through argent MCP tools. Ensure the simulator/emulator is r
 Goal: Test [feature name]
 
 Steps:
-1. screenshot → see current state (baseline)
-2. [Navigate / tap / type to reach starting point] → verify auto-screenshot
-3. [Perform the action to test] → verify auto-screenshot
-4. Report: pass / fail with details
+1. Classify expected result: visual / structural / runtime-log-network / mixed → choose evidence
+2. [Navigate / tap / type to reach stable comparable starting point] → verify auto-screenshot
+3. screenshot { scale: 1.0, includeImageInContext: false } → save baseline path when visual or mixed evidence needs diffing
+4. [Perform the action to test] → verify auto-screenshot
+5. Use screenshot-diff when requested or when comparable images add useful visual evidence
+6. Report: pass / fail with combined visual, structural, runtime/log/network evidence as applicable
 ```
 
 ## 3. Examples
@@ -67,6 +86,19 @@ Steps:
 6. screenshot → verify returned to list
 ```
 
+### Visual behavior check
+
+```
+1. Classify expected result as visual or mixed.
+2. Navigate to the stable starting state.
+3. screenshot { scale: 1.0, includeImageInContext: false } → save baseline path.
+4. describe / debugger-component-tree → find the control and use its returned tap coordinates.
+5. gesture-tap → perform the visual behavior under test.
+6. screenshot-diff { baselinePath, captureCurrent: true, udid, outputDir } → inspect visible change or stability.
+7. describe / debugger-component-tree → verify selected state, label, route, or attributes if relevant.
+8. Report combined verdict from expected behavior, visual inspection, diff summary, and structural evidence.
+```
+
 ---
 
 ## 4. Recovery Pattern
@@ -82,7 +114,6 @@ Steps:
 - **Use `paste` for text entry on iOS** — faster and more reliable than key-by-key `keyboard`. `paste` is iOS-only; on Android use `keyboard` instead.
 - **Use `gesture-custom` for long-press** context menus (800ms hold).
 - **Report clearly**: state what you expected, what you saw, and the verdict.
-- **Coordinate estimation**: center = 0.5, 0.5; top-third ~ 0.2; bottom-third ~ 0.8.
 - **Permission modals**: try `describe` first. Use `screenshot` only as fallback, tap one visible button at a time, and verify with the returned screenshot before continuing.
 - **Record for replay**: If a tested flow is likely to be repeated, use the `argent-create-flow` skill to record it as a `.yaml` script. This lets you replay the entire sequence later with a single `flow-execute` call instead of re-running each step manually.
 

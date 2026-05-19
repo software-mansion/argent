@@ -4,9 +4,17 @@
  * Extracted so it can be tested independently of the MCP server wiring.
  */
 
+import { readFile } from "node:fs/promises";
+
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
+
+interface ScreenshotDiffResult {
+  summary: string;
+  diffPath?: string;
+  contextDiffPath?: string;
+}
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -28,8 +36,28 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
 }
 
 export async function toMcpContent(result: unknown, outputHint?: string): Promise<ContentBlock[]> {
+  if (outputHint === "screenshot-diff" && isScreenshotDiffResult(result)) {
+    const blocks: ContentBlock[] = [];
+
+    if (typeof result.contextDiffPath === "string") {
+      const buf = await readFile(result.contextDiffPath);
+      blocks.push({
+        type: "image" as const,
+        data: buf.toString("base64"),
+        mimeType: "image/png" as const,
+      });
+    }
+
+    blocks.push({ type: "text" as const, text: result.summary });
+    return blocks;
+  }
+
   if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
-    const r = result as { url: string; path?: string };
+    const r = result as { url: string; path?: string; includeImageInContext?: boolean };
+    if (r.includeImageInContext === false) {
+      return [{ type: "text" as const, text: `Saved: ${r.path}` }];
+    }
+
     const buf = await fetchPngBytes(r.url);
     if (buf) {
       return [
@@ -50,6 +78,15 @@ export async function toMcpContent(result: unknown, outputHint?: string): Promis
   }
 
   return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffResult {
+  if (!isRecord(value)) return false;
+  return typeof value.summary === "string";
 }
 
 export type FlowExecuteResult = {

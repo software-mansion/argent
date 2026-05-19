@@ -13,6 +13,8 @@ Use cases:
 - User mentions iOS simulator, Android emulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in a simulator/emulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
+- Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
+- Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS or Android)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
   </description>
@@ -57,6 +59,12 @@ Decision order:
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
+- Use normal downscaled screenshots for UI context. Do not treat `screenshot { scale: 1.0 }`
+  as a general readability or tapping aid. Use `scale: 1.0` with `includeImageInContext: false`
+  only when saving baseline/current PNGs for visual regression, then compare with `screenshot-diff`.
+- For explicit visual-regression, screenshot-diff, or before/after comparison requests, use `screenshot-diff` unless no stable comparable screenshots can be produced;
+- For implementation tasks that change visible mobile UI, consider `screenshot-diff` as supporting visual evidence when the affected screen has stable before/after states and the expected result is pixel-visible. Skip it when structural checks, logs, network evidence, or tests answer the question better, or when dynamic content makes comparison noisy.
+- For `screenshot-diff`, provide exactly one input for each side. Common flow: saved `baselinePath` plus live `captureCurrent: true`. Never set both `captureBaseline` and `captureCurrent` in one call.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
@@ -92,7 +100,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, comparing screenshots with `screenshot-diff`, or verifying a visible UI code change.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
@@ -116,7 +124,7 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 
 END-TO-END UI TESTING
 Skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, validating visual behavior after implementation, validating visible UI changes after implementation, or doing visual regression checks with saved baseline/current screenshots.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`

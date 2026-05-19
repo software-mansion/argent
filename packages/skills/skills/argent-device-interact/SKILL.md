@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
+description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping, swiping, typing, launching apps, taking screenshots, comparing screenshots, running UI or visual regression tests, using screenshot-diff, or verifying visible UI code changes.
 ---
 
 ## Unified tool surface
@@ -48,23 +48,24 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action           | Tool             | Notes                                                                  |
-| ---------------- | ---------------- | ---------------------------------------------------------------------- |
-| Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)                  |
-| Open an app      | `launch-app`     | **Always — never tap home-screen icons**                               |
-| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                                    |
-| Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                                     |
-| Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                             |
-| Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                                          |
-| Long press       | `gesture-custom` | Context menus, drag start                                              |
-| Drag & drop      | `gesture-custom` | Complex drag interactions                                              |
-| Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                               |
-| Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation                            |
-| Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation                      |
-| Hardware key     | `button`         | Home, back, power, volume, appSwitch, actionButton                     |
-| Type text (fast) | `paste`          | iOS only. Form fields — uses clipboard                                 |
-| Type text        | `keyboard`       | iOS+Android. Fallback when paste fails; supports Enter, Escape, arrows |
-| Rotate device    | `rotate`         | Orientation changes                                                    |
+| Action            | Tool              | Notes                                                                            |
+| ----------------- | ----------------- | -------------------------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`    | Batch steps in one call (no intermediate screenshots)                            |
+| Open an app       | `launch-app`      | **Always — never tap home-screen icons**                                         |
+| Restart an app    | `restart-app`     | Terminate and relaunch by bundle ID                                              |
+| Open URL/scheme   | `open-url`        | Web pages, deep links, URL schemes                                               |
+| Single tap        | `gesture-tap`     | Buttons, links, checkboxes                                                       |
+| Scroll/swipe      | `gesture-swipe`   | Straight-line scroll or swipe                                                    |
+| Long press        | `gesture-custom`  | Context menus, drag start                                                        |
+| Drag & drop       | `gesture-custom`  | Complex drag interactions                                                        |
+| Pinch/zoom        | `gesture-pinch`   | Two-finger pinch with auto-interpolation                                         |
+| Rotation          | `gesture-rotate`  | Two-finger rotation with auto-interpolation                                      |
+| Custom gesture    | `gesture-custom`  | Arbitrary touch sequences, optional interpolation                                |
+| Hardware key      | `button`          | Home, back, power, volume, appSwitch, actionButton                               |
+| Type text (fast)  | `paste`           | iOS only. Form fields — uses clipboard                                           |
+| Type text         | `keyboard`        | iOS+Android. Fallback when paste fails; supports Enter, Escape, arrows           |
+| Rotate device     | `rotate`          | Orientation changes                                                              |
+| Visual comparison | `screenshot-diff` | Compare saved baseline/current PNGs, or saved baseline plus live current capture |
 
 ## 5. Finding Tap Targets
 
@@ -184,6 +185,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 Use the explicit `screenshot` tool only when:
 
 - You need the initial screen state before any action.
+- You are about to edit visible UI and the expected result is visible in pixels, so a before/after baseline may make `screenshot-diff` useful.
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
@@ -198,7 +200,60 @@ When using `screenshot` for permission or native modal navigation:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
-Screenshots are downscaled by default (30% of original resolution) to reduce context size. `scale` accepts values from 0.01 to 1.0. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
+Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
+
+Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:
+
+```json
+{ "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
+```
+
+### screenshot-diff — Supporting visual evidence
+
+Use `screenshot-diff` as supporting evidence for visual QA, UI regression, and visible behavior checks. It highlights pixel-visible change or stability; it does not replace visual inspection, accessibility/tree state, frame/attribute checks, logs, network evidence, or app behavior. Do not use it for tap-coordinate discovery.
+
+Use it when pixel comparison can answer the verification question:
+
+- Required for explicit "UI regression test", "visual regression test", "screenshot diff", "compare screenshots", or "before/after visual comparison" requests, unless stable comparable screenshots cannot be produced.
+- Good fit when the affected screen has stable before/after states and the expected result is pixel-visible: layout, position, size, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
+- Good fit when the risk is unintended visual regression outside the exact element you changed.
+- Poor fit when the result is better verified structurally: state changes, navigation existence, accessibility tree contents, console/network behavior, or unit tests.
+- Poor fit when dynamic content, unpausable animation, timestamps, ads, random data, or missing baseline/current screenshots would make the comparison noisy or meaningless.
+
+When you choose to use it, capture the stable baseline before the relevant interaction or before editing whenever feasible, then compare it to the post-change or post-interaction screen after the app reloads, rebuilds, or reaches the state under test.
+
+Choose parameters by source. Provide exactly one input for the baseline side and exactly one input for the current side:
+
+- Common UI regression flow: saved baseline plus live current → `baselinePath`, `captureCurrent: true`, `udid`, `outputDir`.
+- Both screenshots already saved → `baselinePath`, `currentPath`, `outputDir`.
+- Rare fixture flow: live baseline plus saved current → `captureBaseline: true`, `currentPath`, `udid`, `outputDir`.
+- Do not combine `captureBaseline: true` with `captureCurrent: true`, or provide both a path and live capture flag for the same side.
+
+Preferred deterministic flow:
+
+1. Navigate to the known-good state.
+2. Capture a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`; keep the returned `path`.
+3. Perform the interaction, apply the code change, reload, rebuild, or navigate to the state under test.
+4. Call `screenshot-diff` with the saved `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`.
+
+```json
+{
+  "baselinePath": "/tmp/baseline.png",
+  "captureCurrent": true,
+  "udid": "<UDID>",
+  "outputDir": "/tmp/argent-diff"
+}
+```
+
+If both images are already saved, use file paths for both sides:
+
+```json
+{
+  "baselinePath": "/tmp/baseline.png",
+  "currentPath": "/tmp/current.png",
+  "outputDir": "/tmp/argent-diff"
+}
+```
 
 ### Troubleshooting
 
