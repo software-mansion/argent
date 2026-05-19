@@ -62,6 +62,18 @@ const STAGE_BUDGET = {
   bootCompleted: 300_000, // sys.boot_completed = 1
 } as const;
 
+// Poll cadences for the boot state machine. These intervals only pace how
+// often we re-probe adb between attempts — they bound latency, not
+// correctness. Values are deliberately conservative: a hung adb on the
+// default 30s timeout must not be re-spawned every few ms. Timing-sensitive
+// tests drive these with vitest fake timers rather than mutating production
+// state, so this stays an immutable constant.
+const BOOT_POLL_INTERVALS_MS = {
+  serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
+  adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
+  earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
+} as const;
+
 async function killEmulatorQuietly(
   serial: string | null,
   child?: import("node:child_process").ChildProcess
@@ -160,7 +172,7 @@ async function findSerialByAvdName(avdName: string, deadline: number): Promise<s
     const devices = await listAndroidDevices().catch(() => []);
     const match = devices.find((d) => d.isEmulator && d.avdName === avdName);
     if (match) return match.serial;
-    await new Promise((r) => setTimeout(r, 1_500));
+    await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialByAvd));
   }
   return null;
 }
@@ -291,7 +303,7 @@ async function attemptBoot(params: {
           break;
         }
       }
-      await new Promise((r) => setTimeout(r, 1_000));
+      await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.adbRegister));
     }
   } catch (err) {
     killDetachedEmulator(child);
@@ -613,9 +625,9 @@ function createEarlyExitRacer(getExit: () => Error | null): {
         reject(err);
         return;
       }
-      timer = setTimeout(tick, 500);
+      timer = setTimeout(tick, BOOT_POLL_INTERVALS_MS.earlyExit);
     };
-    timer = setTimeout(tick, 500);
+    timer = setTimeout(tick, BOOT_POLL_INTERVALS_MS.earlyExit);
   });
   return {
     promise,
