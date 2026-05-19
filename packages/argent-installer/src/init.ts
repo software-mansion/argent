@@ -119,18 +119,6 @@ export async function init(args: string[]): Promise<void> {
 
   if (!globallyInstalled && !locallyInstalled) {
     if (!nonInteractive) {
-      // Surface the cross-editor relative-path caveat BEFORE the user
-      // picks a mode — by Step 1 they've already committed, so the
-      // warning is most useful here as decision context.
-      p.log.warn(
-        `Before choosing ${pc.bold("Local")}: only Claude Code formally documents ` +
-          `project-relative MCP command paths (via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). ` +
-          `For Cursor, VS Code, Zed, Codex, opencode, and Gemini the recipe relies on ` +
-          `the MCP client launching the server from the project root — supported in ` +
-          `practice but not contractually guaranteed. If a teammate's editor fails to ` +
-          `start argent, verify its working directory first.`
-      );
-
       const installChoice = await p.select({
         message: "Argent isn't installed yet. How would you like to set it up?",
         // Global is the recommended default — it's the broadest install
@@ -162,6 +150,31 @@ export async function init(args: string[]): Promise<void> {
       }
 
       installMode = installChoice;
+
+      // Surface the cross-editor relative-path caveat only after the
+      // user has picked Local. The vast majority of users go global and
+      // never see this; for the team-share path we add a single confirm
+      // prompt so the caveat lands as decision context, not noise.
+      if (installMode === "local") {
+        p.log.warn(
+          `Only Claude Code formally documents project-relative MCP command paths ` +
+            `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, Codex, ` +
+            `opencode, and Gemini the recipe relies on the MCP client launching the ` +
+            `server from the project root — supported in practice but not contractually ` +
+            `guaranteed. If a teammate's editor fails to start argent, verify its ` +
+            `working directory first.`
+        );
+
+        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+        const confirmLocal = await p.confirm({
+          message: "Proceed with the Local devDependency install?",
+          initialValue: true,
+        });
+        if (p.isCancel(confirmLocal) || !confirmLocal) {
+          p.cancel("Installation cancelled. Re-run `argent init` to choose a different mode.");
+          process.exit(0);
+        }
+      }
     }
 
     if (installMode === "local") {
