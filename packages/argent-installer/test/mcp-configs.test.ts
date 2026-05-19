@@ -80,11 +80,69 @@ afterEach(() => {
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
 
 describe("getMcpEntry", () => {
-  it("returns an entry with argent as command", () => {
+  it("returns a global-mode entry with argent as command (default)", () => {
     const entry = getMcpEntry();
     expect(entry.command).toBe("argent");
     expect(entry.args).toEqual(["mcp"]);
     expect(entry.env).toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("returns a global-mode entry when explicitly requested", () => {
+    const entry = getMcpEntry({ kind: "global" });
+    expect(entry.command).toBe("argent");
+    expect(entry.args).toEqual(["mcp"]);
+    expect(entry.env).toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("returns a relative-path entry in local mode for non-Claude adapters", () => {
+    // Cursor is representative of the "plain relative path" adapter group
+    // (Cursor / VS Code / Codex / opencode / Zed / Gemini).
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    const entry = getMcpEntry({ kind: "local", projectRoot: "/tmp/x" }, adapter);
+    expect(entry.command).toBe("./node_modules/.bin/argent");
+    expect(entry.args).toEqual(["mcp"]);
+    // No baked-in absolute log path — the installer's homedir is
+    // meaningless in a committed config; argent's MCP server defaults
+    // the path per-user when the env var is unset.
+    expect(entry.env).not.toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("uses ${CLAUDE_PROJECT_DIR:-.} for the Claude Code adapter in local mode", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    const entry = getMcpEntry({ kind: "local", projectRoot: "/tmp/x" }, adapter);
+    expect(entry.command).toBe("${CLAUDE_PROJECT_DIR:-.}/node_modules/.bin/argent");
+    expect(entry.args).toEqual(["mcp"]);
+    expect(entry.env).not.toHaveProperty("ARGENT_MCP_LOG");
+  });
+
+  it("falls back to the plain relative path when no adapter is provided in local mode", () => {
+    // Update flow and other callers that don't have a specific adapter in
+    // scope still need a usable entry. Default to the more portable shape.
+    const entry = getMcpEntry({ kind: "local", projectRoot: "/tmp/x" });
+    expect(entry.command).toBe("./node_modules/.bin/argent");
+  });
+});
+
+// ── acceptsLocalInstall flag ─────────────────────────────────────────────────
+
+describe("McpConfigAdapter.acceptsLocalInstall", () => {
+  it("is false for Windsurf (global-only)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Windsurf")!;
+    expect(adapter.acceptsLocalInstall).toBe(false);
+  });
+
+  it("is false for Hermes (global-only)", () => {
+    const adapter = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
+    expect(adapter.acceptsLocalInstall).toBe(false);
+  });
+
+  it("is true (or unset, treated as true) for every other adapter", () => {
+    for (const adapter of ALL_ADAPTERS) {
+      if (adapter.name === "Windsurf" || adapter.name === "Hermes") continue;
+      // Unset is the implicit default — treat undefined as `true` here so
+      // adding a new adapter that forgets to set the flag doesn't break.
+      expect(adapter.acceptsLocalInstall !== false).toBe(true);
+    }
   });
 });
 

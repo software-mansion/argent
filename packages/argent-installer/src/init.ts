@@ -9,6 +9,7 @@ import {
   getMcpEntry,
   copyRulesAndAgents,
   type McpConfigAdapter,
+  type McpEntryMode,
 } from "./mcp-configs.js";
 import {
   SKILLS_DIR,
@@ -17,11 +18,15 @@ import {
   getInstalledVersion,
   getLatestVersion,
   isGloballyInstalled,
+  isLocallyInstalled,
+  isYarnPnp,
+  hasPackageJson,
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
   detectPackageManager,
   globalInstallCommand,
+  localDevInstallCommand,
   formatShellCommand,
   resolveProjectRoot,
   type ShellCommand,
@@ -57,9 +62,30 @@ function extractFlag(args: string[], flag: string): string | null {
   return args[idx + 1]!;
 }
 
+// Discriminates the install topology chosen at Step 0 — drives MCP entry
+// shape, scope override, and adapter filtering for the rest of the flow.
+type InstallMode = "global" | "local";
+
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const fromTar = extractFlag(args, "--from");
+  // `--devdep` (alias `--local-install`) selects the "local devDependency"
+  // install topology non-interactively. Designed for teams that want to
+  // commit their MCP config alongside the package.json change so every
+  // teammate gets the same argent version after `npm install`.
+  const devdepFlagRequested = args.includes("--devdep") || args.includes("--local-install");
+  const explicitGlobalScope = (() => {
+    const idx = args.indexOf("--scope");
+    if (idx === -1 || idx + 1 >= args.length) return false;
+    return args[idx + 1] === "global";
+  })();
+  if (devdepFlagRequested && explicitGlobalScope) {
+    process.stderr.write(
+      `${pc.red("error")}: --devdep is incompatible with --scope global ` +
+        "(local installs must use the project-scoped MCP config).\n"
+    );
+    process.exit(1);
+  }
 
   printBanner();
 
@@ -71,15 +97,39 @@ export async function init(args: string[]): Promise<void> {
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
   const globallyInstalled = isGloballyInstalled();
+  // Resolve project root once — needed for the local install check, the
+  // PnP probe, and for the Step-1 MCP entry construction. We use the same
+  // resolution rules as the rest of init so the choices stay consistent.
+  const projectRoot = resolveProjectRoot(process.cwd());
+  const locallyInstalled = isLocallyInstalled(projectRoot);
 
-  if (!globallyInstalled) {
+  let installMode: InstallMode;
+  if (devdepFlagRequested) {
+    installMode = "local";
+  } else if (locallyInstalled && !globallyInstalled) {
+    // A devDep is already on disk but nothing global — assume the user
+    // re-running init wants to refresh the existing local setup, not
+    // suddenly switch to a global install. Stays opt-in: the prompt below
+    // still appears the first time, and `--devdep` is still the canonical
+    // non-interactive selector.
+    installMode = "local";
+  } else {
+    installMode = "global";
+  }
+
+  if (!globallyInstalled && !locallyInstalled) {
     if (!nonInteractive) {
       const installChoice = await p.select({
-        message: "Argent is not installed globally. Would you like to install it?",
+        message: "Argent isn't installed yet. How would you like to set it up?",
         options: [
           {
+            value: "local" as const,
+            label: "Local (devDependency, recommended for teams)",
+            hint: "Pins argent in package.json so the team shares one version",
+          },
+          {
             value: "global" as const,
-            label: "Install globally",
+            label: "Global",
             hint: "Makes the argent command available everywhere",
           },
           {
@@ -93,25 +143,96 @@ export async function init(args: string[]): Promise<void> {
         p.cancel("Installation cancelled.");
         process.exit(0);
       }
+
+      installMode = installChoice;
     }
 
+    if (installMode === "local") {
+      // Refuse early when the workspace can't host a devDep — better than
+      // letting `npm install` fail with a noisy stack a step later.
+      if (!hasPackageJson(projectRoot)) {
+        p.log.error(
+          `No package.json found at ${pc.dim(projectRoot)}.\n` +
+            `  Run ${pc.cyan("npm init -y")} first, then re-run ${pc.cyan("argent init --devdep")}.`
+        );
+        process.exit(1);
+      }
+      if (isYarnPnp(projectRoot)) {
+        p.log.error(
+          `Yarn PnP detected (.pnp.cjs at ${pc.dim(projectRoot)}).\n` +
+            `  The devDep flow needs a real node_modules/.bin directory.\n` +
+            `  Switch to ${pc.cyan('nodeLinker: "node-modules"')} in .yarnrc.yml or ` +
+            `re-run with ${pc.cyan("argent init")} for a global install.`
+        );
+        process.exit(1);
+      }
+
+      const pm = detectPackageManager();
+      const installTarget = fromTar ?? PACKAGE_NAME;
+      const cmd = localDevInstallCommand(pm, installTarget);
+      const cmdStr = formatShellCommand(cmd);
+      const spinner = p.spinner();
+      spinner.start(`Installing ${PACKAGE_NAME} as a devDependency...`);
+      try {
+        await runShellCommand(cmd);
+        spinner.stop(pc.green("Installed as devDependency."));
+        version = getInstalledVersion() ?? version;
+      } catch (err) {
+        spinner.stop(pc.red("Installation failed."));
+        p.log.error(`${err}`);
+        p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+        process.exit(1);
+      }
+    } else {
+      const pm = detectPackageManager();
+      const installTarget = fromTar ?? PACKAGE_NAME;
+      const cmd = globalInstallCommand(pm, installTarget);
+      const cmdStr = formatShellCommand(cmd);
+      const spinner = p.spinner();
+      spinner.start(`Installing ${PACKAGE_NAME} globally...`);
+      try {
+        await runShellCommand(cmd);
+        spinner.stop(pc.green("Installed globally."));
+        version = getInstalledVersion() ?? version;
+      } catch (err) {
+        spinner.stop(pc.red("Installation failed."));
+        p.log.error(`${err}`);
+        p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+        process.exit(1);
+      }
+    }
+  } else if (installMode === "local" && !locallyInstalled) {
+    // `--devdep` was requested but only the global binary is present. Run
+    // the local install on top of what's already there — both can coexist.
+    if (!hasPackageJson(projectRoot)) {
+      p.log.error(
+        `No package.json found at ${pc.dim(projectRoot)}.\n` +
+          `  Run ${pc.cyan("npm init -y")} first, then re-run ${pc.cyan("argent init --devdep")}.`
+      );
+      process.exit(1);
+    }
+    if (isYarnPnp(projectRoot)) {
+      p.log.error(
+        `Yarn PnP detected (.pnp.cjs at ${pc.dim(projectRoot)}).\n` +
+          `  The devDep flow needs a real node_modules/.bin directory.`
+      );
+      process.exit(1);
+    }
     const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
-    const cmd = globalInstallCommand(pm, installTarget);
-    const cmdStr = formatShellCommand(cmd);
+    const cmd = localDevInstallCommand(pm, installTarget);
     const spinner = p.spinner();
-    spinner.start(`Installing ${PACKAGE_NAME} globally...`);
+    spinner.start(`Installing ${PACKAGE_NAME} as a devDependency...`);
     try {
       await runShellCommand(cmd);
-      spinner.stop(pc.green("Installed globally."));
+      spinner.stop(pc.green("Installed as devDependency."));
       version = getInstalledVersion() ?? version;
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
-      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
-  } else if (fromTar) {
+  } else if (installMode === "global" && fromTar) {
     // --from flag: reinstall from the specified tarball/path
     const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, fromTar);
@@ -128,7 +249,7 @@ export async function init(args: string[]): Promise<void> {
       p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
       process.exit(1);
     }
-  } else {
+  } else if (installMode === "global") {
     let latest: string | null = null;
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
@@ -192,15 +313,42 @@ export async function init(args: string[]): Promise<void> {
 
   p.log.step(pc.bold("Step 1: MCP Server Configuration"));
 
-  const detected = detectAdapters();
+  if (installMode === "local") {
+    p.log.info(
+      `${pc.dim("Mode:")} Local devDependency — argent is pinned in ${pc.cyan("package.json")}, ` +
+        `MCP configs point at ${pc.cyan("./node_modules/.bin/argent")}.\n` +
+        `  Commit the changed files (package.json, lockfile, MCP configs) so the team shares this setup.`
+    );
+  }
+
+  // In local-install mode, restrict the adapter universe to ones that have
+  // a project-scoped config file. Windsurf/Hermes are global-only and
+  // would force the user to fall back to a global install anyway.
+  const adapterUniverse =
+    installMode === "local"
+      ? ALL_ADAPTERS.filter((a) => a.acceptsLocalInstall !== false)
+      : ALL_ADAPTERS;
+  const detected = detectAdapters().filter((a) => adapterUniverse.includes(a));
   const detectedNames = detected.map((a) => a.name);
+
+  if (installMode === "local") {
+    const dropped = ALL_ADAPTERS.filter((a) => a.acceptsLocalInstall === false);
+    if (dropped.length > 0) {
+      p.log.info(
+        pc.dim(
+          `Skipping ${dropped.map((a) => a.name).join(", ")} ` +
+            `(global-only — no project config file to commit).`
+        )
+      );
+    }
+  }
 
   let selectedAdapters: McpConfigAdapter[];
 
   if (nonInteractive) {
-    selectedAdapters = detected.length > 0 ? detected : ALL_ADAPTERS;
+    selectedAdapters = detected.length > 0 ? detected : adapterUniverse;
   } else {
-    const choices = ALL_ADAPTERS.map((a) => {
+    const choices = adapterUniverse.map((a) => {
       const parts: string[] = [];
       if (detectedNames.includes(a.name)) parts.push("detected");
       const hasProject = a.projectPath(process.cwd()) != null;
@@ -240,7 +388,12 @@ export async function init(args: string[]): Promise<void> {
   let scope: "local" | "global" | "custom";
   let customRoot: string | undefined;
 
-  if (nonInteractive) {
+  if (installMode === "local") {
+    // The committed config has to live next to the package.json so every
+    // teammate's checkout picks it up. The scope prompt would only have one
+    // legitimate answer in this mode, so skip it.
+    scope = "local";
+  } else if (nonInteractive) {
     scope = "local";
   } else {
     p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
@@ -294,13 +447,17 @@ export async function init(args: string[]): Promise<void> {
     }
   }
 
-  const projectRoot = resolveProjectRoot(process.cwd());
   const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
-  const mcpEntry = getMcpEntry();
+  // MCP entry shape depends on install topology AND target adapter (Claude
+  // Code expands `${CLAUDE_PROJECT_DIR}`, the others use a plain relative
+  // path), so it has to be constructed per-adapter inside the loop.
+  const entryMode: McpEntryMode =
+    installMode === "local" ? { kind: "local", projectRoot: effectiveRoot } : { kind: "global" };
   const mcpResults: string[] = [];
 
   for (const adapter of selectedAdapters) {
+    const mcpEntry = getMcpEntry(entryMode, adapter);
     const configPath =
       scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
 
@@ -534,14 +691,28 @@ export async function init(args: string[]): Promise<void> {
 
   // ── Summary ─────────────────────────────────────────────────────────────────
 
+  const scopeLabel = installMode === "local" ? "local devDependency" : scope;
   const summaryLines = [
-    `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scope})`,
+    `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scopeLabel})`,
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
     `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
     `${pc.green("Rules & agents")} ${copyResults.length > 0 ? "copied" : "n/a"}`,
   ];
 
   p.note(summaryLines.join("\n"), "Summary");
+
+  if (installMode === "local") {
+    p.note(
+      [
+        pc.bold("Commit these so the team shares the setup:"),
+        `  • ${pc.cyan("package.json")}  ${pc.dim("(devDependency entry)")}`,
+        `  • ${pc.cyan("package-lock.json / pnpm-lock.yaml / yarn.lock / bun.lock")}  ${pc.dim("(pin)")}`,
+        `  • the per-editor MCP config files written above`,
+        `  • optionally ${pc.cyan(".claude/")}, ${pc.cyan(".cursor/")} etc. for the skills/rules`,
+      ].join("\n"),
+      "Team Share"
+    );
+  }
 
   p.note(
     [

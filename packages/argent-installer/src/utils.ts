@@ -509,3 +509,62 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
       return { bin: "npm", args: ["uninstall", "-g", pkg] };
   }
 }
+
+// ── Local devDependency helpers ──────────────────────────────────────────────
+// Used by the `argent init --devdep` flow which installs argent as a project
+// devDependency instead of globally. The shape of the install command
+// differs per package manager:
+//   npm   →  npm install --save-dev <pkg>
+//   pnpm  →  pnpm add -D <pkg>
+//   yarn  →  yarn add --dev <pkg>
+//   bun   →  bun add -d <pkg>
+//
+// `<pkg>` may be a registry name (default) or a local tarball / file path
+// (the --from flag); every package manager accepts both as a positional.
+
+export function localDevInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
+  switch (pm) {
+    case "yarn":
+      return { bin: "yarn", args: ["add", "--dev", pkg] };
+    case "pnpm":
+      return { bin: "pnpm", args: ["add", "-D", pkg] };
+    case "bun":
+      return { bin: "bun", args: ["add", "-d", pkg] };
+    default:
+      return { bin: "npm", args: ["install", "--save-dev", pkg] };
+  }
+}
+
+/**
+ * True when `<projectRoot>/node_modules/@swmansion/argent/package.json` is
+ * present. Used to short-circuit the install step in the devDep flow if a
+ * teammate already ran `npm install` and only the MCP config is missing.
+ */
+export function isLocallyInstalled(projectRoot: string): boolean {
+  return fs.existsSync(
+    path.join(projectRoot, "node_modules", "@swmansion", "argent", "package.json")
+  );
+}
+
+/**
+ * Detect a Yarn 2+ (berry) workspace running in Plug'n'Play mode by looking
+ * for the PnP runtime files at the project root. Such workspaces have no
+ * literal `node_modules/.bin/argent`, so the devDep flow's MCP command
+ * recipe won't resolve — we surface this up-front instead of writing a
+ * config that silently fails.
+ */
+export function isYarnPnp(projectRoot: string): boolean {
+  return (
+    fs.existsSync(path.join(projectRoot, ".pnp.cjs")) ||
+    fs.existsSync(path.join(projectRoot, ".pnp.loader.mjs"))
+  );
+}
+
+/**
+ * Whether the project root has a package.json. The devDep flow needs one
+ * to record the dependency entry; without it the install command would
+ * either fail or create one in an unexpected directory.
+ */
+export function hasPackageJson(projectRoot: string): boolean {
+  return fs.existsSync(path.join(projectRoot, "package.json"));
+}

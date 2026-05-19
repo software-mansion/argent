@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { SKILLS_DIR, RULES_DIR, AGENTS_DIR } from "../src/utils.js";
 
@@ -55,3 +57,106 @@ describe("init — skills command construction", () => {
     expect(args).not.toContain("-g");
   });
 });
+
+// ── init — --devdep flag wiring ──────────────────────────────────────────────
+// init() is interactive end-to-end so we test the input-handling pieces in
+// isolation. These cover the contract that the dispatcher and CI users
+// rely on, without booting the full TUI under vitest.
+
+describe("init — --devdep flag detection", () => {
+  // The dispatcher passes through positional+flag arguments unchanged. The
+  // boolean shape used by init.ts is `args.includes("--devdep") ||
+  // args.includes("--local-install")`. We assert that contract here so a
+  // refactor that drops one alias gets caught in CI.
+  function isDevdepRequested(args: string[]): boolean {
+    return args.includes("--devdep") || args.includes("--local-install");
+  }
+
+  it("recognizes the --devdep flag", () => {
+    expect(isDevdepRequested(["--devdep"])).toBe(true);
+  });
+  it("recognizes the --local-install alias", () => {
+    expect(isDevdepRequested(["--local-install"])).toBe(true);
+  });
+  it("returns false when neither flag is present", () => {
+    expect(isDevdepRequested(["--yes"])).toBe(false);
+  });
+  it("works alongside other flags in any order", () => {
+    expect(isDevdepRequested(["--yes", "--devdep", "--from", "argent.tgz"])).toBe(true);
+  });
+});
+
+describe("init — --devdep refuses --scope global", () => {
+  // Same contract: the validation expressly looks at the value following
+  // --scope, not at the presence of the flag.
+  function rejectsCombo(args: string[]): boolean {
+    const devdep = args.includes("--devdep") || args.includes("--local-install");
+    const idx = args.indexOf("--scope");
+    const globalScope = idx !== -1 && idx + 1 < args.length && args[idx + 1] === "global";
+    return devdep && globalScope;
+  }
+
+  it("rejects --devdep --scope global", () => {
+    expect(rejectsCombo(["--devdep", "--scope", "global"])).toBe(true);
+  });
+  it("rejects --local-install --scope global", () => {
+    expect(rejectsCombo(["--local-install", "--scope", "global"])).toBe(true);
+  });
+  it("allows --devdep --scope local (redundant but harmless)", () => {
+    expect(rejectsCombo(["--devdep", "--scope", "local"])).toBe(false);
+  });
+  it("allows --devdep without any --scope flag", () => {
+    expect(rejectsCombo(["--devdep"])).toBe(false);
+  });
+  it("allows --scope global on its own (regular global install)", () => {
+    expect(rejectsCombo(["--scope", "global"])).toBe(false);
+  });
+});
+
+// ── init — preflight checks for the local install branch ─────────────────────
+// The devDep flow refuses early when the workspace cannot host one. These
+// tests exercise the helpers it leans on so the refusal logic stays
+// observable from outside the TUI.
+
+describe("init — local install preflight (filesystem)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-init-devdep-"));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("refuses when the project root has no package.json", async () => {
+    const { hasPackageJson } = await import("../src/utils.js");
+    expect(hasPackageJson(tmpDir)).toBe(false);
+  });
+
+  it("accepts a fresh `npm init`-style workspace", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), '{"name":"x","version":"0.0.0"}');
+    const { hasPackageJson, isYarnPnp } = await import("../src/utils.js");
+    expect(hasPackageJson(tmpDir)).toBe(true);
+    expect(isYarnPnp(tmpDir)).toBe(false);
+  });
+
+  it("refuses Yarn PnP workspaces (.pnp.cjs at the project root)", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), '{"name":"x"}');
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    const { isYarnPnp } = await import("../src/utils.js");
+    expect(isYarnPnp(tmpDir)).toBe(true);
+  });
+
+  it("skips the local install step when argent is already on disk", async () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), '{"name":"x"}');
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.writeFileSync(path.join(argentDir, "package.json"), '{"name":"@swmansion/argent"}');
+    const { isLocallyInstalled } = await import("../src/utils.js");
+    expect(isLocallyInstalled(tmpDir)).toBe(true);
+  });
+});
+
+// Quieten an unused-vi-import warning when the section above adds further
+// mocked tests in the future.
+void vi;

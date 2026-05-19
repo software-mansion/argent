@@ -65,6 +65,15 @@ Commands:
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (status / stop / logs)
 
+Init options:
+  --devdep         Install argent as a project devDependency instead of
+                   globally. The MCP config files written by init will point
+                   at \`./node_modules/.bin/argent\`, so committing them lets
+                   the rest of the team share the setup after \`npm install\`.
+                   Alias: --local-install. Forces project-scoped configs.
+  --yes, -y        Non-interactive mode (accept defaults).
+  --from <path>    Install from a local tarball / path instead of the registry.
+
 Options:
   --help, -h     Show this help message
   --version, -v  Show version

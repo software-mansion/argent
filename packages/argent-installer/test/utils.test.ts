@@ -39,13 +39,17 @@ import {
   detectPackageManager,
   globalInstallCommand,
   globalUninstallCommand,
+  localDevInstallCommand,
   formatShellCommand,
   getGlobalSkillLockPath,
   getProjectSkillLockPath,
-  listArgentSkillsInLock,
+  hasPackageJson,
+  isLocallyInstalled,
   isNewerVersion,
   isOnline,
   isSkillsCliAvailable,
+  isYarnPnp,
+  listArgentSkillsInLock,
   listBundledSkills,
   resolveProjectRoot,
   SKILLS_DIR,
@@ -281,6 +285,98 @@ describe("globalUninstallCommand", () => {
       bin: "bun",
       args: ["remove", "-g", "pkg"],
     });
+  });
+});
+
+// ── localDevInstallCommand ───────────────────────────────────────────────────
+
+describe("localDevInstallCommand", () => {
+  it("npm uses --save-dev", () => {
+    expect(localDevInstallCommand("npm", "pkg")).toEqual({
+      bin: "npm",
+      args: ["install", "--save-dev", "pkg"],
+    });
+  });
+  it("pnpm uses -D", () => {
+    expect(localDevInstallCommand("pnpm", "pkg")).toEqual({
+      bin: "pnpm",
+      args: ["add", "-D", "pkg"],
+    });
+  });
+  it("yarn uses --dev (works on both v1 and berry node-modules linker)", () => {
+    expect(localDevInstallCommand("yarn", "pkg")).toEqual({
+      bin: "yarn",
+      args: ["add", "--dev", "pkg"],
+    });
+  });
+  it("bun uses -d", () => {
+    expect(localDevInstallCommand("bun", "pkg")).toEqual({
+      bin: "bun",
+      args: ["add", "-d", "pkg"],
+    });
+  });
+  it("preserves tarball paths with spaces (--from)", () => {
+    const cmd = localDevInstallCommand("npm", "/path/with spaces/argent.tgz");
+    expect(cmd.args[2]).toBe("/path/with spaces/argent.tgz");
+  });
+});
+
+// ── hasPackageJson ──────────────────────────────────────────────────────────
+
+describe("hasPackageJson", () => {
+  it("returns false when the file is missing", () => {
+    expect(hasPackageJson(tmpDir)).toBe(false);
+  });
+  it("returns true when a package.json exists at the root", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "{}");
+    expect(hasPackageJson(tmpDir)).toBe(true);
+  });
+  it("does not walk up — checks the exact directory provided", () => {
+    fs.writeFileSync(path.join(tmpDir, "package.json"), "{}");
+    const child = path.join(tmpDir, "src");
+    fs.mkdirSync(child, { recursive: true });
+    expect(hasPackageJson(child)).toBe(false);
+  });
+});
+
+// ── isLocallyInstalled ──────────────────────────────────────────────────────
+
+describe("isLocallyInstalled", () => {
+  it("returns false when node_modules/@swmansion/argent does not exist", () => {
+    expect(isLocallyInstalled(tmpDir)).toBe(false);
+  });
+  it("returns true when the package's package.json is on disk", () => {
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    fs.writeFileSync(path.join(argentDir, "package.json"), '{"name":"@swmansion/argent"}');
+    expect(isLocallyInstalled(tmpDir)).toBe(true);
+  });
+  it("returns false when the directory exists but the package.json does not", () => {
+    const argentDir = path.join(tmpDir, "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(argentDir, { recursive: true });
+    expect(isLocallyInstalled(tmpDir)).toBe(false);
+  });
+});
+
+// ── isYarnPnp ────────────────────────────────────────────────────────────────
+
+describe("isYarnPnp", () => {
+  it("returns false when neither .pnp.cjs nor .pnp.loader.mjs exist", () => {
+    expect(isYarnPnp(tmpDir)).toBe(false);
+  });
+  it("returns true when .pnp.cjs exists at the project root", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    expect(isYarnPnp(tmpDir)).toBe(true);
+  });
+  it("returns true when .pnp.loader.mjs exists (Yarn 4+ ESM loader)", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.loader.mjs"), "");
+    expect(isYarnPnp(tmpDir)).toBe(true);
+  });
+  it("does not walk up — checks the exact directory provided", () => {
+    fs.writeFileSync(path.join(tmpDir, ".pnp.cjs"), "");
+    const child = path.join(tmpDir, "src");
+    fs.mkdirSync(child, { recursive: true });
+    expect(isYarnPnp(child)).toBe(false);
   });
 });
 
