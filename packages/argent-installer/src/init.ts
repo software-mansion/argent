@@ -11,9 +11,6 @@ import {
   type McpConfigAdapter,
 } from "./mcp-configs.js";
 import {
-  SKILLS_DIR,
-  RULES_DIR,
-  AGENTS_DIR,
   getInstalledVersion,
   getLatestVersion,
   isGloballyInstalled,
@@ -23,6 +20,7 @@ import {
   detectPackageManager,
   globalInstallCommand,
   formatShellCommand,
+  resolveProjectBundledDir,
   resolveProjectRoot,
   type ShellCommand,
 } from "./utils.js";
@@ -460,27 +458,39 @@ export async function init(args: string[]): Promise<void> {
     skillsMethod = choice as SkillsMethod;
   }
 
+  // Prefer the project's devDep copy of the bundled assets when it
+  // exists. When init runs via `npx @swmansion/argent`, the module-
+  // relative SKILLS_DIR resolves to ~/.npm/_npx/<hash>/... — passing
+  // that to `npx skills add` makes the skills CLI record the npx
+  // hash in skills-lock.json, which is invalid the moment that
+  // cache is evicted (and broken from the start for any teammate
+  // who picks up a committed copy). See resolveProjectBundledDir.
+  const projectRootForBundles = resolveProjectRoot(process.cwd());
+  const skillsBundle = resolveProjectBundledDir(projectRootForBundles, "skills");
+  const rulesBundle = resolveProjectBundledDir(projectRootForBundles, "rules");
+  const agentsBundle = resolveProjectBundledDir(projectRootForBundles, "agents");
+
   if (skillsMethod === "manual") {
     p.note(
       [
         `Skills are bundled at:`,
-        `  ${pc.cyan(SKILLS_DIR)}`,
+        `  ${pc.cyan(skillsBundle)}`,
         ``,
         `To install manually, copy them to your editor's skills directory:`,
         ``,
         `  ${pc.dim("# Claude Code")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
+        `  cp -r ${skillsBundle}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
         ``,
         `  ${pc.dim("# Cursor")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
+        `  cp -r ${skillsBundle}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
         ``,
         `  ${pc.dim("# Or use npx skills directly:")}`,
-        `  npx skills add ${SKILLS_DIR}`,
+        `  npx skills add ${skillsBundle}`,
       ].join("\n"),
       "Manual Skills Installation"
     );
   } else {
-    const skillsArgs = ["skills", "add", SKILLS_DIR];
+    const skillsArgs = ["skills", "add", skillsBundle];
 
     if (scope === "global") {
       skillsArgs.push("-g");
@@ -522,8 +532,8 @@ export async function init(args: string[]): Promise<void> {
     selectedAdapters,
     effectiveRoot,
     normalizedScope,
-    RULES_DIR,
-    AGENTS_DIR
+    rulesBundle,
+    agentsBundle
   );
 
   if (copyResults.length > 0) {

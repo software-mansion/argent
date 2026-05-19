@@ -47,6 +47,7 @@ import {
   isOnline,
   isSkillsCliAvailable,
   listBundledSkills,
+  resolveProjectBundledDir,
   resolveProjectRoot,
   SKILLS_DIR,
   RULES_DIR,
@@ -313,6 +314,58 @@ describe("bundled paths", () => {
 
   it("AGENTS_DIR is a string ending with agents", () => {
     expect(AGENTS_DIR).toMatch(/agents$/);
+  });
+});
+
+// ── resolveProjectBundledDir ────────────────────────────────────────────────
+// Prefer the project's devDep copy over the running module's bundled
+// path. When init runs via `npx @swmansion/argent` the module-relative
+// SKILLS_DIR points at ~/.npm/_npx/<hash>/...; passing that to `npx
+// skills add` leaks the npx hash into skills-lock.json, which becomes
+// useless the moment the cache is evicted.
+
+describe("resolveProjectBundledDir", () => {
+  it("falls back to the module-relative path when no local devDep exists", () => {
+    expect(resolveProjectBundledDir(tmpDir, "skills")).toBe(SKILLS_DIR);
+    expect(resolveProjectBundledDir(tmpDir, "rules")).toBe(RULES_DIR);
+    expect(resolveProjectBundledDir(tmpDir, "agents")).toBe(AGENTS_DIR);
+  });
+
+  it("returns the local devDep skills dir when present", () => {
+    const localSkills = path.join(tmpDir, "node_modules", "@swmansion", "argent", "skills");
+    fs.mkdirSync(localSkills, { recursive: true });
+    expect(resolveProjectBundledDir(tmpDir, "skills")).toBe(localSkills);
+  });
+
+  it("returns the local devDep rules dir when present", () => {
+    const localRules = path.join(tmpDir, "node_modules", "@swmansion", "argent", "rules");
+    fs.mkdirSync(localRules, { recursive: true });
+    expect(resolveProjectBundledDir(tmpDir, "rules")).toBe(localRules);
+  });
+
+  it("returns the local devDep agents dir when present", () => {
+    const localAgents = path.join(tmpDir, "node_modules", "@swmansion", "argent", "agents");
+    fs.mkdirSync(localAgents, { recursive: true });
+    expect(resolveProjectBundledDir(tmpDir, "agents")).toBe(localAgents);
+  });
+
+  it("falls back when only one of the three bundles exists locally", () => {
+    // The team-share workflow expects all three to be present together
+    // (they ship from a single package), but a partially-restored
+    // node_modules shouldn't break the others' resolution.
+    fs.mkdirSync(path.join(tmpDir, "node_modules", "@swmansion", "argent", "skills"), {
+      recursive: true,
+    });
+    expect(resolveProjectBundledDir(tmpDir, "skills")).toContain("node_modules");
+    expect(resolveProjectBundledDir(tmpDir, "rules")).toBe(RULES_DIR);
+    expect(resolveProjectBundledDir(tmpDir, "agents")).toBe(AGENTS_DIR);
+  });
+
+  it("does NOT match a regular file at the expected path (defensive)", () => {
+    const localSkills = path.join(tmpDir, "node_modules", "@swmansion", "argent", "skills");
+    fs.mkdirSync(path.dirname(localSkills), { recursive: true });
+    fs.writeFileSync(localSkills, "this is a file, not a directory");
+    expect(resolveProjectBundledDir(tmpDir, "skills")).toBe(SKILLS_DIR);
   });
 });
 

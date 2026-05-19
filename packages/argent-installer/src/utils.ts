@@ -50,6 +50,43 @@ export const SKILLS_DIR = resolveBundledDir("skills");
 export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
 
+/**
+ * Prefer the project's locally-installed devDep copy of argent's bundled
+ * assets over the running module's. Falls back to the module-relative
+ * default when no local copy exists.
+ *
+ * Why this exists: when init runs via `npx @swmansion/argent`, the
+ * running module lives in `~/.npm/_npx/<hash>/node_modules/@swmansion/
+ * argent`. Passing the npx path to downstream tooling (e.g. `npx skills
+ * add <dir>`) causes that tooling to record the npx hash into
+ * skills-lock.json:
+ *
+ *   "source": "/Users/me/.npm/_npx/abc123/node_modules/@swmansion/argent/skills"
+ *
+ * The npx cache is per-user, transient, and gets evicted over time.
+ * Once committed to git, that path is broken for every teammate and
+ * eventually for the original author too. Reading from the project's
+ * own node_modules instead gives a stable, version-pinned path that
+ * matches what `npm install` provisions for every checkout.
+ *
+ * Returns the local devDep path iff `<projectRoot>/node_modules/
+ * @swmansion/argent/<kind>` exists as a directory. We don't gate this
+ * on whether argent is declared as a dependency: the running init is
+ * itself argent code, so finding bundled assets at the project-local
+ * path is the strongest possible signal that they should be used.
+ */
+export function resolveProjectBundledDir(
+  projectRoot: string,
+  kind: "skills" | "rules" | "agents"
+): string {
+  const candidate = path.join(projectRoot, "node_modules", "@swmansion", "argent", kind);
+  return dirExists(candidate) ? candidate : moduleBundledDirFor(kind);
+}
+
+function moduleBundledDirFor(kind: "skills" | "rules" | "agents"): string {
+  return kind === "skills" ? SKILLS_DIR : kind === "rules" ? RULES_DIR : AGENTS_DIR;
+}
+
 // Returns the names of the skills that ship with this argent install — each
 // subdirectory of SKILLS_DIR that contains a SKILL.md. Used to detect which
 // skills on the user's machine are argent-owned so we don't touch anything
