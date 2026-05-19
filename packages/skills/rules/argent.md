@@ -36,6 +36,16 @@ If `describe` fails, **read the exact error before reacting**, follow the recove
 Before starting to interact with the app, read the `argent-device-interact` skill first.
 </tapping_rule>
 
+<device_selection_rule>
+Before booting, running, or interacting with any app, call `list-devices` first - prefer running devices.
+
+Decision order:
+
+1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`.
+3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
+   </device_selection_rule>
+
 <skill_reading_rule>
 <important>Always read relevant skills for guidance before executing argent-mcp tool - read skill_routing reference</important>
 </skill_reading_rule>
