@@ -18,11 +18,6 @@ const execFileAsync = promisify(execFile);
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
 // Max consecutive init failures per service instance before it stops retrying.
-// Genuinely transient failures (CoreSimulatorService contention, mid-boot
-// races) resolve in the first 1–2 attempts; anything beyond that almost always
-// needs human action (kill CSS, reboot the simulator). The recovery path is
-// shutting the simulator down — it leaves the booted set, the watcher disposes
-// the service, and a fresh boot creates a new instance with a reset counter.
 export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
 
 export interface NativeDevtoolsInitFailure {
@@ -51,6 +46,7 @@ export function buildInitFailedResult(
   };
 }
 
+// Overloads for proper return-type inference.
 export type NativeDevtoolsPrecheckBlock =
   | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string };
@@ -88,8 +84,7 @@ export async function precheckNativeDevtools(
     return {
       status: "restart_required",
       message:
-        "Native devtools are not injected into the running app. " +
-        "Call restart-app then retry.",
+        "Native devtools are not injected into the running app. " + "Call restart-app then retry.",
     };
   }
 
@@ -269,15 +264,7 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   if (updated !== existing) {
     await execFileAsync(
       "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "DYLD_INSERT_LIBRARIES",
-        updated,
-      ],
+      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     );
   }
@@ -286,15 +273,7 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   // ensures correctness after tool-server restarts.
   await execFileAsync(
     "xcrun",
-    [
-      "simctl",
-      "spawn",
-      udid,
-      "launchctl",
-      "setenv",
-      "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
-      socketPath,
-    ],
+    ["simctl", "spawn", udid, "launchctl", "setenv", "NATIVE_DEVTOOLS_IOS_CDP_SOCKET", socketPath],
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   );
 
@@ -356,44 +335,41 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    // Concurrency guard: on a degraded simulator a single ensureEnv attempt
-    // can exceed the watcher's 10s poll interval (each simctl spawn is fenced
-    // at SIMCTL_SPAWN_TIMEOUT_MS and ensureEnv runs them serially). Without
+    // Concurrency guard: a single ensureEnv attempt
+    // can exceed the watcher's 10s poll interval. Without
     // collapsing overlapping callers onto one in-flight promise, each poll
-    // would spawn its own attempt and inflate `attempts` past
-    // MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS.
+    // would spawn its own attempt and inflate `attempts`.
+    const noteInitFailure = (err: unknown): void => {
+      const lastError = err instanceof Error ? err.message : String(err);
+      const attempts = (initFailure?.attempts ?? 0) + 1;
+      const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
+      initFailure = { attempts, lastError, givenUp };
+
+      const message = givenUp
+        ? `[native-devtools] giving up on ${udid} after ${attempts} attempts: ${lastError}\n`
+        : `[native-devtools] init attempt ${attempts}/${MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS} failed for ${udid}: ${lastError}\n`;
+      process.stderr.write(message);
+    };
+
     const ensureEnvReady = (): Promise<void> => {
-      if (envSetup) return Promise.resolve();
-      if (initFailure?.givenUp) return Promise.resolve();
+      if (envSetup || initFailure?.givenUp) return Promise.resolve();
       if (inFlight) return inFlight;
 
-      const attempt = (async () => {
-        try {
-          await ensureEnv(udid, socketPath);
+      inFlight = Promise.resolve()
+        .then(() => ensureEnv(udid, socketPath))
+        .then(() => {
           envSetup = true;
           initFailure = null;
-        } catch (err) {
-          const lastError = err instanceof Error ? err.message : String(err);
-          const attempts = (initFailure?.attempts ?? 0) + 1;
-          const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
-          initFailure = { attempts, lastError, givenUp };
-          if (givenUp) {
-            process.stderr.write(
-              `[native-devtools] giving up on ${udid} after ${attempts} attempts: ${lastError}\n`
-            );
-          } else {
-            process.stderr.write(
-              `[native-devtools] init attempt ${attempts}/${MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS} failed for ${udid}: ${lastError}\n`
-            );
-          }
+        })
+        .catch((err) => {
+          noteInitFailure(err);
           throw err;
-        } finally {
+        })
+        .finally(() => {
           inFlight = null;
-        }
-      })();
+        });
 
-      inFlight = attempt;
-      return attempt;
+      return inFlight;
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {

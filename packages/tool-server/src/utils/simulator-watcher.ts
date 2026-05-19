@@ -28,11 +28,12 @@ async function getBootedUdids(): Promise<Set<string>> {
 async function initUdid(
   registry: Registry,
   udid: string,
-  apis: Map<string, NativeDevtoolsApi>
+  trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   try {
-    apis.set(udid, await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options));
+    const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+    trackedServices.set(udid, service);
   } catch {
     // Factory tolerates env-init failure; a throw here is structural.
   }
@@ -42,9 +43,9 @@ export function startSimulatorWatcher(registry: Registry): {
   stop: () => void;
   ready: Promise<void>;
 } {
-  const apis = new Map<string, NativeDevtoolsApi>();
+  const trackedServices = new Map<string, NativeDevtoolsApi>();
 
-  async function poll(awaitInit: boolean): Promise<void> {
+  async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
     let booted: Set<string>;
     try {
       booted = await getBootedUdids();
@@ -53,21 +54,25 @@ export function startSimulatorWatcher(registry: Registry): {
       return;
     }
 
-    const newUdids = [...booted].filter((u) => !apis.has(u));
-    const work: Promise<unknown>[] = newUdids.map((udid) => initUdid(registry, udid, apis));
+    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
+    const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
+      initUdid(registry, udid, trackedServices)
+    );
 
-    for (const [udid, api] of apis) {
+    for (const [udid, service] of trackedServices) {
       if (!booted.has(udid)) continue;
-      const failure = api.getInitFailure();
-      if (failure && !failure.givenUp) work.push(api.ensureEnvReady().catch(() => {}));
+      const failure = service.getInitFailure();
+      if (failure && !failure.givenUp) {
+        pendingAttempts.push(service.ensureEnvReady().catch(() => {}));
+      }
     }
 
-    if (awaitInit) await Promise.all(work);
-    else work.forEach((p) => p.catch(() => {}));
+    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
+    else pendingAttempts.forEach((p) => p.catch(() => {}));
 
-    for (const udid of [...apis.keys()]) {
+    for (const udid of [...trackedServices.keys()]) {
       if (!booted.has(udid)) {
-        apis.delete(udid);
+        trackedServices.delete(udid);
         registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
       }
     }
