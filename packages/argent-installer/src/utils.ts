@@ -566,6 +566,31 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
 // `<pkg>` may be a registry name (default) or a local tarball / file path
 // (the --from flag); every package manager accepts both as a positional.
 
+/**
+ * Counterpart to {@link globalUninstallCommand} for the local devDep
+ * topology. Removes argent from the project's package.json AND uninstalls
+ * the files under node_modules. The shape varies per package manager:
+ *   npm   →  npm uninstall <pkg>
+ *   pnpm  →  pnpm remove <pkg>
+ *   yarn  →  yarn remove <pkg>
+ *   bun   →  bun remove <pkg>
+ *
+ * All four also update the lockfile in-place, so a follow-up commit
+ * brings the team back in sync.
+ */
+export function localDevUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
+  switch (pm) {
+    case "yarn":
+      return { bin: "yarn", args: ["remove", pkg] };
+    case "pnpm":
+      return { bin: "pnpm", args: ["remove", pkg] };
+    case "bun":
+      return { bin: "bun", args: ["remove", pkg] };
+    default:
+      return { bin: "npm", args: ["uninstall", pkg] };
+  }
+}
+
 export function localDevInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":

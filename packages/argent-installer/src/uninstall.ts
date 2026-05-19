@@ -14,6 +14,9 @@ import {
   detectPackageManager,
   formatShellCommand,
   globalUninstallCommand,
+  isGloballyInstalled,
+  isLocallyInstalled,
+  localDevUninstallCommand,
   resolveProjectRoot,
   RULES_DIR,
   SKILLS_DIR,
@@ -439,36 +442,99 @@ export async function uninstall(args: string[]): Promise<void> {
     p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
   }
 
-  // ── Uninstall the global package ────────────────────────────────────────────
+  // ── Uninstall the package itself ────────────────────────────────────────────
+  // Argent can live in two topologies independently — globally on PATH
+  // and/or as a project devDep — and the team-share workflow makes the
+  // second one common. We probe both and offer them as separate prompts
+  // so the user only sees questions that are actually actionable.
 
-  let shouldUninstallPackage = nonInteractive;
+  const globallyInstalled = isGloballyInstalled();
+  const locallyInstalled = isLocallyInstalled(projectRoot);
 
-  if (!nonInteractive) {
-    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+  // Track whether we've killed the tool-server yet so we only do it once
+  // even if the user uninstalls both topologies in a single run.
+  let toolServerKilled = false;
+  async function ensureToolServerKilled(): Promise<void> {
+    if (toolServerKilled) return;
+    await killToolServer();
+    toolServerKilled = true;
+  }
 
-    const uninstallPkg = await p.confirm({
-      message: `Uninstall the global ${PACKAGE_NAME} package?`,
-      initialValue: false,
-    });
+  if (globallyInstalled) {
+    let shouldUninstallGlobal = nonInteractive;
 
-    if (!p.isCancel(uninstallPkg)) {
-      shouldUninstallPackage = uninstallPkg as boolean;
+    if (!nonInteractive) {
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+
+      const uninstallPkg = await p.confirm({
+        message: `Uninstall the global ${PACKAGE_NAME} package?`,
+        initialValue: false,
+      });
+
+      if (!p.isCancel(uninstallPkg)) {
+        shouldUninstallGlobal = uninstallPkg as boolean;
+      }
+    }
+
+    if (shouldUninstallGlobal) {
+      // Global uninstall doesn't depend on the project's lockfile;
+      // detectPackageManager() with no argument preserves the old
+      // behavior (user-agent fallback to npm).
+      const pm = detectPackageManager();
+      const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
+      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
+
+      await ensureToolServerKilled();
+
+      try {
+        execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
+        p.log.success("Global package uninstalled.");
+      } catch (err) {
+        p.log.error(`Global uninstall failed: ${err}`);
+      }
     }
   }
 
-  if (shouldUninstallPackage) {
-    const pm = detectPackageManager();
-    const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
-    p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
+  if (locallyInstalled) {
+    let shouldUninstallLocal = nonInteractive;
 
-    await killToolServer();
+    if (!nonInteractive) {
+      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
-    try {
-      execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
-      p.log.success("Package uninstalled.");
-    } catch (err) {
-      p.log.error(`Uninstall failed: ${err}`);
+      const uninstallPkg = await p.confirm({
+        message:
+          `Argent is also installed as a devDependency at ${pc.dim(projectRoot)}. ` +
+          `Remove it from package.json?`,
+        initialValue: false,
+      });
+
+      if (!p.isCancel(uninstallPkg)) {
+        shouldUninstallLocal = uninstallPkg as boolean;
+      }
     }
+
+    if (shouldUninstallLocal) {
+      // For the local uninstall we MUST detect the PM from the
+      // project's lockfile — under `npx`, user-agent is npm regardless
+      // of what manages the project (the same trap the install side
+      // hit with yarn workspaces).
+      const pm = detectPackageManager(projectRoot);
+      const cmd = localDevUninstallCommand(pm, PACKAGE_NAME);
+      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))} (in ${pc.dim(projectRoot)})`);
+
+      await ensureToolServerKilled();
+
+      try {
+        execFileSync(cmd.bin, cmd.args, { stdio: "inherit", cwd: projectRoot });
+        p.log.success(`Local devDependency uninstalled via ${pm}.`);
+      } catch (err) {
+        p.log.error(`Local uninstall failed: ${err}`);
+      }
+    }
+  }
+
+  if (!globallyInstalled && !locallyInstalled) {
+    p.log.info(pc.dim("No argent install detected on disk — only configuration was removed."));
   }
 
   p.outro(pc.green("argent has been removed."));

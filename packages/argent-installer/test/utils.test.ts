@@ -359,6 +359,43 @@ describe("globalUninstallCommand", () => {
   });
 });
 
+// ── localDevUninstallCommand ─────────────────────────────────────────────────
+// Counterpart to globalUninstallCommand: argent uninstall offers to
+// remove the local devDep when one is present, and the shape varies per
+// package manager. Same matrix as localDevInstallCommand, dropping any
+// install-only flags.
+
+describe("localDevUninstallCommand", () => {
+  it("npm uses uninstall (no -g)", async () => {
+    const { localDevUninstallCommand } = await import("../src/utils.js");
+    expect(localDevUninstallCommand("npm", "@swmansion/argent")).toEqual({
+      bin: "npm",
+      args: ["uninstall", "@swmansion/argent"],
+    });
+  });
+  it("pnpm uses remove (no -g)", async () => {
+    const { localDevUninstallCommand } = await import("../src/utils.js");
+    expect(localDevUninstallCommand("pnpm", "@swmansion/argent")).toEqual({
+      bin: "pnpm",
+      args: ["remove", "@swmansion/argent"],
+    });
+  });
+  it("yarn uses remove (no 'global' prefix)", async () => {
+    const { localDevUninstallCommand } = await import("../src/utils.js");
+    expect(localDevUninstallCommand("yarn", "@swmansion/argent")).toEqual({
+      bin: "yarn",
+      args: ["remove", "@swmansion/argent"],
+    });
+  });
+  it("bun uses remove (no -g)", async () => {
+    const { localDevUninstallCommand } = await import("../src/utils.js");
+    expect(localDevUninstallCommand("bun", "@swmansion/argent")).toEqual({
+      bin: "bun",
+      args: ["remove", "@swmansion/argent"],
+    });
+  });
+});
+
 // ── localDevInstallCommand ───────────────────────────────────────────────────
 
 describe("localDevInstallCommand", () => {
