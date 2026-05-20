@@ -35,9 +35,7 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
 }
 
 export function adaptAXDescribeToDescribeResult(response: AXDescribeResponse): DescribeNode {
-  let children = response.elements
-    .map(adaptAXElement)
-    .filter((n): n is DescribeNode => n !== null);
+  let children = response.elements.map(adaptAXElement).filter((n): n is DescribeNode => n !== null);
 
   // Springboard-hosted overlays (e.g. AKAppleIDAuthentication sheets) can be
   // invisible to the `primaryApp` AX walk while still being reachable from
