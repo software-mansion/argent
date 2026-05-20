@@ -19,10 +19,12 @@ describe("screenshot tool", () => {
       })
     );
 
-    const params = screenshotTool.zodSchema!.parse({
+    const params = {
       udid: "ABC",
       includeImageInContext: false,
-    });
+    };
+    screenshotTool.zodSchema!.parse(params);
+
     const result = await screenshotTool.execute(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       params,
