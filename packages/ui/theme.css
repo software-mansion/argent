@@ -128,7 +128,7 @@
 
   /* ── Component sizes ─────────────────────────────────────────────────── */
   --card-width: 232px;
-  --vcard-body-max-h: 320px;
+  --vcard-body-max-h: none; /* JS sets a per-card max-height only when the column overflows the viewport; otherwise the body fits its variant count. */
   --thumb-size: 96px;
   --pin-size: 20px;
   --dot-size: 8px; /* status dot, device-picker dot */
