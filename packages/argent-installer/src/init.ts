@@ -164,12 +164,7 @@ export async function init(args: string[]): Promise<void> {
       // noise.
       if (installChoice === "local") {
         p.log.warn(
-          `Only Claude Code formally documents project-relative MCP command paths ` +
-            `(via ${pc.cyan("${CLAUDE_PROJECT_DIR}")}). For Cursor, VS Code, Zed, ` +
-            `Codex, opencode, and Gemini the recipe relies on the MCP client ` +
-            `launching the server from the project root — supported in practice ` +
-            `but not contractually guaranteed. If a teammate's editor fails to ` +
-            `start argent, verify its working directory first.`
+          `The localy set up argent will only work if your agent runs from the root directory of your project. If a teammate's editor fails to start argent, verify if he is in the root directory first.`
         );
 
         p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
