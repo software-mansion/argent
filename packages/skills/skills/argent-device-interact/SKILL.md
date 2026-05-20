@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping, swiping, typing, launching apps, taking screenshots, comparing screenshots, running UI or visual regression tests, using screenshot-diff, or verifying visible UI code changes.
+description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, comparing screenshots, running UI or visual regression tests, using screenshot-diff, or verifying visible UI code changes.
 ---
 
 ## Unified tool surface
@@ -208,52 +208,7 @@ Use full-resolution screenshots only when saving baseline/current PNG files for 
 { "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
 ```
 
-### screenshot-diff — Supporting visual evidence
-
-Use `screenshot-diff` as supporting evidence for visual QA, UI regression, and visible behavior checks. It highlights pixel-visible change or stability; it does not replace visual inspection, accessibility/tree state, frame/attribute checks, logs, network evidence, or app behavior. Do not use it for tap-coordinate discovery.
-
-Use it when pixel comparison can answer the verification question:
-
-- Required for explicit "UI regression test", "visual regression test", "screenshot diff", "compare screenshots", or "before/after visual comparison" requests, unless stable comparable screenshots cannot be produced.
-- Good fit when the affected screen has stable before/after states and the expected result is pixel-visible: layout, position, size, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
-- Good fit when the risk is unintended visual regression outside the exact element you changed.
-- Poor fit when the result is better verified structurally: state changes, navigation existence, accessibility tree contents, console/network behavior, or unit tests.
-- Poor fit when dynamic content, unpausable animation, timestamps, ads, random data, or missing baseline/current screenshots would make the comparison noisy or meaningless.
-
-When you choose to use it, capture the stable baseline before the relevant interaction or before editing whenever feasible, then compare it to the post-change or post-interaction screen after the app reloads, rebuilds, or reaches the state under test.
-
-Choose parameters by source. Provide exactly one input for the baseline side and exactly one input for the current side:
-
-- Common UI regression flow: saved baseline plus live current → `baselinePath`, `captureCurrent: true`, `udid`, `outputDir`.
-- Both screenshots already saved → `baselinePath`, `currentPath`, `outputDir`.
-- Rare fixture flow: live baseline plus saved current → `captureBaseline: true`, `currentPath`, `udid`, `outputDir`.
-- Do not combine `captureBaseline: true` with `captureCurrent: true`, or provide both a path and live capture flag for the same side.
-
-Preferred deterministic flow:
-
-1. Navigate to the known-good state.
-2. Capture a baseline PNG with `screenshot` using `scale: 1.0` and `includeImageInContext: false`; keep the returned `path`.
-3. Perform the interaction, apply the code change, reload, rebuild, or navigate to the state under test.
-4. Call `screenshot-diff` with the saved `baselinePath`, `captureCurrent: true`, `udid`, and `outputDir`.
-
-```json
-{
-  "baselinePath": "/tmp/baseline.png",
-  "captureCurrent": true,
-  "udid": "<UDID>",
-  "outputDir": "/tmp/argent-diff"
-}
-```
-
-If both images are already saved, use file paths for both sides:
-
-```json
-{
-  "baselinePath": "/tmp/baseline.png",
-  "currentPath": "/tmp/current.png",
-  "outputDir": "/tmp/argent-diff"
-}
-```
+For visual regression checks, before/after screenshot comparisons, and detailed `screenshot-diff` parameter guidance, use the `argent-screenshot-diff` skill. Keep this skill focused on device interaction mechanics and screenshot capture.
 
 ### Troubleshooting
 

@@ -37,9 +37,7 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   lines.push(
     `- changed_areas: shown=${formatInteger(shownRegions.length)} total=${formatInteger(result.regions.length)} omitted=${formatInteger(Math.max(0, result.regions.length - shownRegions.length))}`
   );
-  if (coordinateSpace) {
-    lines.push(`- coordinates: normalized [0,1] (source=${formatSize(coordinateSpace.imageSize)})`);
-  }
+
   if (result.diffPath || result.contextDiffPath) {
     lines.push(`- diff_images:`);
     if (result.diffPath) lines.push(`  - diff: ${result.diffPath}`);
@@ -106,9 +104,9 @@ function formatSize(size: { width: number; height: number }): string {
 function describeMismatch(result: ScreenshotDiffSummaryInput): string {
   if (result.differentPixels === 0) return "no pixel change";
   const severity =
-    result.mismatchPercentage < 1
+    result.mismatchPercentage < 5
       ? "minor"
-      : result.mismatchPercentage < 5
+      : result.mismatchPercentage < 10
         ? "moderate"
         : result.mismatchPercentage < 20
           ? "significant"

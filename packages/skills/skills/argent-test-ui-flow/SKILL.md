@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, navigation, manual QA steps, visible UI changes, visual behavior, visual regression checks, screenshot-diff checks, or before/after comparisons.
+description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, visual behavior, visual regression checks, screenshot-diff checks, or before/after comparisons.
 ---
 
 ## Platform-agnostic
@@ -24,14 +24,7 @@ For implementation tasks that modify visible UI, this workflow can also serve as
 
 ### QA preflight
 
-Before running a QA flow, classify each expected result and choose the evidence to collect:
-
-- **Visual**: pixel-visible layout, position, size, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering. Use screenshots, visual inspection, frame/attribute checks, and `screenshot-diff` when stable comparable images are available.
-- **Structural**: navigation state, element existence, accessibility labels/values, selection state, hierarchy, or route changes. Use `describe`, `native-describe-screen`, `debugger-component-tree`, source/frame inspection, or app state checks.
-- **Runtime/log/network**: console errors, API calls, persistence, side effects, timing, or data flow. Use logs, network tools, debugger evaluation, or targeted tests.
-- **Mixed**: any assertion that combines visual behavior with structural, runtime, log, or network state. Collect evidence for each relevant class.
-
-Treat `screenshot-diff` as supporting visual evidence, not the sole oracle. For exact use cases, parameter choices, and full-resolution screenshot guidance, follow `argent-device-interact` §7. If the user explicitly asks for screenshot diffing or before/after visual comparison, use it unless no stable comparable screenshots can be produced.
+Before running a QA flow, classify each expected result as visual, structural, runtime/log/network, or mixed. For detailed evidence selection, read `references/qa-evidence.md`. For exact screenshot-diff use cases, parameter choices, and full-resolution screenshot guidance, use the `argent-screenshot-diff` skill.
 
 1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
@@ -119,11 +112,12 @@ Steps:
 
 ## Related Skills
 
-| Skill                              | When to use                                             |
-| ---------------------------------- | ------------------------------------------------------- |
-| `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS + Android) |
-| `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                 |
-| `argent-android-emulator-setup`    | Booting and connecting an Android emulator              |
-| `argent-react-native-app-workflow` | Starting the app, Metro, build issues                   |
-| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                |
-| `argent-create-flow`               | Record a test sequence as a replayable flow             |
+| Skill                              | When to use                                              |
+| ---------------------------------- | -------------------------------------------------------- |
+| `argent-device-interact`           | Tool usage for tapping, swiping, typing (iOS + Android)  |
+| `argent-screenshot-diff`           | Visual regression and before/after screenshot comparison |
+| `argent-ios-simulator-setup`       | Booting and connecting an iOS simulator                  |
+| `argent-android-emulator-setup`    | Booting and connecting an Android emulator               |
+| `argent-react-native-app-workflow` | Starting the app, Metro, build issues                    |
+| `argent-metro-debugger`            | Breakpoints, console logs, JS evaluation                 |
+| `argent-create-flow`               | Record a test sequence as a replayable flow              |
