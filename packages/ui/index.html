@@ -514,7 +514,10 @@
         padding: var(--pad-cmt);
         font: inherit;
         font-size: var(--fs-label);
-        resize: vertical;
+        /* No manual resize: card height is column-packed in layoutCards.
+           Dragging this resize handle used to grow the card and force
+           neighbouring cards in the same column to compress to make room. */
+        resize: none;
         min-height: var(--cmt-min-h);
       }
 
@@ -2193,13 +2196,27 @@
           let rec = vp.cards.get(p.id);
           const sig = cardSig(p);
           if (!rec) {
-            rec = { el: buildCard(p), sig, pinned: false, pos: null, vel: { x: 0, y: 0 } };
+            rec = {
+              el: buildCard(p),
+              sig,
+              pinned: false,
+              pos: null,
+              vel: { x: 0, y: 0 },
+              naturalBodyH: null,
+              chromeH: null,
+            };
             vp.cards.set(p.id, rec);
           } else if (rec.sig !== sig && !vp.dragging && !vp.cardDragging && !cardHasFocus(rec.el)) {
             const fresh = buildCard(p);
             rec.el.replaceWith(fresh);
             rec.el = fresh;
             rec.sig = sig;
+            // Card structure changed (variants added/removed/swapped) — drop
+            // the cached natural-height so layoutCards re-measures the new
+            // body once. Without this, a freshly-added variant doesn't
+            // expand the card.
+            rec.naturalBodyH = null;
+            rec.chromeH = null;
           }
           if (rec.el.parentElement !== cardsEl) cardsEl.appendChild(rec.el);
           refreshCardState(rec.el, p);
@@ -2259,37 +2276,44 @@
           const rec = vp.cards.get(p.id);
           if (rec && !rec.gone) vis.push(rec);
         }
-        // Phase 1: let each card render at its NATURAL height so a card with
-        // two variants is short and a card with five variants is tall.
-        // Clearing the inline max-height first lets a previously-compressed
-        // card grow back when there's room — per-frame layout is the single
-        // source of truth, no manual-resize / sticky cap.
-        for (const rec of vis) {
-          const body = rec.el.querySelector(".vcard-body");
-          if (body) body.style.maxHeight = "";
-        }
-        const COL_PAD = 8; // top + bottom margin around the column stack
-        const GAP = 12; // between stacked cards
+        // Card sizing — design constraints driving the implementation:
+        //   1. Each card fits its variant count when there's room (no fixed
+        //      --vcard-body-max-h cap).
+        //   2. If a column's natural stack overflows the viewport, compress
+        //      that column proportionally and engage internal scroll on the
+        //      cards that had to shrink.
+        //   3. layoutCards runs every describe poll. The previous version
+        //      cleared body.style.maxHeight to remeasure, then re-set it —
+        //      that mangles scrollTop and flickers the scrollbar. So:
+        //        • body.scrollHeight reflects the *natural* content height
+        //          regardless of an active max-height — read it directly,
+        //          never clear the cap.
+        //        • chrome (head + inline comment + border, anything that's
+        //          not the body) is invariant once the card is built, so it
+        //          is cached on rec.chromeH and refreshed only on rebuild.
+        //        • The final maxHeight write is diffed against the inline
+        //          value so unchanged frames are no-ops — keeps scrollTop.
+        const COL_PAD = 8;
+        const GAP = 12;
         const want = vis.map((rec, i) => {
-          // Force a layout read with maxHeight cleared so this is the true
-          // natural height (head + body content).
-          const natural = rec.el.offsetHeight || 132;
+          const body = rec.el.querySelector(".vcard-body");
+          if (body && rec.chromeH == null) {
+            rec.chromeH = rec.el.offsetHeight - body.offsetHeight;
+          }
+          const chrome = rec.chromeH || 0;
+          const bodyH = body ? body.scrollHeight : 0;
+          const natural = bodyH + chrome || rec.el.offsetHeight || 132;
           const ecx = rec.target && r ? r.x + (rec.target.x + rec.target.width / 2) * r.w : null;
           const side = ecx != null ? (ecx < cx ? "L" : "R") : i % 2 ? "L" : "R";
           const cy =
             rec.target && r
               ? r.y + (rec.target.y + rec.target.height / 2) * r.h
               : 24 + ((i + 0.5) / Math.max(1, vis.length)) * (mh - 48);
-          return { rec, natural, ch: natural, side, anchor: cy };
+          return { rec, body, chrome, natural, ch: natural, side, anchor: cy };
         });
         const colTop = COL_PAD;
         const colBottom = mh - COL_PAD;
         const colH = colBottom - colTop;
-        // Phase 2: per-column pack. If the natural stack fits, anchor each
-        // card to its element then resolve overlaps; if a column would run
-        // off the viewport, shove the whole stack up. If even the shoved
-        // stack doesn't fit, compress: distribute proportionally and clamp
-        // each body's max-height so internal scrolling engages.
         for (const col of ["L", "R"]) {
           const cwant = want.filter((w) => w.side === col);
           if (cwant.length === 0) continue;
@@ -2314,7 +2338,7 @@
               }
             }
           } else {
-            const MIN_CH = 96; // head + ~1 variant row, keeps the head tappable
+            const MIN_CH = 96;
             const availH = colH - (cwant.length - 1) * GAP;
             const scale = availH / cwant.reduce((s, w) => s + w.natural, 0);
             cwant.sort((a, b) => a.anchor - b.anchor);
@@ -2336,22 +2360,17 @@
             }
           }
         }
-        // Phase 3: apply max-heights only on cards that had to compress so
-        // the internal scrollbar appears only when it's needed. Subtract
-        // EVERY non-body sibling (head, inline comment row, optional code
-        // collapsible) plus the card's own border so the resulting card
-        // height matches what the packer computed.
+        // Diffed maxHeight write: pin each body to the natural height when it
+        // fits, or to the compressed cap otherwise. Only write when the
+        // target px differs from what's already inline — guards scrollTop
+        // and prevents the every-frame thrash that caused scrollbar
+        // flicker.
         for (const w of want) {
-          if (w.ch >= w.natural) continue;
-          const body = w.rec.el.querySelector(".vcard-body");
-          if (!body) continue;
-          const natBodyH = body.scrollHeight;
-          const chrome = w.rec.el.offsetHeight - body.offsetHeight; // head + cmt + border + …
-          body.style.maxHeight = Math.max(40, w.ch - chrome) + "px";
-          // If the natural body already fits the new cap (e.g. compression
-          // was driven by a tall sibling card), keep the body uncapped so it
-          // doesn't show a phantom scrollbar.
-          if (natBodyH <= w.ch - chrome) body.style.maxHeight = "";
+          if (!w.body) continue;
+          const chrome = w.rec.chromeH || 0;
+          const targetBodyH = Math.max(40, w.ch - chrome);
+          const px = targetBodyH + "px";
+          if (w.body.style.maxHeight !== px) w.body.style.maxHeight = px;
         }
         for (const w of want) {
           const hx = w.side === "L" ? leftX : rightX;
