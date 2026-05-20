@@ -10,6 +10,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { axServiceBinaryPath } from "@argent/native-devtools-ios";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -107,17 +108,21 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
 }
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
-  await execFileAsync("xcrun", [
-    "simctl",
-    "spawn",
-    udid,
-    "defaults",
-    "write",
-    "com.apple.Accessibility",
-    "AutomationEnabled",
-    "-bool",
-    "true",
-  ]);
+  await execFileAsync(
+    "xcrun",
+    [
+      "simctl",
+      "spawn",
+      udid,
+      "defaults",
+      "write",
+      "com.apple.Accessibility",
+      "AutomationEnabled",
+      "-bool",
+      "true",
+    ],
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+  );
 }
 
 async function killExistingDaemon(socketPath: string): Promise<void> {

@@ -10,7 +10,7 @@
     "build:native:dev": "bash scripts/build.sh dev"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.5.0"
+    "@types/node": "^25.9.0",
+    "typescript": "^6.0.3"
   }
 }

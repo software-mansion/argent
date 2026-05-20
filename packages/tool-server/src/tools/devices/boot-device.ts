@@ -2,7 +2,12 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
+import {
+  buildInitFailedResult,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -52,7 +57,8 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
-  | { platform: "android"; serial: string; avdName: string; booted: true };
+  | { platform: "android"; serial: string; avdName: string; booted: true }
+  | NativeDevtoolsInitFailedResult;
 
 // Each stage has its own sub-budget so a hang in one stage cannot consume the
 // entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
@@ -184,7 +190,7 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
 async function bootIos(
   udid: string,
   registry: Registry
-): Promise<{ platform: "ios"; udid: string; booted: true }> {
+): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   await ensureDep("xcrun");
   await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -196,7 +202,11 @@ async function bootIos(
   // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
-  await registry.resolveService(ndRef.urn, ndRef.options);
+  const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  const initFailure = ndApi.getInitFailure();
+  if (initFailure?.givenUp) {
+    return buildInitFailedResult(udid, initFailure);
+  }
   await execFileAsync("defaults", [
     "write",
     "com.apple.iphonesimulator",
