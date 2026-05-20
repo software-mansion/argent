@@ -190,6 +190,6 @@
   --poll-interval-ms: 1200; /* /preview/variants poll cadence */
   --tree-stale-ms: 6000; /* drop the describe tree if older than this */
   --flick-max-vel: 1500; /* clamp thrown-card release velocity (px/s) */
-  --spot-idle-dismiss-ms: 200; /* lost-element grace before releasing spotlight */
+  --spot-idle-dismiss-ms: 260; /* lost-element grace before releasing spotlight */
   --annpop-hover-grace-ms: 280; /* hover-card grace: pin ↔ popover travel */
 }
