@@ -13,12 +13,17 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import type { Server as HttpServer } from "node:http";
 import {
   ELECTRON_CDP_NAMESPACE,
   electronCdpRef,
   type ElectronCdpApi,
 } from "./blueprints/electron-cdp";
-import { createElectronServerRouter } from "./electron-server/http-api";
+import {
+  attachElectronServerWebsocket,
+  createElectronServerRouter,
+} from "./electron-server/http-api";
+import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -67,6 +72,12 @@ export interface HttpAppHandle {
   dispose: () => void;
   /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
   getLastActivityAt: () => number;
+  /** Attach the per-Electron-device WebSocket upgrade handler to the live
+   * http.Server. Called once `app.listen()` has been invoked and the server
+   * is bound. Splitting this out from `createHttpApp` keeps construction
+   * synchronous — the WS upgrade is the only part that needs the Node server
+   * instance rather than the Express app. */
+  attachElectronWebsockets: (server: HttpServer) => void;
 }
 
 // Loopback hostnames the browser is allowed to address us by. The
@@ -382,5 +393,33 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     app,
     dispose: () => idleTimer.dispose(),
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
+    attachElectronWebsockets: (httpServer: HttpServer) => {
+      attachElectronServerWebsocket(httpServer, "/electron-server/", (req) => {
+        // URL shape: /electron-server/<deviceId>/ws
+        const match = (req.url ?? "").match(/^\/electron-server\/([^/]+)\/ws(?:[?#]|$)/);
+        if (!match) return null;
+        const deviceId = decodeURIComponent(match[1]!);
+        const device = resolveDeviceForWs(deviceId);
+        if (device.platform !== "electron") return null;
+        // The CDP session must already be resolved (the per-device REST routes
+        // resolve it lazily on first hit). For the WS endpoint we look at the
+        // current registry snapshot — if no session is open, refuse the
+        // upgrade instead of triggering a slow CDP connect inside the upgrade
+        // handler (which would block the TCP socket).
+        const urn = `${ELECTRON_CDP_NAMESPACE}:${deviceId}`;
+        const snapshot = registry.getSnapshot();
+        if (!snapshot.services.has(urn)) return null;
+        // Use the synchronous getter on the registry rather than the async
+        // resolveService — by this point the service is guaranteed to exist.
+        const node = (
+          registry as unknown as {
+            services: Map<string, { instance: { api: ElectronCdpApi } | null }>;
+          }
+        ).services.get(urn);
+        const api = node?.instance?.api;
+        if (!api) return null;
+        return api.server;
+      });
+    },
   };
 }
