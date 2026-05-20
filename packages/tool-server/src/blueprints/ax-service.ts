@@ -306,7 +306,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const { device } = opts;
     if (device.platform !== "ios") {
       throw new Error(
-        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — describe falls back to uiautomator on Android, which does not need this service.`
+        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — describe uses uiautomator on Android and the CDP DOM walker on Electron, neither of which needs this service.`
       );
     }
     // Reject before spawning. An undefined `device.id` slips through when an

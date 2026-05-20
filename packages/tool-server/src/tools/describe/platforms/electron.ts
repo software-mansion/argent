@@ -9,19 +9,25 @@ import type { DescribeNode, DescribeTreeData } from "../contract";
  * applies on Electron).
  *
  * Choices:
- *  - Walk every Element (including shadow DOM contents) but skip purely
- *    structural wrappers that contribute no semantic info, no text, and have
- *    no listeners — keeps the tree small.
+ *  - Walk children plus open shadow roots and same-origin iframe documents so
+ *    modern Electron apps (VS Code, Slack, custom-element-heavy SPAs) don't
+ *    appear as empty pages.
+ *  - Skip purely structural wrappers (anonymous single-child divs) so the
+ *    tree stays small.
  *  - Treat anchors, buttons, inputs, [role=button], [onclick], [tabindex]≥0
  *    as `clickable: true` so the agent knows which nodes to tap.
  *  - Use rect.width/rect.height === 0 to prune invisible nodes (display:none
  *    yields a zero-sized rect; visibility:hidden does not, so we also
  *    short-circuit on computed `visibility: hidden` for the root walk).
- *  - The serializer caps depth at 24; runaway trees would otherwise stall the
- *    renderer on enormous SPAs. The cap matches the iOS adapter's default.
+ *  - Cap depth at 24 and node count at 5000 — a runaway SPA otherwise
+ *    serializes a payload too large for CDP to deliver in a single
+ *    Runtime.evaluate reply (~50MB practical limit).
  */
 const DESCRIBE_DOM_SCRIPT = `(() => {
   const MAX_DEPTH = 24;
+  const MAX_NODES = 5000;
+  let nodeBudget = MAX_NODES;
+  let truncated = false;
   const w = window.innerWidth;
   const h = window.innerHeight;
   if (!w || !h) return JSON.stringify({ tree: null, error: "viewport is zero" });
@@ -127,14 +133,48 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
   }
 
   function walk(el, depth) {
+    if (truncated) return null;
     if (depth > MAX_DEPTH) return null;
     if (!(el instanceof Element)) return null;
     if (!visible(el)) return null;
+    if (nodeBudget <= 0) {
+      truncated = true;
+      return null;
+    }
+    nodeBudget--;
+
     const childResults = [];
     for (const child of el.children) {
       const c = walk(child, depth + 1);
       if (c) childResults.push(c);
     }
+
+    // Pierce open shadow roots — closed roots are unreachable by design.
+    // Web-components-heavy apps (VS Code, every Lit/Polymer SPA) put their
+    // interactive content under .shadowRoot, so without this descent describe
+    // returns an empty body.
+    if (el.shadowRoot) {
+      for (const child of el.shadowRoot.children) {
+        const c = walk(child, depth + 1);
+        if (c) childResults.push(c);
+      }
+    }
+
+    // Same-origin iframes: pierce contentDocument if accessible. Cross-origin
+    // contentDocument access throws SecurityError — swallowed silently so the
+    // walker doesn't abort the whole tree.
+    if (el.tagName === "IFRAME") {
+      try {
+        const doc = el.contentDocument;
+        if (doc && doc.documentElement) {
+          const c = walk(doc.documentElement, depth + 1);
+          if (c) childResults.push(c);
+        }
+      } catch (e) {
+        /* cross-origin iframe — skip */
+      }
+    }
+
     const text = ownText(el);
     const name = accessibleName(el);
     const clickable = isInteractive(el);
@@ -173,7 +213,7 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
     frame: { x: 0, y: 0, width: 1, height: 1 },
     children: [],
   };
-  return JSON.stringify({ tree: root });
+  return JSON.stringify({ tree: root, truncated });
 })()`;
 
 export async function describeElectron(api: ElectronCdpApi): Promise<DescribeTreeData> {
@@ -196,7 +236,7 @@ export async function describeElectron(api: ElectronCdpApi): Promise<DescribeTre
   if (typeof payload !== "string") {
     throw new Error("Electron describe: renderer returned no value");
   }
-  let parsed: { tree?: DescribeNode | null; error?: string };
+  let parsed: { tree?: DescribeNode | null; truncated?: boolean; error?: string };
   try {
     parsed = JSON.parse(payload);
   } catch (err) {
@@ -209,6 +249,14 @@ export async function describeElectron(api: ElectronCdpApi): Promise<DescribeTre
   }
   if (!parsed.tree) {
     throw new Error("Electron describe: empty tree");
+  }
+  if (parsed.truncated) {
+    // Surface a server-side warning so a partial tree is visible to ops.
+    // A flag in DescribeTreeData would be cleaner but the contract is shared
+    // with iOS/Android and we don't want to widen it just for Electron.
+    process.stderr.write(
+      `[electron-describe] tree truncated at MAX_NODES — page exceeds the walker's budget; consider scoping the inspection.\n`
+    );
   }
   return { tree: parsed.tree, source: "cdp-dom" };
 }

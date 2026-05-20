@@ -116,10 +116,48 @@ async function waitForCdpReady(port: number, deadlineMs: number): Promise<void> 
  * not bring the app down (matching the simulator-server pattern where the
  * simulator outlives the bridge).
  */
+/**
+ * Strip user-supplied --remote-debugging-port from extraArgs so the caller
+ * can't accidentally point Electron at a different CDP port than the one we
+ * tracked and reported back. Last-wins on Chromium's flag parser, so a stray
+ * override would otherwise silently break list-devices / interaction tools.
+ */
+function sanitizeExtraArgs(extra: string[]): string[] {
+  return extra.filter((a) => {
+    if (a === "--remote-debugging-port" || a.startsWith("--remote-debugging-port=")) {
+      process.stderr.write(
+        `[electron-boot] dropping user-supplied "${a}" — Argent manages the CDP port.\n`
+      );
+      return false;
+    }
+    return true;
+  });
+}
+
+function killChildEscalating(child: ChildProcess): void {
+  // SIGTERM lets Electron flush the renderer's GPU buffers and write a clean
+  // exit code; SIGKILL after 2s catches stuck processes (hardware-accelerated
+  // GPU shutdown can deadlock on some Intel drivers).
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    /* already gone */
+  }
+  setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+  }, 2000).unref();
+}
+
 export async function bootElectronApp(options: BootElectronOptions): Promise<ElectronBootResult> {
   const port = options.port ?? (await pickFreePort());
   const launcher = resolveLauncher(options.appPath);
-  const extra = options.extraArgs ?? [];
+  const extra = sanitizeExtraArgs(options.extraArgs ?? []);
 
   const args = [...launcher.args, `--remote-debugging-port=${port}`, ...extra];
 
@@ -147,15 +185,30 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   });
   child.unref();
 
+  // Race the readiness probe against the child's exit event. If the process
+  // dies before CDP comes up (e.g. main.js crashes during startup), without
+  // this race the caller would see a generic readiness-timeout error 30s
+  // later instead of "process exited with code N".
+  const earlyExit = new Promise<never>((_resolve, reject) => {
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
+      reject(
+        new Error(
+          `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [electron-cdp-${port}] stderr above for the cause.`
+        )
+      );
+    };
+    child.once("exit", onExit);
+  });
+
   try {
-    await waitForCdpReady(port, options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+    await Promise.race([
+      waitForCdpReady(port, options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
+      earlyExit,
+    ]);
   } catch (err) {
     // CDP didn't come up — terminate the orphan so we don't leak a process.
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      /* ignore */
-    }
+    killChildEscalating(child);
     throw err;
   }
 

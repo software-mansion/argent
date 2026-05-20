@@ -35,14 +35,14 @@ describe("iOS-only blueprints reject Android targets up-front", () => {
   it("native-devtools blueprint rejects an Android device with a targeted error", async () => {
     const device = androidDevice("emulator-5554");
     await expect(nativeDevtoolsBlueprint.factory({}, device, { device })).rejects.toThrow(
-      /NativeDevtools is iOS-only.*Android/
+      /NativeDevtools is iOS-only.*classifies as android/
     );
   });
 
   it("native-profiler-session blueprint rejects an Android device with a targeted error", async () => {
     const device = androidDevice("emulator-5556");
     await expect(nativeProfilerSessionBlueprint.factory({}, device, { device })).rejects.toThrow(
-      /NativeProfilerSession currently supports iOS only.*Android/
+      /NativeProfilerSession currently supports iOS only.*classifies as android/
     );
   });
 
@@ -86,7 +86,7 @@ describe("iOS-only blueprints reject Android targets up-front", () => {
   it("ax-service blueprint rejects an Android device with a targeted error", async () => {
     const device = androidDevice("emulator-5554");
     await expect(axServiceBlueprint.factory({}, device, { device })).rejects.toThrow(
-      /AXService is iOS-only.*Android.*uiautomator/
+      /AXService is iOS-only.*classifies as android.*uiautomator/
     );
   });
 

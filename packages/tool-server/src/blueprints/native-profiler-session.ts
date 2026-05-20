@@ -78,13 +78,13 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       );
     }
     const { device } = opts;
-    // Android backend (Perfetto / simpleperf) is not implemented yet; reject
-    // early so an Android serial gets a clear "not yet" message instead of an
-    // opaque xctrace failure deeper in.
+    // Non-iOS backends (Android Perfetto / simpleperf; an Electron equivalent)
+    // are not implemented yet; reject early so the caller gets a clear "not
+    // yet" message instead of an opaque xctrace failure deeper in.
     if (device.platform !== "ios") {
       throw new Error(
         `${NATIVE_PROFILER_SESSION_NAMESPACE} currently supports iOS only (xctrace-backed). ` +
-          `The target '${device.id}' classifies as Android — Android profiling (Perfetto/simpleperf) is on the roadmap. ` +
+          `The target '${device.id}' classifies as ${device.platform} — ${device.platform} profiling is on the roadmap. ` +
           `Pick an iOS udid from list-devices for now.`
       );
     }

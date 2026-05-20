@@ -130,8 +130,17 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
       `Electron CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`
     );
   }
-  // Prefer the first non-devtools page; fall back to the first if everything looks like devtools.
-  const primary = pages.find((p) => !p.url.startsWith("devtools://")) ?? pages[0]!;
+  // Prefer the first non-devtools page. Driving input into a devtools://
+  // inspector instead of the real app window silently masks the bug behind
+  // confused tap behavior, so fail loudly if every page is devtools rather
+  // than fall back.
+  const primary = pages.find((p) => !p.url.startsWith("devtools://"));
+  if (!primary) {
+    throw new Error(
+      `Electron CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +
+        `Bring the app window to the foreground and retry.`
+    );
+  }
   return primary;
 }
 
@@ -150,14 +159,31 @@ async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
   })) as { result?: { value?: string } };
   const raw = out.result?.value;
   if (typeof raw !== "string") {
-    return { width: 800, height: 600, devicePixelRatio: 1 };
+    // Runtime.evaluate succeeded but returned no value — the renderer is
+    // mid-navigation or its main world is detached. Surfacing a fake 800x600
+    // would silently corrupt every subsequent tap's coordinate math, so
+    // throw instead.
+    throw new Error(
+      "Electron CDP: Runtime.evaluate for viewport returned no value. The renderer may be navigating or its main world is detached."
+    );
   }
+  let parsed: { w: number; h: number; dpr: number };
   try {
-    const parsed = JSON.parse(raw) as { w: number; h: number; dpr: number };
-    return { width: parsed.w || 800, height: parsed.h || 600, devicePixelRatio: parsed.dpr || 1 };
-  } catch {
-    return { width: 800, height: 600, devicePixelRatio: 1 };
+    parsed = JSON.parse(raw) as { w: number; h: number; dpr: number };
+  } catch (err) {
+    throw new Error(
+      `Electron CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
+  // window.innerWidth/Height should always be >0 on a visible BrowserWindow.
+  // Zero indicates the window is hidden or in the middle of a resize — the
+  // caller will probably retry; throwing here surfaces that state clearly.
+  if (!parsed.w || !parsed.h) {
+    throw new Error(
+      `Electron CDP: viewport reported zero dimensions (w=${parsed.w}, h=${parsed.h}). The BrowserWindow may be hidden.`
+    );
+  }
+  return { width: parsed.w, height: parsed.h, devicePixelRatio: parsed.dpr || 1 };
 }
 
 async function getDocumentNodeId(cdp: CDPClient): Promise<number | null> {
@@ -248,12 +274,22 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
         return viewport;
       },
       dispatchMouseEvent: async (event) => {
+        if (!Number.isFinite(event.x) || !Number.isFinite(event.y)) {
+          throw new Error(
+            `Electron CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`
+          );
+        }
+        const button = event.button ?? (event.type === "mouseMoved" ? "none" : "left");
+        // `buttons` is the bitmask of pressed buttons during the event: 0 for
+        // a hover/move with no button held, 1 for left. Keying off `button`
+        // (not the event type) keeps an explicit `button: "none"` consistent.
+        const buttons = button === "none" ? 0 : 1;
         const payload: Record<string, unknown> = {
           type: event.type,
           x: event.x,
           y: event.y,
-          button: event.button ?? (event.type === "mouseMoved" ? "none" : "left"),
-          buttons: event.type === "mouseMoved" ? 0 : 1,
+          button,
+          buttons,
         };
         if (event.type !== "mouseMoved") {
           payload.clickCount = event.clickCount ?? 1;
@@ -290,6 +326,14 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
         await cdp.send("Page.navigate", { url });
       },
       evaluate: async (expression, opts2) => {
+        if (opts2?.returnByValue) {
+          const out = (await cdp.send(
+            "Runtime.evaluate",
+            { expression, returnByValue: true },
+            10_000
+          )) as { result?: { value?: unknown } };
+          return out.result?.value;
+        }
         return cdp.evaluate(expression, { timeout: 10_000 });
       },
     };
