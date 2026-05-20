@@ -2304,13 +2304,51 @@
           const bodyH = body ? body.scrollHeight : 0;
           const natural = bodyH + chrome || rec.el.offsetHeight || 132;
           const ecx = rec.target && r ? r.x + (rec.target.x + rec.target.width / 2) * r.w : null;
+          // Initial preferred side: follow the element's own half of the
+          // stream when matched; alternate for unmatched. A second pass
+          // below rebalances if the elements cluster on one side.
           const side = ecx != null ? (ecx < cx ? "L" : "R") : i % 2 ? "L" : "R";
           const cy =
             rec.target && r
               ? r.y + (rec.target.y + rec.target.height / 2) * r.h
               : 24 + ((i + 0.5) / Math.max(1, vis.length)) * (mh - 48);
-          return { rec, body, chrome, natural, ch: natural, side, anchor: cy };
+          // sideBias captures *how strongly* the card prefers its side
+          // (signed distance from stream centre when matched; 0 when not).
+          // When |L−R| exceeds 1 below, the rebalancer moves whichever card
+          // has the smallest |sideBias| — i.e. its position least cares —
+          // so a card pinned dead-centre flips before one near the edge.
+          const sideBias = ecx != null ? ecx - cx : 0;
+          return { rec, body, chrome, natural, ch: natural, side, anchor: cy, sideBias };
         });
+        // Rebalance L/R so the two columns stay within one of each other.
+        // Without this, a screen where every matched element sits on the
+        // right half (e.g. a tab bar item on the right) stacked every
+        // single card on the right and left the left column empty.
+        while (true) {
+          let lCount = 0;
+          let rCount = 0;
+          for (const w of want) w.side === "L" ? (lCount += 1) : (rCount += 1);
+          if (Math.abs(lCount - rCount) <= 1) break;
+          const fromSide = lCount > rCount ? "L" : "R";
+          const toSide = fromSide === "L" ? "R" : "L";
+          // Move the card on `fromSide` whose own bias points least into
+          // that side — least violence to the per-element anchoring.
+          let pick = null;
+          let pickScore = Infinity;
+          for (const w of want) {
+            if (w.side !== fromSide) continue;
+            // Cards on L want bias < 0; on R want bias > 0. The further
+            // their actual bias is in the *opposite* direction (or near 0),
+            // the cheaper they are to move.
+            const into = fromSide === "L" ? -w.sideBias : w.sideBias;
+            if (into < pickScore) {
+              pickScore = into;
+              pick = w;
+            }
+          }
+          if (!pick) break;
+          pick.side = toSide;
+        }
         const colTop = COL_PAD;
         const colBottom = mh - COL_PAD;
         const colH = colBottom - colTop;
