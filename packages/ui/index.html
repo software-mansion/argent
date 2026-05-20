@@ -1644,17 +1644,33 @@
       }
 
       // Smallest on-screen describe node matching a proposal's matcher.
+      // iOS AX labels for elements that use SF Symbols (tab-bar buttons,
+      // many toolbar items) embed the glyph as a BMP private-use code point.
+      // The Map tab's raw label is `, , Map`, but the proposer
+      // (LLM, doc snippet, human) sees and writes `Map`. Strict equality
+      // `, , Map` !== `Map` silently failed. Strip BMP private-use
+      // (U+E000-U+F8FF) and collapse the resulting comma/space runs so both
+      // forms normalise to `map`; substring is then allowed on `by:"label"`
+      // so a clean needle still hits a wrapped element.
+      function vpNormLabel(s) {
+        return (s || "")
+          .toLowerCase()
+          .replace(/[-]/g, "")
+          .replace(/[\s,]+/g, " ")
+          .trim();
+      }
       function vpMatchNode(node, match) {
-        const needle = (match.value || "").trim().toLowerCase();
+        const needle = vpNormLabel(match.value);
         const out = [];
         const walk = (n) => {
           if (!n || typeof n !== "object") return;
-          const label = (n.label || "").toLowerCase();
-          const ident = (n.identifier || "").toLowerCase();
-          const value = (n.value || "").toLowerCase();
+          const label = vpNormLabel(n.label);
+          const ident = vpNormLabel(n.identifier);
+          const value = vpNormLabel(n.value);
           const role = (n.role || "").toLowerCase();
           let hit;
-          if (match.by === "label") hit = label === needle;
+          if (!needle) hit = false;
+          else if (match.by === "label") hit = label === needle || label.includes(needle);
           else if (match.by === "identifier") hit = ident === needle;
           else if (match.by === "role") hit = role === needle;
           else hit = label.includes(needle) || ident.includes(needle) || value.includes(needle);
