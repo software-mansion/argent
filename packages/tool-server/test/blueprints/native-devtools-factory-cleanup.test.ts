@@ -70,7 +70,7 @@ describe("nativeDevtoolsBlueprint factory — failure tolerance", () => {
       return new Error("simctl spawn failed: CoreSimulatorService unreachable");
     });
 
-    const instance = await nativeDevtoolsBlueprint.factory({}, UDID, { device });
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
 
     const failure = instance.api.getInitFailure();
     expect(failure).not.toBeNull();
@@ -100,7 +100,7 @@ describe("nativeDevtoolsBlueprint factory — failure tolerance", () => {
       if (args.includes("getenv")) return { stdout: "", stderr: "" };
       return new Error("simctl spawn failed: factory-init phase");
     });
-    const instance = await nativeDevtoolsBlueprint.factory({}, UDID, { device });
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
     expect(instance.api.getInitFailure()?.attempts).toBe(1);
 
     // Phase 2: setenv hangs until we reject it — models the simctl-hang case

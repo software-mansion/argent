@@ -175,7 +175,7 @@ describe("attachRegistryLogger — end-to-end with Registry", () => {
 
     await expect(registry.resolveService(staticUrn("Fail"))).rejects.toThrow();
 
-    const errorCalls = errorSpy.mock.calls.map((c) => c[0] as string);
+    const errorCalls = (errorSpy.mock.calls as unknown[][]).map((c) => c[0] as string);
     const serviceErrorLog = errorCalls.find((c) => c.includes("serviceError"));
     expect(serviceErrorLog).toBeDefined();
     expect(serviceErrorLog).toContain("Fail factory failure");
@@ -192,7 +192,7 @@ describe("attachRegistryLogger — end-to-end with Registry", () => {
 
     await expect(registry.invokeTool("bad-tool")).rejects.toThrow();
 
-    const errorCalls = errorSpy.mock.calls.map((c) => c[0] as string);
+    const errorCalls = (errorSpy.mock.calls as unknown[][]).map((c) => c[0] as string);
     const toolFailedLog = errorCalls.find((c) => c.includes("toolFailed bad-tool"));
     expect(toolFailedLog).toBeDefined();
     expect(toolFailedLog).toContain("bad-tool execution failure");

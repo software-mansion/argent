@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// @ts-check
 "use strict";
 
 const fs = require("fs");

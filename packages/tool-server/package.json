@@ -9,7 +9,8 @@
     "start": "node dist/index.js start",
     "dev": "ts-node src/index.ts start",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "@argent/registry": "file:../registry",

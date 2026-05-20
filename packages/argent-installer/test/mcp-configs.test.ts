@@ -354,14 +354,14 @@ describe("Zed adapter", () => {
 `
     );
 
-    adapter.addAllowlist(tmpDir, "local");
+    adapter.addAllowlist!(tmpDir, "local");
     let after = fs.readFileSync(configPath, "utf8");
     expect(after).toContain("// user note");
     expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
       default: "allow",
     });
 
-    adapter.removeAllowlist(tmpDir, "local");
+    adapter.removeAllowlist!(tmpDir, "local");
     after = fs.readFileSync(configPath, "utf8");
     expect(after).toContain("// user note");
     expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
