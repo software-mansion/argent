@@ -60,6 +60,20 @@ export class NotImplementedOnPlatformError extends Error {
   }
 }
 
+function platformMatrix(
+  platform: Platform,
+  capability: ToolCapability
+): Record<string, boolean | undefined> | undefined {
+  switch (platform) {
+    case "ios":
+      return capability.apple;
+    case "android":
+      return capability.android;
+    case "electron":
+      return capability.electron;
+  }
+}
+
 /**
  * Throws if the tool's `capability` declaration doesn't include the given
  * device. A tool with no `capability` is treated as universally supported —
@@ -71,11 +85,11 @@ export function assertSupported(
   device: DeviceInfo
 ): void {
   if (!capability) return;
-  const matrix = device.platform === "ios" ? capability.apple : capability.android;
+  const matrix = platformMatrix(device.platform, capability);
   if (!matrix) {
     throw new UnsupportedOperationError(toolId, device, `no ${device.platform} support declared`);
   }
-  const supported = (matrix as Record<string, boolean | undefined>)[device.kind] === true;
+  const supported = matrix[device.kind] === true;
   if (!supported) {
     throw new UnsupportedOperationError(toolId, device, `kind '${device.kind}' not supported`);
   }

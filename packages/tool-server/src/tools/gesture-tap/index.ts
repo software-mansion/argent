@@ -1,13 +1,16 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { electronCdpRef, type ElectronCdpApi } from "../../blueprints/electron-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z
+    .string()
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Electron id)."),
   x: z.number().describe("Normalized horizontal position 0.0–1.0 (left=0, right=1), not pixels"),
   y: z.number().describe("Normalized vertical position 0.0–1.0 (top=0, bottom=1), not pixels"),
 });
@@ -22,25 +25,46 @@ interface Result {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  electron: { app: true },
 };
+
+async function tapElectron(api: ElectronCdpApi, x: number, y: number): Promise<void> {
+  const vp = api.getViewport();
+  const pxX = Math.max(0, Math.min(vp.width, x * vp.width));
+  const pxY = Math.max(0, Math.min(vp.height, y * vp.height));
+  await api.dispatchMouseEvent({ type: "mouseMoved", x: pxX, y: pxY });
+  await api.dispatchMouseEvent({ type: "mousePressed", x: pxX, y: pxY, clickCount: 1 });
+  await sleep(50);
+  await api.dispatchMouseEvent({ type: "mouseReleased", x: pxX, y: pxY, clickCount: 1 });
+}
 
 export const gestureTapTool: ToolDefinition<Params, Result> = {
   id: "gesture-tap",
-  description: `Press the device screen (iOS simulator or Android emulator) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels), matching simulator-server touch input.
-Sends a Down event followed by an Up event at the same point.
+  description: `Press the device screen (iOS simulator, Android emulator, or Electron app) at normalized coordinates: x and y are fractions of screen width and height in 0.0–1.0 (not pixels).
+Sends a Down event followed by an Up event at the same point. For Electron, this dispatches a CDP mouse-press/release on the renderer.
 Use when you need to tap a button, link, or any tappable element on the screen.
-Returns { tapped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.
+Returns { tapped: true, timestampMs }. Fails if the simulator-server / emulator backend / Electron CDP is not reachable for the given device.
 Before tapping, determine the correct coordinates by using discovery tools: describe, native-describe-screen, debugger-component-tree. More information in \`argent-device-interact\` skill`,
   alwaysLoad: true,
-  searchHint: "tap press button element device simulator emulator touch down up",
+  searchHint: "tap press button element device simulator emulator electron touch down up click",
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    if (device.platform === "electron") {
+      return { electron: electronCdpRef(device) };
+    }
+    return { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
-    const api = services.simulatorServer as SimulatorServerApi;
+    const device = resolveDevice(params.udid);
     const timestampMs = Date.now();
+    if (device.platform === "electron") {
+      const electron = services.electron as ElectronCdpApi;
+      await tapElectron(electron, params.x, params.y);
+      return { tapped: true, timestampMs };
+    }
+    const api = services.simulatorServer as SimulatorServerApi;
     sendCommand(api, {
       cmd: "touch",
       type: "Down",

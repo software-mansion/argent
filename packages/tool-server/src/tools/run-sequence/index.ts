@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef } from "@argent/registry";
 import { simulatorServerRef } from "../../blueprints/simulator-server";
+import { electronCdpRef } from "../../blueprints/electron-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 
@@ -62,6 +64,7 @@ type RunSequenceResult = {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  electron: { app: true },
 };
 
 export function createRunSequenceTool(
@@ -109,9 +112,16 @@ Stops on the first error and returns partial results.`,
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     capability,
-    services: (params) => ({
-      simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-    }),
+    // Eagerly hold a reference to the device's transport service so the
+    // sub-tool invocations don't pay the spawn / connect cost on the first
+    // step. iOS / Android use simulator-server; Electron uses CDP.
+    services: (params): Record<string, ServiceRef> => {
+      const device = resolveDevice(params.udid);
+      if (device.platform === "electron") {
+        return { electron: electronCdpRef(device) };
+      }
+      return { simulatorServer: simulatorServerRef(device) };
+    },
     async execute(_services, params) {
       const { udid, steps } = params;
       const results: StepResult[] = [];

@@ -5,7 +5,7 @@ import type {
   ToolDependency,
 } from "@argent/registry";
 import { resolveDevice } from "./device-info";
-import { assertSupported } from "./capability";
+import { assertSupported, NotImplementedOnPlatformError } from "./capability";
 import { ensureDeps } from "./check-deps";
 
 /**
@@ -46,17 +46,24 @@ export interface PlatformImpl<Services, Params, Result> {
  * `Services` is the shape of services the tool declares — typed so handlers
  * see real names (e.g. `services.simulatorServer`) instead of the raw
  * `Record<string, unknown>` the registry hands in.
+ *
+ * The `electron` branch is optional. When omitted, an electron device triggers
+ * `NotImplementedOnPlatformError` — the capability gate normally fires first,
+ * so this only matters for tools that declare electron support without wiring
+ * a handler.
  */
 export function dispatchByPlatform<
   IosServices,
   AndroidServices,
   Params extends { udid: string },
   Result,
+  ElectronServices = Record<string, unknown>,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: PlatformImpl<IosServices, Params, Result>;
   android: PlatformImpl<AndroidServices, Params, Result>;
+  electron?: PlatformImpl<ElectronServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -71,11 +78,29 @@ export function dispatchByPlatform<
       }
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
     }
-    if (opts.android.requires?.length) {
-      await ensureDeps(opts.android.requires);
+    if (device.platform === "android") {
+      if (opts.android.requires?.length) {
+        await ensureDeps(opts.android.requires);
+      }
+      return opts.android.handler(
+        services as unknown as AndroidServices,
+        params,
+        device,
+        invokeOptions
+      );
     }
-    return opts.android.handler(
-      services as unknown as AndroidServices,
+    // electron
+    if (!opts.electron) {
+      throw new NotImplementedOnPlatformError({
+        toolId: opts.toolId,
+        platform: "electron",
+      });
+    }
+    if (opts.electron.requires?.length) {
+      await ensureDeps(opts.electron.requires);
+    }
+    return opts.electron.handler(
+      services as unknown as ElectronServices,
       params,
       device,
       invokeOptions

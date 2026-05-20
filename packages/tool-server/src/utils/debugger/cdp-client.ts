@@ -98,9 +98,15 @@ export class CDPClient {
   private scripts = new Map<string, ScriptInfo>();
   private enabledDomains = new Set<string>();
   private wsUrl: string;
+  private sendOrigin: boolean;
 
-  constructor(wsUrl: string) {
+  constructor(wsUrl: string, options?: { sendOrigin?: boolean }) {
     this.wsUrl = wsUrl;
+    // Default true matches Metro / Expo. Chromium's devtools-target rejects
+    // upgrade requests that carry an Origin header (since the protocol is
+    // meant for IDE clients, not pages), so Electron CDP callers must pass
+    // `sendOrigin: false`.
+    this.sendOrigin = options?.sendOrigin !== false;
   }
 
   connect(): Promise<void> {
@@ -108,10 +114,16 @@ export class CDPClient {
       // RN >= 0.85 Metro requires an Origin header. Expo's dev server does an
       // exact match against its serverBaseUrl (127.0.0.1), so we normalize
       // localhost → 127.0.0.1 in the Origin to satisfy both servers.
-      const { protocol, host } = new URL(this.wsUrl);
-      const origin =
-        (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
-      const ws = new WebSocket(this.wsUrl, { headers: { Origin: origin } });
+      // For Chromium CDP (Electron), the same header triggers a 403, so we
+      // honour the constructor's `sendOrigin: false`.
+      let headers: Record<string, string> | undefined;
+      if (this.sendOrigin) {
+        const { protocol, host } = new URL(this.wsUrl);
+        const origin =
+          (protocol === "wss:" ? "https://" : "http://") + host.replace("localhost", "127.0.0.1");
+        headers = { Origin: origin };
+      }
+      const ws = new WebSocket(this.wsUrl, headers ? { headers } : undefined);
       this.ws = ws;
 
       const onOpen = () => {
