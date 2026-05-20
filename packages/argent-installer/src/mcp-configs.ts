@@ -38,17 +38,9 @@ export interface McpServerEntry {
   env: Record<string, string>;
 }
 
-/**
- * Discriminates between the two install topologies argent supports.
- *
- * - `global`: argent is on the user's PATH (default). The MCP `command`
- *   is the bare `argent` binary name.
- * - `local`: argent is installed as a project devDependency under
- *   `<projectRoot>/node_modules/@swmansion/argent`. The MCP `command`
- *   needs to point at that local copy so the config can be committed and
- *   shared with the rest of the team. The exact recipe is adapter-
- *   specific — see `getMcpEntry`.
- */
+// `global`: argent is on PATH; `local`: argent is a project devDep at
+// <projectRoot>/node_modules/@swmansion/argent (team-share flow).
+// Per-adapter command shape is decided by `getMcpEntry`.
 export type McpEntryMode = { kind: "global" } | { kind: "local"; projectRoot: string };
 
 export interface McpConfigAdapter {
@@ -60,12 +52,8 @@ export interface McpConfigAdapter {
   remove(configPath: string): boolean;
   addAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
-  /**
-   * False for adapters that have no project-scoped config file (Windsurf,
-   * Hermes), which means they cannot participate in the `--devdep` flow.
-   * Defaults to true. Init filters the adapter list by this flag before
-   * the multiselect when running in local-install mode.
-   */
+  // False for adapters with no project-scoped config file (Windsurf,
+  // Hermes) — excluded from the `--devdep` flow. Defaults to true.
   acceptsLocalInstall?: boolean;
 }
 
@@ -84,38 +72,18 @@ type CodexConfig = {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-// Path argent's MCP server uses by default (see packages/argent-mcp/src/
-// mcp-server.ts). Kept in sync here so the global-mode entry exports the
-// same value the binary would have computed on its own.
+// Mirrors packages/argent-mcp/src/mcp-server.ts default.
 function defaultMcpLogPath(): string {
   return path.join(homedir(), ".argent", "mcp-calls.log");
 }
 
-// Relative path that resolves to `node_modules/.bin/argent` when the MCP
-// client spawns from the project root. Always use POSIX separators here —
-// adapters write this verbatim into JSON/JSONC/TOML configs that may be
-// committed and replayed on machines with different path separators.
+// POSIX separators on purpose — value is written verbatim into committed
+// JSON/JSONC/TOML and must replay on machines with any path style.
 const LOCAL_BIN_REL_PATH = "./node_modules/.bin/argent";
 
-/**
- * Build the MCP server entry an adapter should write.
- *
- * The shape varies by:
- *   - install topology (`mode.kind` — global vs local devDep)
- *   - target adapter (Claude Code expands `${CLAUDE_PROJECT_DIR}`; the rest
- *     accept a plain relative path)
- *
- * Global-mode entries are identical for every adapter — argent is on PATH
- * and the binary name resolves naturally. Local-mode entries use a
- * project-relative path so the file can be committed and replayed by every
- * teammate after `npm install`.
- *
- * In local mode the entry also omits `ARGENT_MCP_LOG`: the absolute path
- * we would otherwise bake in is the installer's home directory, which is
- * meaningless when the file is shared via version control. The argent MCP
- * server already falls back to `~/.argent/mcp-calls.log` per-user when
- * the env var is unset.
- */
+// Local mode omits ARGENT_MCP_LOG because the installer's homedir path
+// is meaningless in a committed config; the MCP server defaults the
+// path per-user when the env var is unset.
 export function getMcpEntry(
   mode: McpEntryMode = { kind: "global" },
   adapter?: McpConfigAdapter
@@ -128,10 +96,9 @@ export function getMcpEntry(
     };
   }
 
-  // Claude Code documents `${CLAUDE_PROJECT_DIR}` substitution in `command`
-  // and `args` (see code.claude.com/docs/en/mcp). The `:-.` default keeps
-  // the path usable even in execution contexts where the variable isn't
-  // populated (e.g. running the server manually for debugging).
+  // Claude Code documents `${CLAUDE_PROJECT_DIR}` substitution (see
+  // code.claude.com/docs/en/mcp); `:-.` keeps the path usable when the
+  // variable isn't populated (e.g. manual debug runs).
   const useClaudeProjectDir = adapter?.name === "Claude Code";
   const command = useClaudeProjectDir
     ? "${CLAUDE_PROJECT_DIR:-.}/node_modules/.bin/argent"
@@ -377,8 +344,7 @@ const vscodeAdapter: McpConfigAdapter = {
 
 const windsurfAdapter: McpConfigAdapter = {
   name: "Windsurf",
-  // Global-only adapter — no per-project config file, so the team-share
-  // (`--devdep`) flow cannot wire MCP through here.
+  // Global-only — no per-project config file.
   acceptsLocalInstall: false,
 
   detect(): boolean {

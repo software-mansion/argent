@@ -44,12 +44,9 @@ export async function update(args: string[]): Promise<void> {
 
   p.intro(pc.bgCyan(pc.black(" argent update ")));
 
-  // Probe both topologies up front. Reading versions from each install
-  // (rather than from the running module's package.json) is critical:
-  // when init/update runs via `npx @swmansion/argent`, the running
-  // package is always npm's "latest", so reading PACKAGE_ROOT would
-  // mask any outdated install. See getGloballyInstalledVersion and
-  // getLocallyInstalledVersion for the topology-specific resolvers.
+  // Read versions from each install on disk, not from the running module.
+  // Under `npx`, PACKAGE_ROOT is always "latest" and would mask an
+  // outdated install.
   const projectRoot = resolveProjectRoot(process.cwd());
   const state: TopologyState = {
     globallyInstalled: isGloballyInstalled(),
@@ -87,18 +84,13 @@ export async function update(args: string[]): Promise<void> {
   reportInstalledStatus(state);
   p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
 
-  // Decide which topologies need the install command run. A topology
-  // "needs install" when it's currently installed AND its on-disk
-  // version is older than npm's latest. If a topology isn't installed,
-  // we don't proactively introduce it during an update — that would be
-  // a surprising scope expansion (a team-share user wouldn't expect
-  // `argent update` to suddenly start installing a global copy).
+  // Only update topologies already present — never proactively introduce
+  // one during an update (would surprise team-share users).
   const needsGlobal = state.globallyInstalled && isNewerVersion(latest, state.globalVersion!);
   const needsLocal = state.locallyInstalled && isNewerVersion(latest, state.localVersion!);
 
-  // First-time install (neither topology present) — fall through to the
-  // existing "install globally" behavior, matching the historical CLI
-  // contract for users who run `argent update` to bootstrap.
+  // Neither installed → preserve the historical bootstrap behavior
+  // (`argent update` from scratch installs globally).
   if (!state.globallyInstalled && !state.locallyInstalled) {
     await runFirstTimeGlobalInstall(latest, nonInteractive);
   } else if (!needsGlobal && !needsLocal) {
@@ -113,9 +105,8 @@ export async function update(args: string[]): Promise<void> {
   }
 
   // ── Refresh configuration ─────────────────────────────────────────────
-  // The refresh runs even when no install command fired so a teammate
-  // can `argent update` to repair stale MCP entries / skills after a
-  // package.json bump came in over `git pull`.
+  // Runs even when no install fired, so a teammate can repair stale MCP
+  // entries / skills after a `git pull` bumped package.json.
 
   spinner.start("Refreshing workspace configuration...");
 
@@ -123,13 +114,10 @@ export async function update(args: string[]): Promise<void> {
   const mcpResults = refreshMcpConfigs(detected, state);
   refreshAllowlists(detected, projectRoot);
 
-  // Rules and agents should ship from the same place the MCP server
-  // does. For a local devDep install, that's the project's
-  // node_modules/@swmansion/argent/{rules,agents} — using the module-
-  // relative paths instead would, under `npx`, leak the npx cache
-  // path into the user's project (and copy whichever version npm just
-  // resolved as "latest" rather than the version pinned in the user's
-  // package.json).
+  // Ship rules/agents from the same install the MCP server runs from.
+  // In local mode that's node_modules/@swmansion/argent; module-relative
+  // paths would, under `npx`, leak the npx cache's "latest" into the
+  // project instead of the version pinned in package.json.
   const localArgentRoot = state.locallyInstalled
     ? join(projectRoot, "node_modules", "@swmansion", "argent")
     : null;
@@ -178,9 +166,6 @@ function reportInstalledStatus(state: TopologyState): void {
 }
 
 // ── Install/update flows ────────────────────────────────────────────────
-// Each topology has its own install command shape and its own cwd
-// requirement. Splitting them keeps the success/failure paths clear and
-// avoids interleaving spinners.
 
 async function runFirstTimeGlobalInstall(latest: string, nonInteractive: boolean): Promise<void> {
   const pm = detectPackageManager();
@@ -256,9 +241,8 @@ async function runTopologyUpdate(
     p.log.success(`${label} updated to v${latest}.`);
   } catch (err) {
     p.log.error(`${label} update failed: ${err}`);
-    // Don't process.exit — the other topology (if any) and the config
-    // refresh should still run. A partial update is more useful than
-    // halting the whole flow.
+    // Don't process.exit — let the other topology and the config refresh
+    // still run; a partial update beats halting the whole flow.
   }
 }
 
@@ -269,14 +253,10 @@ function buildUpdateCommand(
 ): ShellCommand {
   const versioned = `${PACKAGE_NAME}@${latest}`;
   if (topology === "global") {
-    // Global install doesn't depend on the project's lockfile;
-    // detectPackageManager() with no argument keeps the historical
-    // user-agent fallback.
+    // No lockfile dependency — no-arg keeps the user-agent fallback.
     return globalInstallCommand(detectPackageManager(), versioned);
   }
-  // Local: detect from the project's lockfile, NOT the user-agent.
-  // Under `npx` the agent is always npm regardless of what manages the
-  // project — same trap the install/uninstall sides hit.
+  // Local: must use the lockfile — `npx` always reports npm in the agent.
   return localDevInstallCommand(detectPackageManager(projectRoot), versioned);
 }
 
@@ -286,13 +266,9 @@ function refreshMcpConfigs(adapters: McpConfigAdapter[], state: TopologyState): 
   const results: string[] = [];
 
   for (const adapter of adapters) {
-    // Refresh both project- and global-scoped paths where they exist.
-    // Mode is chosen per path: project-scoped configs use local mode
-    // iff the project has argent as a devDep (preserves the team-
-    // share wiring); global-scoped configs always use global mode.
-    // This preserves the install topology each config was authored
-    // against instead of clobbering it during what's nominally a
-    // bug-fix update.
+    // Project-scoped configs use local mode iff the project has argent
+    // as a devDep (keeps team-share wiring); global-scoped configs are
+    // always global mode.
     const targets: Array<{ configPath: string; entryMode: McpEntryMode }> = [];
     const projectPath = adapter.projectPath(state.projectRoot);
     const globalPath = adapter.globalPath();

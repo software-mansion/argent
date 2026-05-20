@@ -443,16 +443,13 @@ export async function uninstall(args: string[]): Promise<void> {
   }
 
   // ── Uninstall the package itself ────────────────────────────────────────────
-  // Argent can live in two topologies independently — globally on PATH
-  // and/or as a project devDep — and the team-share workflow makes the
-  // second one common. We probe both and offer them as separate prompts
-  // so the user only sees questions that are actually actionable.
+  // Argent can be present globally and/or as a project devDep
+  // independently — probe both and prompt separately.
 
   const globallyInstalled = isGloballyInstalled();
   const locallyInstalled = isLocallyInstalled(projectRoot);
 
-  // Track whether we've killed the tool-server yet so we only do it once
-  // even if the user uninstalls both topologies in a single run.
+  // Kill the tool-server at most once across both branches.
   let toolServerKilled = false;
   async function ensureToolServerKilled(): Promise<void> {
     if (toolServerKilled) return;
@@ -477,9 +474,8 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     if (shouldUninstallGlobal) {
-      // Global uninstall doesn't depend on the project's lockfile;
-      // detectPackageManager() with no argument preserves the old
-      // behavior (user-agent fallback to npm).
+      // Global uninstall doesn't depend on the project's lockfile; no-arg
+      // detectPackageManager() preserves the user-agent fallback.
       const pm = detectPackageManager();
       const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
       p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
@@ -514,10 +510,8 @@ export async function uninstall(args: string[]): Promise<void> {
     }
 
     if (shouldUninstallLocal) {
-      // For the local uninstall we MUST detect the PM from the
-      // project's lockfile — under `npx`, user-agent is npm regardless
-      // of what manages the project (the same trap the install side
-      // hit with yarn workspaces).
+      // MUST use the project's lockfile here — under `npx` the user-agent
+      // is always npm regardless of what manages the project.
       const pm = detectPackageManager(projectRoot);
       const cmd = localDevUninstallCommand(pm, PACKAGE_NAME);
       p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))} (in ${pc.dim(projectRoot)})`);

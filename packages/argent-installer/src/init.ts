@@ -64,17 +64,13 @@ function extractFlag(args: string[], flag: string): string | null {
   return args[idx + 1]!;
 }
 
-// Discriminates the install topology chosen at Step 0 — drives MCP entry
-// shape, scope override, and adapter filtering for the rest of the flow.
 type InstallMode = "global" | "local";
 
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const fromTar = extractFlag(args, "--from");
-  // `--devdep` (alias `--local-install`) selects the "local devDependency"
-  // install topology non-interactively. Designed for teams that want to
-  // commit their MCP config alongside the package.json change so every
-  // teammate gets the same argent version after `npm install`.
+  // `--devdep` (alias `--local-install`) is the non-interactive selector
+  // for the team-share install topology.
   const devdepFlagRequested = args.includes("--devdep") || args.includes("--local-install");
   const explicitGlobalScope = (() => {
     const idx = args.indexOf("--scope");
@@ -99,38 +95,23 @@ export async function init(args: string[]): Promise<void> {
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
   const globallyInstalled = isGloballyInstalled();
-  // Resolve project root once — needed for the local install check, the
-  // PnP probe, and for the Step-1 MCP entry construction. We use the same
-  // resolution rules as the rest of init so the choices stay consistent.
   const projectRoot = resolveProjectRoot(process.cwd());
   const locallyInstalled = isLocallyInstalled(projectRoot);
 
-  // Mode is decided in two stages. The default is global (matches the
-  // old single-mode behavior); `--devdep` forces local; otherwise the
-  // interactive prompt below may override the default. We deliberately
-  // do NOT auto-pick local just because we found node_modules/@swmansion/
-  // argent at the project root — that surprised users who ran the init
-  // via `npx ./tarball init` from a directory whose resolved project
-  // root happened to have argent installed (e.g. home + ~/.claude or a
-  // workspace ancestor).
+  // Default to global to match the historical single-mode behavior; never
+  // auto-pick local on the presence of node_modules/@swmansion/argent —
+  // a workspace ancestor with argent installed would silently change the
+  // mode for users running init via `npx`.
   let installMode: InstallMode = devdepFlagRequested ? "local" : "global";
 
-  // The Step-0 prompt fires whenever argent isn't on PATH globally — both
-  // for "no install at all" and for "already installed locally, decide
-  // what to do next". `--devdep` is the non-interactive equivalent.
   if (!globallyInstalled && !nonInteractive && !devdepFlagRequested) {
-    // Loop so the Local-mode confirm step can route the user back to
-    // the install-mode select instead of forcing them to abort init
-    // and start over. Only Esc/Ctrl+C (p.isCancel) actually cancels.
+    // Loop so a "no" on the Local confirm re-prompts the mode select
+    // instead of aborting init. Only Esc/Ctrl+C cancels.
     while (true) {
       const installChoice = await p.select({
         message: locallyInstalled
           ? "How would you like to configure argent?"
           : "Argent isn't installed yet. How would you like to set it up?",
-        // Global is the recommended default — it's the broadest install
-        // topology and works for every workflow. Local is offered as an
-        // opt-in for teams that want to commit their argent version +
-        // MCP config alongside the rest of the project.
         initialValue: "global" as const,
         options: [
           {
@@ -157,11 +138,8 @@ export async function init(args: string[]): Promise<void> {
         process.exit(0);
       }
 
-      // Surface the cross-editor relative-path caveat only after the
-      // user has picked Local. The vast majority of users go global
-      // and never see this; for the team-share path we add a single
-      // confirm prompt so the caveat lands as decision context, not
-      // noise.
+      // Surface the cross-editor relative-path caveat only on the Local
+      // path so it lands as decision context, not noise.
       if (installChoice === "local") {
         p.log.warn(
           `The localy set up argent will only work if your agent runs from the root directory of your project. If a teammate's editor fails to start argent, verify if he is in the root directory first.`
@@ -173,12 +151,10 @@ export async function init(args: string[]): Promise<void> {
           initialValue: true,
         });
         if (p.isCancel(confirmLocal)) {
-          // Esc / Ctrl+C — treat as a hard cancel.
           p.cancel("Installation cancelled.");
           process.exit(0);
         }
         if (!confirmLocal) {
-          // User backed out of Local — re-prompt the install mode.
           continue;
         }
       }
@@ -189,11 +165,6 @@ export async function init(args: string[]): Promise<void> {
   }
 
   // ── Step 0a: actually install (or skip if already in the right state) ──
-  // Splitting "decide mode" from "run install" lets us be honest about
-  // the two states each mode can be in: already-installed (skip) and
-  // not-yet-installed (run command). Previously these were tangled into
-  // one branchy block that double-counted some cases and never reached
-  // the prompt when a stale local install was lying around.
 
   if (installMode === "local") {
     if (locallyInstalled) {
@@ -203,8 +174,7 @@ export async function init(args: string[]): Promise<void> {
       );
       version = getLocallyInstalledVersion(projectRoot) ?? version;
     } else {
-      // Refuse early when the workspace can't host a devDep — better
-      // than letting `npm install` fail with a noisy stack a step later.
+      // Refuse early when the workspace can't host a devDep.
       if (!hasPackageJson(projectRoot)) {
         p.log.error(
           `No package.json found at ${pc.dim(projectRoot)}.\n` +
@@ -222,11 +192,9 @@ export async function init(args: string[]): Promise<void> {
         process.exit(1);
       }
 
-      // Detect the project's package manager from its lockfile first.
-      // Under `npx`, the user-agent is always npm regardless of the
-      // project's actual PM — using the wrong one against a yarn/pnpm
-      // workspace can fail catastrophically (e.g., yarn's `link:`
-      // protocol is rejected by npm with EUNSUPPORTEDPROTOCOL).
+      // Prefer the project's lockfile over the runtime user-agent —
+      // under `npx` the agent is always npm regardless of the project's
+      // actual PM, which breaks yarn-only protocols like `link:`.
       const pm = detectPackageManager(projectRoot);
       const installTarget = fromTar ?? PACKAGE_NAME;
       const cmd = localDevInstallCommand(pm, installTarget);
@@ -236,9 +204,8 @@ export async function init(args: string[]): Promise<void> {
       try {
         await runShellCommand(cmd);
         spinner.stop(pc.green(`Installed as devDependency (via ${pm}).`));
-        // Read from the freshly-installed local copy, not the running
-        // module — when init is invoked via `npx`, getInstalledVersion()
-        // would still report the npx cache version.
+        // Read the just-installed copy, not the running module: under
+        // `npx`, getInstalledVersion() returns the npx cache version.
         version = getLocallyInstalledVersion(projectRoot) ?? version;
       } catch (err) {
         spinner.stop(pc.red("Installation failed."));
@@ -319,11 +286,9 @@ export async function init(args: string[]): Promise<void> {
             updateSpinner.stop(pc.green(`Updated to v${latest}.`));
             version = getInstalledVersion() ?? version;
 
-            // The user just bumped to a newer argent. Re-sync and prune
-            // argent skills in every scope that already tracks them — this
-            // is the only point in init where we can surface orphans
-            // (skills removed from a previous argent version) before
-            // Step 2's single-scope `skills add`.
+            // After a version bump, refresh every scope that already
+            // tracks argent skills so orphans (skills removed by the
+            // newer argent) surface before Step 2's single-scope add.
             const skillSummary = formatSkillRefreshSummary(
               refreshArgentSkills(resolveProjectRoot(process.cwd()))
             );
@@ -345,8 +310,6 @@ export async function init(args: string[]): Promise<void> {
   p.log.step(pc.bold("Step 1: MCP Server Configuration"));
 
   if (installMode === "local") {
-    // The cross-editor relative-path caveat is surfaced at the Step-0
-    // prompt where the user actually picks the mode — see above.
     p.log.info(
       `${pc.dim("Mode:")} Local devDependency — argent is pinned in ${pc.cyan("package.json")}, ` +
         `MCP configs point at ${pc.cyan("./node_modules/.bin/argent")}.\n` +
@@ -354,9 +317,8 @@ export async function init(args: string[]): Promise<void> {
     );
   }
 
-  // In local-install mode, restrict the adapter universe to ones that have
-  // a project-scoped config file. Windsurf/Hermes are global-only and
-  // would force the user to fall back to a global install anyway.
+  // Local mode: keep only adapters that have a project-scoped config
+  // file. Global-only adapters (Windsurf, Hermes) can't participate.
   const adapterUniverse =
     installMode === "local"
       ? ALL_ADAPTERS.filter((a) => a.acceptsLocalInstall !== false)
@@ -422,9 +384,8 @@ export async function init(args: string[]): Promise<void> {
   let customRoot: string | undefined;
 
   if (installMode === "local") {
-    // The committed config has to live next to the package.json so every
-    // teammate's checkout picks it up. The scope prompt would only have one
-    // legitimate answer in this mode, so skip it.
+    // Committed config must live next to package.json — scope prompt has
+    // only one legitimate answer in this mode.
     scope = "local";
   } else if (nonInteractive) {
     scope = "local";
@@ -482,9 +443,8 @@ export async function init(args: string[]): Promise<void> {
 
   const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
-  // MCP entry shape depends on install topology AND target adapter (Claude
-  // Code expands `${CLAUDE_PROJECT_DIR}`, the others use a plain relative
-  // path), so it has to be constructed per-adapter inside the loop.
+  // Entry shape depends on the adapter (Claude Code expands
+  // `${CLAUDE_PROJECT_DIR}`), so construct it per-adapter in the loop.
   const entryMode: McpEntryMode =
     installMode === "local" ? { kind: "local", projectRoot: effectiveRoot } : { kind: "global" };
   const mcpResults: string[] = [];
@@ -766,11 +726,9 @@ export async function init(args: string[]): Promise<void> {
   p.outro("Done.");
 }
 
-// Patterns that signal the install failure was caused by something in
-// the user's existing manifest (broken protocol, unreachable file: dep,
-// peer-dep mismatch), rather than by anything to do with argent's own
-// package. We use these to add a "check your existing dependencies"
-// hint without misleading the user into blaming argent.
+// Signals that an install failure came from the user's existing manifest
+// (broken protocol / file: dep / peer-dep), not from argent itself —
+// used to redirect blame in the error hint.
 const EXISTING_MANIFEST_ERROR_PATTERNS = [
   /EUNSUPPORTEDPROTOCOL/i,
   /Unsupported URL Type/i,
@@ -785,14 +743,10 @@ function looksLikeExistingManifestError(message: string): boolean {
   return EXISTING_MANIFEST_ERROR_PATTERNS.some((pattern) => pattern.test(message));
 }
 
-/**
- * Print the local-install failure with the most useful context we can
- * surface from a child-process error. npm's `EUNSUPPORTEDPROTOCOL` and
- * friends fire when init's `npm install --save-dev` triggers a full
- * re-resolve of the user's existing deps — so the failure is in their
- * manifest, not in argent itself. Calling that out keeps the user from
- * filing the bug against the wrong project.
- */
+// Print the local-install failure. `npm install --save-dev` re-resolves
+// every existing dep, so EUNSUPPORTEDPROTOCOL/ERESOLVE etc. usually
+// point at the user's manifest, not argent — surface that hint so the
+// bug doesn't get filed against the wrong project.
 function reportLocalInstallFailure(err: unknown, cmdStr: string, projectRoot: string): void {
   const message = err instanceof Error ? err.message : String(err);
   p.log.error(message);

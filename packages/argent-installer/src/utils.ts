@@ -492,26 +492,11 @@ export function formatShellCommand(cmd: ShellCommand): string {
   return parts.join(" ");
 }
 
-/**
- * Detect which package manager the user is driving.
- *
- * Resolution order:
- *   1. `projectRoot`'s lockfile, when supplied. A project that ships
- *      yarn.lock / pnpm-lock.yaml / bun.lock is unambiguously managed by
- *      that PM regardless of what's currently invoking init. This is the
- *      load-bearing signal for the `--devdep` flow: running `npx
- *      @swmansion/argent init` from inside a yarn workspace will set
- *      `npm_config_user_agent=npm/...` because npx itself is npm-based,
- *      so without the lockfile probe we'd issue `npm install --save-dev`
- *      against a yarn project. Yarn's `link:` protocol then fails the
- *      whole install (EUNSUPPORTEDPROTOCOL), as bsky's social-app shows.
- *   2. `npm_config_user_agent`. Honoured when no lockfile is present
- *      (fresh workspace) or when the caller didn't pass projectRoot.
- *   3. `npm`. Safe default.
- *
- * `projectRoot` is optional so call sites that don't have a path handy
- * (e.g. tests that only care about user-agent parsing) keep working.
- */
+// Resolution: 1) projectRoot's lockfile (load-bearing for `--devdep` —
+// `npx` sets npm_config_user_agent=npm/... even inside a yarn workspace,
+// which would issue `npm install` and fail on yarn-only `link:` deps);
+// 2) npm_config_user_agent; 3) npm.
+// projectRoot is optional so user-agent-only call sites still work.
 export function detectPackageManager(projectRoot?: string): PackageManager {
   if (projectRoot) {
     const fromLockfile = detectFromLockfile(projectRoot);
@@ -524,10 +509,8 @@ export function detectPackageManager(projectRoot?: string): PackageManager {
   return "npm";
 }
 
-// Mapping is ordered by specificity. pnpm-lock.yaml and bun.lock are
-// unique to their respective managers; yarn.lock is unambiguous; npm's
-// package-lock.json is the last fallback (npm projects also coexist
-// with shrinkwrap.json — both signal npm).
+// Ordered by specificity — pnpm/bun lockfiles are unique to their PM;
+// yarn is unambiguous; package-lock.json / shrinkwrap fall through last.
 const LOCKFILE_TO_PM: ReadonlyArray<readonly [string, PackageManager]> = [
   ["pnpm-lock.yaml", "pnpm"],
   ["bun.lock", "bun"],
@@ -571,29 +554,10 @@ export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCo
 }
 
 // ── Local devDependency helpers ──────────────────────────────────────────────
-// Used by the `argent init --devdep` flow which installs argent as a project
-// devDependency instead of globally. The shape of the install command
-// differs per package manager:
-//   npm   →  npm install --save-dev <pkg>
-//   pnpm  →  pnpm add -D <pkg>
-//   yarn  →  yarn add --dev <pkg>
-//   bun   →  bun add -d <pkg>
-//
-// `<pkg>` may be a registry name (default) or a local tarball / file path
-// (the --from flag); every package manager accepts both as a positional.
+// Counterparts to globalInstall/UninstallCommand for the `--devdep` flow.
+// All four PMs accept a registry name or a tarball/file path as the
+// positional, so the same recipes work for the --from flag.
 
-/**
- * Counterpart to {@link globalUninstallCommand} for the local devDep
- * topology. Removes argent from the project's package.json AND uninstalls
- * the files under node_modules. The shape varies per package manager:
- *   npm   →  npm uninstall <pkg>
- *   pnpm  →  pnpm remove <pkg>
- *   yarn  →  yarn remove <pkg>
- *   bun   →  bun remove <pkg>
- *
- * All four also update the lockfile in-place, so a follow-up commit
- * brings the team back in sync.
- */
 export function localDevUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
   switch (pm) {
     case "yarn":
@@ -620,33 +584,11 @@ export function localDevInstallCommand(pm: PackageManager, pkg: string): ShellCo
   }
 }
 
-/**
- * True when the project at `projectRoot` has actually adopted argent as
- * one of its dependencies AND that dependency resolves on disk. Both
- * halves matter:
- *
- *   1. The `package.json` at projectRoot must list `@swmansion/argent`
- *      in one of dependencies / devDependencies / peerDependencies /
- *      optionalDependencies. This is the canonical signal of "the team
- *      has opted into this version", and it's what the team-share flow
- *      is built around.
- *   2. `<projectRoot>/node_modules/@swmansion/argent/package.json` must
- *      exist on disk (post-install).
- *
- * Why both: in an npm/yarn workspace where argent itself is one of the
- * member packages, `node_modules/@swmansion/argent` is a symlink to the
- * workspace source — checking only the file would mis-report the
- * workspace as having argent installed as a dep. Requiring the dep
- * declaration disambiguates: workspace members don't list themselves in
- * the root package.json, but a real consumer does.
- *
- * Cannot be fooled by a transient `npx @swmansion/argent` invocation:
- * npx caches live under `~/.npm/_npx/<hash>/` (and equivalents for pnpm
- * dlx / bunx / yarn dlx), never under a user's project. The companion
- * {@link getLocallyInstalledVersion} reads the package.json under
- * node_modules so post-install version reporting reflects the real
- * install instead of the running npx cache.
- */
+// Requires BOTH a dep declaration in the project's package.json AND the
+// files on disk. The declaration check disambiguates a real consumer
+// install from an npm/yarn workspace where node_modules/@swmansion/argent
+// is just a symlink to the workspace source (workspace members don't
+// list themselves in the root manifest).
 export function isLocallyInstalled(projectRoot: string): boolean {
   if (!isDeclaredAsDependency(projectRoot)) return false;
   return fs.existsSync(localPackageJsonPath(projectRoot));
@@ -659,12 +601,8 @@ const DEPENDENCY_FIELDS = [
   "optionalDependencies",
 ] as const;
 
-/**
- * True iff `<projectRoot>/package.json` declares `@swmansion/argent` in
- * any of the standard dependency fields. Returns false when the file
- * is missing or unparseable — callers treat that as "not a real
- * consumer of argent", which is the safer default.
- */
+// Missing or unparseable package.json → false (safer default than
+// claiming the project depends on argent).
 function isDeclaredAsDependency(projectRoot: string): boolean {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")) as {
@@ -680,19 +618,9 @@ function localPackageJsonPath(projectRoot: string): string {
   return path.join(projectRoot, "node_modules", "@swmansion", "argent", "package.json");
 }
 
-/**
- * Read the version of the argent package installed as a devDependency at
- * `projectRoot`. Mirrors {@link getGloballyInstalledVersion}: when init
- * itself runs via `npx @swmansion/argent`, `getInstalledVersion` reads the
- * npx cache's package.json rather than the freshly-installed local copy.
- * After running the local install command we use this helper to report
- * the right version (which especially matters for `--from <tarball>`,
- * where the installed version can differ from the registry's latest).
- *
- * Returns null when the package is not present locally or its package.json
- * cannot be parsed — callers should treat null as "could not determine"
- * and fall back to whatever they already had.
- */
+// Reads <projectRoot>/node_modules/@swmansion/argent/package.json so
+// the version reported after install is the one that landed on disk,
+// not the npx cache that's still running init. Null on miss/parse fail.
 export function getLocallyInstalledVersion(projectRoot: string): string | null {
   try {
     const pkg = JSON.parse(fs.readFileSync(localPackageJsonPath(projectRoot), "utf8")) as {
@@ -704,13 +632,8 @@ export function getLocallyInstalledVersion(projectRoot: string): string | null {
   }
 }
 
-/**
- * Detect a Yarn 2+ (berry) workspace running in Plug'n'Play mode by looking
- * for the PnP runtime files at the project root. Such workspaces have no
- * literal `node_modules/.bin/argent`, so the devDep flow's MCP command
- * recipe won't resolve — we surface this up-front instead of writing a
- * config that silently fails.
- */
+// Yarn 2+ PnP — no literal node_modules/.bin/argent, so the devDep
+// flow's MCP command would resolve to nothing. Surface upfront.
 export function isYarnPnp(projectRoot: string): boolean {
   return (
     fs.existsSync(path.join(projectRoot, ".pnp.cjs")) ||
@@ -718,11 +641,6 @@ export function isYarnPnp(projectRoot: string): boolean {
   );
 }
 
-/**
- * Whether the project root has a package.json. The devDep flow needs one
- * to record the dependency entry; without it the install command would
- * either fail or create one in an unexpected directory.
- */
 export function hasPackageJson(projectRoot: string): boolean {
   return fs.existsSync(path.join(projectRoot, "package.json"));
 }
