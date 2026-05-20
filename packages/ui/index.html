@@ -2834,7 +2834,10 @@
         };
         paint(osTop, top, "▲", r ? r.y + 8 : 0);
         paint(osBot, bot, "▼", r ? r.y + r.h - 30 : 0);
-        if (hidden.length) {
+        // Same stream-gate as the directional pills: before a stream is live
+        // we haven't *tried* to match anything, so "N hidden" is misleading —
+        // those proposals just haven't been looked for yet.
+        if (r && hidden.length) {
           hiddenBadge.textContent = `◌ ${hidden.length} hidden`;
           hiddenBadge.title = hidden.join(", ");
           hiddenBadge.hidden = false;
