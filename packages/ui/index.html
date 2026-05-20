@@ -2259,27 +2259,99 @@
           const rec = vp.cards.get(p.id);
           if (rec && !rec.gone) vis.push(rec);
         }
+        // Phase 1: let each card render at its NATURAL height so a card with
+        // two variants is short and a card with five variants is tall.
+        // Clearing the inline max-height first lets a previously-compressed
+        // card grow back when there's room — per-frame layout is the single
+        // source of truth, no manual-resize / sticky cap.
+        for (const rec of vis) {
+          const body = rec.el.querySelector(".vcard-body");
+          if (body) body.style.maxHeight = "";
+        }
+        const COL_PAD = 8; // top + bottom margin around the column stack
+        const GAP = 12; // between stacked cards
         const want = vis.map((rec, i) => {
-          const ch = rec.el.offsetHeight || 132;
-          // Side: follow the element's own half of the stream when matched,
-          // else alternate so the two columns stay balanced.
+          // Force a layout read with maxHeight cleared so this is the true
+          // natural height (head + body content).
+          const natural = rec.el.offsetHeight || 132;
           const ecx = rec.target && r ? r.x + (rec.target.x + rec.target.width / 2) * r.w : null;
           const side = ecx != null ? (ecx < cx ? "L" : "R") : i % 2 ? "L" : "R";
-          // Vertical anchor: element centre when matched, else even spread.
           const cy =
             rec.target && r
               ? r.y + (rec.target.y + rec.target.height / 2) * r.h
               : 24 + ((i + 0.5) / Math.max(1, vis.length)) * (mh - 48);
-          return { rec, ch, side, y: Math.max(8, Math.min(mh - ch - 8, cy - ch / 2)) };
+          return { rec, natural, ch: natural, side, anchor: cy };
         });
-        // De-overlap each column independently (top → down push).
+        const colTop = COL_PAD;
+        const colBottom = mh - COL_PAD;
+        const colH = colBottom - colTop;
+        // Phase 2: per-column pack. If the natural stack fits, anchor each
+        // card to its element then resolve overlaps; if a column would run
+        // off the viewport, shove the whole stack up. If even the shoved
+        // stack doesn't fit, compress: distribute proportionally and clamp
+        // each body's max-height so internal scrolling engages.
         for (const col of ["L", "R"]) {
-          const cwant = want.filter((w) => w.side === col).sort((a, b) => a.y - b.y);
-          let prevBottom = -Infinity;
-          for (const w of cwant) {
-            if (w.y < prevBottom + 12) w.y = prevBottom + 12;
-            prevBottom = w.y + w.ch;
+          const cwant = want.filter((w) => w.side === col);
+          if (cwant.length === 0) continue;
+          const naturalSum = cwant.reduce((s, w) => s + w.natural, 0) + (cwant.length - 1) * GAP;
+          if (naturalSum <= colH) {
+            cwant.sort((a, b) => a.anchor - b.anchor);
+            for (const w of cwant) {
+              w.y = Math.max(colTop, Math.min(colBottom - w.ch, w.anchor - w.ch / 2));
+            }
+            let prevBottom = -Infinity;
+            for (const w of cwant) {
+              if (w.y < prevBottom + GAP) w.y = prevBottom + GAP;
+              prevBottom = w.y + w.ch;
+            }
+            const overshoot = prevBottom - colBottom;
+            if (overshoot > 0) {
+              for (const w of cwant) w.y -= overshoot;
+              let prev = colTop - GAP;
+              for (const w of cwant) {
+                if (w.y < prev + GAP) w.y = prev + GAP;
+                prev = w.y + w.ch;
+              }
+            }
+          } else {
+            const MIN_CH = 96; // head + ~1 variant row, keeps the head tappable
+            const availH = colH - (cwant.length - 1) * GAP;
+            const scale = availH / cwant.reduce((s, w) => s + w.natural, 0);
+            cwant.sort((a, b) => a.anchor - b.anchor);
+            let y = colTop;
+            for (const w of cwant) {
+              w.ch = Math.max(MIN_CH, Math.floor(w.natural * scale));
+              w.y = y;
+              y += w.ch + GAP;
+            }
+            const overshoot = y - GAP - colBottom;
+            if (overshoot > 0) {
+              const trim = Math.ceil(overshoot / cwant.length);
+              y = colTop;
+              for (const w of cwant) {
+                w.ch = Math.max(MIN_CH, w.ch - trim);
+                w.y = y;
+                y += w.ch + GAP;
+              }
+            }
           }
+        }
+        // Phase 3: apply max-heights only on cards that had to compress so
+        // the internal scrollbar appears only when it's needed. Subtract
+        // EVERY non-body sibling (head, inline comment row, optional code
+        // collapsible) plus the card's own border so the resulting card
+        // height matches what the packer computed.
+        for (const w of want) {
+          if (w.ch >= w.natural) continue;
+          const body = w.rec.el.querySelector(".vcard-body");
+          if (!body) continue;
+          const natBodyH = body.scrollHeight;
+          const chrome = w.rec.el.offsetHeight - body.offsetHeight; // head + cmt + border + …
+          body.style.maxHeight = Math.max(40, w.ch - chrome) + "px";
+          // If the natural body already fits the new cap (e.g. compression
+          // was driven by a tall sibling card), keep the body uncapped so it
+          // doesn't show a phantom scrollbar.
+          if (natBodyH <= w.ch - chrome) body.style.maxHeight = "";
         }
         for (const w of want) {
           const hx = w.side === "L" ? leftX : rightX;
