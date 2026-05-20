@@ -1,6 +1,3 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import {
   TypedEventEmitter,
   type DeviceInfo,
@@ -8,7 +5,18 @@ import {
   type ServiceEvents,
   type ServiceInstance,
 } from "@argent/registry";
-import { CDPClient } from "../utils/debugger/cdp-client";
+import type { CDPClient } from "../utils/debugger/cdp-client";
+import {
+  createElectronServer,
+  discoverPrimaryPage,
+  ensureCdpReachable,
+  type ElectronServer,
+  type MediaReady,
+  type ScreencastFrame,
+  type ScreencastOpts,
+  type ScreencastSession,
+  type ScreenshotOpts,
+} from "../electron-server";
 import { parseElectronCdpPort } from "../utils/device-info";
 
 export const ELECTRON_CDP_NAMESPACE = "ElectronCdp";
@@ -30,6 +38,14 @@ export function electronCdpRef(device: DeviceInfo): {
     options: { device },
   };
 }
+
+// ── Legacy compatibility surface ─────────────────────────────────────────────
+// The first cut of Electron support exposed a thin `ElectronCdpApi` directly
+// off the blueprint. Existing tools (gesture-tap, screenshot, describe,
+// keyboard, run-sequence, etc.) still consume that shape. The full ElectronServer
+// is now the source of truth, and these legacy types are kept so the blueprint
+// can publish *both* the new abstraction (`server`) and the original ergonomic
+// methods without forcing a callsite-by-callsite migration.
 
 export interface MouseEventArgs {
   type: "mousePressed" | "mouseReleased" | "mouseMoved";
@@ -80,111 +96,32 @@ export interface ElectronCdpApi {
   pageWebSocketUrl: string;
   /** Backend node id of the document (used as the root for AX queries). */
   rootDomNodeId: number | null;
+  /** The full sim-server-equivalent abstraction layer. New callers should use this. */
+  server: ElectronServer;
   /** Re-read the page viewport so normalized → CSS pixel math stays accurate after window resizes. */
   refreshViewport(): Promise<ViewportSize>;
   /** Cached viewport from the most recent connect / refresh. */
   getViewport(): ViewportSize;
   dispatchMouseEvent(event: MouseEventArgs): Promise<void>;
   dispatchKeyEvent(event: KeyEventArgs): Promise<void>;
-  /** Screenshot encoded as base64 PNG via CDP, persisted under tmpdir; returns file:// URL + absolute path. */
-  captureScreenshot(): Promise<{ url: string; path: string }>;
+  /** Screenshot via CDP, persisted under tmpdir; returns file:// URL + absolute path.
+   * Supports the sim-server-style options (rotation, scale, downscaler) when sharp is installed. */
+  captureScreenshot(opts?: ScreenshotOpts): Promise<MediaReady>;
   /** Returns the accessibility tree rooted at the document. */
   getAxTree(): Promise<ElectronAxNode[]>;
   /** Navigate the renderer to a URL. */
   navigate(url: string): Promise<void>;
   /** Evaluate JS in the renderer. Resolves to the serialized value when `returnByValue` is true. */
   evaluate(expression: string, options?: { returnByValue?: boolean }): Promise<unknown>;
+  /** Start a screencast (one CDP session shared across all subscribers). */
+  startScreencast(opts?: ScreencastOpts): Promise<ScreencastSession>;
+  /** Last received screencast frame, or null. */
+  getLastFrame(): ScreencastFrame | null;
 }
 
-interface CdpVersionInfo {
-  Browser?: string;
-  webSocketDebuggerUrl?: string;
-}
-
-interface CdpTarget {
-  id: string;
-  type: string;
-  title: string;
-  url: string;
-  webSocketDebuggerUrl?: string;
-}
-
-async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(url, { signal });
-  if (!res.ok) {
-    throw new Error(`Electron CDP discovery: GET ${url} failed (HTTP ${res.status})`);
-  }
-  return (await res.json()) as T;
-}
-
-/**
- * Probe a CDP endpoint for the renderer page we should drive. Electron typically
- * exposes one "page" target per BrowserWindow and a few "service_worker" /
- * "shared_worker" targets we don't care about.
- */
-export async function discoverPrimaryPage(port: number, signal?: AbortSignal): Promise<CdpTarget> {
-  const targets = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
-  const pages = targets.filter((t) => t.type === "page" && !!t.webSocketDebuggerUrl);
-  if (pages.length === 0) {
-    throw new Error(
-      `Electron CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`
-    );
-  }
-  // Prefer the first non-devtools page. Driving input into a devtools://
-  // inspector instead of the real app window silently masks the bug behind
-  // confused tap behavior, so fail loudly if every page is devtools rather
-  // than fall back.
-  const primary = pages.find((p) => !p.url.startsWith("devtools://"));
-  if (!primary) {
-    throw new Error(
-      `Electron CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +
-        `Bring the app window to the foreground and retry.`
-    );
-  }
-  return primary;
-}
-
-export async function ensureCdpReachable(
-  port: number,
-  signal?: AbortSignal
-): Promise<CdpVersionInfo> {
-  return fetchJson<CdpVersionInfo>(`http://127.0.0.1:${port}/json/version`, signal);
-}
-
-async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
-  const out = (await cdp.send("Runtime.evaluate", {
-    expression:
-      "JSON.stringify({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio || 1 })",
-    returnByValue: true,
-  })) as { result?: { value?: string } };
-  const raw = out.result?.value;
-  if (typeof raw !== "string") {
-    // Runtime.evaluate succeeded but returned no value — the renderer is
-    // mid-navigation or its main world is detached. Surfacing a fake 800x600
-    // would silently corrupt every subsequent tap's coordinate math, so
-    // throw instead.
-    throw new Error(
-      "Electron CDP: Runtime.evaluate for viewport returned no value. The renderer may be navigating or its main world is detached."
-    );
-  }
-  let parsed: { w: number; h: number; dpr: number };
-  try {
-    parsed = JSON.parse(raw) as { w: number; h: number; dpr: number };
-  } catch (err) {
-    throw new Error(
-      `Electron CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-  // window.innerWidth/Height should always be >0 on a visible BrowserWindow.
-  // Zero indicates the window is hidden or in the middle of a resize — the
-  // caller will probably retry; throwing here surfaces that state clearly.
-  if (!parsed.w || !parsed.h) {
-    throw new Error(
-      `Electron CDP: viewport reported zero dimensions (w=${parsed.w}, h=${parsed.h}). The BrowserWindow may be hidden.`
-    );
-  }
-  return { width: parsed.w, height: parsed.h, devicePixelRatio: parsed.dpr || 1 };
-}
+// Re-exports for discovery callers that previously imported these straight from
+// the blueprint module.
+export { discoverPrimaryPage, ensureCdpReachable };
 
 async function getDocumentNodeId(cdp: CDPClient): Promise<number | null> {
   try {
@@ -195,14 +132,6 @@ async function getDocumentNodeId(cdp: CDPClient): Promise<number | null> {
   } catch {
     return null;
   }
-}
-
-function persistPngBase64(base64: string): { url: string; path: string } {
-  const dir = path.join(os.tmpdir(), "argent-electron-screenshots");
-  fs.mkdirSync(dir, { recursive: true });
-  const filePath = path.join(dir, `screenshot-${Date.now()}-${process.pid}.png`);
-  fs.writeFileSync(filePath, Buffer.from(base64, "base64"));
-  return { url: `file://${filePath}`, path: filePath };
 }
 
 export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> = {
@@ -226,63 +155,33 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
       );
     }
 
-    await ensureCdpReachable(port);
-    const target = await discoverPrimaryPage(port);
-    const wsUrl = target.webSocketDebuggerUrl!;
-
-    // Chromium's devtools-target rejects WS upgrades that carry an Origin
-    // header — it expects IDE clients, not browser pages. Suppress it.
-    const cdp = new CDPClient(wsUrl, { sendOrigin: false });
-    await cdp.connect();
-
-    // Best-effort domain enables. Failing to enable Page is non-fatal because
-    // Input.* events don't actually require it — but Page makes Page.navigate
-    // / Page.captureScreenshot return better errors when the renderer is mid-
-    // navigation, so we try.
-    try {
-      await cdp.send("Page.enable");
-    } catch {
-      /* ignore */
-    }
-    try {
-      await cdp.send("DOM.enable");
-    } catch {
-      /* ignore */
-    }
-    try {
-      await cdp.send("Accessibility.enable");
-    } catch {
-      /* ignore */
-    }
-
-    let viewport = await readViewport(cdp);
-    const rootDomNodeId = await getDocumentNodeId(cdp);
+    const server = await createElectronServer({ deviceId: opts.device.id, port });
+    const rootDomNodeId = await getDocumentNodeId(server.cdp);
 
     const events = new TypedEventEmitter<ServiceEvents>();
-    cdp.events.on("disconnected", (err) => {
+    server.events.on("terminated", (err) => {
       events.emit("terminated", err ?? new Error(`Electron CDP on port ${port} disconnected`));
     });
 
+    // Legacy adapter — translates the original `dispatchMouseEvent` and
+    // `dispatchKeyEvent` calls into the new server's wire formats. Keeping
+    // these one-liners means we don't have to rewrite every tool right now;
+    // they can migrate to `api.server.send*` at their own pace.
     const api: ElectronCdpApi = {
       port,
-      cdp,
-      pageWebSocketUrl: wsUrl,
+      cdp: server.cdp,
+      pageWebSocketUrl: server.pageWebSocketUrl,
       rootDomNodeId,
-      getViewport: () => viewport,
-      refreshViewport: async () => {
-        viewport = await readViewport(cdp);
-        return viewport;
-      },
-      dispatchMouseEvent: async (event) => {
+      server,
+      getViewport: () => server.getViewport(),
+      refreshViewport: () => server.refreshViewport(),
+      dispatchMouseEvent: async (event: MouseEventArgs) => {
         if (!Number.isFinite(event.x) || !Number.isFinite(event.y)) {
           throw new Error(
             `Electron CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`
           );
         }
         const button = event.button ?? (event.type === "mouseMoved" ? "none" : "left");
-        // `buttons` is the bitmask of pressed buttons during the event: 0 for
-        // a hover/move with no button held, 1 for left. Keying off `button`
-        // (not the event type) keeps an explicit `button: "none"` consistent.
         const buttons = button === "none" ? 0 : 1;
         const payload: Record<string, unknown> = {
           type: event.type,
@@ -294,9 +193,9 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
         if (event.type !== "mouseMoved") {
           payload.clickCount = event.clickCount ?? 1;
         }
-        await cdp.send("Input.dispatchMouseEvent", payload);
+        await server.cdp.send("Input.dispatchMouseEvent", payload);
       },
-      dispatchKeyEvent: async (event) => {
+      dispatchKeyEvent: async (event: KeyEventArgs) => {
         const payload: Record<string, unknown> = { type: event.type };
         if (event.key !== undefined) payload.key = event.key;
         if (event.code !== undefined) payload.code = event.code;
@@ -305,47 +204,26 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
           payload.windowsVirtualKeyCode = event.windowsVirtualKeyCode;
         }
         if (event.modifiers !== undefined) payload.modifiers = event.modifiers;
-        await cdp.send("Input.dispatchKeyEvent", payload);
+        await server.cdp.send("Input.dispatchKeyEvent", payload);
       },
-      captureScreenshot: async () => {
-        const out = (await cdp.send("Page.captureScreenshot", { format: "png" })) as {
-          data?: string;
-        };
-        if (!out.data) {
-          throw new Error("Electron CDP: Page.captureScreenshot returned no data.");
-        }
-        return persistPngBase64(out.data);
-      },
+      captureScreenshot: (opts2?: ScreenshotOpts) => server.captureScreenshot(opts2),
       getAxTree: async () => {
-        const out = (await cdp.send("Accessibility.getFullAXTree", {})) as {
+        const out = (await server.cdp.send("Accessibility.getFullAXTree", {})) as {
           nodes?: ElectronAxNode[];
         };
         return out.nodes ?? [];
       },
-      navigate: async (url) => {
-        await cdp.send("Page.navigate", { url });
-      },
-      evaluate: async (expression, opts2) => {
-        if (opts2?.returnByValue) {
-          const out = (await cdp.send(
-            "Runtime.evaluate",
-            { expression, returnByValue: true },
-            10_000
-          )) as { result?: { value?: unknown } };
-          return out.result?.value;
-        }
-        return cdp.evaluate(expression, { timeout: 10_000 });
-      },
+      navigate: (url: string) => server.navigate(url),
+      evaluate: (expression: string, opts2?: { returnByValue?: boolean }) =>
+        server.evaluate(expression, opts2),
+      startScreencast: (opts2?: ScreencastOpts) => server.startScreencast(opts2),
+      getLastFrame: () => server.getLastFrame(),
     };
 
     const instance: ServiceInstance<ElectronCdpApi> = {
       api,
       dispose: async () => {
-        try {
-          await cdp.disconnect();
-        } catch {
-          /* ignore */
-        }
+        await server.dispose();
       },
       events,
     };

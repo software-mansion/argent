@@ -13,6 +13,12 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import {
+  ELECTRON_CDP_NAMESPACE,
+  electronCdpRef,
+  type ElectronCdpApi,
+} from "./blueprints/electron-cdp";
+import { createElectronServerRouter } from "./electron-server/http-api";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -154,6 +160,42 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Hidden (not MCP-exposed) preview UI + stream discovery endpoints.
   // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
   app.use("/preview", createPreviewRouter(registry));
+
+  // Per-Electron-device HTTP surface that mirrors sim-server's API: a
+  // `/electron-server/:id/api/*` namespace plus `/stream.mjpeg` and `/viewport`.
+  // The router is mounted lazily — the first request for a given id resolves
+  // the registry service (kicking off the CDP connection) and then forwards
+  // every subsequent request to that already-warm session. Like /preview, this
+  // surface is NOT advertised to MCP agents; tools remain the canonical way to
+  // drive Electron from an LLM. The HTTP surface is for non-agent consumers
+  // (preview UI, integration tests, custom dashboards).
+  app.use("/electron-server/:deviceId", async (req: Request, res: Response, next) => {
+    idleTimer.touch();
+    const deviceId = req.params.deviceId!;
+    const device = resolveDevice(deviceId);
+    if (device.platform !== "electron") {
+      res.status(400).json({
+        error: `Device id "${deviceId}" is not an Electron device. Use list-devices to find one.`,
+      });
+      return;
+    }
+    let server: ElectronCdpApi;
+    try {
+      const ref = electronCdpRef(device);
+      server = await registry.resolveService<ElectronCdpApi>(ref.urn, ref.options);
+    } catch (err) {
+      res.status(502).json({
+        error: `Could not resolve Electron CDP session for ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return;
+    }
+    // Lazily build the router per-device. Each ElectronServer is stable for
+    // the lifetime of the registry entry, so caching the router would only
+    // save a few object allocations per request; building inline keeps the
+    // code simple and the failure surface obvious.
+    const router = createElectronServerRouter(server.server);
+    router(req, res, next);
+  });
 
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();

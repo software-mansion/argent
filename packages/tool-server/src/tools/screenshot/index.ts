@@ -12,14 +12,17 @@ const zodSchema = z.object({
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
-    .describe("Orientation override for the screenshot. Ignored for Electron devices."),
+    .describe(
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Electron)."
+    ),
   scale: z
     .number()
     .min(0.01)
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset. Use 1.0 only when saving full-resolution PNG artifacts. Ignored for Electron devices (PNG is captured at native resolution)."
+      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset for iOS/Android. " +
+        "On Electron the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Electron requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
     .boolean()
@@ -27,6 +30,12 @@ const zodSchema = z.object({
     .default(true)
     .describe(
       "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff — the file is still written, but the image bytes are not attached to the agent context."
+    ),
+  downscaler: z
+    .enum(["lanczos3", "box", "bilinear", "nearest"])
+    .optional()
+    .describe(
+      "Downscaling algorithm when scale<1 on Electron. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum."
     ),
 });
 
@@ -64,7 +73,11 @@ Fails if the simulator-server / emulator backend / Electron CDP is not reachable
     const device = resolveDevice(params.udid);
     if (device.platform === "electron") {
       const electron = services.electron as ElectronCdpApi;
-      return electron.captureScreenshot();
+      return electron.captureScreenshot({
+        rotation: params.rotation,
+        scale: params.scale,
+        downscaler: params.downscaler,
+      });
     }
     const api = services.simulatorServer as SimulatorServerApi;
     const signal = options?.signal ?? AbortSignal.timeout(16_000);

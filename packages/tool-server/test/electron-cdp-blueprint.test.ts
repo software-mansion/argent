@@ -182,9 +182,11 @@ describe("electronCdpBlueprint (smoke)", () => {
       });
       expect(s.recordedMethods).toContain("Input.dispatchMouseEvent");
 
-      // Screenshot — fake server returns a tiny PNG, we expect a real file path.
+      // Screenshot — fake server returns a tiny PNG, we expect a real file
+      // path in the unified media dir maintained by the electron-server.
       const shot = await instance.api.captureScreenshot();
-      expect(shot.path).toMatch(/argent-electron-screenshots/);
+      expect(shot.path).toMatch(/argent-electron-media/);
+      expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);
     } finally {
       await instance.dispose();
