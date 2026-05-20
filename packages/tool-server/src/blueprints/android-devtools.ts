@@ -71,15 +71,11 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
     );
   }
 
-  const proc = spawn(adbPath, [
-    "-s",
-    serial,
-    "shell",
-    "am",
-    "instrument",
-    "-w",
-    manifest.instrumentationRunner,
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+  const proc = spawn(
+    adbPath,
+    ["-s", serial, "shell", "am", "instrument", "-w", manifest.instrumentationRunner],
+    { stdio: ["ignore", "pipe", "pipe"] }
+  );
 
   return new Promise<SpawnedHelper>((resolve, reject) => {
     let devicePort: number | null = null;
@@ -106,10 +102,9 @@ async function spawnHelper(serial: string): Promise<SpawnedHelper> {
       // `adb forward tcp:0 tcp:DEVICE_PORT` makes adb pick a free local port
       // and print it; saves the host-side `net.createServer(0)` dance.
       try {
-        const { stdout } = await runAdb(
-          ["-s", serial, "forward", "tcp:0", `tcp:${devicePort}`],
-          { timeoutMs: 5_000 }
-        );
+        const { stdout } = await runAdb(["-s", serial, "forward", "tcp:0", `tcp:${devicePort}`], {
+          timeoutMs: 5_000,
+        });
         const lpMatch = ADB_FORWARD_PORT_MARKER.exec(stdout.trim());
         if (!lpMatch) {
           throw new Error(`adb forward returned unexpected output: ${stdout.trim()}`);
@@ -253,9 +248,7 @@ export const androidDevtoolsBlueprint: ServiceBlueprint<AndroidDevtoolsApi, Devi
         });
       },
       getScreenSize() {
-        return client.request<{ width: number; height: number; rotation: number }>(
-          "getScreenSize"
-        );
+        return client.request<{ width: number; height: number; rotation: number }>("getScreenSize");
       },
       ping() {
         return client.request<{ ok: boolean; idleMs: number; protocol: string }>("ping");

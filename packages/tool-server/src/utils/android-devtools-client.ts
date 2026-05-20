@@ -92,11 +92,14 @@ export function connectAndroidDevtoolsClient(
           const send = (): Promise<T> => {
             if (closed) return Promise.reject(new Error("AndroidDevtools client closed"));
             const id = nextId++;
-            const timeoutMs = method === "getHierarchy" ? LONG_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
+            const timeoutMs =
+              method === "getHierarchy" ? LONG_RPC_TIMEOUT_MS : DEFAULT_RPC_TIMEOUT_MS;
             return new Promise<T>((resolveReq, rejectReq) => {
               const timer = setTimeout(() => {
                 pending.delete(id);
-                rejectReq(new Error(`AndroidDevtools RPC ${method} timed out after ${timeoutMs}ms`));
+                rejectReq(
+                  new Error(`AndroidDevtools RPC ${method} timed out after ${timeoutMs}ms`)
+                );
               }, timeoutMs);
               pending.set(id, {
                 resolve: (v) => resolveReq(v as T),

@@ -32,11 +32,9 @@ async function probeInstalledVersion(
 ): Promise<InstalledVersionProbe> {
   let out = "";
   try {
-    out = await adbShell(
-      serial,
-      `cmd package list packages --show-versioncode ${packageName}`,
-      { timeoutMs: 5_000 }
-    );
+    out = await adbShell(serial, `cmd package list packages --show-versioncode ${packageName}`, {
+      timeoutMs: 5_000,
+    });
   } catch {
     // `cmd package` only exists on API 24+. Fall back to `pm list packages`.
     try {

@@ -4,7 +4,12 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist/*.apk", "dist/index.js", "dist/index.d.ts", "manifest.json"],
+  "files": [
+    "dist/*.apk",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "manifest.json"
+  ],
   "scripts": {
     "build": "rm -rf dist/index.* tsconfig.tsbuildinfo && tsc",
     "build:native": "bash scripts/build.sh"
