@@ -45,6 +45,11 @@ export interface McpConfigAdapter {
   globalPath(): string | null;
   write(configPath: string, entry: McpServerEntry): void;
   remove(configPath: string): boolean;
+  // Non-mutating predicate used by `update` to skip adapters/scopes the user
+  // never opted into during `init`. Without this, `update` would re-create
+  // configs for any editor whose dir happens to exist on the user's machine
+  // (issue #195). Implementations must read the same key `remove()` checks.
+  hasArgentEntry(configPath: string): boolean;
   addAllowlist?(root: string, scope: "local" | "global"): void;
   removeAllowlist?(root: string, scope: "local" | "global"): void;
 }
@@ -174,6 +179,13 @@ const cursorAdapter: McpConfigAdapter = {
     return true;
   },
 
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
+  },
+
   addAllowlist(): void {
     const permPath = path.join(homedir(), ".cursor", "permissions.json");
     const config = readJson(permPath);
@@ -248,6 +260,13 @@ const claudeAdapter: McpConfigAdapter = {
     return true;
   },
 
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
+  },
+
   addAllowlist(root: string, scope: "local" | "global"): void {
     addClaudePermission(root, scope);
   },
@@ -301,6 +320,13 @@ const vscodeAdapter: McpConfigAdapter = {
     writeJsonOrRemove(configPath, config);
     return true;
   },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.servers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
+  },
 };
 
 // ── Windsurf adapter ─────────────────────────────────────────────────────────
@@ -343,6 +369,13 @@ const windsurfAdapter: McpConfigAdapter = {
     delete servers[MCP_SERVER_KEY];
     writeJsonOrRemove(configPath, config);
     return true;
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
   addAllowlist(): void {
@@ -411,6 +444,13 @@ const zedAdapter: McpConfigAdapter = {
     if (!servers?.[MCP_SERVER_KEY]) return false;
     editJsoncFile(configPath, ["context_servers", MCP_SERVER_KEY], undefined);
     return true;
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJsonc(configPath);
+    const servers = config.context_servers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
   // Zed doesn't support server-level wildcards for MCP tools — each tool
@@ -482,6 +522,13 @@ const geminiAdapter: McpConfigAdapter = {
     delete servers[MCP_SERVER_KEY];
     writeJsonOrRemove(configPath, config);
     return true;
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJson(configPath);
+    const servers = config.mcpServers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
   addAllowlist(root: string, scope: "local" | "global"): void {
@@ -560,6 +607,13 @@ const codexAdapter: McpConfigAdapter = {
     delete servers[MCP_SERVER_KEY];
     writeTomlOrRemove(configPath, config);
     return true;
+  },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readToml(configPath);
+    const servers = config.mcp_servers as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
   },
 
   addAllowlist(root, scope): void {
@@ -666,6 +720,14 @@ const hermesAdapter: McpConfigAdapter = {
     writeYaml(configPath, doc);
     return true;
   },
+
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const doc = readYaml(configPath);
+    const servers = doc.get("mcp_servers");
+    if (!isMap(servers)) return false;
+    return servers.has(MCP_SERVER_KEY);
+  },
 };
 
 // ── opencode adapter ────────────────────────────────────────────────────────
@@ -737,6 +799,13 @@ const openCodeAdapter: McpConfigAdapter = {
     return true;
   },
 
+  hasArgentEntry(configPath: string): boolean {
+    if (!fs.existsSync(configPath)) return false;
+    const config = readJsonc(configPath);
+    const servers = config.mcp as Record<string, unknown> | undefined;
+    return Boolean(servers?.[MCP_SERVER_KEY]);
+  },
+
   addAllowlist(root: string, scope: "local" | "global"): void {
     const configPath = scope === "global" ? this.globalPath() : this.projectPath(root);
     if (!configPath) return;
@@ -774,6 +843,35 @@ export function detectAdapters(): McpConfigAdapter[] {
 
 export function getAdapterByName(name: string): McpConfigAdapter | undefined {
   return ALL_ADAPTERS.find((a) => a.name.toLowerCase() === name.toLowerCase());
+}
+
+export type AdapterConfigScope = "project" | "global";
+
+export interface ConfiguredAdapterScope {
+  adapter: McpConfigAdapter;
+  scope: AdapterConfigScope;
+  configPath: string;
+}
+
+// Returns the (adapter, scope, configPath) tuples where argent is already
+// configured. `update` uses this to skip editors the user opted out of during
+// `init` even when their config dir happens to exist on disk (issue #195).
+export function findConfiguredAdapterScopes(
+  adapters: readonly McpConfigAdapter[],
+  projectRoot: string
+): ConfiguredAdapterScope[] {
+  const results: ConfiguredAdapterScope[] = [];
+  for (const adapter of adapters) {
+    const projectPath = adapter.projectPath(projectRoot);
+    if (projectPath && adapter.hasArgentEntry(projectPath)) {
+      results.push({ adapter, scope: "project", configPath: projectPath });
+    }
+    const globalPath = adapter.globalPath();
+    if (globalPath && adapter.hasArgentEntry(globalPath)) {
+      results.push({ adapter, scope: "global", configPath: globalPath });
+    }
+  }
+  return results;
 }
 
 // ── Claude permissions helpers ────────────────────────────────────────────────

@@ -1,7 +1,13 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { execFileSync } from "node:child_process";
-import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
+import {
+  ALL_ADAPTERS,
+  findConfiguredAdapterScopes,
+  getMcpEntry,
+  copyRulesAndAgents,
+  type McpConfigAdapter,
+} from "./mcp-configs.js";
 import {
   getGloballyInstalledVersion,
   getLatestVersion,
@@ -107,40 +113,48 @@ export async function update(args: string[]): Promise<void> {
   spinner.start("Refreshing workspace configuration...");
 
   const projectRoot = resolveProjectRoot(process.cwd());
-  const detected = detectAdapters();
   const mcpEntry = getMcpEntry();
   const results: string[] = [];
 
-  for (const adapter of detected) {
-    // Refresh both local and global configs where they exist
-    for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
-      const configPath = pathFn();
-      if (!configPath) continue;
-      try {
-        adapter.write(configPath, mcpEntry);
-        results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
-      } catch {
-        // Skip paths that don't exist or can't be written
-      }
+  // Only refresh adapter scopes that already contain an argent entry. A
+  // present editor dir (`.gemini`, `.cursor`, ...) is not consent — issue
+  // #195 — so we look for the argent MCP server key in the actual config.
+  const configuredScopes = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+  const adaptersByScope = new Map<"local" | "global", Set<McpConfigAdapter>>([
+    ["local", new Set()],
+    ["global", new Set()],
+  ]);
+
+  for (const { adapter, scope, configPath } of configuredScopes) {
+    try {
+      adapter.write(configPath, mcpEntry);
+      results.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
+    } catch {
+      // Skip paths that can't be written.
     }
+    adaptersByScope.get(scope === "project" ? "local" : "global")!.add(adapter);
   }
 
-  // Refresh allowlists
-  for (const adapter of detected) {
-    if (!adapter.addAllowlist) continue;
-    for (const s of ["global", "local"] as const) {
+  // Refresh allowlists only for scopes that already had argent configured —
+  // matches the editor list above.
+  for (const [scope, adapters] of adaptersByScope) {
+    for (const adapter of adapters) {
+      if (!adapter.addAllowlist) continue;
       try {
-        adapter.addAllowlist(projectRoot, s);
+        adapter.addAllowlist(projectRoot, scope);
       } catch {
         // non-fatal
       }
     }
   }
 
-  // Refresh rules and agents
+  // Refresh rules/agents the same way: per-scope, only for adapters the user
+  // opted into in that scope.
+  const localAdapters = [...adaptersByScope.get("local")!];
+  const globalAdapters = [...adaptersByScope.get("global")!];
   const ruleResults = [
-    ...copyRulesAndAgents(detected, projectRoot, "global", RULES_DIR, AGENTS_DIR),
-    ...copyRulesAndAgents(detected, projectRoot, "local", RULES_DIR, AGENTS_DIR),
+    ...copyRulesAndAgents(globalAdapters, projectRoot, "global", RULES_DIR, AGENTS_DIR),
+    ...copyRulesAndAgents(localAdapters, projectRoot, "local", RULES_DIR, AGENTS_DIR),
   ];
 
   spinner.stop("Configuration refreshed.");
