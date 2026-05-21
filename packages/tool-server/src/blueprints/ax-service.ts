@@ -123,6 +123,69 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
     ],
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   );
+
+  // iOS 26.5+ gates cross-process AX queries — the SpringBoard-hosted AX
+  // server rejects MIG requests from non-UIApplication clients (the ax-service
+  // daemon is a `simctl spawn`-launched CLI) with kAXError -25215, so
+  // `describe` returns an empty ROOT for any dialog presented by SpringBoard
+  // (TCC permission prompts: "Allow X to use your location?" etc.).
+  //
+  // Apple ships a debug switch for exactly this: AccessibilityUtilities reads
+  // `com.apple.Accessibility/IgnoreAXServerEntitlements` and skips the server-
+  // side entitlement check when it's true. SB caches the value at AX-server
+  // init, so a freshly-set pref doesn't take effect until SB re-reads — which
+  // means we have to kickstart SB the FIRST time we set it. The pref persists
+  // on the sim's disk, so subsequent ax-service spawns see it already true and
+  // skip the kickstart (avoiding the disruptive app-icon reflow on every run).
+  const isAlreadySet = await execFileAsync(
+    "xcrun",
+    [
+      "simctl",
+      "spawn",
+      udid,
+      "defaults",
+      "read",
+      "com.apple.Accessibility",
+      "IgnoreAXServerEntitlements",
+    ],
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+  )
+    .then(({ stdout }) => stdout.trim() === "1")
+    .catch(() => false);
+
+  if (!isAlreadySet) {
+    await execFileAsync(
+      "xcrun",
+      [
+        "simctl",
+        "spawn",
+        udid,
+        "defaults",
+        "write",
+        "com.apple.Accessibility",
+        "IgnoreAXServerEntitlements",
+        "-bool",
+        "true",
+      ],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    );
+    // launchctl emits a warning ("Please switch to user/foreground/...") but
+    // still restarts the process; tolerate non-zero exit because the restart
+    // is what we want.
+    await execFileAsync(
+      "xcrun",
+      [
+        "simctl",
+        "spawn",
+        udid,
+        "launchctl",
+        "kickstart",
+        "-k",
+        "system/com.apple.SpringBoard",
+      ],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    ).catch(() => undefined);
+  }
 }
 
 async function killExistingDaemon(socketPath: string): Promise<void> {
