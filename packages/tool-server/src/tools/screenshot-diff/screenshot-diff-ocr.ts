@@ -1,11 +1,14 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import path from "path";
+import fs from "fs";
+import Tesseract from "tesseract.js";
 import type { DiffBounds } from "./screenshot-diff";
 
-const execFileAsync = promisify(execFile);
-
 const OCR_TIMEOUT_MS = 10_000;
-const OCR_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+const TESSDATA_PATH = path.join(
+  path.dirname(require.resolve("@tesseract.js-data/eng/package.json")),
+  "4.0.0_best_int"
+);
+const PACKAGED_TESSERACT_WORKER_PATH = path.join(__dirname, "tesseract-worker.cjs");
 const MIN_SEGMENT_GAP_PX = 48;
 const MAX_VERTICAL_GAP_LINE_HEIGHT_RATIO = 1.4;
 const MAX_LEFT_EDGE_DELTA_LINE_HEIGHT_RATIO = 2.0;
@@ -70,18 +73,11 @@ interface OcrLineSegment {
 
 export async function extractOcrTextBlocks(imagePath: string): Promise<OcrExtractionResult> {
   try {
-    const { stdout } = await execFileAsync(
-      "tesseract",
-      [imagePath, "stdout", "--psm", "11", "-l", "eng", "tsv"],
-      {
-        timeout: OCR_TIMEOUT_MS,
-        maxBuffer: OCR_MAX_BUFFER_BYTES,
-      }
-    );
+    const tsv = await recognizeTsv(imagePath);
     return {
       status: "ok",
       provider: "tesseract",
-      blocks: parseTesseractTsv(stdout),
+      blocks: parseTesseractTsv(tsv),
     };
   } catch {
     return {
@@ -92,16 +88,68 @@ export async function extractOcrTextBlocks(imagePath: string): Promise<OcrExtrac
   }
 }
 
+async function recognizeTsv(imagePath: string): Promise<string> {
+  const workerRef: { current: Tesseract.Worker | null } = { current: null };
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  const recognition = (async () => {
+    workerRef.current = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {
+      cacheMethod: "none",
+      gzip: true,
+      langPath: TESSDATA_PATH,
+      logger: () => {},
+      ...resolvePackagedTesseractOptions(),
+    });
+    if (timedOut) {
+      await workerRef.current.terminate().catch(() => {});
+      throw new Error("OCR timed out.");
+    }
+    await workerRef.current.setParameters({
+      tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
+    });
+    const result = await workerRef.current.recognize(imagePath, {}, { text: true, tsv: true });
+    return result.data.tsv ?? "";
+  })();
+
+  try {
+    return await Promise.race([
+      recognition,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          void workerRef.current?.terminate().catch(() => {});
+          reject(new Error("OCR timed out."));
+        }, OCR_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    await workerRef.current?.terminate().catch(() => {});
+    recognition.catch(() => {});
+  }
+}
+
+function resolvePackagedTesseractOptions(): Partial<Tesseract.WorkerOptions> {
+  if (!fs.existsSync(PACKAGED_TESSERACT_WORKER_PATH)) return {};
+  return {
+    workerPath: PACKAGED_TESSERACT_WORKER_PATH,
+  };
+}
+
 export function parseTesseractTsv(tsv: string): OcrTextBlock[] {
   const [headerLine, ...lines] = tsv.split(/\r?\n/);
   if (!headerLine) return [];
 
-  const headers = headerLine.replace(/^\uFEFF/u, "").split("\t");
+  const normalizedHeaderLine = headerLine.replace(/^\uFEFF/u, "");
+  const hasHeader = !isHeaderlessTsvDataRow(normalizedHeaderLine);
+  const headers = hasHeader ? normalizedHeaderLine.split("\t") : [...REQUIRED_TSV_HEADERS];
+  const dataLines = hasHeader ? lines : [normalizedHeaderLine, ...lines];
   const indexByName = new Map(headers.map((header, index) => [header, index]));
   validateTsvHeaders(indexByName);
   const words: TesseractWord[] = [];
 
-  for (const line of lines) {
+  for (const line of dataLines) {
     if (!line.trim()) continue;
     const values = line.split("\t");
     const level = readTsvNumber(values, indexByName, "level");
@@ -148,6 +196,15 @@ export function parseTesseractTsv(tsv: string): OcrTextBlock[] {
   return mergeVerticalLineSegments(lineSegments)
     .map(toMergedOcrTextBlock)
     .filter((block): block is OcrTextBlock => block !== null);
+}
+
+function isHeaderlessTsvDataRow(line: string): boolean {
+  const [level, pageNum] = line.split("\t", 2);
+  return isFiniteTsvNumber(level) && isFiniteTsvNumber(pageNum);
+}
+
+function isFiniteTsvNumber(value: string | undefined): boolean {
+  return value !== undefined && value.trim() !== "" && Number.isFinite(Number(value));
 }
 
 function toLineSegments(words: TesseractWord[]): OcrLineSegment[] {

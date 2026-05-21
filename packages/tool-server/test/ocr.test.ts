@@ -32,6 +32,21 @@ describe("Tesseract TSV parsing", () => {
     expect(blocks.map((block) => block.text)).toEqual(["Ready"]);
   });
 
+  it("parses headerless TSV from tesseract.js", () => {
+    const blocks = parseTesseractTsv(
+      [
+        "1\t1\t0\t0\t0\t0\t0\t0\t1206\t2622\t-1\t",
+        "2\t1\t1\t0\t0\t0\t76\t244\t151\t34\t-1\t",
+        "3\t1\t1\t1\t0\t0\t76\t244\t151\t34\t-1\t",
+        "4\t1\t1\t1\t1\t0\t76\t244\t151\t34\t-1\t",
+        "5\t1\t1\t1\t1\t1\t76\t248\t33\t27\t69.401016\t<",
+        "5\t1\t1\t1\t1\t2\t128\t244\t99\t34\t96.929596\tBack",
+      ].join("\n")
+    );
+
+    expect(blocks.map((block) => block.text)).toEqual(["< Back"]);
+  });
+
   it("returns no blocks for empty input", () => {
     expect(parseTesseractTsv("")).toEqual([]);
   });

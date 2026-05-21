@@ -20,6 +20,8 @@ const INSTALLER_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-installer/
 const MCP_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-mcp/src/index.ts");
 const CLI_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-cli/src/index.ts");
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
+const TESSERACT_WORKER_ENTRY = require.resolve("tesseract.js/src/worker-script/node/index.js");
+const TESSERACT_WORKER_OUT_FILE = path.resolve(__dirname, "../dist/tesseract-worker.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
@@ -41,6 +43,7 @@ const ALIASES = {
 // pick ESM entries with static imports that get fully inlined. Affects e.g.
 // jsonc-parser, which ships both UMD (main) and ESM (module).
 const MAIN_FIELDS = ["module", "main"];
+const TOOLS_EXTERNAL = ["@tesseract.js-data/eng"];
 
 // Banner injected into ESM bundles so any inlined CJS dependencies that call
 // `require()` work without a real CJS context.
@@ -84,10 +87,41 @@ esbuild.buildSync({
   format: "cjs",
   outfile: OUT_FILE,
   alias: ALIASES,
+  external: TOOLS_EXTERNAL,
   mainFields: MAIN_FIELDS,
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
+
+// tesseract.js starts a worker thread from a runtime file path. Since the tool
+// server is bundled into one CJS file, ship a matching bundled worker next to it.
+esbuild.buildSync({
+  entryPoints: [TESSERACT_WORKER_ENTRY],
+  bundle: true,
+  platform: "node",
+  target: "node22",
+  format: "cjs",
+  outfile: TESSERACT_WORKER_OUT_FILE,
+  mainFields: MAIN_FIELDS,
+});
+
+for (const filename of [
+  "tesseract-core.wasm",
+  "tesseract-core-lstm.wasm",
+  "tesseract-core-simd.wasm",
+  "tesseract-core-simd-lstm.wasm",
+  "tesseract-core-relaxedsimd.wasm",
+  "tesseract-core-relaxedsimd-lstm.wasm",
+]) {
+  fs.copyFileSync(
+    require.resolve(`tesseract.js-core/${filename}`),
+    path.join(path.dirname(TESSERACT_WORKER_OUT_FILE), filename)
+  );
+}
+
+console.log(
+  `✓ Bundled Tesseract worker → ${path.relative(process.cwd(), TESSERACT_WORKER_OUT_FILE)}`
+);
 
 // Bundle the installer (init/update/uninstall) as ESM so import.meta.dirname
 // works at runtime. The dispatcher lazy-imports this bundle so the workspace
