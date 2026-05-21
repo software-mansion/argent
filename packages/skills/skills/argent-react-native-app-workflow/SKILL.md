@@ -220,7 +220,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
 | Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
-| Compare visible UI changes   | `screenshot-diff` tool; follow the `argent-screenshot-diff` skill for baseline/current capture choices                                  |
+| Compare visible UI changes   | `screenshot-diff` tool; follow the `argent-screenshot-diff` skill for baseline/current capture choices                                   |
 | Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
 | Read JS console logs         | `debugger-log-registry` tool                                                                                                             |
 | Reload JS bundle             | `debugger-reload-metro` tool                                                                                                             |
