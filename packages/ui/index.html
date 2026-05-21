@@ -428,10 +428,12 @@
       .vcard-body {
         max-height: var(--vcard-body-max-h);
         overflow-y: auto;
-        /* Reserve the scrollbar space whether or not it's shown so the row
-           content width is invariant — keeps the JS-sized previews from
-           overhanging / oscillating when a 2nd tall variant adds a scrollbar. */
-        scrollbar-gutter: stable;
+        /* No stable scrollbar gutter: it reserved ~15px on the right inside
+           the body, sitting outside .vrow's content box, so a hovered row
+           had a visible un-highlighted strip on its right. The previews
+           still don't oscillate because applyThumbCrop's cache key includes
+           the row's current content width — when the scrollbar toggles,
+           the cache misses and the preview re-fits to the new width. */
       }
       .vrow {
         display: flex;
@@ -1940,7 +1942,10 @@
         // row reads better. rw=fw*NW, rh=fh*NH (cropped region, px).
         const _vr = tw.closest(".vrow");
         if (_vr) _vr.classList.toggle("col", !(fh * NH >= 1.2 * (fw * NW)));
-        const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}`;
+        // Width is part of the cache key so a scrollbar appearing or
+        // disappearing (no stable gutter) busts the cache and re-fits.
+        const _vrW = _vr ? _vr.clientWidth : 0;
+        const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}:${_vrW}`;
         if (tw._cropKey === key) return; // unchanged — avoid layout thrash
         tw._cropKey = key;
         const rw = fw * NW,
@@ -1951,10 +1956,10 @@
         // Fill the space the bubble actually gives the preview instead of a
         // fixed 96px chip: the full row content width when stacked (column),
         // a generous height when side-by-side (row). The card width is fixed
-        // (232px) and .vcard-body reserves a stable scrollbar gutter, so the
-        // row's content box is invariant to scrollbar state — the
-        // geometry-only cache key above stays correct (no re-fit needed,
-        // no scrollbar-feedback oscillation).
+        // but the row's content box shrinks when a scrollbar appears, so the
+        // cache key above includes the row's clientWidth — the cache then
+        // misses on scrollbar toggle and the preview re-fits to the new
+        // width instead of overhanging.
         const colMode = _vr ? _vr.classList.contains("col") : false;
         const availW = Math.max(120, (_vr ? _vr.clientWidth : 212) - 20);
         let W, H;
@@ -2050,9 +2055,36 @@
               // can't fling it across the screen.
               const cap = THEME.flickMaxVel;
               const cl = (v) => (v < -cap ? -cap : v > cap ? cap : v);
+              let releaseVx = 0;
+              let releaseVy = 0;
               if (Math.abs(vx) > 40 || Math.abs(vy) > 40) {
-                rec.vel = { x: cl(vx), y: cl(vy) };
+                releaseVx = cl(vx);
+                releaseVy = cl(vy);
               }
+              // Out-of-bounds recovery: when the user drops the bubble
+              // past a viewport edge, bias home back to the nearest
+              // in-bounds point and add inward velocity so the spring
+              // pulls the bubble back with momentum (not a snap). The pos
+              // stays at the drop point — the bubble flies in smoothly.
+              const elW = rec.el.offsetWidth || 0;
+              const elH = rec.el.offsetHeight || 0;
+              const mr2 = mainEl.getBoundingClientRect();
+              const PAD = 8;
+              const minXb = PAD,
+                maxXb = mr2.width - elW - PAD;
+              const minYb = PAD,
+                maxYb = mr2.height - elH - PAD;
+              const hx = Math.max(minXb, Math.min(maxXb, rec.pos.x));
+              const hy = Math.max(minYb, Math.min(maxYb, rec.pos.y));
+              let kx = 0;
+              let ky = 0;
+              const KICK = 700; // px/s — strong enough to feel decisive
+              if (rec.pos.x < minXb) kx = +KICK;
+              else if (rec.pos.x > maxXb) kx = -KICK;
+              if (rec.pos.y < minYb) ky = +KICK;
+              else if (rec.pos.y > maxYb) ky = -KICK;
+              rec.home = { x: hx, y: hy };
+              rec.vel = { x: cl(releaseVx + kx), y: cl(releaseVy + ky) };
             }
             window.removeEventListener("pointermove", move);
             window.removeEventListener("pointerup", up);
@@ -2420,7 +2452,19 @@
         }
         for (const w of want) {
           const hx = w.side === "L" ? leftX : rightX;
-          w.rec.home = w.rec.pinned && w.rec.pos ? w.rec.pos : { x: hx, y: w.y };
+          // Pinned cards keep the user's drop position as home, BUT clamp it
+          // to the viewport — otherwise a card dragged off-screen would rest
+          // off-screen with no way to bring it back.
+          let pinHome = null;
+          if (w.rec.pinned && w.rec.pos) {
+            const elW = w.rec.el.offsetWidth || cardW;
+            const elH = w.rec.el.offsetHeight || w.ch;
+            pinHome = {
+              x: Math.max(COL_PAD, Math.min(mw - elW - COL_PAD, w.rec.pos.x)),
+              y: Math.max(COL_PAD, Math.min(mh - elH - COL_PAD, w.rec.pos.y)),
+            };
+          }
+          w.rec.home = pinHome || { x: hx, y: w.y };
           if (!w.rec.pos) {
             // First appearance: drift in from just outside its own side
             // toward home so it floats into place like a cloud (px/s — the
