@@ -1998,6 +1998,14 @@
           ev.stopPropagation();
           const mr = mainEl.getBoundingClientRect();
           vp.cardDragging = true;
+          // Grab the card where the pointer landed, not by its top-centre.
+          // Without this offset the card would jump so the pointer sits at
+          // (width/2, 12) on the first move event.
+          const startRec = vp.cards.get(p.id);
+          const startEl = startRec ? startRec.el : el;
+          const cr0 = startEl.getBoundingClientRect();
+          const grabX = ev.clientX - cr0.left;
+          const grabY = ev.clientY - cr0.top;
           // Release-velocity tracking so a flick "throws" the bubble.
           let lcx = ev.clientX,
             lcy = ev.clientY,
@@ -2009,8 +2017,8 @@
             // (rare while dragging — guarded) can't strand the drag.
             const rec = vp.cards.get(p.id);
             const node = rec ? rec.el : el;
-            const x = m.clientX - mr.left - node.offsetWidth / 2;
-            const y = m.clientY - mr.top - 12;
+            const x = m.clientX - mr.left - grabX;
+            const y = m.clientY - mr.top - grabY;
             // EMA of pointer velocity in px/s (smooths the last-sample spike).
             const now = performance.now();
             const dt = Math.max(8, now - lt);
