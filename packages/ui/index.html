@@ -458,6 +458,24 @@
       .vrow.staged {
         background: var(--color-row-staged);
       }
+      /* Once a variant is staged on a card, the other variants collapse to
+         a name-only line so they stop dominating the screen — they stay
+         clickable so the user can switch picks, and re-clicking the staged
+         row unstages and brings everyone back. */
+      .vcard:has(.vrow.staged) .vrow:not(.staged) {
+        flex-direction: row;
+        align-items: center;
+        padding: 4px 10px;
+        gap: var(--gap-inline);
+        font-size: var(--fs-note);
+        color: var(--color-muted);
+      }
+      .vcard:has(.vrow.staged) .vrow:not(.staged) .thumb {
+        display: none;
+      }
+      .vcard:has(.vrow.staged) .vrow:not(.staged):hover {
+        color: var(--color-fg);
+      }
       /* Wide/square previews read better stacked (image above text); only
          clearly-portrait previews keep the side-by-side row. */
       .vrow.col {
@@ -1638,8 +1656,22 @@
         annPopFor: null, // annotation id whose review popover is open
       };
 
+      // iOS AX labels for elements that embed SF Symbol glyphs (tab bar
+      // buttons, many toolbar items) include the glyph as a BMP private-use
+      // code point. After stripping the unrenderable glyph, the leftover
+      // commas (which separate the symbol from the human text) leak into
+      // headers like `Comment on , , Favourites (6)`. cleanLabel removes
+      // the private-use chars and collapses comma/space runs while
+      // preserving case for display.
+      function cleanLabel(s) {
+        return (s || "")
+          .replace(/[-]/g, "")
+          .replace(/[,\s]+/g, " ")
+          .trim();
+      }
       function nodeDesc(n) {
-        return (n && (n.identifier || n.label || n.value || (n.role ? n.role : ""))) || "element";
+        const raw = (n && (n.identifier || n.label || n.value || (n.role ? n.role : ""))) || "";
+        return cleanLabel(raw) || "element";
       }
       function nodeMatch(n) {
         if (n.identifier) return { by: "identifier", value: n.identifier };
@@ -1894,7 +1926,14 @@
         completeNote.className = "complete-note" + (kind ? " " + kind : "");
       }
       function vpStage(elementId, variantId) {
-        vp.staged[elementId] = variantId;
+        // Re-clicking the already-staged variant unstages — this is how the
+        // user re-expands the card to see every variant again after picking
+        // one. Clicking a different variant simply swaps the selection.
+        if (vp.staged[elementId] === variantId) {
+          delete vp.staged[elementId];
+        } else {
+          vp.staged[elementId] = variantId;
+        }
         setNote("");
         vpRender();
       }
@@ -2163,7 +2202,7 @@
 
         const cmt = document.createElement("textarea");
         cmt.className = "vcard-cmt";
-        cmt.placeholder = `Comment on "${p.element}" (optional)…`;
+        cmt.placeholder = `Comment on "${cleanLabel(p.element) || p.element}" (optional)…`;
         cmt.value = vp.comments[p.id] || "";
         cmt.addEventListener("input", () => {
           vp.comments[p.id] = cmt.value;
@@ -2390,7 +2429,12 @@
           pick.side = toSide;
         }
         const colTop = COL_PAD;
-        const colBottom = mh - COL_PAD;
+        // The footbar (Complete selection + comment) floats above #main's
+        // bottom edge. Without this clamp the column extends behind it and
+        // hides the bottom of any card whose comment box lands down low.
+        const footTop =
+          footEl && !footEl.hidden ? footEl.getBoundingClientRect().top - mr.top - COL_PAD : mh;
+        const colBottom = Math.min(mh - COL_PAD, footTop);
         const colH = colBottom - colTop;
         for (const col of ["L", "R"]) {
           const cwant = want.filter((w) => w.side === col);
@@ -2741,7 +2785,15 @@
         const mr = mainEl.getBoundingClientRect();
         let px = ex + ew + 14;
         if (px + 260 > mr.width) px = Math.max(8, ex - 262);
-        let py = Math.min(Math.max(8, ey - 10), mr.height - 180);
+        // Clamp below the footbar so its lower portion isn't covered by the
+        // floating Complete-selection bar. Measure popH after it's visible
+        // (we already set hidden=false above) — falls back to a sane minimum.
+        const safeBottom =
+          footEl && !footEl.hidden
+            ? footEl.getBoundingClientRect().top - mr.top - 8
+            : mr.height - 8;
+        const popH = popEl.offsetHeight || 180;
+        let py = Math.min(Math.max(8, ey - 10), Math.max(8, safeBottom - popH));
         popEl.style.left = px + "px";
         popEl.style.top = py + "px";
         ta.focus();
