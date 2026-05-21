@@ -350,37 +350,6 @@ export function getInstalledVersion(): string | null {
   }
 }
 
-/**
- * Read the version of the globally-installed argent package — distinct from
- * {@link getInstalledVersion}, which reads the package.json this code is
- * currently executing from. When invoked via `npx @swmansion/argent`, the
- * npx cache is always at the latest published version, so reading
- * PACKAGE_ROOT/package.json masks an outdated global install and lets the
- * update check report "already on the latest" incorrectly. This helper
- * resolves the global binary via `which -a` / `where`, follows symlinks to
- * the actual entrypoint, and walks up to the owning package.json instead.
- *
- * Returns null when argent is not permanently installed on PATH, or when
- * the global package layout cannot be resolved (e.g., Windows wrapper
- * scripts that aren't symlinks). Callers should treat null as "could not
- * determine" — preferable to silently using the running package's version,
- * which is the bug this guards against.
- */
-export function getGloballyInstalledVersion(): string | null {
-  const binaryPath = getGlobalBinaryPath();
-  if (!binaryPath) return null;
-  try {
-    const realPath = fs.realpathSync(binaryPath);
-    const pkgRoot = resolvePackageRoot(path.dirname(realPath));
-    const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8")) as {
-      version?: string;
-    };
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
-}
-
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
@@ -399,54 +368,15 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return semver.gt(candidate, current);
 }
 
-// Path segments used by temp package runners (npx, pnpm dlx, bunx, yarn dlx).
-// When invoked via one of these, the runner prepends its cache .bin/ dir to PATH,
-// so `which argent` succeeds even though argent is not permanently installed globally.
-const TEMP_RUNNER_MARKERS = [
-  "_npx",
-  "/dlx-",
-  "\\dlx-",
-  "bun/install/cache",
-  ".bun\\install\\cache",
-];
-
-export function isTempRunnerPath(binaryPath: string): boolean {
-  return TEMP_RUNNER_MARKERS.some((marker) => binaryPath.includes(marker));
-}
-
-/**
- * Resolve the path of the globally-installed argent binary, ignoring
- * temp-runner caches (npx / pnpm dlx / bunx / yarn dlx). On Windows `where`
- * returns every match, on Unix `which -a` does — we inspect each line so a
- * concurrent npx invocation does not mask a real global install. Returns
- * null when argent is not permanently installed on PATH.
- */
-function getGlobalBinaryPath(): string | null {
-  try {
-    const cmd = process.platform === "win32" ? "where" : "which -a";
-    const output = execSync(`${cmd} ${MCP_BINARY_NAME}`, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return (
-      output
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .find((line) => !isTempRunnerPath(line)) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
-/**
- * True iff argent is permanently installed on the user's PATH (not just being
- * executed transiently from an npx / dlx / bunx cache).
- */
-export function isGloballyInstalled(): boolean {
-  return getGlobalBinaryPath() !== null;
-}
+// Re-exported from ./topology so existing imports keep working. New code
+// should import directly from ./topology.js.
+export {
+  getGloballyInstalledVersion,
+  getLocallyInstalledVersion,
+  isGloballyInstalled,
+  isLocallyInstalled,
+  isTempRunnerPath,
+} from "./topology.js";
 
 export function isSkillsCliAvailable(): boolean {
   try {
@@ -479,168 +409,17 @@ export async function isOnline(timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
 }
 
 // ── Package manager detection ─────────────────────────────────────────────────
+// Re-exported from ./package-manager so existing callers keep working.
+// New code should import directly from ./package-manager.js.
+export {
+  detectPackageManager,
+  formatShellCommand,
+  globalInstallCommand,
+  globalUninstallCommand,
+  localDevInstallCommand,
+  localDevUninstallCommand,
+} from "./package-manager.js";
+export type { PackageManager, ShellCommand } from "./package-manager.js";
 
-export type PackageManager = "npm" | "yarn" | "pnpm" | "bun";
-
-export interface ShellCommand {
-  bin: string;
-  args: string[];
-}
-
-export function formatShellCommand(cmd: ShellCommand): string {
-  const parts = [cmd.bin, ...cmd.args.map((a) => (a.includes(" ") ? `"${a}"` : a))];
-  return parts.join(" ");
-}
-
-// Resolution: 1) projectRoot's lockfile (load-bearing for `--devdep` —
-// `npx` sets npm_config_user_agent=npm/... even inside a yarn workspace,
-// which would issue `npm install` and fail on yarn-only `link:` deps);
-// 2) npm_config_user_agent; 3) npm.
-// projectRoot is optional so user-agent-only call sites still work.
-export function detectPackageManager(projectRoot?: string): PackageManager {
-  if (projectRoot) {
-    const fromLockfile = detectFromLockfile(projectRoot);
-    if (fromLockfile) return fromLockfile;
-  }
-  const agent = process.env.npm_config_user_agent ?? "";
-  if (agent.startsWith("yarn")) return "yarn";
-  if (agent.startsWith("pnpm")) return "pnpm";
-  if (agent.startsWith("bun")) return "bun";
-  return "npm";
-}
-
-// Ordered by specificity — pnpm/bun lockfiles are unique to their PM;
-// yarn is unambiguous; package-lock.json / shrinkwrap fall through last.
-const LOCKFILE_TO_PM: ReadonlyArray<readonly [string, PackageManager]> = [
-  ["pnpm-lock.yaml", "pnpm"],
-  ["bun.lock", "bun"],
-  ["bun.lockb", "bun"],
-  ["yarn.lock", "yarn"],
-  ["package-lock.json", "npm"],
-  ["npm-shrinkwrap.json", "npm"],
-];
-
-function detectFromLockfile(projectRoot: string): PackageManager | null {
-  for (const [lockfile, pm] of LOCKFILE_TO_PM) {
-    if (fs.existsSync(path.join(projectRoot, lockfile))) return pm;
-  }
-  return null;
-}
-
-export function globalInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["global", "add", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["add", "-g", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["add", "-g", pkg] };
-    default:
-      return { bin: "npm", args: ["install", "-g", pkg] };
-  }
-}
-
-export function globalUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["global", "remove", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["remove", "-g", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["remove", "-g", pkg] };
-    default:
-      return { bin: "npm", args: ["uninstall", "-g", pkg] };
-  }
-}
-
-// ── Local devDependency helpers ──────────────────────────────────────────────
-// Counterparts to globalInstall/UninstallCommand for the `--devdep` flow.
-// All four PMs accept a registry name or a tarball/file path as the
-// positional, so the same recipes work for the --from flag.
-
-export function localDevUninstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["remove", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["remove", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["remove", pkg] };
-    default:
-      return { bin: "npm", args: ["uninstall", pkg] };
-  }
-}
-
-export function localDevInstallCommand(pm: PackageManager, pkg: string): ShellCommand {
-  switch (pm) {
-    case "yarn":
-      return { bin: "yarn", args: ["add", "--dev", pkg] };
-    case "pnpm":
-      return { bin: "pnpm", args: ["add", "-D", pkg] };
-    case "bun":
-      return { bin: "bun", args: ["add", "-d", pkg] };
-    default:
-      return { bin: "npm", args: ["install", "--save-dev", pkg] };
-  }
-}
-
-// Requires BOTH a dep declaration in the project's package.json AND the
-// files on disk. The declaration check disambiguates a real consumer
-// install from an npm/yarn workspace where node_modules/@swmansion/argent
-// is just a symlink to the workspace source (workspace members don't
-// list themselves in the root manifest).
-export function isLocallyInstalled(projectRoot: string): boolean {
-  if (!isDeclaredAsDependency(projectRoot)) return false;
-  return fs.existsSync(localPackageJsonPath(projectRoot));
-}
-
-const DEPENDENCY_FIELDS = [
-  "dependencies",
-  "devDependencies",
-  "peerDependencies",
-  "optionalDependencies",
-] as const;
-
-// Missing or unparseable package.json → false (safer default than
-// claiming the project depends on argent).
-function isDeclaredAsDependency(projectRoot: string): boolean {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")) as {
-      [field: string]: Record<string, unknown> | undefined;
-    };
-    return DEPENDENCY_FIELDS.some((field) => Boolean(pkg[field]?.[PACKAGE_NAME]));
-  } catch {
-    return false;
-  }
-}
-
-function localPackageJsonPath(projectRoot: string): string {
-  return path.join(projectRoot, "node_modules", "@swmansion", "argent", "package.json");
-}
-
-// Reads <projectRoot>/node_modules/@swmansion/argent/package.json so
-// the version reported after install is the one that landed on disk,
-// not the npx cache that's still running init. Null on miss/parse fail.
-export function getLocallyInstalledVersion(projectRoot: string): string | null {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(localPackageJsonPath(projectRoot), "utf8")) as {
-      version?: string;
-    };
-    return pkg.version ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// Yarn 2+ PnP — no literal node_modules/.bin/argent, so the devDep
-// flow's MCP command would resolve to nothing. Surface upfront.
-export function isYarnPnp(projectRoot: string): boolean {
-  return (
-    fs.existsSync(path.join(projectRoot, ".pnp.cjs")) ||
-    fs.existsSync(path.join(projectRoot, ".pnp.loader.mjs"))
-  );
-}
-
-export function hasPackageJson(projectRoot: string): boolean {
-  return fs.existsSync(path.join(projectRoot, "package.json"));
-}
+// Re-exported from ./preflight for compatibility.
+export { hasPackageJson, isYarnPnp } from "./preflight.js";

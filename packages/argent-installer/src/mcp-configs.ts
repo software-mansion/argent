@@ -55,6 +55,11 @@ export interface McpConfigAdapter {
   // False for adapters with no project-scoped config file (Windsurf,
   // Hermes) — excluded from the `--devdep` flow. Defaults to true.
   acceptsLocalInstall?: boolean;
+  // When true, the adapter natively expands ${CLAUDE_PROJECT_DIR} in
+  // `command`/`args`. Currently only Claude Code documents this.
+  // getMcpEntry uses it to pick the local-mode command path. Defaults
+  // to false (plain "./node_modules/.bin/argent").
+  expandsProjectDirVariable?: boolean;
 }
 
 type CodexConfig = {
@@ -96,11 +101,11 @@ export function getMcpEntry(
     };
   }
 
-  // Claude Code documents `${CLAUDE_PROJECT_DIR}` substitution (see
-  // code.claude.com/docs/en/mcp); `:-.` keeps the path usable when the
-  // variable isn't populated (e.g. manual debug runs).
-  const useClaudeProjectDir = adapter?.name === "Claude Code";
-  const command = useClaudeProjectDir
+  // Adapters that natively expand ${CLAUDE_PROJECT_DIR} (Claude Code) use
+  // the documented substitution; `:-.` keeps it usable when the variable
+  // isn't populated (e.g. manual debug runs). See `expandsProjectDirVariable`
+  // on each adapter for the contract.
+  const command = adapter?.expandsProjectDirVariable
     ? "${CLAUDE_PROJECT_DIR:-.}/node_modules/.bin/argent"
     : LOCAL_BIN_REL_PATH;
 
@@ -241,6 +246,9 @@ const cursorAdapter: McpConfigAdapter = {
 
 const claudeAdapter: McpConfigAdapter = {
   name: "Claude Code",
+  // Claude Code documents `${CLAUDE_PROJECT_DIR}` substitution in `command`
+  // / `args` (see code.claude.com/docs/en/mcp).
+  expandsProjectDirVariable: true,
 
   detect(): boolean {
     return (

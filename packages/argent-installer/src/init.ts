@@ -1,677 +1,121 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { spawn } from "node:child_process";
 import {
-  detectAdapters,
-  ALL_ADAPTERS,
-  getMcpEntry,
   copyRulesAndAgents,
   type McpConfigAdapter,
-  type McpEntryMode,
 } from "./mcp-configs.js";
 import {
-  SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
-  buildArgentSkillsSource,
   getInstalledVersion,
   getLatestVersion,
   getLocallyInstalledVersion,
-  isGloballyInstalled,
-  isLocallyInstalled,
-  isYarnPnp,
-  hasPackageJson,
   isNewerVersion,
-  isOnline,
-  isSkillsCliAvailable,
-  detectPackageManager,
-  globalInstallCommand,
-  localDevInstallCommand,
-  formatShellCommand,
   resolveProjectRoot,
-  type ShellCommand,
 } from "./utils.js";
+import { formatShellCommand } from "./package-manager.js";
+import { runShellCommand } from "./shell.js";
 import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
+import {
+  parseInitArgs,
+  validateInitArgs,
+  reportInitArgsError,
+  InitArgsError,
+  type InitArgs,
+} from "./init-args.js";
+import { promptInstallMode } from "./init-mode-prompt.js";
+import { runInstall } from "./install-runner.js";
+import {
+  GLOBAL,
+  LOCAL,
+  isGloballyInstalled,
+  isLocallyInstalled,
+  type Topology,
+  type TopologyId,
+} from "./topology.js";
+import { chooseAdapters } from "./init-adapters.js";
+import { chooseScope, type Scope } from "./init-scope.js";
+import { writeMcpConfigs } from "./init-mcp-write.js";
+import { configureAllowlist } from "./init-allowlist.js";
+import { runSkillsStep, type SkillsMethod } from "./init-skills.js";
 
-function runShellCommand(cmd: ShellCommand): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const isWin = process.platform === "win32";
-    const child = spawn(isWin ? `${cmd.bin}.cmd` : cmd.bin, cmd.args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: isWin,
-    });
+// `argent init` orchestrator. Each phase below is a thin call into a
+// dedicated module — the goal is for this file to read top-to-bottom
+// like a recipe, with no inline branching on install topology.
 
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || `Command exited with code ${code}`));
-    });
-
-    child.on("error", reject);
-  });
-}
-
-function extractFlag(args: string[], flag: string): string | null {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return null;
-  return args[idx + 1]!;
-}
-
-type InstallMode = "global" | "local";
-
-export async function init(args: string[]): Promise<void> {
-  const nonInteractive = args.includes("--yes") || args.includes("-y");
-  const fromTar = extractFlag(args, "--from");
-  // `--devdep` (alias `--local-install`) is the non-interactive selector
-  // for the team-share install topology.
-  const devdepFlagRequested = args.includes("--devdep") || args.includes("--local-install");
-  const explicitGlobalScope = (() => {
-    const idx = args.indexOf("--scope");
-    if (idx === -1 || idx + 1 >= args.length) return false;
-    return args[idx + 1] === "global";
-  })();
-  if (devdepFlagRequested && explicitGlobalScope) {
-    process.stderr.write(
-      `${pc.red("error")}: --devdep is incompatible with --scope global ` +
-        "(local installs must use the project-scoped MCP config).\n"
-    );
-    process.exit(1);
+export async function init(rawArgs: string[]): Promise<void> {
+  const parsed = parseInitArgs(rawArgs);
+  try {
+    validateInitArgs(parsed);
+  } catch (err) {
+    if (err instanceof InitArgsError) {
+      reportInitArgsError(err);
+      process.exit(1);
+    }
+    throw err;
   }
 
   printBanner();
-
   p.intro(pc.bgCyan(pc.black(" argent init ")));
 
   let version = getInstalledVersion() ?? "unknown";
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
-  // ── Step 0: Install / Update Check ──────────────────────────────────────────
-
-  const globallyInstalled = isGloballyInstalled();
+  // ── Step 0 — decide topology + install if needed ─────────────────────
   const projectRoot = resolveProjectRoot(process.cwd());
-  const locallyInstalled = isLocallyInstalled(projectRoot);
+  const topology = await decideTopology(parsed, projectRoot);
+  version = await ensureInstalled({ topology, parsed, projectRoot, version });
 
-  // Default to global to match the historical single-mode behavior; never
-  // auto-pick local on the presence of node_modules/@swmansion/argent —
-  // a workspace ancestor with argent installed would silently change the
-  // mode for users running init via `npx`.
-  let installMode: InstallMode = devdepFlagRequested ? "local" : "global";
-
-  if (!globallyInstalled && !nonInteractive && !devdepFlagRequested) {
-    // Loop so a "no" on the Local confirm re-prompts the mode select
-    // instead of aborting init. Only Esc/Ctrl+C cancels.
-    while (true) {
-      const installChoice = await p.select({
-        message: locallyInstalled
-          ? "How would you like to configure argent?"
-          : "Argent isn't installed yet. How would you like to set it up?",
-        initialValue: "global" as const,
-        options: [
-          {
-            value: "global" as const,
-            label: "Global (recommended)",
-            hint: "Makes the argent command available everywhere",
-          },
-          {
-            value: "local" as const,
-            label: locallyInstalled
-              ? "Local (devDependency, already installed)"
-              : "Local (devDependency)",
-            hint: "Might be used by teams to share configuration",
-          },
-          {
-            value: "cancel" as const,
-            label: "Cancel installation",
-          },
-        ],
-      });
-
-      if (p.isCancel(installChoice) || installChoice === "cancel") {
-        p.cancel("Installation cancelled.");
-        process.exit(0);
-      }
-
-      // Surface the cross-editor relative-path caveat only on the Local
-      // path so it lands as decision context, not noise.
-      if (installChoice === "local") {
-        p.log.warn(
-          `The localy set up argent will only work if your agent runs from the root directory of your project. If a teammate's editor fails to start argent, verify if he is in the root directory first.`
-        );
-
-        p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-        const confirmLocal = await p.confirm({
-          message: "Proceed with the Local devDependency install?",
-          initialValue: true,
-        });
-        if (p.isCancel(confirmLocal)) {
-          p.cancel("Installation cancelled.");
-          process.exit(0);
-        }
-        if (!confirmLocal) {
-          continue;
-        }
-      }
-
-      installMode = installChoice;
-      break;
-    }
-  }
-
-  // ── Step 0a: actually install (or skip if already in the right state) ──
-
-  if (installMode === "local") {
-    if (locallyInstalled) {
-      p.log.info(
-        `Argent is already installed as a devDependency at ` +
-          `${pc.dim(`${projectRoot}/node_modules/@swmansion/argent`)}. Skipping install step.`
-      );
-      version = getLocallyInstalledVersion(projectRoot) ?? version;
-    } else {
-      // Refuse early when the workspace can't host a devDep.
-      if (!hasPackageJson(projectRoot)) {
-        p.log.error(
-          `No package.json found at ${pc.dim(projectRoot)}.\n` +
-            `  Run ${pc.cyan("npm init -y")} first, then re-run ${pc.cyan("argent init --devdep")}.`
-        );
-        process.exit(1);
-      }
-      if (isYarnPnp(projectRoot)) {
-        p.log.error(
-          `Yarn PnP detected (.pnp.cjs at ${pc.dim(projectRoot)}).\n` +
-            `  The devDep flow needs a real node_modules/.bin directory.\n` +
-            `  Switch to ${pc.cyan('nodeLinker: "node-modules"')} in .yarnrc.yml or ` +
-            `re-run with ${pc.cyan("argent init")} for a global install.`
-        );
-        process.exit(1);
-      }
-
-      // Prefer the project's lockfile over the runtime user-agent —
-      // under `npx` the agent is always npm regardless of the project's
-      // actual PM, which breaks yarn-only protocols like `link:`.
-      const pm = detectPackageManager(projectRoot);
-      const installTarget = fromTar ?? PACKAGE_NAME;
-      const cmd = localDevInstallCommand(pm, installTarget);
-      const cmdStr = formatShellCommand(cmd);
-      const spinner = p.spinner();
-      spinner.start(`Installing ${PACKAGE_NAME} as a devDependency with ${pm}...`);
-      try {
-        await runShellCommand(cmd);
-        spinner.stop(pc.green(`Installed as devDependency (via ${pm}).`));
-        // Read the just-installed copy, not the running module: under
-        // `npx`, getInstalledVersion() returns the npx cache version.
-        version = getLocallyInstalledVersion(projectRoot) ?? version;
-      } catch (err) {
-        spinner.stop(pc.red("Installation failed."));
-        reportLocalInstallFailure(err, cmdStr, projectRoot);
-        process.exit(1);
-      }
-    }
-  } else if (installMode === "global" && !globallyInstalled) {
-    const pm = detectPackageManager();
-    const installTarget = fromTar ?? PACKAGE_NAME;
-    const cmd = globalInstallCommand(pm, installTarget);
-    const cmdStr = formatShellCommand(cmd);
-    const spinner = p.spinner();
-    spinner.start(`Installing ${PACKAGE_NAME} globally...`);
-    try {
-      await runShellCommand(cmd);
-      spinner.stop(pc.green("Installed globally."));
-      version = getInstalledVersion() ?? version;
-    } catch (err) {
-      spinner.stop(pc.red("Installation failed."));
-      p.log.error(`${err}`);
-      p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
-      process.exit(1);
-    }
-  } else if (installMode === "global" && fromTar) {
-    // --from flag: reinstall from the specified tarball/path
-    const pm = detectPackageManager();
-    const cmd = globalInstallCommand(pm, fromTar);
-    const cmdStr = formatShellCommand(cmd);
-    const spinner = p.spinner();
-    spinner.start(`Installing from ${fromTar}...`);
-    try {
-      await runShellCommand(cmd);
-      spinner.stop(pc.green("Installed from tarball."));
-      version = getInstalledVersion() ?? version;
-    } catch (err) {
-      spinner.stop(pc.red("Installation failed."));
-      p.log.error(`${err}`);
-      p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
-      process.exit(1);
-    }
-  } else if (installMode === "global") {
-    let latest: string | null = null;
-    const spinner = p.spinner();
-    spinner.start("Checking for updates...");
-    try {
-      latest = getLatestVersion();
-    } catch {
-      // Registry unreachable - silently skip
-    }
-    spinner.stop(pc.dim("Version check complete."));
-
-    if (latest && isNewerVersion(latest, version)) {
-      if (!nonInteractive) {
-        const updateChoice = await p.select({
-          message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
-          options: [
-            {
-              value: "update" as const,
-              label: `Update to v${latest} (recommended)`,
-            },
-            {
-              value: "skip" as const,
-              label: "Skip",
-              hint: "Continue with current version",
-            },
-          ],
-        });
-
-        if (!p.isCancel(updateChoice) && updateChoice === "update") {
-          const pm = detectPackageManager();
-          const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
-          const cmdStr = formatShellCommand(cmd);
-          const updateSpinner = p.spinner();
-          updateSpinner.start(`Updating to v${latest}...`);
-          try {
-            await runShellCommand(cmd);
-            updateSpinner.stop(pc.green(`Updated to v${latest}.`));
-            version = getInstalledVersion() ?? version;
-
-            // After a version bump, refresh every scope that already
-            // tracks argent skills so orphans (skills removed by the
-            // newer argent) surface before Step 2's single-scope add.
-            const skillSummary = formatSkillRefreshSummary(
-              refreshArgentSkills(resolveProjectRoot(process.cwd()))
-            );
-            if (skillSummary) {
-              p.note(skillSummary, "Skills Updated");
-            }
-          } catch (err) {
-            updateSpinner.stop(pc.red("Update failed."));
-            p.log.error(`${err}`);
-            p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
-          }
-        }
-      }
-    }
-  }
-
-  // ── Step 1: MCP Server Configuration ────────────────────────────────────────
-
+  // ── Step 1 — MCP configuration ────────────────────────────────────────
   p.log.step(pc.bold("Step 1: MCP Server Configuration"));
+  announceLocalMode(topology.id);
 
-  if (installMode === "local") {
-    p.log.info(
-      `${pc.dim("Mode:")} Local devDependency — argent is pinned in ${pc.cyan("package.json")}, ` +
-        `MCP configs point at ${pc.cyan("./node_modules/.bin/argent")}.\n` +
-        `  Commit the changed files (package.json, lockfile, MCP configs) so the team shares this setup.`
-    );
-  }
-
-  // Local mode: keep only adapters that have a project-scoped config
-  // file. Global-only adapters (Windsurf, Hermes) can't participate.
-  const adapterUniverse =
-    installMode === "local"
-      ? ALL_ADAPTERS.filter((a) => a.acceptsLocalInstall !== false)
-      : ALL_ADAPTERS;
-  const detected = detectAdapters().filter((a) => adapterUniverse.includes(a));
-  const detectedNames = detected.map((a) => a.name);
-
-  if (installMode === "local") {
-    const dropped = ALL_ADAPTERS.filter((a) => a.acceptsLocalInstall === false);
-    if (dropped.length > 0) {
-      p.log.info(
-        pc.dim(
-          `Skipping ${dropped.map((a) => a.name).join(", ")} ` +
-            `(global-only — no project config file to commit).`
-        )
-      );
-    }
-  }
-
-  let selectedAdapters: McpConfigAdapter[];
-
-  if (nonInteractive) {
-    selectedAdapters = detected.length > 0 ? detected : adapterUniverse;
-  } else {
-    const choices = adapterUniverse.map((a) => {
-      const parts: string[] = [];
-      if (detectedNames.includes(a.name)) parts.push("detected");
-      const hasProject = a.projectPath(process.cwd()) != null;
-      const hasGlobal = a.globalPath() != null;
-      if (!hasProject && hasGlobal) {
-        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s global config`)));
-      } else if (hasProject && !hasGlobal) {
-        parts.push(pc.italic(pc.cyan(`ⓘ  will be installed into ${a.name}'s project config`)));
-      }
-      return {
-        value: a,
-        label: a.name,
-        hint: parts.length > 0 ? parts.join(", ") : undefined,
-      };
-    });
-
-    p.log.message(pc.dim("  Use arrow keys to move, space to toggle, enter to confirm."));
-
-    const selected = await p.multiselect({
-      message: "Which editors should Argent be configured for?",
-      options: choices,
-      initialValues: detected,
-      required: true,
-    });
-
-    if (p.isCancel(selected)) {
-      p.cancel("Initialization cancelled.");
-      process.exit(0);
-    }
-
-    selectedAdapters = selected as McpConfigAdapter[];
-  }
-
+  const { selected: selectedAdapters } = await chooseAdapters({
+    topology: topology.id,
+    nonInteractive: parsed.nonInteractive,
+  });
   p.log.info(`Editors: ${selectedAdapters.map((a) => pc.cyan(a.name)).join(", ")}`);
 
-  // Ask scope: global, local, or custom path
-  let scope: "local" | "global" | "custom";
-  let customRoot: string | undefined;
+  const scopeChoice = await chooseScope({
+    topology: topology.id,
+    nonInteractive: parsed.nonInteractive,
+  });
+  const effectiveRoot = scopeChoice.scope === "custom" ? scopeChoice.customRoot! : projectRoot;
+  const normalizedScope: "local" | "global" =
+    scopeChoice.scope === "global" ? "global" : "local";
 
-  if (installMode === "local") {
-    // Committed config must live next to package.json — scope prompt has
-    // only one legitimate answer in this mode.
-    scope = "local";
-  } else if (nonInteractive) {
-    scope = "local";
-  } else {
-    p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
+  const mcpLines = writeMcpConfigs({
+    adapters: selectedAdapters,
+    topology: topology.id,
+    scope: scopeChoice.scope,
+    effectiveRoot,
+    projectRoot,
+  });
+  p.note(mcpLines.join("\n"), "MCP Configuration");
 
-    const scopeChoice = await p.select({
-      message: "Install MCP server globally or locally?",
-      options: [
-        {
-          value: "local" as const,
-          label: "Local",
-          hint: "Current project only - .cursor/mcp.json, .mcp.json, ...",
-        },
-        {
-          value: "global" as const,
-          label: "Global",
-          hint: "Available across all projects - ~/.*/mcp.json",
-        },
-        {
-          value: "custom" as const,
-          label: "Specify installation directory",
-          hint: "Specify a directory to use as the project root",
-        },
-      ],
-    });
-
-    if (p.isCancel(scopeChoice)) {
-      p.cancel("Initialization cancelled.");
-      process.exit(0);
-    }
-
-    scope = scopeChoice as "local" | "global" | "custom";
-
-    if (scope === "custom") {
-      const customPathInput = await p.text({
-        message: "Enter the path to use as the project root for MCP config:",
-        placeholder: process.cwd(),
-        validate(value) {
-          if (!value?.trim()) return "Path cannot be empty.";
-          const resolved = resolve(value.trim());
-          if (!existsSync(resolved))
-            return `Path does not exist: ${resolved}. Please verify and enter a valid path.`;
-        },
-      });
-
-      if (p.isCancel(customPathInput)) {
-        p.cancel("Initialization cancelled.");
-        process.exit(0);
-      }
-
-      customRoot = resolve((customPathInput as string).trim());
-    }
+  // ── Tool auto-approval ───────────────────────────────────────────────
+  const allowlist = await configureAllowlist({
+    adapters: selectedAdapters,
+    effectiveRoot,
+    scope: normalizedScope,
+    nonInteractive: parsed.nonInteractive,
+  });
+  if (allowlist.enabled && allowlist.lines.length > 0) {
+    p.note(allowlist.lines.join("\n"), "Tool Auto-Approval");
   }
 
-  const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
-  const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
-  // Entry shape depends on the adapter (Claude Code expands
-  // `${CLAUDE_PROJECT_DIR}`), so construct it per-adapter in the loop.
-  const entryMode: McpEntryMode =
-    installMode === "local" ? { kind: "local", projectRoot: effectiveRoot } : { kind: "global" };
-  const mcpResults: string[] = [];
+  // ── Step 2 — Skills ─────────────────────────────────────────────────
+  const skillsMethod = await runSkillsStep({
+    nonInteractive: parsed.nonInteractive,
+    fromTar: parsed.fromTar,
+    version,
+    scope: scopeChoice.scope,
+    customRoot: scopeChoice.customRoot,
+  });
 
-  for (const adapter of selectedAdapters) {
-    const mcpEntry = getMcpEntry(entryMode, adapter);
-    const configPath =
-      scope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
-
-    if (!configPath) {
-      if (scope === "global" && adapter.projectPath(projectRoot)) {
-        const fallback = adapter.projectPath(projectRoot)!;
-        try {
-          adapter.write(fallback, mcpEntry);
-          mcpResults.push(
-            `${pc.green("+")} ${adapter.name} ${pc.dim(`(local fallback: ${fallback})`)}`
-          );
-        } catch (err) {
-          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
-        }
-      } else if (scope !== "global" && adapter.globalPath()) {
-        const fallback = adapter.globalPath()!;
-        try {
-          adapter.write(fallback, mcpEntry);
-          mcpResults.push(
-            `${pc.green("+")} ${adapter.name} ${pc.dim(`(global fallback: ${fallback})`)}`
-          );
-        } catch (err) {
-          mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
-        }
-      } else {
-        mcpResults.push(
-          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config path for this scope)")}`
-        );
-      }
-      continue;
-    }
-
-    try {
-      adapter.write(configPath, mcpEntry);
-      mcpResults.push(`${pc.green("+")} ${adapter.name} ${pc.dim(configPath)}`);
-    } catch (err) {
-      mcpResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
-    }
-  }
-
-  p.note(mcpResults.join("\n"), "MCP Configuration");
-
-  // ── Tool Auto-Approval ────────────────────────────────────────────────────
-
-  const adaptersWithAllowlist = selectedAdapters.filter((a) => a.addAllowlist);
-  const adaptersWithoutAllowlist = selectedAdapters.filter((a) => !a.addAllowlist);
-
-  let allowlistEnabled = false;
-
-  if (adaptersWithAllowlist.length > 0) {
-    p.log.info(
-      `By default, editors ask for confirmation before running each MCP tool.\n` +
-        `  Adding Argent to the auto-approve allowlist lets tools run without\n` +
-        `  repeated prompts. This is ${pc.cyan("recommended")} for a smooth experience.`
-    );
-
-    if (nonInteractive) {
-      allowlistEnabled = true;
-    } else {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const allowlistChoice = await p.confirm({
-        message: "Add Argent tools to editor auto-approve lists? - recommended",
-        initialValue: true,
-      });
-
-      if (p.isCancel(allowlistChoice)) {
-        p.cancel("Initialization cancelled.");
-        process.exit(0);
-      }
-
-      allowlistEnabled = allowlistChoice as boolean;
-    }
-  }
-
-  if (allowlistEnabled) {
-    const allowlistResults: string[] = [];
-
-    for (const adapter of adaptersWithAllowlist) {
-      const hasPath =
-        normalizedScope === "global" ? adapter.globalPath() : adapter.projectPath(effectiveRoot);
-      if (!hasPath) {
-        allowlistResults.push(
-          `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no config for this scope)")}`
-        );
-        continue;
-      }
-      try {
-        adapter.addAllowlist!(effectiveRoot, normalizedScope);
-        allowlistResults.push(`${pc.green("+")} ${adapter.name}`);
-      } catch (err) {
-        allowlistResults.push(`${pc.red("x")} ${adapter.name}: ${pc.dim(String(err))}`);
-      }
-    }
-
-    for (const adapter of adaptersWithoutAllowlist) {
-      allowlistResults.push(
-        `${pc.yellow("-")} ${adapter.name} ${pc.dim("(no auto-approve API - configure manually)")}`
-      );
-    }
-
-    p.note(allowlistResults.join("\n"), "Tool Auto-Approval");
-  }
-
-  // ── Step 2: Skills Installation ─────────────────────────────────────────────
-
-  p.log.step(pc.bold("Step 2: Skills Installation"));
-  p.log.warn(pc.yellow("Skills installation is required for Argent to function properly."));
-
-  type SkillsMethod = "default" | "interactive" | "manual";
-  let skillsMethod: SkillsMethod;
-
-  const online = await isOnline();
-  const offlineWithCache = !online && isSkillsCliAvailable();
-  const skillsCliReady = online || offlineWithCache;
-
-  if (!skillsCliReady) {
-    p.log.warn(
-      pc.yellow("You appear to be offline. ") +
-        "Automatic skills installation requires a network connection."
-    );
-  }
-
-  if (!skillsCliReady) {
-    skillsMethod = "manual";
-  } else if (nonInteractive) {
-    skillsMethod = "default";
-  } else {
-    p.log.message(pc.dim("  Use arrow keys to move, enter to confirm."));
-
-    const choice = await p.select({
-      message: "How would you like to install skills?",
-      options: [
-        {
-          value: "default" as const,
-          label: "Automatic",
-          hint: "Installs all skills automatically with npx skills",
-        },
-        {
-          value: "interactive" as const,
-          label: "Interactive",
-          hint: "Full npx skills TUI - choose skills, agents, and method",
-        },
-        {
-          value: "manual" as const,
-          label: "Manual",
-          hint: "Print instructions for manual installation",
-        },
-      ],
-    });
-
-    if (p.isCancel(choice)) {
-      p.cancel("Initialization cancelled.");
-      process.exit(0);
-    }
-
-    skillsMethod = choice as SkillsMethod;
-  }
-
-  // Prefer the GitHub-pinned source. SKILLS_DIR as a fallback.
-  const useGitHubSource = online && !fromTar && version !== "unknown";
-  const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
-
-  if (skillsMethod === "manual") {
-    p.note(
-      [
-        `Skills are bundled at:`,
-        `  ${pc.cyan(SKILLS_DIR)}`,
-        ``,
-        `To install manually, copy them to your editor's skills directory:`,
-        ``,
-        `  ${pc.dim("# Claude Code")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.claude/skills/" : `${scope === "custom" ? customRoot! : "."}/.claude/skills/`}`,
-        ``,
-        `  ${pc.dim("# Cursor")}`,
-        `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
-        ``,
-        `  ${pc.dim("# Or use npx skills directly:")}`,
-        `  npx skills add ${skillsSource}`,
-      ].join("\n"),
-      "Manual Skills Installation"
-    );
-  } else {
-    const skillsArgs = ["skills", "add", skillsSource];
-
-    if (scope === "global") {
-      skillsArgs.push("-g");
-    }
-
-    if (skillsMethod === "default") {
-      skillsArgs.push("--skill", "*", "-y");
-    }
-
-    const npxArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
-
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
-
-    const spinner = p.spinner();
-    if (skillsMethod === "default") {
-      spinner.start("Installing skills...");
-    }
-
-    try {
-      const skillsCwd = scope === "custom" ? customRoot : undefined;
-      await runNpxSkills(npxArgs, skillsMethod === "interactive", skillsCwd);
-      if (skillsMethod === "default") {
-        spinner.stop("Skills installed.");
-      }
-    } catch (err) {
-      if (skillsMethod === "default") {
-        spinner.stop(pc.red("Skills installation failed."));
-      }
-      p.log.error(`Failed to run npx skills: ${err}`);
-      p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
-    }
-  }
-
-  // ── Step 3: Rules and Agents ────────────────────────────────────────────────
-
+  // ── Step 3 — Rules & Agents ──────────────────────────────────────────
   p.log.step(pc.bold("Step 3: Rules & Agents"));
-
   const copyResults = copyRulesAndAgents(
     selectedAdapters,
     effectiveRoot,
@@ -679,37 +123,21 @@ export async function init(args: string[]): Promise<void> {
     RULES_DIR,
     AGENTS_DIR
   );
-
   if (copyResults.length > 0) {
     p.note(copyResults.join("\n"), "Rules & Agents");
   } else {
     p.log.info(pc.dim("No rules or agents to copy for selected editors."));
   }
 
-  // ── Summary ─────────────────────────────────────────────────────────────────
-
-  const scopeLabel = installMode === "local" ? "local devDependency" : scope;
-  const summaryLines = [
-    `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scopeLabel})`,
-    `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
-    `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
-    `${pc.green("Rules & agents")} ${copyResults.length > 0 ? "copied" : "n/a"}`,
-  ];
-
-  p.note(summaryLines.join("\n"), "Summary");
-
-  if (installMode === "local") {
-    p.note(
-      [
-        pc.bold("Commit these so the team shares the setup:"),
-        `  • ${pc.cyan("package.json")}  ${pc.dim("(devDependency entry)")}`,
-        `  • ${pc.cyan("package-lock.json / pnpm-lock.yaml / yarn.lock / bun.lock")}  ${pc.dim("(pin)")}`,
-        `  • the per-editor MCP config files written above`,
-        `  • optionally ${pc.cyan(".claude/")}, ${pc.cyan(".cursor/")} etc. for the skills/rules`,
-      ].join("\n"),
-      "Team Share"
-    );
-  }
+  // ── Summary ──────────────────────────────────────────────────────────
+  printSummary({
+    topology: topology.id,
+    selectedAdapters,
+    scope: scopeChoice.scope,
+    allowlistEnabled: allowlist.enabled,
+    skillsMethod,
+    copiedRules: copyResults.length > 0,
+  });
 
   p.note(
     [
@@ -726,44 +154,178 @@ export async function init(args: string[]): Promise<void> {
   p.outro("Done.");
 }
 
-// Signals that an install failure came from the user's existing manifest
-// (broken protocol / file: dep / peer-dep), not from argent itself —
-// used to redirect blame in the error hint.
-const EXISTING_MANIFEST_ERROR_PATTERNS = [
-  /EUNSUPPORTEDPROTOCOL/i,
-  /Unsupported URL Type/i,
-  /\blink:/i, // `link:./foo` and friends
-  /ERESOLVE/i,
-  /peer dep/i,
-  /could not resolve dependency/i,
-  /ENOENT.*package\.json/i,
-];
+// ── Step 0 helpers ──────────────────────────────────────────────────────
 
-function looksLikeExistingManifestError(message: string): boolean {
-  return EXISTING_MANIFEST_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+// Pick the topology by following the same priority the CLI documents:
+//   1. --devdep / --local-install         (parsed.forcedTopology)
+//   2. Already globally installed        → stay global
+//   3. Non-interactive                   → global default
+//   4. Interactive prompt
+async function decideTopology(parsed: InitArgs, projectRoot: string): Promise<Topology> {
+  if (parsed.forcedTopology === "local") return LOCAL;
+  if (isGloballyInstalled()) return GLOBAL;
+  if (parsed.nonInteractive) return GLOBAL;
+
+  const choice = await promptInstallMode({
+    locallyInstalled: isLocallyInstalled(projectRoot),
+  });
+  return choice === "local" ? LOCAL : GLOBAL;
 }
 
-// Print the local-install failure. `npm install --save-dev` re-resolves
-// every existing dep, so EUNSUPPORTEDPROTOCOL/ERESOLVE etc. usually
-// point at the user's manifest, not argent — surface that hint so the
-// bug doesn't get filed against the wrong project.
-function reportLocalInstallFailure(err: unknown, cmdStr: string, projectRoot: string): void {
-  const message = err instanceof Error ? err.message : String(err);
-  p.log.error(message);
+interface EnsureInstalledArgs {
+  topology: Topology;
+  parsed: InitArgs;
+  projectRoot: string;
+  version: string;
+}
 
-  if (looksLikeExistingManifestError(message)) {
-    p.log.info(
-      `${pc.yellow("Note:")} this looks like a problem with an existing dependency in ` +
-        `${pc.dim(`${projectRoot}/package.json`)}, not with argent itself. ` +
-        `Argent was added to package.json but the wider install ran a re-resolve ` +
-        `of every dep and one of them failed. Fix the offending entry (the error ` +
-        `above names it) and re-run ${pc.cyan("argent init")}, or install argent ` +
-        `globally instead with ${pc.cyan("argent init")} → Global.`
-    );
+// Branches by topology, but each branch is short. Local: skip when already
+// installed, otherwise run via install-runner. Global: install if missing,
+// reinstall if --from, otherwise offer an interactive update.
+async function ensureInstalled({
+  topology,
+  parsed,
+  projectRoot,
+  version,
+}: EnsureInstalledArgs): Promise<string> {
+  if (topology === LOCAL) {
+    if (isLocallyInstalled(projectRoot)) {
+      p.log.info(
+        `Argent is already installed as a devDependency at ` +
+          `${pc.dim(`${projectRoot}/node_modules/@swmansion/argent`)}. Skipping install step.`
+      );
+      return getLocallyInstalledVersion(projectRoot) ?? version;
+    }
+    return runInstall({
+      topology,
+      projectRoot,
+      fromTar: parsed.fromTar,
+      fallbackVersion: version,
+    });
   }
 
-  p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+  // Global topology.
+  if (!isGloballyInstalled() || parsed.fromTar) {
+    return runInstall({
+      topology,
+      projectRoot,
+      fromTar: parsed.fromTar,
+      fallbackVersion: version,
+    });
+  }
+  return await offerInteractiveUpdate({ version, nonInteractive: parsed.nonInteractive, projectRoot });
 }
+
+interface OfferUpdateArgs {
+  version: string;
+  nonInteractive: boolean;
+  projectRoot: string;
+}
+
+async function offerInteractiveUpdate({
+  version,
+  nonInteractive,
+  projectRoot,
+}: OfferUpdateArgs): Promise<string> {
+  let latest: string | null = null;
+  const spinner = p.spinner();
+  spinner.start("Checking for updates...");
+  try {
+    latest = getLatestVersion();
+  } catch {
+    // Registry unreachable - silently skip.
+  }
+  spinner.stop(pc.dim("Version check complete."));
+
+  if (!latest || !isNewerVersion(latest, version)) return version;
+  if (nonInteractive) return version;
+
+  const choice = await p.select({
+    message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
+    options: [
+      { value: "update" as const, label: `Update to v${latest} (recommended)` },
+      { value: "skip" as const, label: "Skip", hint: "Continue with current version" },
+    ],
+  });
+  if (p.isCancel(choice) || choice !== "update") return version;
+
+  const cmd = GLOBAL.installCommand(projectRoot, `${PACKAGE_NAME}@${latest}`);
+  const cmdStr = formatShellCommand(cmd);
+  const updateSpinner = p.spinner();
+  updateSpinner.start(`Updating to v${latest}...`);
+  try {
+    await runShellCommand(cmd);
+    updateSpinner.stop(pc.green(`Updated to v${latest}.`));
+    const installedVersion = getInstalledVersion() ?? latest;
+
+    // After a version bump, refresh every scope that already tracks
+    // argent skills so orphans (skills removed by the newer argent)
+    // surface before Step 2's single-scope add.
+    const summary = formatSkillRefreshSummary(refreshArgentSkills(projectRoot));
+    if (summary) p.note(summary, "Skills Updated");
+    return installedVersion;
+  } catch (err) {
+    updateSpinner.stop(pc.red("Update failed."));
+    p.log.error(`${err}`);
+    p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+    return version;
+  }
+}
+
+// ── Step-1 helpers ─────────────────────────────────────────────────────
+
+function announceLocalMode(topology: TopologyId): void {
+  if (topology !== "local") return;
+  p.log.info(
+    `${pc.dim("Mode:")} Local devDependency — argent is pinned in ${pc.cyan("package.json")}, ` +
+      `MCP configs point at ${pc.cyan("./node_modules/.bin/argent")}.\n` +
+      `  Commit the changed files (package.json, lockfile, MCP configs) so the team shares this setup.`
+  );
+}
+
+// ── Summary ────────────────────────────────────────────────────────────
+
+interface SummaryArgs {
+  topology: TopologyId;
+  selectedAdapters: McpConfigAdapter[];
+  scope: Scope;
+  allowlistEnabled: boolean;
+  skillsMethod: SkillsMethod;
+  copiedRules: boolean;
+}
+
+function printSummary({
+  topology,
+  selectedAdapters,
+  scope,
+  allowlistEnabled,
+  skillsMethod,
+  copiedRules,
+}: SummaryArgs): void {
+  const scopeLabel = topology === "local" ? "local devDependency" : scope;
+  const lines = [
+    `${pc.green("MCP server")} configured for ${selectedAdapters.map((a) => a.name).join(", ")} (${scopeLabel})`,
+    `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
+    `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
+    `${pc.green("Rules & agents")} ${copiedRules ? "copied" : "n/a"}`,
+  ];
+  p.note(lines.join("\n"), "Summary");
+
+  if (topology === "local") {
+    p.note(
+      [
+        pc.bold("Commit these so the team shares the setup:"),
+        `  • ${pc.cyan("package.json")}  ${pc.dim("(devDependency entry)")}`,
+        `  • ${pc.cyan("package-lock.json / pnpm-lock.yaml / yarn.lock / bun.lock")}  ${pc.dim("(pin)")}`,
+        `  • the per-editor MCP config files written above`,
+        `  • optionally ${pc.cyan(".claude/")}, ${pc.cyan(".cursor/")} etc. for the skills/rules`,
+      ].join("\n"),
+      "Team Share"
+    );
+  }
+}
+
+// ── Banner ─────────────────────────────────────────────────────────────
 
 export function printBanner(): void {
   const lines = [
@@ -774,49 +336,10 @@ export function printBanner(): void {
     "██║  ██║██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║",
     "╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝",
   ];
-
   const width = Math.max(...lines.map((l) => l.length));
-
   console.log();
-  for (const line of lines) {
-    console.log(line);
-  }
-
+  for (const line of lines) console.log(line);
   const attribution = "by Software Mansion";
   console.log(" ".repeat(width - attribution.length) + pc.dim(attribution));
   console.log();
-}
-
-function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
-    const child = spawn(npxCmd, args, {
-      stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
-      ...(cwd ? { cwd } : {}),
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    if (!interactive) {
-      child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-    }
-
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        const output = [stderr, stdout].filter(Boolean).join("\n").trim();
-        reject(new Error(output || `npx skills exited with code ${code}`));
-      }
-    });
-
-    child.on("error", reject);
-  });
 }
