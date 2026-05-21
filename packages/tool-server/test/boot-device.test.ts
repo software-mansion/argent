@@ -113,7 +113,10 @@ describe("boot-device — iOS path", () => {
     ]);
     expect(resolveService).toHaveBeenCalledWith(
       "NativeDevtools:11111111-1111-1111-1111-111111111111",
-      { device: { id: "11111111-1111-1111-1111-111111111111", platform: "ios", kind: "simulator" } }
+      {
+        device: { id: "11111111-1111-1111-1111-111111111111", platform: "ios", kind: "simulator" },
+        transport: "unix",
+      }
     );
     // NativeDevtools must be primed AFTER bootstatus returns (launchd env is
     // only reachable once the simulator is fully up) and BEFORE `open`, so
@@ -232,7 +235,10 @@ describe("boot-device — iOS path", () => {
     ]);
     expect(resolveService).toHaveBeenCalledWith(
       "NativeDevtools:22222222-2222-2222-2222-222222222222",
-      { device: { id: "22222222-2222-2222-2222-222222222222", platform: "ios", kind: "simulator" } }
+      {
+        device: { id: "22222222-2222-2222-2222-222222222222", platform: "ios", kind: "simulator" },
+        transport: "unix",
+      }
     );
   });
 

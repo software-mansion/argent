@@ -5,20 +5,25 @@ import * as fs from "node:fs";
 // ARGENT_NATIVE_DEVTOOLS_DIR lets the launcher override the dylib directory,
 // matching the same pattern used by ARGENT_SIMULATOR_SERVER_DIR.
 const DYLIB_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_DIR ?? path.join(__dirname, "..", "dylibs");
+const DYLIB_TCP_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR ?? path.join(DYLIB_DIR, "tcp");
 
-function requireDylib(name: string): string {
-  const p = path.join(DYLIB_DIR, name);
+function requireDylibIn(dir: string, name: string): string {
+  const p = path.join(dir, name);
   if (!fs.existsSync(p)) {
     throw new Error(`Native devtools dylib not found: ${p}`);
   }
   return p;
 }
 
-export const bootstrapDylibPath = () => requireDylib("libArgentInjectionBootstrap.dylib");
-export const nativeDevtoolsDylibPath = () => requireDylib("libNativeDevtoolsIos.dylib");
-export const keyboardPatchDylibPath = () => requireDylib("libKeyboardPatch.dylib");
+export const bootstrapDylibPath = () => requireDylibIn(DYLIB_DIR, "libArgentInjectionBootstrap.dylib");
+export const nativeDevtoolsDylibPath = () => requireDylibIn(DYLIB_DIR, "libNativeDevtoolsIos.dylib");
+export const keyboardPatchDylibPath = () => requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
+
+export const bootstrapDylibPathTcp = () => requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
+export const nativeDevtoolsDylibPathTcp = () => requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
 
 const BIN_DIR = process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "bin");
+const BIN_TCP_DIR = process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR ?? path.join(BIN_DIR, "tcp");
 
 export function simulatorServerBinaryPath(): string {
   const p = path.join(BIN_DIR, "simulator-server");
@@ -32,10 +37,18 @@ export function simulatorServerBinaryDir(): string {
   return BIN_DIR;
 }
 
-export function axServiceBinaryPath(): string {
-  const p = path.join(BIN_DIR, "ax-service");
+function requireBinIn(dir: string, name: string): string {
+  const p = path.join(dir, name);
   if (!fs.existsSync(p)) {
-    throw new Error(`ax-service binary not found: ${p}`);
+    throw new Error(`${name} binary not found: ${p}`);
   }
   return p;
+}
+
+export function axServiceBinaryPath(): string {
+  return requireBinIn(BIN_DIR, "ax-service");
+}
+
+export function axServiceBinaryPathTcp(): string {
+  return requireBinIn(BIN_TCP_DIR, "ax-service");
 }
