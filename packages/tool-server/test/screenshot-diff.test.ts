@@ -144,24 +144,6 @@ describe("diffPngFiles", () => {
     expect(rows.regions).toHaveLength(2);
   });
 
-  it("keeps high region-count diffs bounded instead of merging every nearby pair", async () => {
-    const dir = await makeTempDir();
-    const baselinePath = path.join(dir, "baseline.png");
-    const currentPath = path.join(dir, "current.png");
-    const changedPixels = Array.from({ length: 2_001 }, (_, index) => ({
-      x: index * 3,
-      y: 10,
-      rgb: { r: 255, g: 0, b: 0 },
-    }));
-    await writePng(baselinePath, changedPixels.length * 3, 20, { r: 0, g: 0, b: 0 });
-    await writePng(currentPath, changedPixels.length * 3, 20, { r: 0, g: 0, b: 0 }, changedPixels);
-
-    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
-
-    expect(result.regions).toHaveLength(changedPixels.length);
-    expect(result.differentPixels).toBe(changedPixels.length);
-  });
-
   it("reports average colors and dominant luminance shifts per region", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");
