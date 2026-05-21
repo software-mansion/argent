@@ -50,6 +50,7 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
       execSync: vi.fn(() => ""),
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -61,6 +62,10 @@ describe("native-profiler-start cold-start retry", () => {
     }));
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
+    }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
     }));
 
     const { nativeProfilerStartTool: startTool } =
@@ -91,6 +96,7 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
       execSync: vi.fn(() => ""),
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -102,6 +108,10 @@ describe("native-profiler-start cold-start retry", () => {
     }));
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
+    }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
     }));
 
     const { nativeProfilerStartTool: startTool } =
@@ -122,8 +132,8 @@ describe("native-profiler-start cold-start retry", () => {
     expect(waitForReady).toHaveBeenCalledTimes(2);
     expect(spawnFn).toHaveBeenCalledTimes(2);
     expect(api.profilingActive).toBe(false);
-    expect(api.xctracePid).toBeNull();
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
   });
 
   it("does not retry when xctrace fails with an unrelated error", async () => {
@@ -137,6 +147,7 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
       execSync: vi.fn(() => ""),
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -148,6 +159,10 @@ describe("native-profiler-start cold-start retry", () => {
     }));
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: waitForReady,
+    }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
     }));
 
     const { nativeProfilerStartTool: startTool } =

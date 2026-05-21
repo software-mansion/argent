@@ -87,3 +87,28 @@ export function buildIosAnchor(wallClockStartMs: number): TimeAnchor {
     monotonicStartMs: 0,
   };
 }
+
+/**
+ * Build a TimeAnchor for an Android Perfetto recording.
+ *
+ * Same shape as buildIosAnchor — perfetto timestamps in the .pftrace are
+ * also trace-relative (start at 0 in the PerfettoSQL queries we run). Kept
+ * as a named entry point so callers document the platform they intend, and
+ * so the iOS/Android branches in profiler-combined-report read symmetrically.
+ */
+export function buildPerfettoAnchor(wallClockStartMs: number): TimeAnchor {
+  return {
+    wallClockMs: wallClockStartMs,
+    monotonicStartMs: 0,
+  };
+}
+
+/**
+ * Convert Perfetto nanoseconds (trace-relative) to wall clock ms.
+ * Functionally identical to instrumentsNsToWallClock; kept as a named alias
+ * so the Android branches read symmetrically with the iOS ones.
+ */
+export function perfettoNsToWallClock(perfettoNs: number, anchor: TimeAnchor): number {
+  const elapsedMs = perfettoNs / 1_000_000 - anchor.monotonicStartMs;
+  return anchor.wallClockMs + elapsedMs;
+}

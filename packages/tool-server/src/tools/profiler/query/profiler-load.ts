@@ -71,7 +71,21 @@ async function listSessions(debugDir: string): Promise<string> {
     }
   }
 
-  if (reactSessions.size === 0 && nativeSessions.size === 0) {
+  // Android .pftrace sessions live next to the iOS-style XML sessions but with
+  // a different extension. The serial may include a port (`emulator-5554`), so
+  // the filename pattern doesn't constrain it — anything ending in .pftrace
+  // under the canonical timestamp prefix counts.
+  const androidSessions = new Map<string, string[]>();
+  for (const entry of entries) {
+    const m = entry.match(/^native-profiler-(\d{8}-?\d{6})\.pftrace$/);
+    if (m) {
+      const sid = m[1];
+      if (!androidSessions.has(sid)) androidSessions.set(sid, []);
+      androidSessions.get(sid)!.push(entry);
+    }
+  }
+
+  if (reactSessions.size === 0 && nativeSessions.size === 0 && androidSessions.size === 0) {
     return "_No profiling sessions found in the debug directory._";
   }
 
@@ -105,7 +119,7 @@ async function listSessions(debugDir: string): Promise<string> {
   }
 
   if (nativeSessions.size > 0) {
-    lines.push("### Native Profiler Sessions", "");
+    lines.push("### Native Profiler Sessions (iOS)", "");
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
     for (const [sid, files] of [...nativeSessions.entries()].sort().reverse()) {
@@ -119,6 +133,16 @@ async function listSessions(debugDir: string): Promise<string> {
       if (hasLeaks) parts.push("leaks");
       if (hasReport) parts.push("report");
       lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
+    }
+    lines.push("");
+  }
+
+  if (androidSessions.size > 0) {
+    lines.push("### Native Profiler Sessions (Android)", "");
+    lines.push("| Session ID | Files |");
+    lines.push("|---|---|");
+    for (const [sid] of [...androidSessions.entries()].sort().reverse()) {
+      lines.push(`| \`${sid}\` | pftrace |`);
     }
     lines.push("");
   }
@@ -246,7 +270,34 @@ async function loadNativeSession(
   sessionId: string,
   api: NativeProfilerSessionApi
 ): Promise<string> {
-  // Find exported XML files for this session
+  // Android .pftrace first — the platform field on the resolved session API
+  // tells us which shape to load. If the platform is android but the .pftrace
+  // is missing we fall through to the iOS XML path so the user gets the
+  // "no files found" error.
+  if (api.platform === "android") {
+    const pftrace = path.join(debugDir, `native-profiler-${sessionId}.pftrace`);
+    try {
+      await fs.access(pftrace);
+    } catch {
+      throw new Error(
+        `No native profiler .pftrace found for session "${sessionId}". ` +
+          `Expected file at ${pftrace}`
+      );
+    }
+    api.traceFile = pftrace;
+    api.exportedFiles = { pftrace };
+    api.parsedData = null;
+    return [
+      `Loaded Android profiler session \`${sessionId}\`.`,
+      "",
+      `- Trace file: \`${pftrace}\``,
+      "",
+      "Query tools (`profiler-stack-query`) will re-query the .pftrace on demand.",
+      "Run `native-profiler-analyze` to produce a report from this trace.",
+    ].join("\n");
+  }
+
+  // iOS XML path
   const cpuXml = path.join(debugDir, `native-profiler-${sessionId}_raw_cpu.xml`);
   const hangsXml = path.join(debugDir, `native-profiler-${sessionId}_raw_hangs.xml`);
   const leaksXml = path.join(debugDir, `native-profiler-${sessionId}_raw_leaks.xml`);

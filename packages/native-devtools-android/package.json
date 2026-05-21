@@ -1,0 +1,14 @@
+{
+  "name": "@argent/native-devtools-android",
+  "version": "0.7.1",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "typescript": "^6.0.3"
+  }
+}

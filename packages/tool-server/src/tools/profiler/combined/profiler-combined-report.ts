@@ -9,12 +9,15 @@ import { resolveDevice } from "../../../utils/device-info";
 import {
   buildReactAnchor,
   buildIosAnchor,
+  buildPerfettoAnchor,
   reactTimeToWallClock,
   instrumentsNsToWallClock,
   windowsOverlap,
+  type TimeAnchor,
 } from "../../../utils/profiler-shared/time-align";
 import type { HotCommitSummary } from "../../../utils/react-profiler/types/output";
-import type { UiHang, MemoryLeak } from "../../../utils/ios-profiler/types";
+import type { UiHang, MemoryLeak } from "../../../utils/profiler-shared/types";
+import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
 import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/debug/dump";
@@ -50,9 +53,27 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
   async execute(services, params) {
     const nativeApi = services.nativeSession as NativeProfilerSessionApi;
 
-    // Validate prerequisites
-    if (!nativeApi.parsedData) {
-      throw new Error("No native profiler data. Run native-profiler-analyze first.");
+    // For iOS, the analyze step cached uiHangs + memoryLeaks in parsedData.
+    // For Android, drill-down re-queries the .pftrace, so we load the same
+    // shape on demand here.
+    let uiHangs: UiHang[];
+    let memoryLeaks: MemoryLeak[];
+    if (nativeApi.platform === "android") {
+      if (!nativeApi.traceFile) {
+        throw new Error("No native profiler data. Run native-profiler-analyze first.");
+      }
+      const data = await loadAndroidCombinedData(
+        nativeApi.traceFile,
+        nativeApi.appProcess ?? ""
+      );
+      uiHangs = data.uiHangs;
+      memoryLeaks = [];
+    } else {
+      if (!nativeApi.parsedData) {
+        throw new Error("No native profiler data. Run native-profiler-analyze first.");
+      }
+      uiHangs = nativeApi.parsedData.uiHangs;
+      memoryLeaks = nativeApi.parsedData.memoryLeaks;
     }
 
     // Read-only: resolve react paths from cache only — no live CDP connection needed.
@@ -95,15 +116,16 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     // Build time anchors
     const cpuStartUs = cpuProfile?.startTime ?? 0;
     const reactAnchor = buildReactAnchor(reactWallStart, cpuStartUs);
-    const nativeAnchor = buildIosAnchor(nativeWallStart);
+    const nativeAnchor: TimeAnchor =
+      nativeApi.platform === "android"
+        ? buildPerfettoAnchor(nativeWallStart)
+        : buildIosAnchor(nativeWallStart);
 
     // Build hot commit summaries from raw data
     const preprocessed = preprocess(commitTree.commits);
     const hotIndices = sessionPaths.hotCommitIndices ?? [];
     const hotCommits = buildHotCommitSummaries(preprocessed, hotIndices);
     const nonMarginCommits = hotCommits.filter((c) => !c.isMargin);
-
-    const { uiHangs, memoryLeaks } = nativeApi.parsedData;
 
     // Tolerance for time alignment: wall clock jitter + the fact that
     // instruments hang detection and React commit timing may not perfectly align
@@ -113,10 +135,8 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     const correlations: HangCommitCorrelation[] = [];
 
     for (const hang of uiHangs) {
-      const hangStartNs = parseHangStartNs(hang.startTimeFormatted);
-      const hangDurationNs = hang.durationMs * 1_000_000;
-      const hangWallStartMs = instrumentsNsToWallClock(hangStartNs, nativeAnchor);
-      const hangWallEndMs = instrumentsNsToWallClock(hangStartNs + hangDurationNs, nativeAnchor);
+      const hangWallStartMs = instrumentsNsToWallClock(hang.startNs, nativeAnchor);
+      const hangWallEndMs = instrumentsNsToWallClock(hang.endNs, nativeAnchor);
 
       const overlapping = nonMarginCommits
         .map((commit) => {
@@ -309,18 +329,6 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     return lines.join("\n");
   },
 };
-
-/**
- * Parse "MM:SS.mmm" formatted hang start time back to nanoseconds.
- */
-function parseHangStartNs(formatted: string): number {
-  const match = formatted.match(/^(\d+):(\d+)\.(\d+)$/);
-  if (!match) return 0;
-  const minutes = parseInt(match[1]!, 10);
-  const seconds = parseInt(match[2]!, 10);
-  const ms = parseInt(match[3]!, 10);
-  return (minutes * 60_000 + seconds * 1000 + ms) * 1_000_000;
-}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;

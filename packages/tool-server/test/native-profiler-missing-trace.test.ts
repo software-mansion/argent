@@ -35,14 +35,20 @@ describe("native-profiler-analyze: missing trace file", () => {
       // exportedFiles has a non-null CPU path, but the file does not exist.
       const session: NativeProfilerSessionApi = {
         deviceId: "TEST-DEVICE",
+        platform: "ios",
         appProcess: null,
-        xctracePid: null,
+        capturePid: null,
+        captureProcess: null,
         traceFile,
         exportedFiles: { cpu: cpuPath, hangs: hangsPath, leaks: leaksPath },
         profilingActive: false,
         wallClockStartMs: null,
         parsedData: null,
         recordingTimeout: null,
+        recordingTimedOut: false,
+        recordingExitedUnexpectedly: false,
+        lastExitInfo: null,
+        androidOnDeviceTracePath: null,
       };
 
       const result = await nativeProfilerAnalyzeTool.execute(

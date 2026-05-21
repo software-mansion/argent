@@ -6,7 +6,8 @@ import type {
   CpuHotspot,
   UiHang,
   MemoryLeak,
-  IosProfilerAnalyzeResult,
+  MemoryRssGrowth,
+  NativeProfilerAnalyzeResult,
 } from "./types";
 
 const MAX_INLINE_HOTSPOTS = 5;
@@ -23,14 +24,23 @@ interface InlineCap {
   hangLimit: number;
 }
 
-export async function renderIosProfilerReport(
+/**
+ * Render a native profiler analysis report. Works on both iOS and Android
+ * payloads — bottleneck rows are platform-agnostic, with branches on
+ * `b.platform` / `b.type` for Android-specific row text (jank reason,
+ * state breakdown, RSS-growth weak signal).
+ *
+ * Old export name `renderIosProfilerReport` is retained as an alias for
+ * source compatibility with iOS callers.
+ */
+export async function renderNativeProfilerReport(
   input: RenderInput
-): Promise<IosProfilerAnalyzeResult> {
+): Promise<NativeProfilerAnalyzeResult> {
   const { payload, traceFile } = input;
   const bottlenecksTotal = payload.bottlenecks.length;
 
-  const cpuHotspotsCount = payload.bottlenecks.filter((b) => b.type === "ios_cpu_hotspot").length;
-  const uiHangsCount = payload.bottlenecks.filter((b) => b.type === "ios_ui_hang").length;
+  const cpuHotspotsCount = payload.bottlenecks.filter((b) => b.type === "cpu_hotspot").length;
+  const uiHangsCount = payload.bottlenecks.filter((b) => b.type === "ui_hang").length;
 
   const fullReport =
     bottlenecksTotal === 0
@@ -62,16 +72,25 @@ export async function renderIosProfilerReport(
   return { report, reportFile: wroteFile ? reportFile : null, bottlenecksTotal };
 }
 
+// Legacy alias — iOS callers historically imported renderIosProfilerReport.
+export const renderIosProfilerReport = renderNativeProfilerReport;
+
 // ---------------------------------------------------------------------------
 // Report builders
 // ---------------------------------------------------------------------------
+
+function reportTitle(payload: ProfilerPayload): string {
+  return payload.metadata.platform.toLowerCase() === "android"
+    ? "Android Perfetto Analysis"
+    : "iOS Instruments Analysis";
+}
 
 function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, string>): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
   const lines = [
-    `# iOS Instruments Analysis`,
+    `# ${reportTitle(payload)}`,
     ``,
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
@@ -85,7 +104,7 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
   lines.push(
     `---`,
     ``,
-    `All clear — no CPU hotspots, UI hangs, or memory leaks detected.`,
+    `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
     ``,
     `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`
   );
@@ -102,15 +121,18 @@ function renderFullReport(
     : "unknown";
 
   const cpuHotspots = payload.bottlenecks.filter(
-    (b): b is CpuHotspot => b.type === "ios_cpu_hotspot"
+    (b): b is CpuHotspot => b.type === "cpu_hotspot"
   );
-  const uiHangs = payload.bottlenecks.filter((b): b is UiHang => b.type === "ios_ui_hang");
+  const uiHangs = payload.bottlenecks.filter((b): b is UiHang => b.type === "ui_hang");
   const memoryLeaks = payload.bottlenecks.filter(
-    (b): b is MemoryLeak => b.type === "ios_memory_leak"
+    (b): b is MemoryLeak => b.type === "memory_leak"
+  );
+  const rssGrowths = payload.bottlenecks.filter(
+    (b): b is MemoryRssGrowth => b.type === "memory_rss_growth"
   );
 
   const lines: string[] = [
-    `# iOS Instruments Analysis`,
+    `# ${reportTitle(payload)}`,
     ``,
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
@@ -132,6 +154,11 @@ function renderFullReport(
   if (memoryLeaks.length > 0) {
     lines.push(`| Memory Leaks | ${memoryLeaks.length} | ${severitySummary(memoryLeaks)} |`);
   }
+  if (rssGrowths.length > 0) {
+    lines.push(
+      `| RSS Growth (weak signal) | ${rssGrowths.length} | ${severitySummary(rssGrowths)} |`
+    );
+  }
 
   // CPU Hotspots section
   if (cpuHotspots.length > 0) {
@@ -147,7 +174,6 @@ function renderFullReport(
       );
     });
 
-    // Deep detail per hotspot (capped for inline)
     const hotspotDetailSlice = isFinite(cap.hotspotLimit)
       ? cpuHotspots.slice(0, cap.hotspotLimit)
       : cpuHotspots;
@@ -156,7 +182,6 @@ function renderFullReport(
       lines.push(`### \`${b.dominantFunction}\` (${b.thread})`);
       lines.push(``);
 
-      // Top call chains
       if (b.topCallChains && b.topCallChains.length > 0) {
         lines.push(`**Call chains:**`);
         for (const { chain, count } of b.topCallChains) {
@@ -168,7 +193,6 @@ function renderFullReport(
         lines.push(``);
       }
 
-      // Burst windows
       if (b.burstWindows && b.burstWindows.length > 1) {
         lines.push(`**Activity bursts:** ${b.burstWindows.length} clusters`);
         for (const burst of b.burstWindows) {
@@ -195,31 +219,66 @@ function renderFullReport(
   // UI Hangs section
   if (uiHangs.length > 0) {
     lines.push(``, `---`, ``, `## UI Hangs`, ``);
-    lines.push(`| # | Type | Start | Duration | Severity |`, `|---|---|---|---|---|`);
-    uiHangs.forEach((b, i) => {
+    const headerHasJank = uiHangs.some((h) => h.jankReason);
+    if (headerHasJank) {
       lines.push(
-        `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+        `| # | Type | Reason | Start | Duration | Severity |`,
+        `|---|---|---|---|---|---|`
       );
-    });
-    // Show correlated call chains for each hang (capped for inline)
+      uiHangs.forEach((b, i) => {
+        lines.push(
+          `| ${i + 1} | ${b.hangType} | ${b.jankReason ?? "—"} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+        );
+      });
+    } else {
+      lines.push(`| # | Type | Start | Duration | Severity |`, `|---|---|---|---|---|`);
+      uiHangs.forEach((b, i) => {
+        lines.push(
+          `| ${i + 1} | ${b.hangType} | ${b.startTimeFormatted} | ${b.durationMs}ms | ${severityEmoji(b.severity)} |`
+        );
+      });
+    }
+
     const hangDetailSlice = isFinite(cap.hangLimit) ? uiHangs.slice(0, cap.hangLimit) : uiHangs;
     for (const hang of hangDetailSlice) {
-      if (hang.appCallChains.length > 0) {
+      const header =
+        `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms)**` +
+        (hang.jankReason ? ` — reason: \`${hang.jankReason}\`` : "") +
+        (hang.gcOverlapMs && hang.gcOverlapMs > 0
+          ? ` — +${Math.round(hang.gcOverlapMs)}ms in GC`
+          : "");
+
+      if (hang.platform === "android" && hang.stateBreakdown && hang.stateBreakdown.length > 0) {
         lines.push(``);
-        lines.push(
-          `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms)** — app call chains during this hang:`
-        );
+        lines.push(`${header} — main-thread state breakdown:`);
+        lines.push(``, `| State | Blocked on | Duration |`, `|---|---|---|`);
+        for (const entry of hang.stateBreakdown) {
+          lines.push(
+            `| ${entry.state} | ${entry.blockedFunction ? `\`${entry.blockedFunction}\`` : "—"} | ${entry.durationMs}ms |`
+          );
+        }
+        if (hang.appCallChains.length > 0) {
+          lines.push(``);
+          lines.push(`App call chains during this hang:`);
+          hang.appCallChains.forEach((entry, i) => {
+            lines.push(`${i + 1}. \`${entry.chain.join(" > ")}\` (${entry.sampleCount} samples)`);
+          });
+        }
+      } else if (hang.appCallChains.length > 0) {
+        lines.push(``);
+        lines.push(`${header} — app call chains during this hang:`);
         hang.appCallChains.forEach((entry, i) => {
           lines.push(`${i + 1}. \`${entry.chain.join(" > ")}\` (${entry.sampleCount} samples)`);
         });
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
-        lines.push(
-          `**${hang.hangType} at ${hang.startTimeFormatted} (${hang.durationMs}ms)** — during this hang, the most active functions were:`
-        );
+        lines.push(`${header} — during this hang, the most active functions were:`);
         for (const fn of hang.suspectedFunctions) {
           lines.push(`- \`${fn}\``);
         }
+      } else {
+        lines.push(``);
+        lines.push(header);
       }
     }
     if (isFinite(cap.hangLimit) && uiHangs.length > cap.hangLimit) {
@@ -230,7 +289,7 @@ function renderFullReport(
     }
   }
 
-  // Memory Leaks section
+  // Memory Leaks section (iOS only in v1)
   if (memoryLeaks.length > 0) {
     lines.push(``, `---`, ``, `## Memory Leaks`, ``);
     lines.push(
@@ -242,6 +301,23 @@ function renderFullReport(
         `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${b.responsibleFrame}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
       );
     });
+  }
+
+  // RSS Growth section (Android-only weak signal)
+  if (rssGrowths.length > 0) {
+    lines.push(``, `---`, ``, `## RSS Growth — Weak Signal`, ``);
+    lines.push(
+      `> **Manual confirmation needed.** Resident-set size grew during the recording, ` +
+        `but RSS growth is a weak proxy — it can be normal warm-up behaviour (JIT compilation, ` +
+        `texture caches). Real Android leak detection lands in a later phase via heap-dump analysis.`,
+      ``
+    );
+    lines.push(`| Start (MB) | Peak (MB) | Growth (MB) | Severity |`, `|---|---|---|---|`);
+    for (const g of rssGrowths) {
+      lines.push(
+        `| ${g.startMb.toFixed(1)} | ${g.peakMb.toFixed(1)} | ${g.growthMb.toFixed(1)} | ${severityEmoji(g.severity)} |`
+      );
+    }
   }
 
   // Suggested Improvements
@@ -262,8 +338,9 @@ function renderFullReport(
     for (const b of uiHangs) {
       const funcNote =
         b.suspectedFunctions.length > 0 ? ` Likely caused by: \`${b.suspectedFunctions[0]}\`.` : "";
+      const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
-        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): Main thread blocked — move heavy work to background queue.${funcNote}`
+        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): Main thread blocked — move heavy work to background queue.${reasonNote}${funcNote}`
       );
     }
     lines.push(``);
@@ -352,7 +429,8 @@ function formatBytes(sizeBytes: number): string {
 
 function deriveReportPath(traceFile: string): string {
   const dir = path.dirname(traceFile);
-  const baseName = path.basename(traceFile, ".trace");
+  const ext = path.extname(traceFile);
+  const baseName = path.basename(traceFile, ext);
   return path.join(dir, `${baseName}-report.md`);
 }
 

@@ -10,6 +10,14 @@ import {
 vi.mock("../../src/utils/ios-profiler/export", () => ({
   exportIosTraceData: vi.fn(),
 }));
+// `native-profiler-stop` now preflights its iOS binary requirement via
+// `ensureDeps(["xcrun"])` inside execute (so the cross-platform stop tool can
+// preflight adb on Android). The unit-level tests here don't have a real
+// host-binary install — short-circuit the check.
+vi.mock("../../src/utils/check-deps", () => ({
+  ensureDeps: vi.fn(async () => {}),
+  ensureDep: vi.fn(async () => {}),
+}));
 
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
 import { nativeProfilerStopTool } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
@@ -58,15 +66,15 @@ describe("handleXctraceExit", () => {
     const api = await buildSession();
     const child = new FakeChild();
     api.profilingActive = true;
-    api.xctracePid = 1234;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 1234;
+    api.captureProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
     handleXctraceExit(api, 0, null);
 
     expect(api.profilingActive).toBe(false);
-    expect(api.xctracePid).toBeNull();
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(true);
     expect(api.recordingTimedOut).toBe(false);
     expect(api.lastExitInfo).toEqual({ code: 0, signal: null });
@@ -188,8 +196,8 @@ describe("native-profiler-stop recovery branch", () => {
     child.on("exit", (code, signal) => handleXctraceExit(api, code, signal));
 
     api.profilingActive = true;
-    api.xctracePid = 4321;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 4321;
+    api.captureProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
     const promise = nativeProfilerStopTool.execute({ session: api } as never, {
@@ -201,7 +209,7 @@ describe("native-profiler-stop recovery branch", () => {
     expect(result.warning).toBeUndefined();
     expect(result.traceFile).toBe(FAKE_TRACE);
     expect(api.profilingActive).toBe(false);
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(false);
     expect(api.lastExitInfo).toBeNull();
   });
@@ -236,6 +244,7 @@ describe("native-profiler-start fresh-start reset", () => {
     vi.doMock("child_process", () => ({
       spawn: vi.fn(() => fakeChild),
       execSync: vi.fn(() => ""), // detectRunningApp is bypassed via app_process
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -247,6 +256,10 @@ describe("native-profiler-start fresh-start reset", () => {
     }));
     vi.doMock("../../src/utils/ios-profiler/startup", () => ({
       waitForXctraceReady: vi.fn(async () => ({ stderrBuffer: "" })),
+    }));
+    vi.doMock("../../src/utils/check-deps", () => ({
+      ensureDeps: vi.fn(async () => {}),
+      ensureDep: vi.fn(async () => {}),
     }));
 
     const { nativeProfilerStartTool: startTool } =
