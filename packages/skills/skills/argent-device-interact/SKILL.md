@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, comparing screenshots, running UI or visual regression tests, using screenshot-diff, or verifying visible UI code changes.
+description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -48,24 +48,23 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool              | Notes                                                                            |
-| ----------------- | ----------------- | -------------------------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`    | Batch steps in one call (no intermediate screenshots)                            |
-| Open an app       | `launch-app`      | **Always — never tap home-screen icons**                                         |
-| Restart an app    | `restart-app`     | Terminate and relaunch by bundle ID                                              |
-| Open URL/scheme   | `open-url`        | Web pages, deep links, URL schemes                                               |
-| Single tap        | `gesture-tap`     | Buttons, links, checkboxes                                                       |
-| Scroll/swipe      | `gesture-swipe`   | Straight-line scroll or swipe                                                    |
-| Long press        | `gesture-custom`  | Context menus, drag start                                                        |
-| Drag & drop       | `gesture-custom`  | Complex drag interactions                                                        |
-| Pinch/zoom        | `gesture-pinch`   | Two-finger pinch with auto-interpolation                                         |
-| Rotation          | `gesture-rotate`  | Two-finger rotation with auto-interpolation                                      |
-| Custom gesture    | `gesture-custom`  | Arbitrary touch sequences, optional interpolation                                |
-| Hardware key      | `button`          | Home, back, power, volume, appSwitch, actionButton                               |
-| Type text (fast)  | `paste`           | iOS only. Form fields — uses clipboard                                           |
-| Type text         | `keyboard`        | iOS+Android. Fallback when paste fails; supports Enter, Escape, arrows           |
-| Rotate device     | `rotate`          | Orientation changes                                                              |
-| Visual comparison | `screenshot-diff` | Compare saved baseline/current PNGs, or saved baseline plus live current capture |
+| Action           | Tool             | Notes                                                                  |
+| ---------------- | ---------------- | ---------------------------------------------------------------------- |
+| Multiple actions | `run-sequence`   | Batch steps in one call (no intermediate screenshots)                  |
+| Open an app      | `launch-app`     | **Always — never tap home-screen icons**                               |
+| Restart an app   | `restart-app`    | Terminate and relaunch by bundle ID                                    |
+| Open URL/scheme  | `open-url`       | Web pages, deep links, URL schemes                                     |
+| Single tap       | `gesture-tap`    | Buttons, links, checkboxes                                             |
+| Scroll/swipe     | `gesture-swipe`  | Straight-line scroll or swipe                                          |
+| Long press       | `gesture-custom` | Context menus, drag start                                              |
+| Drag & drop      | `gesture-custom` | Complex drag interactions                                              |
+| Pinch/zoom       | `gesture-pinch`  | Two-finger pinch with auto-interpolation                               |
+| Rotation         | `gesture-rotate` | Two-finger rotation with auto-interpolation                            |
+| Custom gesture   | `gesture-custom` | Arbitrary touch sequences, optional interpolation                      |
+| Hardware key     | `button`         | Home, back, power, volume, appSwitch, actionButton                     |
+| Type text (fast) | `paste`          | iOS only. Form fields — uses clipboard                                 |
+| Type text        | `keyboard`       | iOS+Android. Fallback when paste fails; supports Enter, Escape, arrows |
+| Rotate device    | `rotate`         | Orientation changes                                                    |
 
 ## 5. Finding Tap Targets
 
@@ -185,7 +184,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 Use the explicit `screenshot` tool only when:
 
 - You need the initial screen state before any action.
-- You are about to edit visible UI and the expected result is visible in pixels, so a before/after baseline may make `screenshot-diff` useful.
+- You are about to edit visible UI and need a baseline capture before making changes.
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
@@ -202,7 +201,7 @@ Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }`
 
 Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
 
-Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:
+Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:
 
 ```json
 { "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
