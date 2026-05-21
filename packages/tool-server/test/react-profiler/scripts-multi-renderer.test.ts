@@ -394,7 +394,7 @@ describe("REACT_NATIVE_PROFILER_SETUP_SCRIPT (per-renderer cache isolation)", ()
       cache.set(a, aBucket);
 
       // Start on ri#b — wrapper should reset only b's bucket, leaving a's intact.
-      b.startProfiling();
+      (b.startProfiling as () => void)();
       expect(cache.get(a)?.[7]).toBe("FromA");
       expect(cache.get(b)).toBeDefined();
       expect(Object.keys(cache.get(b)!)).toHaveLength(0);

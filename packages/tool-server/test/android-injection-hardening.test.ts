@@ -22,8 +22,8 @@ import { Registry } from "@argent/registry";
 
 describe("bundleId validation — tools that interpolate into adb shell", () => {
   const toolCases = [
-    { name: "launch-app", schema: launchAppTool.zodSchema, baseArgs: { udid: "emulator-5554" } },
-    { name: "restart-app", schema: restartAppTool.zodSchema, baseArgs: { udid: "emulator-5554" } },
+    { name: "launch-app", schema: launchAppTool.zodSchema!, baseArgs: { udid: "emulator-5554" } },
+    { name: "restart-app", schema: restartAppTool.zodSchema!, baseArgs: { udid: "emulator-5554" } },
   ];
 
   const injectionPayloads = [
@@ -64,7 +64,7 @@ describe("bundleId validation — tools that interpolate into adb shell", () => 
 
 describe("activity validation — launch-app Android branch", () => {
   it("accepts a dot-prefixed activity (.MainActivity)", () => {
-    const parsed = launchAppTool.zodSchema.safeParse({
+    const parsed = launchAppTool.zodSchema!.safeParse({
       udid: "emulator-5554",
       bundleId: "com.example.app",
       activity: ".MainActivity",
@@ -73,7 +73,7 @@ describe("activity validation — launch-app Android branch", () => {
   });
 
   it("accepts a fully-qualified activity (pkg/.Component)", () => {
-    const parsed = launchAppTool.zodSchema.safeParse({
+    const parsed = launchAppTool.zodSchema!.safeParse({
       udid: "emulator-5554",
       bundleId: "com.example.app",
       activity: "com.example.app/.MainActivity",
@@ -82,7 +82,7 @@ describe("activity validation — launch-app Android branch", () => {
   });
 
   it("rejects an activity with a shell backtick", () => {
-    const parsed = launchAppTool.zodSchema.safeParse({
+    const parsed = launchAppTool.zodSchema!.safeParse({
       udid: "emulator-5554",
       bundleId: "com.example.app",
       activity: ".Main`id`",
@@ -91,7 +91,7 @@ describe("activity validation — launch-app Android branch", () => {
   });
 
   it("rejects an activity with `;`", () => {
-    const parsed = launchAppTool.zodSchema.safeParse({
+    const parsed = launchAppTool.zodSchema!.safeParse({
       udid: "emulator-5554",
       bundleId: "com.example.app",
       activity: ".Main;reboot",
@@ -100,7 +100,7 @@ describe("activity validation — launch-app Android branch", () => {
   });
 
   it("rejects an activity that starts with `-` (flag injection)", () => {
-    const parsed = launchAppTool.zodSchema.safeParse({
+    const parsed = launchAppTool.zodSchema!.safeParse({
       udid: "emulator-5554",
       bundleId: "com.example.app",
       activity: "-X",
@@ -117,17 +117,17 @@ describe('empty-udid guard (#7) — cross-platform tools reject `udid: ""`', () 
     schema: { safeParse: (x: unknown) => { success: boolean } };
     extra: Record<string, unknown>;
   }> = [
-    { name: "launch-app", schema: launchAppTool.zodSchema, extra: { bundleId: "com.x" } },
-    { name: "restart-app", schema: restartAppTool.zodSchema, extra: { bundleId: "com.x" } },
-    { name: "open-url", schema: openUrlTool.zodSchema, extra: { url: "https://example.com" } },
+    { name: "launch-app", schema: launchAppTool.zodSchema!, extra: { bundleId: "com.x" } },
+    { name: "restart-app", schema: restartAppTool.zodSchema!, extra: { bundleId: "com.x" } },
+    { name: "open-url", schema: openUrlTool.zodSchema!, extra: { url: "https://example.com" } },
     {
       name: "reinstall-app",
-      schema: reinstallAppTool.zodSchema,
+      schema: reinstallAppTool.zodSchema!,
       extra: { bundleId: "com.x", appPath: "/tmp/x.apk" },
     },
     {
       name: "describe",
-      schema: createDescribeTool(new Registry()).zodSchema,
+      schema: createDescribeTool(new Registry()).zodSchema!,
       extra: {},
     },
   ];

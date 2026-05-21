@@ -20,6 +20,7 @@
     "prepack": "node scripts/sync-readme.cjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
     "observe": "node scripts/observe.cjs",
     "benchmark": "node scripts/benchmark.cjs",
     "postinstall": "node scripts/postinstall.cjs"
