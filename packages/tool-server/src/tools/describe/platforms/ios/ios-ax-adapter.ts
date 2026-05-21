@@ -35,9 +35,23 @@ export function adaptAXElement(el: AXDescribeElement): DescribeNode | null {
 }
 
 export function adaptAXDescribeToDescribeResult(response: AXDescribeResponse): DescribeNode {
-  const children = response.elements
+  let children = response.elements
     .map(adaptAXElement)
     .filter((n): n is DescribeNode => n !== null);
+
+  // XPC-hosted dialogs (iOS 26+ TCC permission prompts: "Allow X to use
+  // your location?" etc.) are invisible to every in-app AX walk — neither
+  // primaryApp, applicationAtCoordinate, nor systemApplication reach them.
+  // The daemon's last-resort sweep (`currentApplicationsIgnoringSiri`)
+  // catches them and lands them in `dialogElements`. The daemon only
+  // populates this field when both prior walks were empty, so it never
+  // duplicates content already in `elements`; we still gate on the same
+  // condition here for older daemon builds whose semantics may differ.
+  if (children.length === 0 && response.dialogElements && response.dialogElements.length > 0) {
+    children = response.dialogElements
+      .map(adaptAXElement)
+      .filter((n): n is DescribeNode => n !== null);
+  }
 
   return parseDescribeResult({
     role: "AXGroup",

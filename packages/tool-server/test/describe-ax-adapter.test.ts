@@ -165,6 +165,74 @@ describe("describe ax-service adapter", () => {
     expect(root.children[1]?.label).toBe("Don\u2019t Allow");
   });
 
+  it("falls back to dialogElements when elements is empty", () => {
+    // Models an iOS 26+ TCC permission prompt \u2014 invisible to primaryApp,
+    // applicationAtCoordinate, and systemApplication walks. The daemon
+    // collects it via currentApplicationsIgnoringSiri and lands it in
+    // dialogElements; the adapter should surface those buttons.
+    const response: AXDescribeResponse = {
+      alertVisible: true,
+      screenFrame: { width: 440, height: 956 },
+      elements: [],
+      dialogElements: [
+        {
+          label: "Allow \u201cMaps\u201d to use your location?",
+          frame: { x: 0.177, y: 0.343, width: 0.647, height: 0.048 },
+          traits: ["staticText"],
+        },
+        {
+          label: "Allow Once",
+          frame: { x: 0.142, y: 0.513, width: 0.716, height: 0.055 },
+          traits: ["button"],
+        },
+        {
+          label: "Allow While Using App",
+          frame: { x: 0.142, y: 0.577, width: 0.716, height: 0.055 },
+          traits: ["button"],
+        },
+        {
+          label: "Don\u2019t Allow",
+          frame: { x: 0.142, y: 0.641, width: 0.716, height: 0.055 },
+          traits: ["button"],
+        },
+      ],
+    };
+
+    const root = adaptAXDescribeToDescribeResult(response);
+    expect(root.children).toHaveLength(4);
+    expect(root.children[0]?.label).toBe("Allow \u201cMaps\u201d to use your location?");
+    expect(root.children[1]?.role).toBe("AXButton");
+    expect(root.children[1]?.label).toBe("Allow Once");
+    expect(root.children[3]?.label).toBe("Don\u2019t Allow");
+  });
+
+  it("prefers elements over dialogElements when both are present", () => {
+    // The daemon only populates dialogElements when prior walks were empty,
+    // but the adapter still defends against older/newer daemon builds: if
+    // elements has anything usable, dialogElements is ignored.
+    const response: AXDescribeResponse = {
+      alertVisible: true,
+      elements: [
+        {
+          label: "From elements",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+      dialogElements: [
+        {
+          label: "From dialogElements",
+          frame: { x: 0.1, y: 0.5, width: 0.5, height: 0.05 },
+          traits: ["button"],
+        },
+      ],
+    };
+
+    const root = adaptAXDescribeToDescribeResult(response);
+    expect(root.children).toHaveLength(1);
+    expect(root.children[0]?.label).toBe("From elements");
+  });
+
   it("filters out elements with no visible area", () => {
     const response: AXDescribeResponse = {
       alertVisible: false,

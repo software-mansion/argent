@@ -46,6 +46,13 @@ export interface AXDescribeResponse {
   alertVisible: boolean;
   screenFrame?: { width: number; height: number };
   elements: AXDescribeElement[];
+  // Populated by the daemon (post argent-private#10) only when alertVisible
+  // is true and the primaryApp + systemApplication walks were both empty.
+  // Sourced from `[AXElement currentApplicationsIgnoringSiri]` — the last-
+  // resort sweep that catches XPC-hosted dialogs (e.g. iOS 26+ TCC
+  // permission prompts) which live outside primaryApp and Springboard
+  // alike. Empty/missing on daemon builds that predate that change.
+  dialogElements?: AXDescribeElement[];
 }
 
 export interface AXServiceApi {
@@ -276,6 +283,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
           elements: result.elements ?? [],
+          dialogElements: result.dialogElements ?? [],
         };
       },
 
