@@ -1596,10 +1596,26 @@
       window.addEventListener("keydown", handleKeyEvent);
       window.addEventListener("keyup", handleKeyEvent);
 
-      // Disable the right-click context menu over the stage so right-button
-      // drags (if the user tries) don't pop up a menu on top of the stream.
+      // Right-click over the stream: suppress the native menu, and in
+      // "Add comment" inspect mode treat it as the comment trigger (handy
+      // for trackpad users where two-finger tap is the natural pick).
       window.addEventListener("contextmenu", (ev) => {
-        if (stage && stage.contains(ev.target)) ev.preventDefault();
+        const overStage = stage && stage.contains(ev.target);
+        const overSpot = vp.spot && vp.spot.hit && vp.spot.hit.contains(ev.target);
+        if (!overStage && !overSpot) return;
+        ev.preventDefault();
+        if (!vp.inspect) return;
+        const r = streamRect();
+        if (!r || !vp.tree) return;
+        const mr = mainEl.getBoundingClientRect();
+        const x = (ev.clientX - mr.left - r.x) / r.w;
+        const y = (ev.clientY - mr.top - r.y) / r.h;
+        const node = vpNodeAtPoint(vp.tree, x, y) || vp.focus;
+        if (!node) return;
+        vp.focus = node;
+        vp.commentFor = node;
+        paintSpot();
+        openCommentPop(node);
       });
 
       // On focus loss, release any active touches/keys so the device doesn't
