@@ -64,7 +64,7 @@ Decision order:
   only when saving baseline/current PNGs for visual regression, then compare with `screenshot-diff`.
 - For explicit visual-regression, screenshot-diff, or before/after comparison requests, use `screenshot-diff` unless no stable comparable screenshots can be produced;
 - For implementation tasks that change visible mobile UI, consider `screenshot-diff` as supporting visual evidence when the affected screen has stable before/after states and the expected result is pixel-visible. Skip it when structural checks, logs, network evidence, or tests answer the question better, or when dynamic content makes comparison noisy.
-- For `screenshot-diff`, provide exactly one input for each side. Common flow: saved `baselinePath` plus live `captureCurrent: true`. Never set both `captureBaseline` and `captureCurrent` in one call.
+- For `screenshot-diff`, provide `udid` and exactly one input for each side. Common flow: saved `baselinePath` plus live `captureCurrent: true`. Never set both `captureBaseline` and `captureCurrent` in one call.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
 - Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.

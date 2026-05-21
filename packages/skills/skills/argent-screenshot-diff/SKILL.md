@@ -31,10 +31,10 @@ Capture the stable baseline before the relevant interaction or before editing wh
 
 ## 4. Parameters
 
-Provide exactly one input for the baseline side and exactly one input for the current side:
+Provide `udid` and exactly one input for the baseline side and exactly one input for the current side:
 
 - Common UI regression flow: saved baseline plus live current -> `baselinePath`, `captureCurrent: true`, `udid`, `outputDir`.
-- Both screenshots already saved -> `baselinePath`, `currentPath`, `outputDir`. This path does not require `udid`.
+- Both screenshots already saved -> `baselinePath`, `currentPath`, `udid`, `outputDir`.
 - Rare fixture flow: live baseline plus saved current -> `captureBaseline: true`, `currentPath`, `udid`, `outputDir`.
 - Do not combine `captureBaseline: true` with `captureCurrent: true`, or provide both a path and live capture flag for the same side.
 
@@ -61,6 +61,7 @@ If both images are already saved, use file paths for both sides:
 {
   "baselinePath": "/tmp/baseline.png",
   "currentPath": "/tmp/current.png",
+  "udid": "<UDID>",
   "outputDir": "/tmp/argent-diff"
 }
 ```

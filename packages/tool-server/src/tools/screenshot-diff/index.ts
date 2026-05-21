@@ -27,10 +27,7 @@ const zodSchema = z
     udid: z
       .string()
       .min(1)
-      .optional()
-      .describe(
-        "Target device id used for live captures. Required when captureBaseline or captureCurrent is true."
-      ),
+      .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
     captureBaseline: z.coerce
       .boolean()
       .optional()
@@ -69,25 +66,20 @@ const capability: ToolCapability = {
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
   description: `Compare two PNG screenshots and return a compact visual-diff summary.
-Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device.
+Accepts saved baseline/current PNG paths, or one saved PNG plus one live full-resolution capture from a device. Always provide udid so the simulator-server dependency can be resolved.
 Use when stable before/after screenshots exist and the expected result is pixel-visible: layout, spacing, color, typography, image/icon rendering, clipping, overflow, or text rendering.
-For live captures, provide udid and exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
+For live captures, set exactly one of captureBaseline or captureCurrent; use baselinePath + captureCurrent for the common visual-regression flow.
 Returns { summary, diffPath, contextDiffPath }. The summary uses normalized [0,1] screen locations matching describe coordinates; diffPath is the full-size diff image and contextDiffPath is a downscaled image for MCP/agent display.
 Ignores the fixed top status-bar band for both pixel and OCR text comparisons.
-Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable for a live capture.`,
+Fails if the input sources are invalid, PNG files cannot be read, outputDir cannot be written, or the simulator-server / emulator backend is not reachable.`,
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
   outputHint: "screenshot-diff",
   capability,
-  services: (params): Record<string, ServiceRef> => {
-    if ((params.captureBaseline || params.captureCurrent) && params.udid) {
-      return {
-        simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-      };
-    }
-    return {};
-  },
+  services: (params): Record<string, ServiceRef> => ({
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
+  }),
   async execute(services, params, options) {
     return executeScreenshotDiffTool(services, params, options);
   },
@@ -169,9 +161,6 @@ function validateInputSources(params: Params): void {
   }
   if (!params.captureCurrent && !params.currentPath) {
     throw new Error("currentPath is required unless captureCurrent is true.");
-  }
-  if ((params.captureBaseline || params.captureCurrent) && !params.udid) {
-    throw new Error("udid is required when captureBaseline or captureCurrent is true.");
   }
 }
 

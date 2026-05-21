@@ -14,6 +14,7 @@ describe("screenshotDiffTool", () => {
     const result = screenshotDiffTool.zodSchema!.safeParse({
       baselinePath: "/tmp/baseline.png",
       currentPath: "/tmp/current.png",
+      udid: "ABC",
       outputDir: "/tmp",
       includeTextAnalysis: false,
       threshold: 0.2,
@@ -22,6 +23,37 @@ describe("screenshotDiffTool", () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("requires udid and always declares the simulator-server service", () => {
+    expect(
+      screenshotDiffTool.zodSchema!.safeParse({
+        baselinePath: "/tmp/baseline.png",
+        currentPath: "/tmp/current.png",
+        outputDir: "/tmp",
+      }).success
+    ).toBe(false);
+
+    const params = {
+      baselinePath: "/tmp/baseline.png",
+      currentPath: "/tmp/current.png",
+      udid: "ABC",
+      outputDir: "/tmp",
+    };
+
+    expect(screenshotDiffTool.zodSchema!.safeParse(params).success).toBe(true);
+    expect(screenshotDiffTool.services(params)).toEqual({
+      simulatorServer: {
+        urn: "SimulatorServer:ABC",
+        options: {
+          device: {
+            id: "ABC",
+            platform: "android",
+            kind: "emulator",
+          },
+        },
+      },
+    });
   });
 
   it("returns only the summary and diff artifact paths", async () => {
@@ -36,6 +68,7 @@ describe("screenshotDiffTool", () => {
       {
         baselinePath,
         currentPath,
+        udid: "ABC",
         outputDir: dir,
       }
     );
@@ -98,17 +131,6 @@ describe("screenshotDiffTool", () => {
         }
       )
     ).rejects.toThrow("Provide either currentPath or captureCurrent, not both.");
-
-    await expect(
-      executeScreenshotDiffTool(
-        {},
-        {
-          baselinePath: "/tmp/baseline.png",
-          captureCurrent: true,
-          outputDir: "/tmp",
-        }
-      )
-    ).rejects.toThrow("udid is required");
   });
 });
 
