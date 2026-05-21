@@ -101,10 +101,6 @@ const REGION_RECTANGLE_COLOR: Rgb = { r: 0, g: 255, b: 255 };
 const HORIZONTAL_TEXT_MERGE_HEIGHT_MULTIPLIER = 3;
 const HORIZONTAL_TEXT_MERGE_MIN_GAP = 32;
 const HORIZONTAL_TEXT_MERGE_MAX_GAP = 120;
-// Noisy screenshots can produce thousands of isolated one-pixel components.
-// Above this cap, preserving the raw regions is safer than spending tool-call
-// time on best-effort cosmetic grouping.
-const MAX_PAIRWISE_REGION_JOIN_COUNT = 2_000;
 // Treat only near-equal RGB movement as luminance so color-tinted changes
 // still report the dominant RGB channel.
 const UNIFORM_BRIGHTNESS_DELTA_TOLERANCE = 4;
@@ -652,29 +648,36 @@ function absorbChangedPixel(
 
 function joinChangeRegions(sourceRegions: ChangeRegion[], joinGapPixels: number): ChangeRegion[] {
   const regions = sourceRegions.map(copyRegion);
-  if (regions.length <= 1) return regions;
 
-  if (regions.length > MAX_PAIRWISE_REGION_JOIN_COUNT) {
+  if (regions.length <= 1) {
     return regions;
   }
 
-  const merged: ChangeRegion[] = [];
-  for (const region of regions.sort(compareChangeRegionsByPosition)) {
-    let candidate = region;
+  for (let i = 0; i < regions.length; i++) {
+    let j = 0;
 
-    for (let index = 0; index < merged.length; ) {
-      if (shouldJoinRegions(merged[index], candidate, joinGapPixels)) {
-        candidate = combineRegions(merged[index], candidate);
-        merged.splice(index, 1);
+    while (j < regions.length) {
+      if (i === j) {
+        j++;
+        continue;
+      }
+
+      if (shouldJoinRegions(regions[i], regions[j], joinGapPixels)) {
+        regions[i] = combineRegions(regions[i], regions[j]);
+        regions.splice(j, 1);
+
+        if (j < i) {
+          i--;
+        }
+
+        j = 0;
       } else {
-        index++;
+        j++;
       }
     }
-
-    merged.push(candidate);
   }
 
-  return merged;
+  return regions;
 }
 
 function shouldJoinRegions(a: ChangeRegion, b: ChangeRegion, joinGapPixels: number): boolean {
@@ -683,10 +686,6 @@ function shouldJoinRegions(a: ChangeRegion, b: ChangeRegion, joinGapPixels: numb
   const regionGapDistance = Math.sqrt(dx * dx + dy * dy);
   if (regionGapDistance <= joinGapPixels) return true;
   return joinGapPixels > 0 && seemsLikeOneTextRow(a, b);
-}
-
-function compareChangeRegionsByPosition(a: ChangeRegion, b: ChangeRegion): number {
-  return a.minY - b.minY || a.minX - b.minX;
 }
 
 function copyRegion(region: ChangeRegion): ChangeRegion {
