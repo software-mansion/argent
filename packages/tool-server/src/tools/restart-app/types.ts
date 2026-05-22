@@ -1,4 +1,7 @@
-import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import type {
+  NativeDevtoolsApi,
+  NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 
 export interface RestartAppParams {
   udid: string;
@@ -6,10 +9,9 @@ export interface RestartAppParams {
   activity?: string;
 }
 
-export interface RestartAppResult {
-  restarted: boolean;
-  bundleId: string;
-}
+export type RestartAppResult =
+  | { restarted: boolean; bundleId: string }
+  | NativeDevtoolsInitFailedResult;
 
 // iOS gets the native-devtools service so restart-app can refresh the DYLD env
 // before the relaunch. Android's `services()` returns `{}` so its handler types

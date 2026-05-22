@@ -64,7 +64,7 @@ describe("update-checker", () => {
   });
 
   it("reports no update when versions match", async () => {
-    const { version: currentVersion } = await import("../../package.json");
+    const { version: currentVersion } = await import("../package.json");
 
     const mockGet = vi.mocked(https.get);
     mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {

@@ -38,7 +38,7 @@ describe("boot-device — iOS path", () => {
   });
 
   it("waits for boot completion and native-devtools init before returning", async () => {
-    const resolveService = vi.fn(async () => {});
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
     const registry = {
       resolveService,
     } as unknown as Registry;
@@ -82,6 +82,29 @@ describe("boot-device — iOS path", () => {
     );
   });
 
+  it("returns a structured init_failed result when native-devtools has given up", async () => {
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => ({
+        attempts: 3,
+        lastError: "simctl spawn timed out",
+        givenUp: true,
+      }),
+    }));
+    const registry = { resolveService } as unknown as Registry;
+
+    const tool = createBootDeviceTool(registry);
+
+    const result = await tool.execute!({}, { udid: "33333333-3333-3333-3333-333333333333" });
+    expect(result).toMatchObject({ status: "init_failed", attempts: 3 });
+    if ("status" in result && result.status === "init_failed") {
+      expect(result.message).toContain("33333333-3333-3333-3333-333333333333");
+      expect(result.message).toContain("simctl spawn timed out");
+    }
+    // Opening Simulator.app would imply success — must not happen.
+    const calls = mockExecFile.mock.calls.map(([file]) => file);
+    expect(calls).not.toContain("open");
+  });
+
   it("still primes native-devtools when simctl reports the simulator is already booted", async () => {
     mockExecFile
       .mockImplementationOnce((...args: unknown[]) => {
@@ -93,7 +116,7 @@ describe("boot-device — iOS path", () => {
         return {} as never;
       });
 
-    const resolveService = vi.fn(async () => {});
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
     const registry = { resolveService } as unknown as Registry;
 
     const tool = createBootDeviceTool(registry);
@@ -144,8 +167,8 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
   it("bounds bootTimeoutMs to [30s, 15min]", () => {
     // Timeouts should fail at the zod layer before reaching execute.
     const tool = createBootDeviceTool({} as unknown as Registry);
-    expect(tool.zodSchema.safeParse({ avdName: "x", bootTimeoutMs: 29_999 }).success).toBe(false);
-    expect(tool.zodSchema.safeParse({ avdName: "x", bootTimeoutMs: 900_001 }).success).toBe(false);
-    expect(tool.zodSchema.safeParse({ avdName: "x", bootTimeoutMs: 60_000 }).success).toBe(true);
+    expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 29_999 }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 900_001 }).success).toBe(false);
+    expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 60_000 }).success).toBe(true);
   });
 });

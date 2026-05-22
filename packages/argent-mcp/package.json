@@ -1,14 +1,15 @@
 {
   "private": true,
   "name": "@argent/mcp",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "MCP stdio protocol adapter — talks to the argent tool-server and forwards calls",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "@argent/tools-client": "file:../argent-tools-client",

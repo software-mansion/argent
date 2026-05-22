@@ -1,14 +1,15 @@
 {
   "private": true,
   "name": "@argent/cli",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Shell CLI commands for argent: tools, run, server",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "@argent/tools-client": "file:../argent-tools-client"
