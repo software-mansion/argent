@@ -97,7 +97,9 @@ const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
 const DEFAULT_CONTEXT_DIFF_SCALE = 0.3;
 const REGION_RECTANGLE_STROKE_WIDTH = 4;
-const REGION_RECTANGLE_COLOR: Rgb = { r: 0, g: 255, b: 255 };
+const REGION_RECTANGLE_COLOR: Rgb = { r: 255, g: 220, b: 0 };
+const DIFF_BRIGHTER_COLOR: Rgb = { r: 0, g: 200, b: 0 };
+const DIFF_DARKER_COLOR: Rgb = { r: 255, g: 0, b: 0 };
 const HORIZONTAL_TEXT_MERGE_HEIGHT_MULTIPLIER = 3;
 const HORIZONTAL_TEXT_MERGE_MIN_GAP = 32;
 const HORIZONTAL_TEXT_MERGE_MAX_GAP = 120;
@@ -142,6 +144,7 @@ export async function diffPngFiles(options: {
 
   const artifactPaths = resolveDiffArtifactPaths(options);
   await writeDiffArtifacts({
+    baseline,
     current,
     mask: pixelDiff.mask,
     regions,
@@ -277,13 +280,18 @@ function outputArtifactBaseName(filePath: string): string {
 }
 
 async function writeDiffArtifacts(params: {
+  baseline: DecodedPng;
   current: DecodedPng;
   mask: Uint8Array;
   regions: DiffRegion[];
   paths: DiffArtifactPaths;
   contextDiffScale: number;
 }): Promise<void> {
-  const diffImage = buildContextDiff({ current: params.current, mask: params.mask });
+  const diffImage = buildContextDiff({
+    baseline: params.baseline,
+    current: params.current,
+    mask: params.mask,
+  });
   drawRegionRectangles(diffImage, params.regions);
   await writePngFile(params.paths.diffPath, diffImage);
   await writePngFile(
@@ -316,15 +324,23 @@ async function analyzeScreenshotTextChangesSafely(
   }
 }
 
-function buildContextDiff(params: { current: DecodedPng; mask: Uint8Array }): PNG {
+function buildContextDiff(params: {
+  baseline: DecodedPng;
+  current: DecodedPng;
+  mask: Uint8Array;
+}): PNG {
   const output = new PNG({ width: params.current.width, height: params.current.height });
 
   for (let pixelIndex = 0; pixelIndex < params.mask.length; pixelIndex++) {
     const offset = pixelIndex * 4;
     if (params.mask[pixelIndex]) {
-      output.data[offset] = 255;
-      output.data[offset + 1] = 0;
-      output.data[offset + 2] = 0;
+      const baselineLuminance = luminanceFromOffset(params.baseline.data, offset);
+      const currentLuminance = luminanceFromOffset(params.current.data, offset);
+      const color =
+        currentLuminance >= baselineLuminance ? DIFF_BRIGHTER_COLOR : DIFF_DARKER_COLOR;
+      output.data[offset] = color.r;
+      output.data[offset + 1] = color.g;
+      output.data[offset + 2] = color.b;
       output.data[offset + 3] = 255;
       continue;
     }
@@ -336,6 +352,10 @@ function buildContextDiff(params: { current: DecodedPng; mask: Uint8Array }): PN
   }
 
   return output;
+}
+
+function luminanceFromOffset(data: Buffer, offset: number): number {
+  return 0.2126 * data[offset] + 0.7152 * data[offset + 1] + 0.0722 * data[offset + 2];
 }
 
 async function writePngFile(filePath: string, png: PNG): Promise<void> {

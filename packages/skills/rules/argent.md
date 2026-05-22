@@ -94,7 +94,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, comparing screenshots with `screenshot-diff`, or verifying a visible UI code change.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
@@ -122,7 +122,7 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 
 END-TO-END UI TESTING
 Skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, validating visual behavior after implementation, validating visible UI changes after implementation, or doing visual regression checks with saved baseline/current screenshots.
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, or validating visible UI changes or visual behavior after implementation.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`

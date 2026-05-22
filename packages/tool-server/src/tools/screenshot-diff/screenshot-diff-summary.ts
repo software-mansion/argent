@@ -42,6 +42,9 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
     lines.push(`- diff_images:`);
     if (result.diffPath) lines.push(`  - diff: ${result.diffPath}`);
     if (result.contextDiffPath) lines.push(`  - context: ${result.contextDiffPath}`);
+    lines.push(
+      `  - legend: green=pixel brighter in current, red=pixel darker in current, yellow rectangles outline changed regions`
+    );
   }
 
   lines.push("", "Text changes:");

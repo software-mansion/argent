@@ -35,7 +35,11 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
   }
 }
 
-export async function toMcpContent(result: unknown, outputHint?: string): Promise<ContentBlock[]> {
+export async function toMcpContent(
+  result: unknown,
+  outputHint?: string,
+  args?: unknown
+): Promise<ContentBlock[]> {
   if (outputHint === "screenshot-diff" && isScreenshotDiffResult(result)) {
     const blocks: ContentBlock[] = [];
 
@@ -53,8 +57,8 @@ export async function toMcpContent(result: unknown, outputHint?: string): Promis
   }
 
   if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
-    const r = result as { url: string; path?: string; includeImageInContext?: boolean };
-    if (r.includeImageInContext === false) {
+    const r = result as { url: string; path?: string };
+    if (isRecord(args) && args.includeImageInContext === false) {
       return [{ type: "text" as const, text: `Saved: ${r.path}` }];
     }
 
@@ -98,6 +102,7 @@ export type FlowExecuteResult = {
     message?: string;
     result?: unknown;
     outputHint?: string;
+    args?: unknown;
     error?: string;
   }[];
 };
@@ -134,7 +139,7 @@ export async function flowRunToMcpContent(result: FlowExecuteResult): Promise<Co
       });
     } else {
       blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint);
+      const stepContent = await toMcpContent(step.result, step.outputHint, step.args);
       blocks.push(...stepContent);
     }
   }

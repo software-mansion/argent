@@ -23,7 +23,7 @@ const zodSchema = z.object({
     .optional()
     .default(true)
     .describe(
-      "Whether the MCP adapter should attach the screenshot image to the agent context. Set false to save the file path only."
+      "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff — the file is still written, but the image bytes are not attached to the agent context."
     ),
 });
 
@@ -32,7 +32,6 @@ type Params = z.infer<typeof zodSchema>;
 interface Result {
   url: string;
   path: string;
-  includeImageInContext: boolean;
 }
 
 const capability: ToolCapability = {
@@ -42,7 +41,7 @@ const capability: ToolCapability = {
 
 export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
-  description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path, includeImageInContext } and the MCP adapter renders it as a visible image unless includeImageInContext is false.
+  description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
@@ -56,10 +55,6 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
   async execute(services, params, options) {
     const api = services.simulatorServer as SimulatorServerApi;
     const signal = options?.signal ?? AbortSignal.timeout(16_000);
-    const screenshot = await httpScreenshot(api, params.rotation, signal, params.scale);
-    return {
-      ...screenshot,
-      includeImageInContext: params.includeImageInContext ?? true,
-    };
+    return httpScreenshot(api, params.rotation, signal, params.scale);
   },
 };

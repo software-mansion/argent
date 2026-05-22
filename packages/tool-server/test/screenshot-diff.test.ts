@@ -194,8 +194,27 @@ describe("diffPngFiles", () => {
     ]);
     const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
     expect(readRgb(diff, 0, 0)).toEqual({ r: 247, g: 247, b: 247 });
-    expect(readRgb(diff, 4, 17)).toEqual({ r: 0, g: 255, b: 255 });
-    expect(readRgb(diff, 5, 21)).toEqual({ r: 255, g: 0, b: 0 });
+    expect(readRgb(diff, 4, 17)).toEqual({ r: 255, g: 220, b: 0 });
+    expect(readRgb(diff, 5, 21)).toEqual({ r: 0, g: 200, b: 0 });
+  });
+
+  it("colors changed pixels green when they brightened and red when they darkened", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    await writePng(baselinePath, 30, 60, { r: 20, g: 20, b: 20 }, [
+      ...rectPixels(2, 20, 10, 10, { r: 240, g: 240, b: 240 }),
+    ]);
+    await writePng(currentPath, 30, 60, { r: 20, g: 20, b: 20 }, [
+      ...rectPixels(18, 20, 10, 10, { r: 240, g: 240, b: 240 }),
+    ]);
+
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
+
+    expect(readRgb(diff, 6, 24)).toEqual({ r: 255, g: 0, b: 0 });
+    expect(readRgb(diff, 22, 24)).toEqual({ r: 0, g: 200, b: 0 });
   });
 
   it("keeps pixel diff artifacts when text analysis fails unexpectedly", async () => {

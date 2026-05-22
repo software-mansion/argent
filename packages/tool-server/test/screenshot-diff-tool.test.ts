@@ -112,10 +112,46 @@ describe("screenshotDiffTool", () => {
       signal,
       1.0
     );
-    await expect(fs.stat(path.join(dir, "current.live.png"))).resolves.toMatchObject({
+
+    const entries = await fs.readdir(dir);
+    const liveCaptures = entries.filter((name) => /^current-[a-f0-9]{8}\.live\.png$/.test(name));
+    expect(liveCaptures).toHaveLength(1);
+    const liveBaseName = path.parse(liveCaptures[0]!).name;
+    await expect(fs.stat(path.join(dir, liveCaptures[0]!))).resolves.toMatchObject({
       size: expect.any(Number),
     });
-    expect(result.diffPath).toBe(path.join(dir, "current.live-diff.png"));
+    expect(result.diffPath).toBe(path.join(dir, `${liveBaseName}-diff.png`));
+  });
+
+  it("uses a fresh hashed filename for each live capture so concurrent diffs do not collide", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-unique-"));
+    const baselinePath = path.join(dir, "baseline.png");
+    const capturedPath = path.join(dir, "captured.png");
+    await writePng(baselinePath, 2, 2, { r: 0, g: 0, b: 0 });
+    await writePng(capturedPath, 2, 2, { r: 0, g: 0, b: 0 });
+    const captureScreenshot = vi.fn(async () => ({
+      url: "http://localhost/current.png",
+      path: capturedPath,
+    }));
+
+    await executeScreenshotDiffTool(
+      { simulatorServer: { apiUrl: "http://localhost:4949" } },
+      { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
+      {},
+      captureScreenshot as never
+    );
+    await executeScreenshotDiffTool(
+      { simulatorServer: { apiUrl: "http://localhost:4949" } },
+      { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
+      {},
+      captureScreenshot as never
+    );
+
+    const liveCaptures = (await fs.readdir(dir)).filter((name) =>
+      /^current-[a-f0-9]{8}\.live\.png$/.test(name)
+    );
+    expect(liveCaptures).toHaveLength(2);
+    expect(new Set(liveCaptures).size).toBe(2);
   });
 
   it("validates mutually exclusive saved and live inputs at execute time", async () => {

@@ -1,6 +1,6 @@
 ---
 name: argent-test-ui-flow
-description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, visual behavior, visual regression checks, screenshot-diff checks, or before/after comparisons.
+description: Autonomously test an app UI (iOS or Android) by running interact-screenshot-verify loops using argent MCP tools. Use when testing UI flows, verifying login works, testing navigation, running end-to-end UI test scenarios, manual QA steps, visible UI changes, or visual behavior.
 ---
 
 ## Platform-agnostic
@@ -22,10 +22,6 @@ All interactions go through argent MCP tools. Ensure the simulator/emulator is r
 
 For implementation tasks that modify visible UI, this workflow can also serve as a visual acceptance path.
 
-### QA preflight
-
-Before running a QA flow, classify each expected result as visual, structural, runtime/log/network, or mixed. For detailed evidence selection, read `references/qa-evidence.md`. For exact screenshot-diff use cases, parameter choices, and full-resolution screenshot guidance, use the `argent-screenshot-diff` skill.
-
 1. **Baseline screenshot**: Call `screenshot` to see the current UI state. For visual regression comparison or UI change verification, capture the baseline at `scale: 1.0` with `includeImageInContext: false` and keep the returned `path` before editing whenever feasible.
 2. **Find target**: Before tapping, use a discovery tool to get element coordinates:
    - **React Native apps**: use `debugger-component-tree` — it returns component names with (tap: x,y) coordinates. This is the preferred tool for RN apps on either platform. To use it, resolve the `argent-react-native-app-workflow` skill for setup; on Android you must also run `adb -s <serial> reverse tcp:8081 tcp:8081` so Metro is reachable from the device.
@@ -33,10 +29,11 @@ Before running a QA flow, classify each expected result as visual, structural, r
    - **Permission prompts / system modal overlays**: try `describe` first. Fall back to `screenshot` only if the overlay is not exposed reliably.
    - **Fallback**: use `screenshot` to estimate where the desired component is, then verify immediately after the action.
 3. **Interact**: Perform the action (`gesture-tap`, `gesture-swipe`, `keyboard`, `button`, ...) — you receive a screenshot automatically.
-4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with normal downscaled `screenshot`.
-   - For visual or mixed assertions, use `screenshot-diff` when a stable baseline/current pair is available.
-   - For structural assertions, verify with the accessibility/component tree or app state.
-   - For runtime/log/network assertions, verify with logs, network tools, debugger evaluation, or targeted tests.
+4. **Verify**: Check the returned screenshot for expected results. If it shows a loading/transitional state, retake with normal downscaled `screenshot`. Pick evidence by what's being asserted:
+   - **Visual** (layout, spacing, color, typography, image/icon rendering, clipping, overflow, text rendering): prefer `screenshot-diff` against the baseline captured in step 1 — it surfaces pixel-visible changes the auto-screenshot might miss. Fall back to visual inspection of the auto-screenshot only when a stable baseline isn't available.
+   - **Structural** (navigation state, element existence, accessibility labels/values, selection, hierarchy, route): verify with `describe`, `debugger-component-tree`, or `native-describe-screen`.
+   - **Runtime / log / network** (console errors, API calls, persistence, timing): verify with `view-network-logs`, `debugger-log-registry`, `debugger-evaluate`, or targeted tests.
+   - **Mixed**: collect evidence for each relevant class.
    - Report the combined verdict: expected behavior, observed behavior, evidence used, and any blocker for requested visual diffing.
 5. **Repeat** for each step in the flow.
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "fs/promises";
 import path from "path";
 import { z } from "zod";
@@ -177,7 +178,8 @@ async function captureLiveInput(params: {
   }
 
   const capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
-  const destination = path.join(params.outputDir, `${params.name}.live.png`);
+  const suffix = crypto.randomBytes(4).toString("hex");
+  const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
   await fs.copyFile(capture.path, destination);
   return destination;

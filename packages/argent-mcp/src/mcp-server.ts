@@ -203,7 +203,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "flow" in result &&
         "steps" in result
           ? await flowRunToMcpContent(result as FlowExecuteResult)
-          : await toMcpContent(result, outputHint);
+          : await toMcpContent(result, outputHint, params.arguments);
 
       const udid = getUdidFromArgs(params.arguments);
       if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
@@ -212,7 +212,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(screenshotResult.result, "image");
+          const screenshotContent = await toMcpContent(screenshotResult.result, "image", { udid });
           const hasImage = screenshotContent.some((b) => b.type === "image");
           if (hasImage) {
             content = [

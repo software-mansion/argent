@@ -6,7 +6,7 @@ describe("screenshot tool", () => {
     vi.unstubAllGlobals();
   });
 
-  it("preserves includeImageInContext in the result", async () => {
+  it("returns only url and path; includeImageInContext is an input-only flag handled by the MCP adapter", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -34,7 +34,7 @@ describe("screenshot tool", () => {
     expect(result).toEqual({
       url: "http://localhost/screenshot.png",
       path: "/tmp/screenshot.png",
-      includeImageInContext: false,
     });
+    expect(result).not.toHaveProperty("includeImageInContext");
   });
 });
