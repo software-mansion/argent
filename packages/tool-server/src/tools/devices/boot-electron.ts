@@ -174,7 +174,30 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     );
   }
 
+  // Attach the `error` listener BEFORE checking pid / wiring anything else.
+  // Node's `spawn()` returns synchronously, but ENOENT / EACCES / EAGAIN are
+  // delivered as a deferred `'error'` event on the next tick. EventEmitter
+  // convention: an unhandled `error` event escapes as an uncaught exception —
+  // here that would crash the entire tool-server every time someone called
+  // boot-device with `electronAppPath` on a host that doesn't have electron
+  // on PATH. Fold the event into the readiness race so the caller sees a
+  // clean rejection instead.
+  const spawnError = new Promise<never>((_resolve, reject) => {
+    child.once("error", (err: NodeJS.ErrnoException) => {
+      const codeSuffix = err.code ? ` (${err.code})` : "";
+      reject(
+        new Error(
+          `Electron boot: failed to launch ${launcher.command}${codeSuffix}: ${err.message}. ` +
+            `Make sure 'electron' is installed (npm i electron in the app dir, or globally) and on PATH.`
+        )
+      );
+    });
+  });
+
   if (!child.pid) {
+    // No pid + no async error yet is still possible on some platforms when
+    // spawn fails very early. Surface it loudly rather than waiting for the
+    // CDP probe to time out.
     throw new Error(`Electron boot: spawn returned without a pid (binary: ${launcher.command}).`);
   }
 
@@ -205,6 +228,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     await Promise.race([
       waitForCdpReady(port, options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
       earlyExit,
+      spawnError,
     ]);
   } catch (err) {
     // CDP didn't come up — terminate the orphan so we don't leak a process.
