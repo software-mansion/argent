@@ -345,6 +345,12 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         totalReactCommits: api.totalReactCommits,
       };
 
+      cacheProfilerPaths(api.port, sessionPaths, api.deviceId);
+      api.sessionPaths = sessionPaths;
+      api.sessionId = null;
+      api.ownerToolServerPid = null;
+      api.disposeSession();
+
       const duration_ms = (profile.endTime - profile.startTime) / 1000;
 
       const response: Record<string, unknown> = {
@@ -384,16 +390,6 @@ Fails if no active profiling session exists or the CDP connection was lost durin
           }
         }
       }
-
-      // Publish session paths only once the response is fully built. If any
-      // step above throws, the previous (potentially valid) cache entry is
-      // preserved and we don't point react-profiler-analyze at a partial /
-      // corrupted dump on disk.
-      cacheProfilerPaths(api.port, sessionPaths, api.deviceId);
-      api.sessionPaths = sessionPaths;
-      api.sessionId = null;
-      api.ownerToolServerPid = null;
-      api.disposeSession();
 
       return response;
     },

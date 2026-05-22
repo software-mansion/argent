@@ -37,11 +37,6 @@ export const NO_DEVTOOLS_HOOK_ERROR =
   "Fix: rebuild in debug/dev mode (e.g. `npx react-native run-ios` without --configuration Release; for Expo, run a dev client). " +
   "Once the app is running with DevTools attached, call react-profiler-start again.";
 
-export const NO_RENDERER_INTERFACE_ERROR =
-  "React DevTools hook is present but no renderer interface has registered yet. " +
-  "Wait for the app to render its first commit (e.g. trigger a navigation or interaction) and call react-profiler-start again. " +
-  "If this persists, the runtime may be a non-React JS context — confirm the target device_id is the one running the React app.";
-
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   device_id: z
@@ -151,42 +146,14 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // Inject the native-profiler instrumentation (idempotent).
       await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
 
-      // Rollback for early validation failures. The session is in
-      // RUNNING state after resolveService but no CPU sampler or React
-      // backend has been started yet — disposing it ensures subsequent
-      // react-profiler-stop / react-profiler-analyze calls see a clean
-      // "no session" state instead of tripping over a half-initialised
-      // session with no live profile data.
-      const disposeSessionQuietly = async () => {
-        try {
-          await registry.disposeService(psUrn);
-        } catch {
-          /* best-effort — caller cares about the original error */
-        }
-      };
-
       // Snapshot backend state so we can decide whether to start, take over, or refuse.
-      // Wrap the eval itself: a thrown CDP error must still trigger rollback,
-      // otherwise the half-initialised session stays RUNNING and any later
-      // react-profiler-stop trips over an unstarted Hermes sampler.
-      let stateJson: string | undefined;
-      try {
-        stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
-      } catch (err) {
-        await disposeSessionQuietly();
-        throw err;
-      }
+      let stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
       if (!stateJson) {
-        await disposeSessionQuietly();
-        throw new Error(
-          "Failed to read React profiler state from runtime (no value returned). " +
-            "The Hermes runtime may have disconnected — verify the app is still running in dev mode and the debugger is attached, then retry."
-        );
+        throw new Error("Failed to read React profiler state from runtime (no value returned).");
       }
       let state = JSON.parse(stateJson) as ReadStateResult;
 
       if (!state.hookExists) {
-        await disposeSessionQuietly();
         throw new Error(NO_DEVTOOLS_HOOK_ERROR);
       }
 
@@ -198,8 +165,44 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       // identifying the specific failure mode (production build, rdt-core
       // version too old, etc.).
       if (!("rendererInterfaceFound" in state) || !state.rendererInterfaceFound) {
-        await disposeSessionQuietly();
-        throw new Error(NO_RENDERER_INTERFACE_ERROR);
+        const bootstrapJson = (await cdp.evaluate(BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT)) as
+          | string
+          | undefined;
+        if (!bootstrapJson) {
+          throw new Error(
+            "Failed to attach React DevTools backend (no value returned from runtime)."
+          );
+        }
+        const bootstrap = JSON.parse(bootstrapJson) as BootstrapResult;
+
+        if (!bootstrap.ok) {
+          throw new Error(bootstrapFailureMessage(bootstrap));
+        }
+
+        // Re-run the setup script: it walks `hook.rendererInterfaces` and
+        // installs the `__argent_startWrapped__` wrappers. The previous setup
+        // call (before bootstrap) saw an empty map and did nothing, so the
+        // freshly-attached interfaces are unwrapped — `buildStartScript`'s
+        // post-start check on `__argent_isProfiling__` would fail without this.
+        await cdp.evaluate(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+
+        stateJson = (await cdp.evaluate(READ_STATE_SCRIPT)) as string | undefined;
+        if (!stateJson) {
+          throw new Error(
+            "Failed to re-read React profiler state after attach (no value returned)."
+          );
+        }
+        state = JSON.parse(stateJson) as ReadStateResult;
+
+        if (
+          !state.hookExists ||
+          !("rendererInterfaceFound" in state) ||
+          !state.rendererInterfaceFound
+        ) {
+          throw new Error(
+            "Attached the React DevTools backend but no React renderer registered itself afterwards. Ask the user to fully reload the JS bundle and retry."
+          );
+        }
       }
 
       // If a session is already active, classify it and decide.

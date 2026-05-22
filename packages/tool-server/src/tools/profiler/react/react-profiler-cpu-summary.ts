@@ -6,10 +6,7 @@ import type {
   HermesCpuProfile,
 } from "../../../utils/react-profiler/types/input";
 import { readCpuProfile } from "../../../utils/react-profiler/debug/dump";
-import {
-  assertHermesCpuProfile,
-  isArgentProfilerFunction,
-} from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
+import { isArgentProfilerFunction } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -137,7 +134,6 @@ Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
     }
 
     const cpuProfile: HermesCpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
-    assertHermesCpuProfile(cpuProfile, "react-profiler-cpu-summary");
 
     const { nodes, samples, timeDeltas, startTime, endTime } = cpuProfile;
     const duration_ms = Math.round((endTime - startTime) / 1000);
