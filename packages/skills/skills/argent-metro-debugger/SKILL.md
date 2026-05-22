@@ -117,13 +117,13 @@ When reading from the log file:
 
 ## Quick Reference
 
-| Action                        | Tool                                                                |
-| ----------------------------- | ------------------------------------------------------------------- |
-| Diagnose / check connection   | `debugger-status`                                                   |
-| Connect to Metro CDP          | `debugger-connect`                                                  |
-| Reload JS (already connected) | `debugger-reload-metro`                                             |
-| Relaunch app on device        | `restart-app`                                                       |
-| Inspect component at point    | `debugger-inspect-element`                                          |
-| Full component tree           | `debugger-component-tree`                                           |
-| Console log overview          | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
-| Evaluate JS                   | `debugger-evaluate`                                                 |
+| Action                            | Tool                                                                |
+| --------------------------------- | ------------------------------------------------------------------- |
+| Diagnose / check connection       | `debugger-status`                                                   |
+| Connect to CDP (Metro / Electron) | `debugger-connect`                                                  |
+| Reload JS (already connected)     | `debugger-reload-metro`                                             |
+| Relaunch app on device            | `restart-app`                                                       |
+| Inspect component at point        | `debugger-inspect-element`                                          |
+| Full component tree               | `debugger-component-tree`                                           |
+| Console log overview              | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |
+| Evaluate JS                       | `debugger-evaluate`                                                 |

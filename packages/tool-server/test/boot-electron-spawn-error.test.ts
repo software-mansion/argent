@@ -141,4 +141,49 @@ describe("bootElectronApp — spawn error handling", () => {
       })
     ).rejects.toThrow(/spawn returned without a pid/);
   });
+
+  it("detaches the error listener after the no-pid throw — a deferred 'error' must not become an unhandled rejection", async () => {
+    // Real-world regression scenario: a hostile platform returns a Child with
+    // no pid AND fires a deferred 'error' event after spawn returns. Before
+    // the fix, the error listener would still be attached and would call
+    // reject() on a promise that nobody is awaiting — Node's default
+    // --unhandled-rejections=throw would then crash the tool-server.
+    const child = makeFakeChild({ pid: undefined });
+    spawnMock.mockReturnValue(child);
+
+    let unhandledRejections = 0;
+    const onUnhandled = () => {
+      unhandledRejections++;
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      await expect(
+        bootElectronApp({
+          appPath: appDir,
+          port: 19226,
+          readyTimeoutMs: 100,
+        })
+      ).rejects.toThrow(/spawn returned without a pid/);
+
+      // After the synchronous throw, no listener should remain on the child.
+      expect(child.listenerCount("error")).toBe(0);
+
+      // Fire the deferred error now — like Node would.
+      const err = new Error("late ENOENT") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      // emit() with no listener on a stock EventEmitter would throw, but the
+      // test fake-child uses a vanilla EventEmitter, so emit just no-ops when
+      // there are no listeners on a non-'error' channel. For 'error' events
+      // specifically Node DOES throw — so guard the emit to confirm the
+      // listener was actually detached.
+      expect(() => child.emit("error", err)).toThrow(/late ENOENT/);
+
+      // Give microtasks a tick to surface any unhandled rejection.
+      await new Promise((r) => setImmediate(r));
+      expect(unhandledRejections).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

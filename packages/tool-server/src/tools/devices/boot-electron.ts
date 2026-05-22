@@ -182,22 +182,33 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // boot-device with `electronAppPath` on a host that doesn't have electron
   // on PATH. Fold the event into the readiness race so the caller sees a
   // clean rejection instead.
+  const onSpawnError = (err: NodeJS.ErrnoException, reject: (e: Error) => void) => {
+    const codeSuffix = err.code ? ` (${err.code})` : "";
+    reject(
+      new Error(
+        `Electron boot: failed to launch ${launcher.command}${codeSuffix}: ${err.message}. ` +
+          `Make sure 'electron' is installed (npm i electron in the app dir, or globally) and on PATH.`
+      )
+    );
+  };
+  let spawnErrorReject: ((e: Error) => void) | null = null;
   const spawnError = new Promise<never>((_resolve, reject) => {
-    child.once("error", (err: NodeJS.ErrnoException) => {
-      const codeSuffix = err.code ? ` (${err.code})` : "";
-      reject(
-        new Error(
-          `Electron boot: failed to launch ${launcher.command}${codeSuffix}: ${err.message}. ` +
-            `Make sure 'electron' is installed (npm i electron in the app dir, or globally) and on PATH.`
-        )
-      );
-    });
+    spawnErrorReject = reject;
   });
+  const spawnErrorListener = (err: NodeJS.ErrnoException) => {
+    if (spawnErrorReject) onSpawnError(err, spawnErrorReject);
+  };
+  child.once("error", spawnErrorListener);
 
   if (!child.pid) {
     // No pid + no async error yet is still possible on some platforms when
-    // spawn fails very early. Surface it loudly rather than waiting for the
-    // CDP probe to time out.
+    // spawn fails very early. Detach the error listener before throwing so a
+    // deferred `'error'` event delivered after this synchronous throw doesn't
+    // resolve onto an orphan promise (which Node would surface as an
+    // UnhandledPromiseRejection and — with default --unhandled-rejections=throw
+    // — crash the tool-server).
+    child.removeListener("error", spawnErrorListener);
+    spawnErrorReject = null;
     throw new Error(`Electron boot: spawn returned without a pid (binary: ${launcher.command}).`);
   }
 

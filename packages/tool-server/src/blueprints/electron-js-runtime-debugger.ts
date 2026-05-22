@@ -147,11 +147,17 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     const cdp = electron.cdp;
     const port = electron.port;
 
-    // Attach the terminated bridge *before* any awaits below. If the CDP
-    // disconnects while we're still binding the console server or addBinding,
-    // the registry needs that termination signal — otherwise consumers think
-    // the service is healthy until their next CDP send fails. Same reason the
-    // dispose closure must `off` both listeners symmetrically.
+    // Attach the terminated bridge *before* any awaits below. This is mainly
+    // about post-factory disconnects: once the registry binds to our `events`
+    // (after factory returns), a `disconnected` here translates cleanly to
+    // `terminated` so the service is torn down. The disconnect-DURING-factory
+    // window is handled by the upstream ElectronCdp service, which has its own
+    // `terminated` event already bound to the registry — when it fires, the
+    // registry cascades teardown into us. So this listener and the upstream
+    // one cooperate: upstream covers the factory-init window; this one covers
+    // everything after factory returns. The dispose closure must `off` both
+    // listeners symmetrically — otherwise the upstream `cdp.events` outlives
+    // our blueprint and would emit into a disposed event bus.
     const events = new TypedEventEmitter<ServiceEvents>();
     const onDisconnected = (error?: Error) => {
       events.emit("terminated", error ?? new Error("Electron CDP disconnected"));
