@@ -336,8 +336,7 @@ function buildContextDiff(params: {
     if (params.mask[pixelIndex]) {
       const baselineLuminance = luminanceFromOffset(params.baseline.data, offset);
       const currentLuminance = luminanceFromOffset(params.current.data, offset);
-      const color =
-        currentLuminance >= baselineLuminance ? DIFF_BRIGHTER_COLOR : DIFF_DARKER_COLOR;
+      const color = currentLuminance >= baselineLuminance ? DIFF_BRIGHTER_COLOR : DIFF_DARKER_COLOR;
       output.data[offset] = color.r;
       output.data[offset + 1] = color.g;
       output.data[offset + 2] = color.b;
