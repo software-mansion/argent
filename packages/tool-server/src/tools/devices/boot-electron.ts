@@ -263,6 +263,11 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     // CDP didn't come up — terminate the orphan so we don't leak a process.
     // Detach the boot listeners first so the impending kill→exit doesn't
     // chain into a stale earlyExit rejection.
+    //
+    // INVARIANT: detachBootListeners() MUST be the first synchronous
+    // statement in this catch block — no awaits before it. The boot-time
+    // listeners would otherwise keep firing during any awaited cleanup and
+    // re-introduce the orphan-rejection bug this commit closes.
     detachBootListeners();
     killChildEscalating(child);
     throw err;

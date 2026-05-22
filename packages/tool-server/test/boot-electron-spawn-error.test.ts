@@ -225,6 +225,50 @@ describe("bootElectronApp — spawn error handling", () => {
     }
   });
 
+  it("detaches BOTH boot listeners after a FAILURE path too (CDP-ready timeout) — no orphan rejections on the cleanup kill", async () => {
+    // Companion to the success-path test above. The catch branch in
+    // bootElectronApp runs detachBootListeners() before killChildEscalating;
+    // confirm both listeners come off and the synthetic post-kill 'exit'
+    // doesn't refire any stale handler.
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    let unhandled = 0;
+    const onUnhandled = () => unhandled++;
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      // No HTTP server on the port → waitForCdpReady will time out fast,
+      // taking the catch path. earlyExit / spawnError aren't fired by us.
+      await expect(
+        bootElectronApp({
+          appPath: appDir,
+          // Pick an unbound port; ensureCdpReachable will fail repeatedly
+          // until readyTimeoutMs elapses. Don't pick 0 — we want a real
+          // unreachable port, not OS-assigned ephemeral.
+          port: 1,
+          readyTimeoutMs: 100,
+        })
+      ).rejects.toBeInstanceOf(Error);
+
+      // Both listeners must be detached in the catch path.
+      expect(child.listenerCount("error")).toBe(0);
+      expect(child.listenerCount("exit")).toBe(0);
+
+      // killChildEscalating already fired SIGTERM on the (mock) child; in
+      // production that would cause the kernel to deliver `'exit'` shortly
+      // after. Simulate it now — the detached listener must NOT chain into
+      // an earlyExit rejection (which would arrive as an unhandled
+      // rejection on an orphan promise).
+      child.emit("exit", null, "SIGTERM");
+
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
   it("detaches the error listener after the no-pid throw — a deferred 'error' must not become an unhandled rejection", async () => {
     // Real-world regression scenario: a hostile platform returns a Child with
     // no pid AND fires a deferred 'error' event after spawn returns. Before
