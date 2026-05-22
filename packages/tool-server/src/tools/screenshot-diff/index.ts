@@ -76,7 +76,6 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
   searchHint:
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
-  outputHint: "screenshot-diff",
   capability,
   services: (params): Record<string, ServiceRef> => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),

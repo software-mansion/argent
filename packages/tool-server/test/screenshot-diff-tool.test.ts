@@ -6,10 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 
 describe("screenshotDiffTool", () => {
-  it("uses the screenshot-diff output hint", () => {
-    expect(screenshotDiffTool.outputHint).toBe("screenshot-diff");
-  });
-
   it("rejects public tuning options so defaults stay internal", () => {
     const result = screenshotDiffTool.zodSchema!.safeParse({
       baselinePath: "/tmp/baseline.png",

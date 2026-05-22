@@ -5,7 +5,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import { ensureToolsServer, type ToolMeta, type ToolsServerPaths } from "@argent/tools-client";
-import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "./content.js";
+import {
+  toMcpContent,
+  flowRunToMcpContent,
+  screenshotDiffToMcpContent,
+  isScreenshotDiffResult,
+  type ContentBlock,
+  type FlowExecuteResult,
+} from "./content.js";
 import {
   autoScreenshotEnabled,
   getUdidFromArgs,
@@ -196,14 +203,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         result,
       });
 
-      let content =
+      let content: ContentBlock[];
+      if (
         params.name === "flow-execute" &&
         result &&
         typeof result === "object" &&
         "flow" in result &&
         "steps" in result
-          ? await flowRunToMcpContent(result as FlowExecuteResult)
-          : await toMcpContent(result, outputHint, params.arguments);
+      ) {
+        content = await flowRunToMcpContent(result as FlowExecuteResult);
+      } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
+        content = await screenshotDiffToMcpContent(result);
+      } else {
+        content = await toMcpContent(result, outputHint, params.arguments);
+      }
 
       const udid = getUdidFromArgs(params.arguments);
       if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {

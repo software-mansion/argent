@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "../src/content.js";
+import {
+  toMcpContent,
+  screenshotDiffToMcpContent,
+  isScreenshotDiffResult,
+  flowRunToMcpContent,
+  type FlowExecuteResult,
+} from "../src/content.js";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -156,43 +162,28 @@ describe("toMcpContent", () => {
     expect(result.find((b) => b.type === "image")).toBeUndefined();
     vi.unstubAllGlobals();
   });
+});─────────────────────────────────────
 
-  it("returns a context image and plain-text summary for screenshot-diff results", async () => {
+describe("screenshotDiffToMcpContent", () => {
+  it("returns a context image followed by the summary text", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
     const contextDiffPath = path.join(dir, "context.diff.png");
     const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     await fs.writeFile(contextDiffPath, pngBytes);
 
-    const result = {
-      summary: [
-        "Screenshot diff summary",
-        "",
-        "Overall:",
-        "- status: unchanged",
-        "- pixel_mismatch: 0% - no pixel change",
-        "- changed_areas: shown=0 total=0 omitted=0",
-        "- diff_images:",
-        `  - diff: ${path.join(dir, "full.diff.png")}`,
-        `  - context: ${contextDiffPath}`,
-        "",
-        "High-level interpretation:",
-        "- No visual or OCR text changes detected.",
-        "",
-        "Text changes:",
-        "- text_analysis: not_run",
-        "",
-        "Regions:",
-        "- regions: shown=0 total=0 omitted=0",
-        "- None detected.",
-      ].join("\n"),
-      totalPixels: 0,
-      differentPixels: 0,
-      mismatchPercentage: 0,
+    const summary = [
+      "Screenshot diff summary",
+      "",
+      "Overall:",
+      "- status: unchanged",
+      "- pixel_mismatch: 0% - no pixel change",
+    ].join("\n");
+
+    const content = await screenshotDiffToMcpContent({
+      summary,
       diffPath: path.join(dir, "full.diff.png"),
       contextDiffPath,
-      regions: [],
-    };
-    const content = await toMcpContent(result, "screenshot-diff");
+    });
 
     expect(content).toEqual([
       {
@@ -200,137 +191,38 @@ describe("toMcpContent", () => {
         data: pngBytes.toString("base64"),
         mimeType: "image/png",
       },
-      {
-        type: "text",
-        text: result.summary,
-      },
+      { type: "text", text: summary },
     ]);
   });
 
-  it("returns a plain-text summary for screenshot-diff results without a context image", async () => {
-    const result = await toMcpContent(
-      {
-        summary: [
-          "Screenshot diff summary",
-          "",
-          "Overall:",
-          "- status: dimension_mismatch",
-          "- dimension_mismatch: expected=2x1 actual=1x2",
-          "- changed_areas: shown=0 total=0 omitted=0",
-          "",
-          "High-level interpretation:",
-          "- Images have different dimensions, so visual comparison is limited.",
-          "",
-          "Text changes:",
-          "- text_analysis: status=skipped provider=ocr",
-          "",
-          "Regions:",
-          "- regions: shown=0 total=0 omitted=0",
-          "- None detected.",
-        ].join("\n"),
-        totalPixels: 2,
-        differentPixels: 0,
-        mismatchPercentage: 0,
-        dimensionMismatch: {
-          expected: { width: 2, height: 1 },
-          actual: { width: 1, height: 2 },
-        },
-        regions: [],
-        textAnalysis: {
-          status: "skipped",
-          provider: "ocr",
-          changes: [],
-        },
-      },
-      "screenshot-diff"
-    );
+  it("returns only the summary text when no context image is present", async () => {
+    const summary = [
+      "Screenshot diff summary",
+      "",
+      "Overall:",
+      "- status: dimension_mismatch",
+      "- dimension_mismatch: expected=2x1 actual=1x2",
+    ].join("\n");
 
-    expect(result).toEqual([
-      {
-        type: "text",
-        text: "Screenshot diff summary\n\nOverall:\n- status: dimension_mismatch\n- dimension_mismatch: expected=2x1 actual=1x2\n- changed_areas: shown=0 total=0 omitted=0\n\nHigh-level interpretation:\n- Images have different dimensions, so visual comparison is limited.\n\nText changes:\n- text_analysis: status=skipped provider=ocr\n\nRegions:\n- regions: shown=0 total=0 omitted=0\n- None detected.",
-      },
-    ]);
+    const content = await screenshotDiffToMcpContent({ summary });
+
+    expect(content).toEqual([{ type: "text", text: summary }]);
+  });
+});
+
+// ── isScreenshotDiffResult ───────────────────────────────────────────
+
+describe("isScreenshotDiffResult", () => {
+  it("returns true for values carrying a string summary", () => {
+    expect(isScreenshotDiffResult({ summary: "hello" })).toBe(true);
+    expect(isScreenshotDiffResult({ summary: "hello", contextDiffPath: "/tmp/x.png" })).toBe(true);
   });
 
-  it("uses explicit text-change wording for screenshot-diff results", async () => {
-    const result = await toMcpContent(
-      {
-        summary: [
-          "Screenshot diff summary",
-          "",
-          "Overall:",
-          "- status: changed",
-          "- pixel_mismatch: 12% - significant localized visual change",
-          "- changed_areas: shown=1 total=1 omitted=0",
-          "",
-          "High-level interpretation:",
-          '- "Continue" moved.',
-          '- Text changed from "Allow" to "Allow Once".',
-          "",
-          "Text changes:",
-          "- text_analysis: status=ok provider=ocr shown=2 total=2 omitted=0",
-          '- Moved: "Continue"',
-          "  - from x=10 y=20 w=100 h=20",
-          "  - to x=40 y=50 w=100 h=20",
-          "  - delta: dx=+30 dy=+30 dw=0 dh=0",
-          '- Changed: "Allow" -> "Allow Once"',
-          "  - from x=10 y=70 w=80 h=20",
-          "  - to x=10 y=70 w=120 h=20",
-          "",
-          "Regions:",
-          "- regions: shown=1 total=1 omitted=0",
-          "- Region 1: x=10 y=20 w=30 h=40 - changed_pixels=12",
-        ].join("\n"),
-        totalPixels: 100,
-        differentPixels: 12,
-        mismatchPercentage: 12,
-        regions: [
-          {
-            bounds: { x: 10, y: 20, width: 30, height: 40 },
-            pixelCount: 12,
-            averageColor: {
-              delta: { r: 3, g: -2, b: 7 },
-              dominantChange: {
-                channel: "blue",
-                direction: "up",
-                magnitude: 7,
-              },
-            },
-          },
-        ],
-        textAnalysis: {
-          status: "ok",
-          provider: "ocr",
-          changes: [
-            {
-              kind: "moved",
-              text: "Continue",
-              baselineBounds: { x: 10, y: 20, width: 100, height: 20 },
-              currentBounds: { x: 40, y: 50, width: 100, height: 20 },
-              delta: { x: 30, y: 30, width: 0, height: 0 },
-              confidence: 0.91,
-            },
-            {
-              kind: "content_changed",
-              baselineText: "Allow",
-              currentText: "Allow Once",
-              baselineBounds: { x: 10, y: 70, width: 80, height: 20 },
-              currentBounds: { x: 10, y: 70, width: 120, height: 20 },
-              confidence: 0.84,
-            },
-          ],
-        },
-      },
-      "screenshot-diff"
-    );
-
-    expect(result).toEqual([
-      {
-        type: "text",
-        text: 'Screenshot diff summary\n\nOverall:\n- status: changed\n- pixel_mismatch: 12% - significant localized visual change\n- changed_areas: shown=1 total=1 omitted=0\n\nHigh-level interpretation:\n- "Continue" moved.\n- Text changed from "Allow" to "Allow Once".\n\nText changes:\n- text_analysis: status=ok provider=ocr shown=2 total=2 omitted=0\n- Moved: "Continue"\n  - from x=10 y=20 w=100 h=20\n  - to x=40 y=50 w=100 h=20\n  - delta: dx=+30 dy=+30 dw=0 dh=0\n- Changed: "Allow" -> "Allow Once"\n  - from x=10 y=70 w=80 h=20\n  - to x=10 y=70 w=120 h=20\n\nRegions:\n- regions: shown=1 total=1 omitted=0\n- Region 1: x=10 y=20 w=30 h=40 - changed_pixels=12',
-      },
-    ]);
+  it("returns false for non-object values or missing summary", () => {
+    expect(isScreenshotDiffResult(null)).toBe(false);
+    expect(isScreenshotDiffResult("string")).toBe(false);
+    expect(isScreenshotDiffResult({})).toBe(false);
+    expect(isScreenshotDiffResult({ summary: 123 })).toBe(false);
   });
 });
 
