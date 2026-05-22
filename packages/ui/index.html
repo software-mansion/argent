@@ -888,7 +888,10 @@
         treeStaleMs: cssNum("--tree-stale-ms", 6000),
         flickMaxVel: cssNum("--flick-max-vel", 1500),
         cardWidth: cssNum("--card-width", 232),
-        spotIdleMs: cssNum("--spot-idle-dismiss-ms", 200),
+        spotIdleMs: cssNum("--spot-idle-dismiss-ms", 300),
+        spotTrajWindowMs: cssNum("--spot-traj-window-ms", 80),
+        spotTrajStoppedSpeed: cssNum("--spot-traj-stopped-speed", 0.05),
+        spotTrajReach: cssNum("--spot-traj-reach", 0.5),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
       };
 
@@ -1687,6 +1690,7 @@
         pinAnim: new Map(), // annId -> { p:{x,y}, v:{x,y} } spring-eased pin
         annPopFor: null, // annotation id whose review popover is open
         pendingComment: null, // { x, y } right-click awaiting tree-load to resolve
+        trajSamples: [], // recent off-element pointer samples {x,y,t} in normalized stream coords
       };
 
       // iOS AX labels for elements that embed SF Symbol glyphs (tab bar
@@ -2633,23 +2637,154 @@
       //   • pointer LEAVES the stream rect    → reset immediately (the user
       //     has clearly stopped inspecting; pointerleave handler).
       //   • a hovered element is lost while still on the stream (a gap or a
-      //     non-hoverable region) → keep the focus box on the last element
-      //     and run a single short ease-off (spotIdleMs); release only if
-      //     nothing new is hovered in that window. Brief crossings covered free.
-      // clearSpotIdle cancels the ease-off (new element hovered, or the
-      // inspector/stream was torn down); armSpotIdle starts it. A locked
-      // comment target (vp.commentFor) is never auto-dismissed by either.
+      //     non-hoverable region) → trajectory-based release: only arm the
+      //     spotIdleMs timer when the pointer is either stopped or aimed at
+      //     nothing reachable. While the pointer is travelling toward another
+      //     highlightable, the timer is cancelled regardless of how long the
+      //     trip takes. Brief gap crossings stay covered for free.
+      // clearSpotIdle cancels any pending release; evaluateSpotIdle re-checks
+      // trajectory each off-element sample and arms/cancels accordingly. A
+      // locked comment target (vp.commentFor) is never auto-dismissed.
       function clearSpotIdle() {
         if (vp._spotIdle) {
           clearTimeout(vp._spotIdle);
           vp._spotIdle = null;
         }
+        if (vp._spotTrajCheck) {
+          clearTimeout(vp._spotTrajCheck);
+          vp._spotTrajCheck = null;
+        }
+        vp.trajSamples.length = 0;
       }
-      function armSpotIdle() {
-        // Armed once: the countdown runs from the FIRST lost-element moment
-        // and is not reset by further empty moves over the stream. A locked
-        // comment target (vp.commentFor) stays put.
-        if (vp.commentFor || !vp.focus || vp._spotIdle) return;
+      function pushTrajSample(x, y) {
+        const t = performance.now();
+        vp.trajSamples.push({ x, y, t });
+        // Keep just enough history to span the velocity window. We need at
+        // least one sample older than window so the velocity estimate has a
+        // baseline; everything beyond that is dead weight.
+        const cutoff = t - THEME.spotTrajWindowMs * 2;
+        while (vp.trajSamples.length > 2 && vp.trajSamples[0].t < cutoff) {
+          vp.trajSamples.shift();
+        }
+      }
+      function spotTrajVelocity() {
+        // Normalized units per second between the latest sample and the
+        // earliest one still within spotTrajWindowMs. With <2 samples or a
+        // zero-time window we can't infer direction — treat as stopped.
+        // If the latest sample itself is older than the window, the pointer
+        // has been idle for at least a window's worth — also treat as stopped,
+        // so a flick that ends mid-air decays into "stopped" without needing
+        // a fresh pointermove to push the state along.
+        const s = vp.trajSamples;
+        if (s.length < 2) return null;
+        const last = s[s.length - 1];
+        if (performance.now() - last.t > THEME.spotTrajWindowMs) return null;
+        let early = s[0];
+        for (let i = s.length - 2; i >= 0; i--) {
+          early = s[i];
+          if (last.t - s[i].t >= THEME.spotTrajWindowMs) break;
+        }
+        const dt = (last.t - early.t) / 1000;
+        if (dt <= 0) return null;
+        const vx = (last.x - early.x) / dt;
+        const vy = (last.y - early.y) / dt;
+        return { x: last.x, y: last.y, vx, vy, speed: Math.hypot(vx, vy) };
+      }
+      // Slab-method ray/AABB test in normalized coords. Returns true if the
+      // forward ray from (x,y) in unit direction (ux,uy) enters `frame` within
+      // `reach` normalized units. Points already inside the frame count as
+      // hits (the cursor is *on* the target).
+      function rayHitsFrame(x, y, ux, uy, frame, reach) {
+        const minX = frame.x,
+          maxX = frame.x + frame.width;
+        const minY = frame.y,
+          maxY = frame.y + frame.height;
+        if (x >= minX && x <= maxX && y >= minY && y <= maxY) return true;
+        let tmin = -Infinity,
+          tmax = Infinity;
+        const EPS = 1e-9;
+        if (Math.abs(ux) > EPS) {
+          const t1 = (minX - x) / ux,
+            t2 = (maxX - x) / ux;
+          tmin = Math.max(tmin, Math.min(t1, t2));
+          tmax = Math.min(tmax, Math.max(t1, t2));
+        } else if (x < minX || x > maxX) {
+          return false;
+        }
+        if (Math.abs(uy) > EPS) {
+          const t1 = (minY - y) / uy,
+            t2 = (maxY - y) / uy;
+          tmin = Math.max(tmin, Math.min(t1, t2));
+          tmax = Math.min(tmax, Math.max(t1, t2));
+        } else if (y < minY || y > maxY) {
+          return false;
+        }
+        if (tmax < 0) return false; // rect entirely behind the ray
+        if (tmin > tmax) return false; // miss
+        return Math.max(tmin, 0) <= reach;
+      }
+      // True if the recent trajectory points forward (within reach) at any
+      // highlightable other than the current focus. Walks the same node set
+      // vpNodeAtPoint considers — node with a non-degenerate on-screen frame.
+      function trajAimsAtTarget(v) {
+        if (!v || !vp.tree) return false;
+        const len = v.speed;
+        if (len <= 0) return false;
+        const ux = v.vx / len,
+          uy = v.vy / len;
+        const focus = vp.focus;
+        let hit = false;
+        const visit = (n) => {
+          if (hit || !n || typeof n !== "object") return;
+          if (n !== focus) {
+            const f = n.frame;
+            if (f && f.width > 0 && f.height > 0) {
+              const cx = f.x + f.width / 2,
+                cy = f.y + f.height / 2;
+              if (cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1) {
+                if (rayHitsFrame(v.x, v.y, ux, uy, f, THEME.spotTrajReach)) {
+                  hit = true;
+                  return;
+                }
+              }
+            }
+          }
+          if (Array.isArray(n.children)) n.children.forEach(visit);
+        };
+        if (Array.isArray(vp.tree.children)) vp.tree.children.forEach(visit);
+        return hit;
+      }
+      function evaluateSpotIdle() {
+        // Decide every off-element sample whether we want a release pending.
+        // Cancel if a locked comment is up, no focus to lose, or the cursor
+        // is on its way toward a *different* highlightable. Arm if it's
+        // stopped or drifting aimlessly. A watchdog re-runs this once the
+        // current velocity sample has aged out, so a flick that ends
+        // mid-flight (no follow-up pointermove) still transitions to the
+        // stopped branch and arms the dismissal timer.
+        if (vp.commentFor || !vp.focus) {
+          clearSpotIdle();
+          return;
+        }
+        const v = spotTrajVelocity();
+        const moving = v && v.speed >= THEME.spotTrajStoppedSpeed;
+        if (moving && trajAimsAtTarget(v)) {
+          if (vp._spotIdle) {
+            clearTimeout(vp._spotIdle);
+            vp._spotIdle = null;
+          }
+          if (vp._spotTrajCheck) clearTimeout(vp._spotTrajCheck);
+          vp._spotTrajCheck = setTimeout(() => {
+            vp._spotTrajCheck = null;
+            evaluateSpotIdle();
+          }, THEME.spotTrajWindowMs + 20);
+          return;
+        }
+        if (vp._spotTrajCheck) {
+          clearTimeout(vp._spotTrajCheck);
+          vp._spotTrajCheck = null;
+        }
+        if (vp._spotIdle) return;
         vp._spotIdle = setTimeout(() => {
           vp._spotIdle = null;
           if (vp.commentFor) return;
@@ -2681,11 +2816,14 @@
           if (!r || !vp.tree || vp.commentFor) return;
           const x = (ev.clientX - mainEl.getBoundingClientRect().left - r.x) / r.w;
           const y = (ev.clientY - mainEl.getBoundingClientRect().top - r.y) / r.h;
+          pushTrajSample(x, y);
           const node = vpNodeAtPoint(vp.tree, x, y);
           if (node) {
             // Over an element → cancel any pending idle release and move the
-            // spotlight there.
+            // spotlight there. Trajectory history is reset so a fresh exit
+            // measures the *new* element's departure, not stale samples.
             clearSpotIdle();
+            pushTrajSample(x, y);
             if (node !== vp.focus) {
               vp.focus = node;
               paintSpot();
@@ -2693,15 +2831,15 @@
             return;
           }
           // No element under the pointer — a thin gap between elements, or a
-          // genuinely non-hoverable region. Do NOT dismiss: hold the last
-          // element and run the shared ease-off. Brief gap crossings are
-          // covered for free (returning to an element clears the timer before
-          // it fires); a real "moved off everything" releases after spotIdleMs.
-          armSpotIdle();
+          // genuinely non-hoverable region. Hold the last element and let
+          // evaluateSpotIdle decide: arm only if stopped or aimed at nothing
+          // reachable; cancel as soon as the trajectory points to a new
+          // highlightable, regardless of how long the trip takes.
+          evaluateSpotIdle();
         });
         hit.addEventListener("pointerleave", () => {
           // Left the stream rect entirely → reset immediately, by design.
-          // The ease-off (spotIdleMs) is ONLY for losing a hovered element
+          // The trajectory-based release is ONLY for losing a hovered element
           // while the pointer is still on the stream. Locked comment stays.
           clearSpotIdle();
           if (vp.commentFor) return;
