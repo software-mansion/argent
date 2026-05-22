@@ -528,7 +528,19 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // rather than hanging for the full overall budget. `-no-snapshot-save`
       // avoids overwriting a working snapshot with state captured after we
       // later force-kill the child from a failure path.
-      const hotArgs = ["-avd", params.avdName, "-force-snapshot-load", "-no-snapshot-save"];
+      // `-gpu auto` overrides `hw.gpu.enabled=no` in AVDs created via
+      // `avdmanager create avd` (its default), which would otherwise force the
+      // emulator onto lavapipe/swangle software rendering even when the host
+      // has a usable Vulkan ICD. macOS hosts hit this less because their AVDs
+      // are usually created through Android Studio with hardware GPU on.
+      const hotArgs = [
+        "-avd",
+        params.avdName,
+        "-force-snapshot-load",
+        "-no-snapshot-save",
+        "-gpu",
+        "auto",
+      ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
         const result = await attemptBoot({
@@ -567,7 +579,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load"];
+  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", "auto"];
   let coldResult: { serial: string };
   try {
     coldResult = await attemptBoot({
