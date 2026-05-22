@@ -412,40 +412,98 @@ export async function checkSnapshotLoadable(
 }
 
 /**
- * True iff a `default_boot` snapshot directory exists on disk for this AVD.
- * Cheap filesystem check — the emulator's own `-snapshot-list` requires
- * spawning the emulator once, which is precisely the hang we are trying to
- * avoid up-front.
+ * Candidate AVD-root directories, in the priority order the Android emulator
+ * binary itself uses (see `external/qemu/android/android-emu/android/avd/util.cpp`):
+ *
+ *   1. `$ANDROID_USER_HOME/avd`            — current Studio convention (≥ 4.2)
+ *   2. `$ANDROID_AVD_HOME`                 — explicit override (files live directly here)
+ *   3. `$XDG_CONFIG_HOME/Android/avd`      — Linux XDG convention
+ *   4. `$ANDROID_SDK_HOME/.android/avd`    — legacy env
+ *   5. `$HOME/.android/avd`                — default
+ *
+ * Mirroring the binary's order is what lets argent find AVDs on Linux setups
+ * where Studio defaults to `$ANDROID_USER_HOME` or `$XDG_CONFIG_HOME` instead
+ * of `$HOME` — exactly the configurations where the old `$HOME`-only lookup
+ * silently returned false and forced a cold boot every time.
+ */
+function avdRootCandidates(): string[] {
+  const home = process.env.HOME ?? "";
+  const candidates: Array<string | null | undefined> = [
+    process.env.ANDROID_USER_HOME ? `${process.env.ANDROID_USER_HOME}/avd` : null,
+    process.env.ANDROID_AVD_HOME,
+    process.env.XDG_CONFIG_HOME ? `${process.env.XDG_CONFIG_HOME}/Android/avd` : null,
+    process.env.ANDROID_SDK_HOME ? `${process.env.ANDROID_SDK_HOME}/.android/avd` : null,
+    home ? `${home}/.android/avd` : null,
+  ];
+  return candidates.filter((p): p is string => Boolean(p && p.startsWith("/")));
+}
+
+/**
+ * Resolve the absolute path of an AVD's `.avd` folder by reading its `.ini`
+ * file. The `path=` line inside `<root>/<name>.ini` is the authoritative
+ * source — the `.avd` folder can live anywhere (Studio lets users move AVDs
+ * onto a faster disk; snap-installed Studio on Linux puts them under
+ * `~/snap/android-studio/...`). The convention `<root>/<name>.avd` is just
+ * the default; trusting it for the snapshot lookup mis-targets every AVD that
+ * has been relocated, which is the second class of "cold boot every time"
+ * symptom on Linux behind the mtime-skew bug.
+ *
+ * Returns null if no `<name>.ini` is found in any candidate root.
+ */
+export async function resolveAvdPath(avdName: string): Promise<string | null> {
+  const { readFile } = await import("node:fs/promises");
+  for (const root of avdRootCandidates()) {
+    try {
+      const ini = await readFile(`${root}/${avdName}.ini`, "utf-8");
+      const match = ini.match(/^path\s*=\s*(.+?)\s*$/m);
+      if (match && match[1]) return match[1];
+    } catch {
+      // .ini missing in this root; try the next one
+    }
+  }
+  return null;
+}
+
+/**
+ * True iff a usable `default_boot` snapshot exists on disk for this AVD.
+ *
+ * Cheap filesystem pre-filter: the emulator's own `-snapshot-list` requires
+ * spawning the binary, which is the hang we are trying to avoid up-front.
+ *
+ * The check is intentionally lenient: `ram.bin` exists and is non-empty, and
+ * `snapshot.pb` exists. That is enough because:
+ *
+ *   - The `-check-snapshot-loadable` probe (called after this returns true)
+ *     validates metadata + renderer compatibility before we commit to a
+ *     hot-boot spawn.
+ *   - The hot-boot spawn passes `-force-snapshot-load`, so a truncated or
+ *     corrupt `ram.bin` produces a loud early child-exit instead of a silent
+ *     qemu fall-through to cold boot — caught by `attemptBoot`'s
+ *     `earlyExitError` race and recovered via the cold-boot fallback.
+ *
+ * A previous version of this check required `snapshot.pb` and `ram.bin` to
+ * have mtimes within 60 s of each other, on the theory that a save writes
+ * both files in one batch. In practice the emulator updates `snapshot.pb`'s
+ * metadata on *every load* (load count, last-loaded timestamp) even with
+ * `-no-snapshot-save`, so the two mtimes drift apart by hours or days after
+ * a few hot-boot sessions and the skew guard rejects every valid snapshot.
+ * That manifested as "cold boot every single time" on macOS and Linux alike;
+ * Linux just made it more painful because the cold boot is slower there.
  */
 export async function hasDefaultBootSnapshot(avdName: string): Promise<boolean> {
   const { stat } = await import("node:fs/promises");
-  const home = process.env.HOME ?? "";
-  const candidates = [
-    `${home}/.android/avd/${avdName}.avd/snapshots/default_boot`,
-    `${process.env.ANDROID_AVD_HOME ?? ""}/${avdName}.avd/snapshots/default_boot`,
-  ].filter((p) => p && p.startsWith("/"));
-  for (const path of candidates) {
-    try {
-      // `snapshot.pb` alone is not enough to call the snapshot "present":
-      // an OOM-killed emulator can leave the tiny metadata file on disk while
-      // `ram.bin` is missing, zero-length, or truncated. The -check-snapshot-
-      // loadable probe reads only metadata and happily reports "Loadable" in
-      // that state, so the hot-boot attempt spawns, then hangs or crashes on
-      // a bad RAM restore. Verifying ram.bin is present and non-empty, and
-      // that its mtime is within a minute of snapshot.pb's (a save writes
-      // both in one batch), cheaply filters the partial-save class before we
-      // ever spawn the emulator.
-      const [metaStat, ramStat] = await Promise.all([
-        stat(`${path}/snapshot.pb`),
-        stat(`${path}/ram.bin`),
-      ]);
-      if (ramStat.size === 0) continue;
-      const mtimeSkewMs = Math.abs(metaStat.mtimeMs - ramStat.mtimeMs);
-      if (mtimeSkewMs > 60_000) continue;
-      return true;
-    } catch {
-      // keep looking
-    }
+  const avdPath = await resolveAvdPath(avdName);
+  if (!avdPath) return false;
+  const snapshotPath = `${avdPath}/snapshots/default_boot`;
+  try {
+    const [metaStat, ramStat] = await Promise.all([
+      stat(`${snapshotPath}/snapshot.pb`),
+      stat(`${snapshotPath}/ram.bin`),
+    ]);
+    if (!metaStat.isFile()) return false;
+    if (!ramStat.isFile() || ramStat.size === 0) return false;
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }
