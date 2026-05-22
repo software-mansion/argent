@@ -223,17 +223,35 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // dies before CDP comes up (e.g. main.js crashes during startup), without
   // this race the caller would see a generic readiness-timeout error 30s
   // later instead of "process exited with code N".
+  //
+  // Both onExit and the earlier spawnErrorListener stay attached to the child
+  // for the duration of Promise.race below. After we resolve (success OR
+  // failure), they MUST be detached: the child is detached + unref'd, so it
+  // outlives this function. A natural exit later (e.g. user closes the
+  // Electron window) would otherwise reject the orphan `earlyExit` promise
+  // with "exited with code 0" → unhandled rejection → tool-server crash.
+  // Same shape as the no-pid throw path above, just for the steady-state run.
+  let earlyExitReject: ((e: Error) => void) | null = null;
   const earlyExit = new Promise<never>((_resolve, reject) => {
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
-      reject(
-        new Error(
-          `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [electron-cdp-${port}] stderr above for the cause.`
-        )
-      );
-    };
-    child.once("exit", onExit);
+    earlyExitReject = reject;
   });
+  const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (!earlyExitReject) return;
+    const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
+    earlyExitReject(
+      new Error(
+        `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [electron-cdp-${port}] stderr above for the cause.`
+      )
+    );
+  };
+  child.once("exit", onExit);
+
+  const detachBootListeners = () => {
+    child.removeListener("error", spawnErrorListener);
+    child.removeListener("exit", onExit);
+    spawnErrorReject = null;
+    earlyExitReject = null;
+  };
 
   try {
     await Promise.race([
@@ -243,9 +261,16 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     ]);
   } catch (err) {
     // CDP didn't come up — terminate the orphan so we don't leak a process.
+    // Detach the boot listeners first so the impending kill→exit doesn't
+    // chain into a stale earlyExit rejection.
+    detachBootListeners();
     killChildEscalating(child);
     throw err;
   }
+  // Happy path: detach the boot-time listeners now that race has resolved.
+  // The child is intentionally long-lived; any later exit / error belongs
+  // to whatever code subsequently manages the session, not to this boot fn.
+  detachBootListeners();
 
   trackElectronPort(port);
 

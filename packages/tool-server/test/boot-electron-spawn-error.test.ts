@@ -142,6 +142,89 @@ describe("bootElectronApp — spawn error handling", () => {
     ).rejects.toThrow(/spawn returned without a pid/);
   });
 
+  it("detaches BOTH boot listeners after successful boot — child outliving the function must not leak rejections", async () => {
+    // The child is detached + unref'd, so it survives beyond bootElectronApp.
+    // When the user later closes the Electron window (a normal action), the
+    // child emits 'exit'. Without symmetric cleanup, the earlyExit promise
+    // would reject "exited with code 0" on an orphan — Node escalates to
+    // uncaughtException with default --unhandled-rejections=throw.
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+
+    // Mock waitForCdpReady → instant success via a real CDP server is overkill;
+    // emit 'exit' immediately would also work, but we want to test the success
+    // path. Use a tiny http server on `port` that satisfies ensureCdpReachable
+    // + discoverPrimaryPage. Or, simpler: fire `Promise.race` to win on the
+    // ready probe by exposing one. Easiest: just verify the no-leak property
+    // by triggering a synthetic success — exit fires AFTER we've already
+    // verified the listeners are detached.
+
+    // Force the boot to complete by emitting `exit` only after we've awaited
+    // a tick — to win the race naturally we'd need a live HTTP/CDP server,
+    // which is outside the unit-test scope. Instead, simulate the post-boot
+    // window by directly stubbing waitForCdpReady via a one-shot HTTP server.
+    const http = await import("node:http");
+    const srv = http.createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/json/version") {
+        res.end(JSON.stringify({ "Browser": "Chrome/Test", "Protocol-Version": "1.3" }));
+        return;
+      }
+      if (req.url === "/json/list") {
+        res.end(
+          JSON.stringify([
+            {
+              id: "page1",
+              type: "page",
+              title: "T",
+              url: "about:blank",
+              webSocketDebuggerUrl: "ws://127.0.0.1:1/discard",
+            },
+          ])
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+    const realPort = (srv.address() as { port: number }).port;
+
+    let unhandled = 0;
+    const onUnhandled = () => unhandled++;
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      await bootElectronApp({
+        appPath: appDir,
+        port: realPort,
+        readyTimeoutMs: 5000,
+      });
+
+      // After successful boot, both boot-time listeners MUST be detached.
+      expect(child.listenerCount("error")).toBe(0);
+      expect(child.listenerCount("exit")).toBe(0);
+
+      // Simulate the user closing the Electron window — normal exit code 0.
+      child.emit("exit", 0, null);
+
+      // And simulate a late stray `'error'` event from the OS layer.
+      const err = new Error("late ECONNRESET") as NodeJS.ErrnoException;
+      err.code = "ECONNRESET";
+      // 'error' is special — emit() throws if no listener. We're proving
+      // the absence of a listener is correct here, so the emit itself
+      // SHOULD throw locally rather than turning into an unhandled
+      // rejection on an orphan promise.
+      expect(() => child.emit("error", err)).toThrow(/late ECONNRESET/);
+
+      await new Promise((r) => setImmediate(r));
+      expect(unhandled).toBe(0);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      srv.close();
+    }
+  });
+
   it("detaches the error listener after the no-pid throw — a deferred 'error' must not become an unhandled rejection", async () => {
     // Real-world regression scenario: a hostile platform returns a Child with
     // no pid AND fires a deferred 'error' event after spawn returns. Before
