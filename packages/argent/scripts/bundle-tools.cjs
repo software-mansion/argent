@@ -47,11 +47,15 @@ const MAIN_FIELDS = ["module", "main"];
 const ESM_REQUIRE_BANNER = {
   js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
 };
-const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
-const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
-const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
-const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
+// Source layout mirrors what `scripts/download-simulator-server.sh` writes:
+// platform-keyed subdirectories of bin/, each containing one simulator-server
+// binary. ax-service is macOS-only (it spawns inside an iOS Simulator), so it
+// only lives under darwin/.
+const BIN_SRC_ROOT = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
+const AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
+const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
+const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux"];
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
@@ -66,6 +70,15 @@ for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) 
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
 }
+
+// Copy the hand-written `argent-simulator-server` dispatcher into bin/.
+// It's the file npm's `bin` field publishes; its job is to pick the right
+// per-platform binary at invocation time. Source lives in scripts/ so it
+// isn't entangled with the gitignored bundle output under bin/.
+const DISPATCHER_SRC = path.resolve(__dirname, "argent-simulator-server.cjs");
+const DISPATCHER_DEST = path.resolve(BIN_DIR, "argent-simulator-server.cjs");
+fs.copyFileSync(DISPATCHER_SRC, DISPATCHER_DEST);
+fs.chmodSync(DISPATCHER_DEST, 0o755);
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
@@ -135,20 +148,36 @@ esbuild.buildSync({
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
 
-// Copy simulator-server binary (downloaded via scripts/download-simulator-server.sh)
-if (fs.existsSync(BIN_SRC)) {
-  fs.copyFileSync(BIN_SRC, BIN_DEST);
-  fs.chmodSync(BIN_DEST, 0o755);
-  console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
-} else {
-  throw new Error(
-    `simulator-server binary not found at ${BIN_SRC}.\n` +
-      `Run: bash scripts/download-simulator-server.sh`
-  );
+// Copy simulator-server binary for every supported host platform that's
+// present in the staging area. At least darwin must be there — the macOS
+// binary is what the publish pipeline has always required. Linux is best-
+// effort: if the artifact wasn't downloaded yet (e.g. radon's Linux build
+// hasn't shipped to the release), we warn and continue rather than blocking
+// the macOS build.
+let copiedSimServers = 0;
+for (const platform of SUPPORTED_HOST_PLATFORMS) {
+  const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
+  const destDir = path.join(BIN_DIR, platform);
+  const dest = path.join(destDir, "simulator-server");
+  if (fs.existsSync(src)) {
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(src, dest);
+    fs.chmodSync(dest, 0o755);
+    console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
+    copiedSimServers += 1;
+  } else if (platform === "darwin") {
+    throw new Error(
+      `simulator-server binary not found at ${src}.\n` +
+        `Run: bash scripts/download-simulator-server.sh`
+    );
+  } else {
+    console.warn(`⚠ simulator-server (${platform}) not found at ${src} — skipping`);
+  }
 }
 
-// Copy ax-service binary
+// Copy ax-service binary (macOS-only — it runs inside an iOS Simulator)
 if (fs.existsSync(AX_BIN_SRC)) {
+  fs.mkdirSync(path.dirname(AX_BIN_DEST), { recursive: true });
   fs.copyFileSync(AX_BIN_SRC, AX_BIN_DEST);
   fs.chmodSync(AX_BIN_DEST, 0o755);
   console.log(`✓ Copied ax-service binary → ${path.relative(process.cwd(), AX_BIN_DEST)}`);

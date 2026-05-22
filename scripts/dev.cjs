@@ -128,16 +128,23 @@ console.log("✓ Dispatcher TypeScript built\n");
 
 // ── Step 3: Set up packages/argent/bin/ and skills/rules/agents ──────────────
 
-const BIN_DIR = path.join(ARGENT_PKG, "bin");
-const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", "simulator-server");
+// Copy the simulator-server binary for the current host platform into the
+// platform-keyed subdir the runtime resolver looks at. Mirrors bundle-tools.cjs
+// but only for `process.platform` — dev iterations don't need every host's
+// binary alongside.
+const BIN_DIR = path.join(ARGENT_PKG, "bin", process.platform);
+const BIN_SRC = path.join(NATIVE_DEVTOOLS_PKG, "bin", process.platform, "simulator-server");
 const BIN_DEST = path.join(BIN_DIR, "simulator-server");
 fs.mkdirSync(BIN_DIR, { recursive: true });
 if (fs.existsSync(BIN_SRC)) {
   fs.copyFileSync(BIN_SRC, BIN_DEST);
   fs.chmodSync(BIN_DEST, 0o755);
-  console.log("✓ Copied simulator-server binary");
+  console.log(`✓ Copied simulator-server binary (${process.platform})`);
 } else {
-  console.warn("⚠ simulator-server binary not found — gestures won't work");
+  console.warn(
+    `⚠ simulator-server binary not found at ${BIN_SRC} — gestures won't work. ` +
+      `Run: bash scripts/download-simulator-server.sh`
+  );
 }
 
 for (const [srcName, destName] of [
