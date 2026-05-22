@@ -252,7 +252,17 @@ export function createPreviewRouter(registry: Registry): Router {
     res.type("text/css").sendFile(p);
   });
 
-  router.get("/", (_req: Request, res: Response) => {
+  router.get("/", (req: Request, res: Response) => {
+    // The index references theme.css with a relative URL. Without a trailing
+    // slash on /preview, browsers resolve that against /, hitting /theme.css
+    // (404) instead of /preview/theme.css. Canonicalise to the trailing-slash
+    // form so relative sub-resources resolve under the mount.
+    if (!req.originalUrl.split("?")[0].endsWith("/")) {
+      const [pathPart, ...queryParts] = req.originalUrl.split("?");
+      const target = pathPart + "/" + (queryParts.length ? "?" + queryParts.join("?") : "");
+      res.redirect(301, target);
+      return;
+    }
     const p = findUiFile("index.html");
     if (!p) {
       res.status(404).type("text/plain").send("Preview UI not found");
