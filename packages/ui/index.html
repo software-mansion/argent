@@ -1396,6 +1396,10 @@
         target.addEventListener("dragstart", (ev) => ev.preventDefault());
 
         target.addEventListener("pointerdown", (ev) => {
+          // Only the primary button drives the device. Right-click (button 2)
+          // is reserved for the comment-popover shortcut handled in the
+          // window-level `contextmenu` listener; middle-click is ignored too.
+          if (ev.button !== 0) return;
           if (activePointerId !== null) return;
           const pt = toDeviceCoords(ev);
           if (!pt) return;
@@ -1596,26 +1600,38 @@
       window.addEventListener("keydown", handleKeyEvent);
       window.addEventListener("keyup", handleKeyEvent);
 
-      // Right-click over the stream: suppress the native menu, and in
-      // "Add comment" inspect mode treat it as the comment trigger (handy
-      // for trackpad users where two-finger tap is the natural pick).
+      // Right-click over the stream is the "add comment" shortcut: same
+      // outcome as left-clicking with inspect mode on, but works regardless
+      // of whether inspect is currently active. Suppresses the native menu
+      // either way so users can rely on it across the surface.
       window.addEventListener("contextmenu", (ev) => {
         const overStage = stage && stage.contains(ev.target);
         const overSpot = vp.spot && vp.spot.hit && vp.spot.hit.contains(ev.target);
         if (!overStage && !overSpot) return;
         ev.preventDefault();
-        if (!vp.inspect) return;
         const r = streamRect();
-        if (!r || !vp.tree) return;
+        if (!r) return;
         const mr = mainEl.getBoundingClientRect();
         const x = (ev.clientX - mr.left - r.x) / r.w;
         const y = (ev.clientY - mr.top - r.y) / r.h;
-        const node = vpNodeAtPoint(vp.tree, x, y) || vp.focus;
-        if (!node) return;
-        vp.focus = node;
-        vp.commentFor = node;
-        paintSpot();
-        openCommentPop(node);
+        // Activate inspect mode so the spotlight is visible and the describe
+        // loop keeps the tree fresh while the user composes a comment.
+        if (!vp.inspect) setInspect(true);
+        const tryPick = () => {
+          if (!vp.tree) return false;
+          const node = vpNodeAtPoint(vp.tree, x, y);
+          if (!node) return false;
+          vp.focus = node;
+          vp.commentFor = node;
+          paintSpot();
+          openCommentPop(node);
+          return true;
+        };
+        if (tryPick()) return;
+        // Tree not loaded yet (inspect just turned on / cached tree expired) —
+        // queue the click; describeOnce will resolve it once the tree lands.
+        vp.pendingComment = { x, y };
+        kickDescribe();
       });
 
       // On focus loss, release any active touches/keys so the device doesn't
@@ -1670,6 +1686,7 @@
         spot: null, // spotlight layer root (child of mainEl)
         pinAnim: new Map(), // annId -> { p:{x,y}, v:{x,y} } spring-eased pin
         annPopFor: null, // annotation id whose review popover is open
+        pendingComment: null, // { x, y } right-click awaiting tree-load to resolve
       };
 
       // iOS AX labels for elements that embed SF Symbol glyphs (tab bar
@@ -1871,6 +1888,19 @@
               if (j && j.tree) {
                 vp.tree = j.tree;
                 vp.treeAt = Date.now();
+                // A right-click that landed before the tree was loaded waits
+                // here; the first successful describe completes the pick.
+                const pc = vp.pendingComment;
+                if (pc) {
+                  const node = vpNodeAtPoint(vp.tree, pc.x, pc.y);
+                  if (node) {
+                    vp.pendingComment = null;
+                    vp.focus = node;
+                    vp.commentFor = node;
+                    paintSpot();
+                    openCommentPop(node);
+                  }
+                }
               }
             }
           } catch {
@@ -2757,6 +2787,7 @@
           clearSpotIdle();
           vp.focus = null;
           vp.commentFor = null;
+          vp.pendingComment = null;
           popEl.hidden = true;
           if (vp.spot) {
             vp.spot.root.remove();
