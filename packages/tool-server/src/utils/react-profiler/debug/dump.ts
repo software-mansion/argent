@@ -59,11 +59,37 @@ export async function writeDumpCompact(
 }
 
 /**
- * Read a CPU profile from disk.
+ * Read a CPU profile from disk. Validates the shape inline so consumers
+ * (analyze, cpu-summary, cpu-query) get a verbose, actionable error instead
+ * of a generic `TypeError: Cannot read properties of undefined (reading
+ * 'length')` from `buildCpuSampleIndex` when an older or partial dump is
+ * loaded via `profiler-load`.
  */
 export async function readCpuProfile(path: string): Promise<HermesCpuProfile> {
   const json = await fs.readFile(path, "utf8");
-  return JSON.parse(json) as HermesCpuProfile;
+  const parsed = JSON.parse(json) as Partial<HermesCpuProfile> | null;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error(
+      `On-disk CPU profile at ${path} is missing or not an object. The session dump is corrupt or was written by an incompatible tool-server version; rerun react-profiler-start/stop to capture a fresh session.`
+    );
+  }
+  if (
+    !Array.isArray(parsed.samples) ||
+    !Array.isArray(parsed.nodes) ||
+    !Array.isArray(parsed.timeDeltas)
+  ) {
+    throw new Error(
+      `On-disk CPU profile at ${path} is malformed (missing samples/nodes/timeDeltas). ` +
+        `The session was likely recorded against a release build where Hermes CPU sampling never started, or the dump was truncated. ` +
+        `Rerun react-profiler-start on a dev build and retry.`
+    );
+  }
+  if (typeof parsed.startTime !== "number" || typeof parsed.endTime !== "number") {
+    throw new Error(
+      `On-disk CPU profile at ${path} is missing startTime/endTime timestamps; the recording is incomplete and cannot be analysed.`
+    );
+  }
+  return parsed as HermesCpuProfile;
 }
 
 export interface CommitTreeOnDisk {
