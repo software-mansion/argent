@@ -144,4 +144,86 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
     await instance.dispose();
     expect(disconnect).not.toHaveBeenCalled();
   });
+
+  it("cdp.disconnected → events.terminated propagation, with the original error preserved", async () => {
+    const fake = makeFakeElectronCdpApi();
+    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
+      { electron: fake.api },
+      "electron-cdp-19222",
+      { device: electronDevice }
+    );
+    try {
+      const terminated: Array<Error | undefined> = [];
+      instance.events.on("terminated", (err) => terminated.push(err));
+      const cause = new Error("websocket closed by peer");
+      fake.events.emit("disconnected", cause);
+      expect(terminated).toHaveLength(1);
+      expect(terminated[0]).toBe(cause);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("cdp.disconnected with no error still emits a terminated event with a synthetic Error", async () => {
+    const fake = makeFakeElectronCdpApi();
+    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
+      { electron: fake.api },
+      "electron-cdp-19222",
+      { device: electronDevice }
+    );
+    try {
+      const terminated: Array<Error | undefined> = [];
+      instance.events.on("terminated", (err) => terminated.push(err));
+      fake.events.emit("disconnected", undefined);
+      expect(terminated).toHaveLength(1);
+      expect(terminated[0]).toBeInstanceOf(Error);
+      expect((terminated[0] as Error).message).toMatch(/Electron CDP disconnected/);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("dispose detaches the disconnected listener — no terminated emission after dispose", async () => {
+    const fake = makeFakeElectronCdpApi();
+    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
+      { electron: fake.api },
+      "electron-cdp-19222",
+      { device: electronDevice }
+    );
+    const terminated: unknown[] = [];
+    instance.events.on("terminated", (err) => terminated.push(err));
+    await instance.dispose();
+    fake.events.emit("disconnected", new Error("late"));
+    expect(terminated).toHaveLength(0);
+  });
+
+  it("a non-finite consoleAPICalled.timestamp is coerced — entry is captured, not silently dropped", async () => {
+    const fake = makeFakeElectronCdpApi();
+    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
+      { electron: fake.api },
+      "electron-cdp-19222",
+      { device: electronDevice }
+    );
+    try {
+      const received: Array<{ message: string; timestamp: number }> = [];
+      instance.api.consoleEvents.on("log", (entry) =>
+        received.push({ message: entry.message, timestamp: entry.timestamp })
+      );
+      const before = Date.now();
+      fake.events.emit("consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: "nan-test" }],
+        timestamp: Number.NaN,
+      });
+      const after = Date.now();
+      expect(received).toHaveLength(1);
+      expect(received[0].message).toBe("nan-test");
+      // Coerced to Date.now() — must be finite and within the call window.
+      expect(Number.isFinite(received[0].timestamp)).toBe(true);
+      expect(received[0].timestamp).toBeGreaterThanOrEqual(before);
+      expect(received[0].timestamp).toBeLessThanOrEqual(after);
+    } finally {
+      await instance.dispose();
+    }
+  });
 });

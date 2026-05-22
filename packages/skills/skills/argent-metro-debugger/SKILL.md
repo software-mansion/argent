@@ -1,11 +1,13 @@
 ---
 name: argent-metro-debugger
-description: Debug a React Native app via Metro CDP using argent debugger tools. Use when connecting to Metro, inspecting React components, reading console logs, or evaluating JavaScript in the app runtime.
+description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive an Electron app's renderer through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
 ---
 
 ## 1. Prerequisites
 
-The debugger requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
+For **React Native (iOS / Android)**: requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
+
+For **Electron**: requires an Electron app already booted via `boot-device` with `electronAppPath`. The debugger re-uses the page CDP session that boot opens — `port` is ignored, `device_id` is the `electron-cdp-<port>` value returned by `boot-device`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, and `debugger-log-registry` work on Electron; `debugger-component-tree`, `debugger-reload-metro`, `debugger-inspect-element`, the `view-network-*` tools, and the `react-profiler-*` / `profiler-*` tools are RN-only and reject Electron at the capability gate with `Tool 'X' is not supported on electron app`.
 
 ### Android: reverse port for Metro
 
@@ -25,10 +27,10 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 
 ### Connect & diagnostics
 
-| Tool               | Purpose                                                                                                                                                                                                                   |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-connect` | Connect to Metro CDP. Returns port, projectRoot, deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger/network/profiler call. |
-| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady. **Use to diagnose.**                                                                                                                                        |
+| Tool               | Purpose                                                                                                                                                                                                                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugger-connect` | Connect to the JS runtime's CDP (Metro on iOS / Android; the page CDP session on Electron). Returns port, projectRoot (empty on Electron), deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger call. |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady (no-op on Electron). **Use to diagnose.**                                                                                                                                                                                             |
 
 ### Reload & recovery
 

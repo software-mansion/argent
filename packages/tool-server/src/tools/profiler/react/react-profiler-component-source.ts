@@ -2,6 +2,7 @@ import { z } from "zod";
 import { promises as fs } from "fs";
 import type { ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 
 const zodSchema = z.object({
   component_name: z.string().describe("Name of the React component to look up"),
@@ -17,6 +18,13 @@ export const reactProfilerComponentSourceTool: ToolDefinition<
 Call this per-finding after react-profiler-analyze to inspect source before proposing a fix.
 Returns found: false if the component is not found in user-owned code (e.g. lives in node_modules).`,
   zodSchema,
+  // Companion to react-profiler-analyze. Carries the same RN-only capability
+  // declaration as the rest of react-profiler-* for intent-clarity, even
+  // though the HTTP gate is a no-op here (the tool takes no device_id, so
+  // there's nothing for the gate to inspect). An LLM agent reading the tool
+  // catalogue should see this is paired with the other react-profiler tools
+  // and not reach for it on an Electron app.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);

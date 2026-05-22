@@ -147,11 +147,29 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     const cdp = electron.cdp;
     const port = electron.port;
 
+    // Attach the terminated bridge *before* any awaits below. If the CDP
+    // disconnects while we're still binding the console server or addBinding,
+    // the registry needs that termination signal — otherwise consumers think
+    // the service is healthy until their next CDP send fails. Same reason the
+    // dispose closure must `off` both listeners symmetrically.
+    const events = new TypedEventEmitter<ServiceEvents>();
+    const onDisconnected = (error?: Error) => {
+      events.emit("terminated", error ?? new Error("Electron CDP disconnected"));
+    };
+    cdp.events.on("disconnected", onDisconnected);
+
     const logWriter = new LogFileWriter(port);
     const consoleEvents = new TypedEventEmitter<ConsoleLogEvents>();
     let nextLogId = 0;
 
     const onConsoleAPI = (params: ConsoleAPICalledParams) => {
+      // Chrome's consoleAPICalled.timestamp is ms-since-epoch; Hermes' is
+      // seconds (which the Metro blueprint multiplies by 1000). Either source
+      // can theoretically hand us a non-finite number (CDP server bug, future
+      // protocol revision). new Date(NaN).toISOString() throws RangeError —
+      // since this fires inside a typed emitter that try/catches listeners,
+      // a throw here silently drops the entry. Coerce defensively.
+      const ts = Number.isFinite(params.timestamp) ? params.timestamp : Date.now();
       const entry: ConsoleLogEntry = {
         id: nextLogId++,
         level: params.type,
@@ -161,12 +179,12 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
           description: a.description,
         })),
         message: formatConsoleArgs(params),
-        timestamp: params.timestamp,
+        timestamp: ts,
         stackTrace: params.stackTrace as ConsoleLogEntry["stackTrace"],
       };
       logWriter.write({
         id: entry.id,
-        timestamp: new Date(entry.timestamp).toISOString(),
+        timestamp: new Date(ts).toISOString(),
         level: entry.level,
         message: entry.message,
         stackTrace: entry.stackTrace,
@@ -179,7 +197,8 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
 
     // Best-effort: bind a callback name so evaluateWithBinding works if a
     // future Electron tool wants it. Failure is non-fatal — the existing
-    // four ported tools don't use it.
+    // four ported tools don't use it. Future tools that DO use bindings must
+    // re-attempt addBinding themselves and surface their own errors loudly.
     await cdp.addBinding("__argent_callback").catch(() => {});
 
     const sourceMaps = new StubSourceMapsRegistry();
@@ -204,15 +223,11 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
       consoleSocketUrl: consoleServer.url,
     };
 
-    const events = new TypedEventEmitter<ServiceEvents>();
-    cdp.events.on("disconnected", (error) => {
-      events.emit("terminated", error ?? new Error("Electron CDP disconnected"));
-    });
-
     return {
       api,
       dispose: async () => {
         cdp.events.off("consoleAPICalled", onConsoleAPI);
+        cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
         logWriter.close();
         // Do NOT disconnect the cdp — it belongs to the ElectronCdp service.

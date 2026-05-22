@@ -8,6 +8,27 @@ import { ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE } from "../src/blueprints/electr
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 
+// All tools that must reject Electron at the HTTP capability gate. Pull the
+// ToolDefinition directly so any future drift (someone re-adds an `electron:`
+// block on one of these) breaks this single test instead of slipping into a
+// release. Kept exhaustive on purpose — a per-tool assertion is cheap and the
+// list is the contract.
+import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
+import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
+import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspect-element";
+import { networkLogsTool } from "../src/tools/network/network-logs";
+import { networkRequestTool } from "../src/tools/network/network-request";
+import { reactProfilerAnalyzeTool } from "../src/tools/profiler/react/react-profiler-analyze";
+import { reactProfilerComponentSourceTool } from "../src/tools/profiler/react/react-profiler-component-source";
+import { reactProfilerCpuSummaryTool } from "../src/tools/profiler/react/react-profiler-cpu-summary";
+import { reactProfilerFiberTreeTool } from "../src/tools/profiler/react/react-profiler-fiber-tree";
+import { reactProfilerRendersTool } from "../src/tools/profiler/react/react-profiler-renders";
+import { profilerCpuQueryTool } from "../src/tools/profiler/query/profiler-cpu-query";
+import { profilerCommitQueryTool } from "../src/tools/profiler/query/profiler-commit-query";
+import { profilerStackQueryTool } from "../src/tools/profiler/query/profiler-stack-query";
+import { profilerLoadTool } from "../src/tools/profiler/query/profiler-load";
+import { profilerCombinedReportTool } from "../src/tools/profiler/combined/profiler-combined-report";
+
 const ELECTRON_ID = "electron-cdp-19222";
 const IOS_ID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const ANDROID_ID = "emulator-5554";
@@ -73,5 +94,47 @@ describe("debugger tool capability gating — electron", () => {
       expect(msg).toContain("electron");
       expect(msg).toContain("app");
     }
+  });
+});
+
+describe("RN-only tool registry — every locked tool actually rejects Electron", () => {
+  const electronDevice = resolveDevice("electron-cdp-19222");
+
+  // Source of truth for what must stay locked. If a tool is added/removed
+  // here, the maintainer is making an explicit Electron-support decision.
+  const LOCKED_TOOLS = [
+    debuggerComponentTreeTool,
+    debuggerReloadMetroTool,
+    debuggerInspectElementTool,
+    networkLogsTool,
+    networkRequestTool,
+    reactProfilerAnalyzeTool,
+    reactProfilerComponentSourceTool,
+    reactProfilerCpuSummaryTool,
+    reactProfilerFiberTreeTool,
+    reactProfilerRendersTool,
+    profilerCpuQueryTool,
+    profilerCommitQueryTool,
+    profilerStackQueryTool,
+    profilerLoadTool,
+    profilerCombinedReportTool,
+  ];
+
+  it.each(LOCKED_TOOLS.map((t) => [t.id, t] as const))(
+    "%s declares a capability and rejects Electron",
+    (_id, tool) => {
+      expect(tool.capability).toBeDefined();
+      expect(() => assertSupported(tool.id, tool.capability!, electronDevice)).toThrow(
+        UnsupportedOperationError
+      );
+    }
+  );
+
+  it("matches the spec count — exactly 15 device-bound RN/iOS tools are locked", () => {
+    // Add to LOCKED_TOOLS above when locking a new tool; this guards against
+    // silent omissions. react-profiler-{start,stop,status} are factory-built
+    // and not exported as plain ToolDefinitions, so they're absent here even
+    // though they're locked — counted separately in the PR description.
+    expect(LOCKED_TOOLS).toHaveLength(15);
   });
 });
