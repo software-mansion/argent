@@ -1784,10 +1784,10 @@
       // The describe ROOT node (an "AXGroup" that spans the whole stream) is
       // treated as if it did not exist: it contains every point, so without
       // this it would be the smallest match over empty gaps — making the
-      // whole screen the "element" (instant full-stream focus with no ease-off
-      // because the null path never fires) and visually swallowing small
-      // nested pressables. Skipping it means a gap returns null → the 1s
-      // ease-off applies, and real descendants are still picked normally.
+      // whole screen the "element" (full-stream focus, no release path ever
+      // fires) and visually swallowing small nested pressables. Skipping it
+      // means a gap returns null → the trajectory-based release applies, and
+      // real descendants are still picked normally.
       function vpNodeAtPoint(node, x, y) {
         let best = null,
           bestArea = Infinity;
@@ -2669,8 +2669,8 @@
       }
       function spotTrajVelocity() {
         // Normalized units per second between the latest sample and the
-        // earliest one still within spotTrajWindowMs. With <2 samples or a
-        // zero-time window we can't infer direction — treat as stopped.
+        // OLDEST sample still within spotTrajWindowMs. With <2 samples or a
+        // zero-time delta we can't infer direction — treat as stopped.
         // If the latest sample itself is older than the window, the pointer
         // has been idle for at least a window's worth — also treat as stopped,
         // so a flick that ends mid-air decays into "stopped" without needing
@@ -2679,11 +2679,17 @@
         if (s.length < 2) return null;
         const last = s[s.length - 1];
         if (performance.now() - last.t > THEME.spotTrajWindowMs) return null;
-        let early = s[0];
-        for (let i = s.length - 2; i >= 0; i--) {
-          early = s[i];
-          if (last.t - s[i].t >= THEME.spotTrajWindowMs) break;
+        // Walk oldest → newest and pick the first sample whose age is within
+        // the window. That is the oldest in-window sample and gives the
+        // smoothest velocity estimate without dragging in a stale baseline.
+        let early = null;
+        for (let i = 0; i < s.length - 1; i++) {
+          if (last.t - s[i].t <= THEME.spotTrajWindowMs) {
+            early = s[i];
+            break;
+          }
         }
+        if (!early) return null;
         const dt = (last.t - early.t) / 1000;
         if (dt <= 0) return null;
         const vx = (last.x - early.x) / dt;
