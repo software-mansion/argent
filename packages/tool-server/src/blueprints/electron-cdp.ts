@@ -17,7 +17,7 @@ import {
   type ScreencastSession,
   type ScreenshotOpts,
 } from "../electron-server";
-import { parseElectronCdpPort } from "../utils/device-info";
+import { parseElectronCdpPort, resolveDevice } from "../utils/device-info";
 
 export const ELECTRON_CDP_NAMESPACE = "ElectronCdp";
 
@@ -139,23 +139,40 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
   getURN(device: DeviceInfo) {
     return `${ELECTRON_CDP_NAMESPACE}:${device.id}`;
   },
-  async factory(_deps, _payload, options) {
+  async factory(_deps, payload, options) {
+    // Two routes into this factory:
+    //   1) A tool's `services()` callback uses electronCdpRef(device) and we
+    //      get options.device for free.
+    //   2) Another blueprint declares `ElectronCdp:<id>` as a transitive dep
+    //      (registry resolves deps via URN strings only, no options channel
+    //      — see Registry._resolve). In that case we synthesize DeviceInfo
+    //      from the URN payload, which IS the device id.
+    // Both paths must agree on the device id; if a caller passed an explicit
+    // options.device whose id doesn't match the URN, that's a wiring bug
+    // worth surfacing loudly.
     const opts = options as unknown as ElectronFactoryOptions | undefined;
-    if (!opts?.device) {
+    const deviceFromOpts = opts?.device;
+    const payloadStr = typeof payload === "string" ? payload : (payload as DeviceInfo)?.id;
+    if (deviceFromOpts && payloadStr && deviceFromOpts.id !== payloadStr) {
       throw new Error(
-        `${ELECTRON_CDP_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use electronCdpRef(device) when registering the service ref.`
+        `${ELECTRON_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
       );
     }
-    const port = parseElectronCdpPort(opts.device.id);
+    const device = deviceFromOpts ?? (payloadStr ? resolveDevice(payloadStr) : null);
+    if (!device) {
+      throw new Error(
+        `${ELECTRON_CDP_NAMESPACE}.factory could not determine the device — pass it via electronCdpRef(device).options or via the URN payload.`
+      );
+    }
+    const port = parseElectronCdpPort(device.id);
     if (port == null) {
       throw new Error(
-        `${ELECTRON_CDP_NAMESPACE}.factory got a malformed device id "${opts.device.id}". ` +
+        `${ELECTRON_CDP_NAMESPACE}.factory got a malformed device id "${device.id}". ` +
           `Expected "electron-cdp-<port>".`
       );
     }
 
-    const server = await createElectronServer({ deviceId: opts.device.id, port });
+    const server = await createElectronServer({ deviceId: device.id, port });
     const rootDomNodeId = await getDocumentNodeId(server.cdp);
 
     const events = new TypedEventEmitter<ServiceEvents>();

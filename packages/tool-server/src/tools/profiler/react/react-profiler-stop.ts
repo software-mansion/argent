@@ -18,6 +18,7 @@ import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -162,6 +163,8 @@ Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits
 When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count } — these quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
+    // RN-only: companion to react-profiler-start.
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;

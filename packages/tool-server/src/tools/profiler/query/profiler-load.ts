@@ -11,6 +11,7 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -333,6 +334,10 @@ Modes:
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or required XML files are missing from disk.`,
   zodSchema,
+  // Loads Hermes-format React traces or iOS xctrace XML — neither maps onto
+  // Electron yet. The gate keeps the error close to the call site instead of
+  // letting it surface from inside the trace parser.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => {
     const svcs: Record<string, ServiceRef> = {};
     if (params.mode === "load_native") {

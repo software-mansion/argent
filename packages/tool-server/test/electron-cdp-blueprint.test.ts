@@ -193,12 +193,47 @@ describe("electronCdpBlueprint (smoke)", () => {
     }
   });
 
-  it("factory rejects when called without a device option", async () => {
+  it("factory can synthesize the device from a string URN payload when no options.device is given", async () => {
+    // This path matters for transitive dep resolution — see the registry's
+    // _resolve, which only forwards the URN string into the factory, not the
+    // ServiceRef options. The ElectronJsRuntimeDebugger blueprint depends on
+    // ElectronCdp via getDependencies and reaches this branch.
+    const s = await startFakeCdp();
+    servers.push(s);
+    const payload = `electron-cdp-${s.port}`;
+    const instance = await electronCdpBlueprint.factory(
+      {},
+      payload as unknown as ReturnType<typeof resolveDevice>,
+      undefined as unknown as Record<string, unknown>
+    );
+    try {
+      expect(instance.api.port).toBe(s.port);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("factory rejects when neither options.device nor a valid URN payload is given", async () => {
+    await expect(
+      electronCdpBlueprint.factory(
+        {},
+        undefined as unknown as ReturnType<typeof resolveDevice>,
+        undefined as unknown as Record<string, unknown>
+      )
+    ).rejects.toThrow(/could not determine the device/);
+  });
+
+  it("factory rejects when options.device.id disagrees with the URN payload", async () => {
     const s = await startFakeCdp();
     servers.push(s);
     const device = resolveDevice(`electron-cdp-${s.port}`);
+    const otherPayload = `electron-cdp-${s.port + 1}`;
     await expect(
-      electronCdpBlueprint.factory({}, device, undefined as unknown as Record<string, unknown>)
-    ).rejects.toThrow(/requires a resolved DeviceInfo/);
+      electronCdpBlueprint.factory(
+        {},
+        otherPayload as unknown as ReturnType<typeof resolveDevice>,
+        { device }
+      )
+    ).rejects.toThrow(/disagrees with URN payload/);
   });
 });

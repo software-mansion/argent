@@ -4,6 +4,7 @@ import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeInspectScript } from "../../utils/debugger/scripts/inspect-at-point";
 import { shouldSkip, isHardSkip } from "../../utils/debugger/skip-rules";
+import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 
 export interface InspectItem {
   name: string;
@@ -174,6 +175,11 @@ Set resolveSourceMaps to false to skip symbolication and get raw bundled locatio
 Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
+  // RN-only: uses React Native's internal getInspectorDataForViewAtPoint and
+  // Metro's /symbolicate endpoint. Electron's CDP has DOM.getNodeForLocation
+  // for "what's here?" but the source-map flow would need a complete rewrite —
+  // out of scope for this port.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),

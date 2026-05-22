@@ -19,6 +19,7 @@ import {
   DEFAULT_STALE_THRESHOLD_MS,
   type ProfilerSessionOwner,
 } from "../../../utils/react-profiler/session-ownership";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   bootstrapFailureMessage,
   type BootstrapResult,
@@ -77,6 +78,10 @@ After starting, ask the user to perform the interaction to profile, then call re
 Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } on success, or the already_running payload described above.
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
+    // RN-only: bootstraps the React DevTools backend and uses Hermes'
+    // Profiler.start. A CDP-direct CPU profile for Electron is tracked as a
+    // follow-up; the React commit recording has no Electron analog.
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       const jsdUrn = `${JS_RUNTIME_DEBUGGER_NAMESPACE}:${params.port}:${params.device_id}`;

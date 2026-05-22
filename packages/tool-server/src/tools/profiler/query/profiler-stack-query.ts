@@ -326,6 +326,9 @@ Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
+  // iOS-only: reads xctrace output. Android native profiling is on the roadmap;
+  // Electron has no native trace capture.
+  capability: { apple: { simulator: true, device: true } },
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

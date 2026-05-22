@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -111,6 +112,8 @@ Returns a markdown table of the top re-rendering components. No profiling sessio
 Use when you want a quick snapshot of render counts without a full profiling session.
 Fails if the React DevTools hook is not present in the runtime or the app is not connected.`,
   zodSchema,
+  // RN-only: queries the React DevTools backend hook on the live runtime.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     profilerSession: `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`,
   }),
