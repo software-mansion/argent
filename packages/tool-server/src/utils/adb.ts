@@ -456,9 +456,19 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
     try {
       const ini = await readFile(`${root}/${avdName}.ini`, "utf-8");
       const match = ini.match(/^path\s*=\s*(.+?)\s*$/m);
-      if (match && match[1]) return match[1];
+      if (!match || !match[1]) continue;
+      // Trim again — the non-greedy `(.+?)` plus greedy `\s*$` strips most
+      // trailing whitespace, but a `path=   ` (whitespace-only value) still
+      // captures a single space because `(.+?)` is forced to match ≥1 char.
+      // Skip that, plus any non-absolute path: the emulator binary always
+      // writes an absolute `path=` and a relative one would resolve against
+      // `process.cwd()` here, silently mis-locating snapshots when callers
+      // are invoked from outside the project root.
+      const trimmed = match[1].trim();
+      if (!trimmed.startsWith("/")) continue;
+      return trimmed;
     } catch {
-      // .ini missing in this root; try the next one
+      // .ini missing or unreadable in this root; try the next one
     }
   }
   return null;

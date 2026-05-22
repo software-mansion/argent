@@ -169,6 +169,51 @@ describe("resolveAvdPath", () => {
 
     expect(await resolveAvdPath("Pixel_7")).toBe("/some/where/Pixel_7.avd");
   });
+
+  it("rejects a whitespace-only `path=` value as if the .ini were missing", async () => {
+    // The non-greedy `(.+?)` in the regex still captures a single space for
+    // `path=   ` because it must match at least one character. Without a
+    // post-match trim+absolute-path guard, callers would receive " " as a
+    // valid path — truthy in JS, so the `if (!avdPath)` short-circuit in
+    // `hasDefaultBootSnapshot` would not fire and a downstream stat would
+    // silently target the wrong location.
+    const avdRoot = join(process.env.HOME!, ".android", "avd");
+    await mkdir(avdRoot, { recursive: true });
+    await writeFile(
+      join(avdRoot, "Pixel_7.ini"),
+      ["avd.ini.encoding=UTF-8", "path=   ", ""].join("\n")
+    );
+
+    expect(await resolveAvdPath("Pixel_7")).toBeNull();
+  });
+
+  it("rejects a relative `path=` value (the emulator binary always writes an absolute path)", async () => {
+    // A relative path would `stat` against `process.cwd()` here, silently
+    // mis-locating the snapshot to wherever the tool-server happens to have
+    // been launched from. Real .ini files always carry an absolute path, so
+    // anything else is a corrupt/hand-edited file we should ignore in favor
+    // of the next candidate root.
+    const avdRoot = join(process.env.HOME!, ".android", "avd");
+    await mkdir(avdRoot, { recursive: true });
+    await writeFile(
+      join(avdRoot, "Pixel_7.ini"),
+      ["avd.ini.encoding=UTF-8", "path=relative/Pixel_7.avd", ""].join("\n")
+    );
+
+    expect(await resolveAvdPath("Pixel_7")).toBeNull();
+  });
+
+  it("falls through to a later candidate when an earlier .ini has a bad path", async () => {
+    // The bad-path case should not poison the whole lookup — if a later
+    // root has a healthy .ini, we should still find the AVD there.
+    const userHomeRoot = join(tmpRoot, "user-home", "avd");
+    await writeAvdIni(userHomeRoot, "Pixel_7", "relative/oops");
+    const homeRoot = join(process.env.HOME!, ".android", "avd");
+    await writeAvdIni(homeRoot, "Pixel_7", "/from/home/Pixel_7.avd");
+    process.env.ANDROID_USER_HOME = join(tmpRoot, "user-home");
+
+    expect(await resolveAvdPath("Pixel_7")).toBe("/from/home/Pixel_7.avd");
+  });
 });
 
 describe("hasDefaultBootSnapshot", () => {
