@@ -1,5 +1,8 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import * as fsAsync from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
@@ -128,8 +131,13 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
   // (this `simctl spawn`-launched CLI) with kAXError -25215, so `describe` sees an empty
   // ROOT for any SB-hosted dialog (TCC prompts etc.). The debug pref
   // `com.apple.Accessibility/IgnoreAXServerEntitlements` disables the check, but SB caches
-  // it at AX-server init — so we kickstart SB only on first set. The pref persists on disk,
-  // so later runs skip the disruptive icon-reflow restart.
+  // it at AX-server init — so we must restart SB after setting it. boot-device's iOS path
+  // writes the pref directly to the host plist BEFORE `simctl boot`, so SB starts with
+  // the bypass already cached and never needs the kickstart. This function is the
+  // post-boot fallback: a simulator that was already booted when argent first touched it
+  // (e.g. started by Xcode) won't have the pref cached, and the only way to enable
+  // describe for SB-hosted dialogs on it is to kickstart SB now — losing the foreground
+  // app and any in-flight system alert in the process.
   const isAlreadySet = await execFileAsync(
     "xcrun",
     [
@@ -162,6 +170,15 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
       ],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     );
+    // Loud, single line so the calling agent sees in its tool output that SB is being
+    // restarted — any foreground app launched between boot and this point is gone.
+    process.stderr.write(
+      `[ax ${udid.slice(0, 8)}] restarting SpringBoard to enable describe ` +
+        `for SB-hosted dialogs (TCC prompts etc.). This dismisses any foreground app ` +
+        `or in-flight system alert. boot-device avoids this by setting the pref ` +
+        `pre-boot — reaching this path means the simulator was already booted ` +
+        `outside of argent.\n`
+    );
     // launchctl warns ("Please switch to user/foreground/...") but still restarts SB;
     // tolerate the non-zero exit.
     await execFileAsync(
@@ -169,6 +186,77 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
       ["simctl", "spawn", udid, "launchctl", "kickstart", "-k", "system/com.apple.SpringBoard"],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     ).catch(() => undefined);
+    // Block until SB has finished respawning so a subsequent tool call doesn't race
+    // the kickstart and observe a half-up system UI.
+    await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"], {
+      timeout: SIMCTL_SPAWN_TIMEOUT_MS,
+    }).catch(() => undefined);
+  }
+}
+
+/**
+ * Path of the simulator's host-side `com.apple.Accessibility` preference plist.
+ * Lives inside the device's data container — writeable while the sim is
+ * Shutdown, but overwritten by cfprefsd once the sim is Booted.
+ */
+function accessibilityPlistPath(udid: string): string {
+  return path.join(
+    os.homedir(),
+    "Library/Developer/CoreSimulator/Devices",
+    udid,
+    "data/Library/Preferences/com.apple.Accessibility.plist"
+  );
+}
+
+/**
+ * Set the four Accessibility prefs SpringBoard needs at boot directly on the
+ * simulator's host-side preference plist BEFORE `simctl boot`. SpringBoard's
+ * AX server reads these at first init and caches them for the lifetime of
+ * the SB process — by setting them on disk pre-boot, SB starts with the
+ * bypass already cached and no `launchctl kickstart -k system/com.apple.SpringBoard`
+ * is ever needed. That kickstart kills any foreground app (e.g. a Maps launch
+ * in flight) and dismisses any in-flight system alert (e.g. TCC prompts), so
+ * eliminating it makes describe usable mid-launch without disrupting the agent.
+ *
+ * All four keys are required for the path to work on a freshly-erased sim:
+ * - `IgnoreAXServerEntitlements` — bypasses the iOS 26.5+ kAXErrorNotEntitled
+ *   check that rejects non-Apple-internal AX clients.
+ * - `AutomationEnabled` — opt-in for the simctl-spawned ax-service binary
+ *   to act as an accessibility client at all.
+ * - `AccessibilityEnabled` + `ApplicationAccessibilityEnabled` — gate the
+ *   AT subsystem bootstrap. Without them, SpringBoard never spawns
+ *   `AccessibilityUIServer` (the LaunchAngel that owns the on-screen
+ *   hierarchy), and describe queries return an empty ROOT even though the
+ *   entitlement check passes. Hands-on confirmed on a wiped iPhone 17e
+ *   sim: with only the first two prefs set, `AccessibilityUIServer`'s
+ *   `active count` stayed at 0 and describe returned 0 elements; with all
+ *   four set the daemon spawned automatically at boot and describe
+ *   returned the full hierarchy.
+ *
+ * Caller must ensure the sim is currently Shutdown — cfprefsd inside a
+ * booted sim caches preference values in memory and rewrites this file on
+ * flush, which would silently undo this write.
+ */
+export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
+  const plistPath = accessibilityPlistPath(udid);
+  await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
+  const exists = await fsAsync
+    .access(plistPath)
+    .then(() => true)
+    .catch(() => false);
+  if (!exists) {
+    // `plutil -create binary1` produces an empty dict in the same binary format
+    // SpringBoard reads at boot. -replace below adds each key regardless of
+    // whether the file already had it.
+    await execFileAsync("plutil", ["-create", "binary1", plistPath]);
+  }
+  for (const key of [
+    "AutomationEnabled",
+    "IgnoreAXServerEntitlements",
+    "AccessibilityEnabled",
+    "ApplicationAccessibilityEnabled",
+  ]) {
+    await execFileAsync("plutil", ["-replace", key, "-bool", "true", plistPath]);
   }
 }
 
