@@ -96,6 +96,9 @@ const DEFAULT_THRESHOLD = 0.1;
 const DEFAULT_IGNORE_TOP_NORMALIZED_Y = 0.06;
 const DEFAULT_REGION_MERGE_DISTANCE = 8;
 const DEFAULT_CONTEXT_DIFF_SCALE = 0.3;
+const MIN_REGION_PIXEL_COUNT = 2;
+const MAX_REGIONS_FOR_JOIN = 5000;
+const MAX_REGIONS_WITHOUT_JOIN = 64;
 const REGION_RECTANGLE_STROKE_WIDTH = 4;
 const REGION_RECTANGLE_COLOR: Rgb = { r: 255, g: 220, b: 0 };
 const DIFF_BRIGHTER_COLOR: Rgb = { r: 0, g: 200, b: 0 };
@@ -251,16 +254,28 @@ function getChangedRegions(params: {
   current: DecodedPng;
   joinGapPixels: number;
 }): DiffRegion[] {
-  const regions = traceChangeRegions({
+  const rawRegions = traceChangeRegions({
     mask: params.mask,
     width: params.baseline.width,
     height: params.baseline.height,
     baselineData: params.baseline.data,
     currentData: params.current.data,
   });
-  return joinChangeRegions(regions, params.joinGapPixels)
+  const significantRegions = rawRegions.filter(
+    (region) => region.pixelCount >= MIN_REGION_PIXEL_COUNT
+  );
+  const finalRegions =
+    significantRegions.length > MAX_REGIONS_FOR_JOIN
+      ? topRegionsByPixelCount(significantRegions, MAX_REGIONS_WITHOUT_JOIN)
+      : joinChangeRegions(significantRegions, params.joinGapPixels);
+  return finalRegions
     .map(toDiffRegion)
     .sort((a, b) => a.bounds.y - b.bounds.y || a.bounds.x - b.bounds.x);
+}
+
+function topRegionsByPixelCount(regions: ChangeRegion[], limit: number): ChangeRegion[] {
+  if (regions.length <= limit) return regions;
+  return [...regions].sort((a, b) => b.pixelCount - a.pixelCount).slice(0, limit);
 }
 
 function resolveDiffArtifactPaths(options: {
