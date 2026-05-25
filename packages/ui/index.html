@@ -892,6 +892,7 @@
         spotTrajWindowMs: cssNum("--spot-traj-window-ms", 80),
         spotTrajStoppedSpeed: cssNum("--spot-traj-stopped-speed", 0.05),
         spotTrajReach: cssNum("--spot-traj-reach", 0.5),
+        spotTrajHitboxMargin: cssNum("--spot-traj-hitbox-margin", 0.2),
         spotMaxFrameArea: cssNum("--spot-max-frame-area", 0.85),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
       };
@@ -2754,12 +2755,17 @@
       // Slab-method ray/AABB test in normalized coords. Returns true if the
       // forward ray from (x,y) in unit direction (ux,uy) enters `frame` within
       // `reach` normalized units. Points already inside the frame count as
-      // hits (the cursor is *on* the target).
-      function rayHitsFrame(x, y, ux, uy, frame, reach) {
-        const minX = frame.x,
-          maxX = frame.x + frame.width;
-        const minY = frame.y,
-          maxY = frame.y + frame.height;
+      // hits (the cursor is *on* the target). `margin` (fraction of the
+      // element's own width/height) inflates the AABB on each side, which
+      // makes the trajectory hitbox more forgiving without affecting which
+      // element vpNodeAtPoint considers actually hovered.
+      function rayHitsFrame(x, y, ux, uy, frame, reach, margin) {
+        const mw = frame.width * (margin || 0);
+        const mh = frame.height * (margin || 0);
+        const minX = frame.x - mw,
+          maxX = frame.x + frame.width + mw;
+        const minY = frame.y - mh,
+          maxY = frame.y + frame.height + mh;
         if (x >= minX && x <= maxX && y >= minY && y <= maxY) return true;
         let tmin = -Infinity,
           tmax = Infinity;
@@ -2811,7 +2817,9 @@
                 cy <= 1 &&
                 f.width * f.height <= THEME.spotMaxFrameArea
               ) {
-                if (rayHitsFrame(v.x, v.y, ux, uy, f, THEME.spotTrajReach)) {
+                if (
+                  rayHitsFrame(v.x, v.y, ux, uy, f, THEME.spotTrajReach, THEME.spotTrajHitboxMargin)
+                ) {
                   hit = true;
                   return;
                 }
