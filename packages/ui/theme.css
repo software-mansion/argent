@@ -149,6 +149,8 @@
   --lab-max-width: 240px;
   --lab-top: -22px;
   --complete-note-max-width: 200px;
+  --modal-max-width: 360px;
+  --pad-modal: 18px;
   --stream-max-h: 80vh;
   --backdrop-blur: 5px;
 
@@ -164,6 +166,7 @@
   --z-spot-hit: 8;
   --z-pop: 9; /* off-screen pill, comment popover */
   --z-overlay: 10; /* annotation popover, footbar */
+  --z-modal: 12; /* confirm modal (above the footbar) */
 
   /* ── Motion & feel (CSS transitions AND read by JS at boot) ──────────── */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
