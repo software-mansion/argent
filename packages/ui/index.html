@@ -1297,6 +1297,7 @@
         // No live stream → no current device. Prevents the describe loop from
         // firing one stale GET /preview/describe/<oldUdid> after teardown.
         currentUdid = null;
+        describeWarmupPending = false;
         // Explicitly clear the img src — otherwise the browser keeps the MJPEG
         // HTTP connection open after the element is detached, and re-selecting
         // a simulator leaks more connections. Same trick radon-ide uses.
@@ -1315,6 +1316,14 @@
       async function connect(udid) {
         teardownStream();
         currentUdid = udid;
+        // Warm the describe pipeline in the background: the first /describe on
+        // iOS AX or Android uiautomator cold-starts the platform service and
+        // can take several seconds, which the user would otherwise pay on
+        // their first right-click. Triggering it now lets it run in parallel
+        // with stream setup, so the tree is usually already in vp.tree by the
+        // time the user reaches for an element.
+        describeWarmupPending = true;
+        describeOnce();
         setStatus("starting simulator-server…");
         viewport.innerHTML = '<div class="empty">Starting simulator-server…</div>';
         let info;
@@ -1913,8 +1922,14 @@
       // so poll describe as fast as it can answer (self-scheduling, never
       // overlapping) — combined with vpTick easing, the lines track the stream.
       let describeInFlight = false;
+      // Set once when a new simulator connects so the first describe fires
+      // even before any inspect-mode interaction, warming the platform's
+      // accessibility service. The flag self-clears the first time we land a
+      // tree, so steady-state polling is unaffected.
+      let describeWarmupPending = false;
       async function describeOnce() {
-        const need = currentUdid && (vp.proposals.length > 0 || vp.inspect);
+        const need =
+          currentUdid && (vp.proposals.length > 0 || vp.inspect || describeWarmupPending);
         if (need && !describeInFlight) {
           describeInFlight = true;
           // Bound each request — describe is polled ~3×/s now, so a single
@@ -1931,6 +1946,7 @@
               if (j && j.tree) {
                 vp.tree = j.tree;
                 vp.treeAt = Date.now();
+                describeWarmupPending = false;
                 // A right-click that landed before the tree was loaded waits
                 // here; the first successful describe completes the pick.
                 const pc = vp.pendingComment;
