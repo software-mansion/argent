@@ -139,8 +139,8 @@
   --textarea-min-h: 64px;
   --cmt-min-h: 28px;
   --footbar-input-width: 260px;
-  --footbar-input-h: 32px;
   --footbar-bottom: 14px;
+  --footbar-right: 14px;
   --footbar-max-width: 70%;
   --select-min-width: 240px;
   --debug-min-width: 220px;
@@ -156,7 +156,6 @@
   --opacity-disabled: 0.45;
   --opacity-connector: 0.7;
   --opacity-pill: 0.92;
-  --opacity-pulse-dim: 0.4;
 
   /* ── Z-index layers ──────────────────────────────────────────────────── */
   --z-connectors: 4;
@@ -176,7 +175,6 @@
   --dur-card-in: 0.22s;
   --dur-spot: 0.28s;
   --dur-card-move: 0.34s;
-  --dur-pulse: 1.6s;
   --card-gone-scale: 0.8; /* shrink as a card pops away */
 
   /* Spring feel — JS integrates these (ω rad/s, ζ damping ratio). The bubble
