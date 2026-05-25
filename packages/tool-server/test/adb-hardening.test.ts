@@ -30,7 +30,7 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
-import { listAndroidDevices, listAvds } from "../src/utils/adb";
+import { checkSnapshotLoadable, listAndroidDevices, listAvds } from "../src/utils/adb";
 
 beforeEach(() => {
   execFileMock.mockReset();
@@ -175,5 +175,60 @@ describe("listAvds noise filter (review #9)", () => {
     });
     const avds = await listAvds();
     expect(avds.map((a) => a.name)).toEqual(["Pixel_7_API_34", "Pixel_3a_API_29"]);
+  });
+});
+
+describe("checkSnapshotLoadable extraArgs (renderer-args parity)", () => {
+  /**
+   * The probe must receive the same renderer-affecting flags as the actual
+   * boot spawn, otherwise it resolves a different renderer than the boot
+   * does and falsely reports `Not loadable | Reason: different renderer
+   * configured` for a snapshot the boot would have happily loaded.
+   * `boot-device` defines a single `RENDERER_ARGS` constant and threads it
+   * through both call sites; these tests pin the argv shape end-to-end.
+   */
+
+  it("inserts extraArgs between -avd <name> and -check-snapshot-loadable <snap>", async () => {
+    let observedArgs: readonly string[] | null = null;
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd === "emulator" && args.includes("-check-snapshot-loadable")) {
+        observedArgs = args;
+        return { stdout: "snapshot name default_boot\nLoadable\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await checkSnapshotLoadable("Pixel_7_API_34", "default_boot", {
+      extraArgs: ["-gpu", "auto"],
+    });
+
+    expect(result).toEqual({ loadable: true, reason: null });
+    expect(observedArgs).toEqual([
+      "-avd",
+      "Pixel_7_API_34",
+      "-gpu",
+      "auto",
+      "-check-snapshot-loadable",
+      "default_boot",
+    ]);
+  });
+
+  it("omits extraArgs entirely when none are passed", async () => {
+    let observedArgs: readonly string[] | null = null;
+    execFileMock.mockImplementation((cmd: string, args: readonly string[]) => {
+      if (cmd === "emulator" && args.includes("-check-snapshot-loadable")) {
+        observedArgs = args;
+        return { stdout: "Loadable\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await checkSnapshotLoadable("Pixel_7_API_34");
+    expect(observedArgs).toEqual([
+      "-avd",
+      "Pixel_7_API_34",
+      "-check-snapshot-loadable",
+      "default_boot",
+    ]);
   });
 });

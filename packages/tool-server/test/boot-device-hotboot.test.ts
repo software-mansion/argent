@@ -145,6 +145,34 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(hotArgs).not.toContain("-no-snapshot-load");
     // Window is always visible — `-no-window` must never appear in spawn args.
     expect(hotArgs).not.toContain("-no-window");
+    // Renderer args must reach the spawn. See RENDERER_ARGS in boot-device.ts.
+    expect(hotArgs).toEqual(expect.arrayContaining(["-gpu", "auto"]));
+  });
+
+  it("hands the same renderer args to the probe and the hot-boot spawn", async () => {
+    // Sibling test of the assertion above, focused on parity: the probe argv
+    // and the spawn argv must agree on every renderer-affecting flag, or the
+    // emulator's `-check-snapshot-loadable` resolves a different renderer
+    // than the boot does and rejects perfectly loadable snapshots. The bug
+    // this guards against is "every boot is cold on Linux even with a fresh
+    // snapshot on disk" — caught only end-to-end because both unit-mocked
+    // halves test green in isolation.
+    hasSnapshotMock.mockResolvedValue(true);
+    probeMock.mockResolvedValue({ loadable: true, reason: null });
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(probeMock).toHaveBeenCalledTimes(1);
+    const [, , probeOptions] = probeMock.mock.calls[0]!;
+    expect(probeOptions).toMatchObject({ extraArgs: ["-gpu", "auto"] });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const hotArgs = spawnMock.mock.calls[0]![1] as string[];
+    const gpuIdx = hotArgs.indexOf("-gpu");
+    expect(gpuIdx).toBeGreaterThanOrEqual(0);
+    expect(hotArgs[gpuIdx + 1]).toBe("auto");
   });
 
   it("skips the hot-boot attempt and cold-boots when no snapshot exists on disk", async () => {
@@ -160,6 +188,11 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(args).toContain("-no-snapshot-load");
     expect(args).not.toContain("-force-snapshot-load");
     expect(args).not.toContain("-no-window");
+    // Cold boot must also pass `-gpu auto` so the snapshot it eventually
+    // saves matches the renderer the next launch's probe will resolve.
+    // Without this, the cold-boot fallback bakes a renderer mismatch into
+    // the saved snapshot and re-enters the "every boot is cold" cycle.
+    expect(args).toEqual(expect.arrayContaining(["-gpu", "auto"]));
   });
 
   it("skips the hot-boot attempt and cold-boots when -check-snapshot-loadable rejects", async () => {

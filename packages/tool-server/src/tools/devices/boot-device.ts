@@ -518,7 +518,23 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   if (!hasSnapshot) {
     hotBootFailureReason = "no default_boot snapshot exists";
   } else {
-    const probe = await checkSnapshotLoadable(params.avdName, "default_boot");
+    // `-gpu auto` overrides `hw.gpu.enabled=no` in AVDs created via
+    // `avdmanager create avd` (its default), which would otherwise force the
+    // emulator onto lavapipe/swangle software rendering even when the host
+    // has a usable Vulkan ICD. macOS hosts hit this less because their AVDs
+    // are usually created through Android Studio with hardware GPU on.
+    //
+    // The exact same flag MUST be passed to `checkSnapshotLoadable` too: the
+    // probe resolves a renderer based on its own argv plus the AVD's config,
+    // so a probe without `-gpu auto` ends up on a different renderer than the
+    // boot does. The snapshot saved during a `-gpu auto` boot then trips the
+    // probe's "different renderer configured" check and routes every hot-boot
+    // attempt through the cold-boot fallback. Sharing one source of truth
+    // here keeps the two argvs in lockstep.
+    const RENDERER_ARGS = ["-gpu", "auto"] as const;
+    const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
+      extraArgs: RENDERER_ARGS,
+    });
     if (!probe.loadable) {
       hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
     } else {
@@ -528,7 +544,13 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // rather than hanging for the full overall budget. `-no-snapshot-save`
       // avoids overwriting a working snapshot with state captured after we
       // later force-kill the child from a failure path.
-      const hotArgs = ["-avd", params.avdName, "-force-snapshot-load", "-no-snapshot-save"];
+      const hotArgs = [
+        "-avd",
+        params.avdName,
+        "-force-snapshot-load",
+        "-no-snapshot-save",
+        ...RENDERER_ARGS,
+      ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
         const result = await attemptBoot({
@@ -567,7 +589,11 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load"];
+  // `-gpu auto` mirrors the hot-boot path — both for parity and so the
+  // snapshot this cold boot eventually saves matches the renderer the next
+  // launch's probe will resolve. Without it, the saved snapshot bakes in a
+  // different renderer and we re-enter the "every boot is cold" cycle.
+  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", "auto"];
   let coldResult: { serial: string };
   try {
     coldResult = await attemptBoot({

@@ -382,15 +382,29 @@ export interface SnapshotProbeResult {
 export async function checkSnapshotLoadable(
   avdName: string,
   snapshotName = "default_boot",
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number; extraArgs?: readonly string[] } = {}
 ): Promise<SnapshotProbeResult> {
   try {
     const emulatorPath = await resolveEmulatorOrThrow();
-    const { stdout } = await execFileAsync(
-      emulatorPath,
-      ["-avd", avdName, "-check-snapshot-loadable", snapshotName],
-      { timeout: options.timeoutMs ?? 10_000, maxBuffer: 4 * 1024 * 1024 }
-    );
+    // Renderer-affecting flags (`-gpu auto`, future `-accel`, etc.) MUST match
+    // the args we will pass to the actual hot-boot spawn, otherwise the probe
+    // resolves a different renderer than the boot will and reports `Not
+    // loadable | Reason: different renderer configured` for a snapshot the
+    // boot would have happily loaded. That false-negative routes every hot
+    // boot through the cold-boot fallback — the exact symptom this whole PR
+    // is trying to kill. Caller is responsible for handing us the same flags
+    // it'll use on the boot spawn; see boot-device.ts:RENDERER_ARGS.
+    const args = [
+      "-avd",
+      avdName,
+      ...(options.extraArgs ?? []),
+      "-check-snapshot-loadable",
+      snapshotName,
+    ];
+    const { stdout } = await execFileAsync(emulatorPath, args, {
+      timeout: options.timeoutMs ?? 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
     const tail = stdout.split("\n").slice(-6).join("\n");
     // The emulator emits an informational "WARNING | change of renderer
     // detected." whenever `hardware.ini` and `emu-launch-params.txt` disagree
