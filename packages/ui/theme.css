@@ -194,5 +194,6 @@
   --spot-traj-window-ms: 80; /* recent-sample window used to derive pointer velocity */
   --spot-traj-stopped-speed: 0.05; /* below this normalized speed (1/s) the pointer counts as stopped */
   --spot-traj-reach: 0.5; /* normalized forward distance to look for a trajectory target */
+  --spot-max-frame-area: 0.85; /* nodes whose frame covers more than this fraction of the screen are not treated as highlightables (catches Android full-screen container roots that lack iOS's explicit root flag) */
   --annpop-hover-grace-ms: 280; /* hover-card grace: pin ↔ popover travel */
 }

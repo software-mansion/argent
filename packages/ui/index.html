@@ -892,6 +892,7 @@
         spotTrajWindowMs: cssNum("--spot-traj-window-ms", 80),
         spotTrajStoppedSpeed: cssNum("--spot-traj-stopped-speed", 0.05),
         spotTrajReach: cssNum("--spot-traj-reach", 0.5),
+        spotMaxFrameArea: cssNum("--spot-max-frame-area", 0.85),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
       };
 
@@ -1788,6 +1789,10 @@
             cy = f.y + f.height / 2;
           if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
           const a = f.width * f.height;
+          // Ignore near-full-screen matches so a proposal that accidentally
+          // resolves to a container root doesn't paint a screen-spanning
+          // bubble. Same filter `vpNodeAtPoint` uses for the inspector pick.
+          if (a > THEME.spotMaxFrameArea) continue;
           if (a < bestArea) {
             bestArea = a;
             best = n;
@@ -1815,6 +1820,13 @@
       // fires) and visually swallowing small nested pressables. Skipping it
       // means a gap returns null → the trajectory-based release applies, and
       // real descendants are still picked normally.
+      //
+      // The `isRoot` flag handles iOS's single explicit root. Android dumps
+      // tend to expose multiple full-screen-or-near container Views below the
+      // root, so we also drop any node whose frame covers more than
+      // spotMaxFrameArea of the screen — a generic size filter that catches
+      // those Android wrappers (and any future near-root container on either
+      // platform) without per-platform special-casing.
       function vpNodeAtPoint(node, x, y) {
         let best = null,
           bestArea = Infinity;
@@ -1835,7 +1847,7 @@
               cy = f.y + f.height / 2;
             const onScreen = cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1;
             const a = f.width * f.height;
-            if (onScreen && a < bestArea) {
+            if (onScreen && a < bestArea && a <= THEME.spotMaxFrameArea) {
               bestArea = a;
               best = n;
             }
@@ -2758,7 +2770,9 @@
       }
       // True if the recent trajectory points forward (within reach) at any
       // highlightable other than the current focus. Walks the same node set
-      // vpNodeAtPoint considers — node with a non-degenerate on-screen frame.
+      // vpNodeAtPoint considers — non-degenerate on-screen frame, area no
+      // larger than spotMaxFrameArea (so screen-spanning Android containers
+      // don't count as aim targets).
       function trajAimsAtTarget(v) {
         if (!v || !vp.tree) return false;
         const len = v.speed;
@@ -2774,7 +2788,13 @@
             if (f && f.width > 0 && f.height > 0) {
               const cx = f.x + f.width / 2,
                 cy = f.y + f.height / 2;
-              if (cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1) {
+              if (
+                cx >= 0 &&
+                cx <= 1 &&
+                cy >= 0 &&
+                cy <= 1 &&
+                f.width * f.height <= THEME.spotMaxFrameArea
+              ) {
                 if (rayHitsFrame(v.x, v.y, ux, uy, f, THEME.spotTrajReach)) {
                   hit = true;
                   return;
