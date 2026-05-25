@@ -733,9 +733,16 @@
         background: var(--color-accent);
         color: var(--color-on-accent);
       }
-      .ann-pop .del {
-        background: var(--color-danger-bg);
-        color: var(--color-danger-fg);
+      .ann-pop .del,
+      .clear-btn {
+        background: var(--color-bg);
+        color: var(--color-fg);
+        border: var(--border-hairline) solid var(--color-border);
+      }
+      .ann-pop .del:hover,
+      .clear-btn:hover {
+        border-color: var(--color-error);
+        color: var(--color-error);
       }
       .ann-pop .cancel {
         background: var(--color-border);
@@ -770,16 +777,26 @@
         resize: none;
         width: var(--footbar-input-width);
       }
-      .complete-btn {
-        background: var(--color-accent);
-        color: var(--color-on-accent);
-        border: 0;
+      .footbar .btn-row {
+        display: flex;
+        gap: var(--gap-list);
+      }
+      .footbar .btn-row > button {
+        flex: 1;
+      }
+      .complete-btn,
+      .clear-btn {
         border-radius: var(--radius-button);
         padding: var(--pad-complete);
         font-size: var(--fs-body);
         font-weight: var(--fw-bold);
         cursor: pointer;
         white-space: nowrap;
+      }
+      .complete-btn {
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        border: 0;
       }
       .complete-btn:disabled {
         background: var(--color-border);
@@ -796,6 +813,55 @@
       }
       .complete-note.err {
         color: var(--color-error);
+      }
+
+      /* Confirm modal — shared backstop for destructive actions (Remove, Clear). */
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: var(--spotlight-scrim);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: var(--z-modal);
+      }
+      .modal[hidden] {
+        display: none;
+      }
+      .modal-card {
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-card);
+        padding: var(--pad-modal);
+        max-width: var(--modal-max-width);
+        box-shadow: var(--shadow-pop);
+      }
+      .modal-msg {
+        margin: 0 0 var(--gap-stack);
+        color: var(--color-fg);
+        font-size: var(--fs-body);
+        line-height: var(--lh-snug);
+      }
+      .modal .row {
+        display: flex;
+        gap: var(--gap-list);
+        justify-content: flex-end;
+      }
+      .modal button {
+        border: 0;
+        border-radius: var(--radius-button);
+        padding: var(--pad-btn);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+      }
+      .modal .cancel {
+        background: var(--color-border);
+        color: var(--color-fg);
+      }
+      .modal .confirm {
+        background: var(--color-danger-bg);
+        color: var(--color-danger-fg);
       }
     </style>
   </head>
@@ -830,8 +896,20 @@
             id="global-comment"
             rows="4"
             placeholder="Overall comment for the agent (optional)…"></textarea>
-          <button class="complete-btn" id="complete-btn">Complete selection</button>
+          <div class="btn-row">
+            <button class="complete-btn" id="complete-btn">Complete</button>
+            <button class="clear-btn" id="clear-btn">Clear</button>
+          </div>
           <span class="complete-note" id="complete-note"></span>
+        </div>
+        <div class="modal" id="confirm-modal" hidden>
+          <div class="modal-card">
+            <p class="modal-msg" id="confirm-msg"></p>
+            <div class="row">
+              <button class="cancel" id="confirm-cancel">Cancel</button>
+              <button class="confirm" id="confirm-yes">Confirm</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1656,8 +1734,13 @@
       const roundBadge = document.getElementById("round-badge");
       const hiddenBadge = document.getElementById("hidden-badge");
       const completeBtn = document.getElementById("complete-btn");
+      const clearBtn = document.getElementById("clear-btn");
       const completeNote = document.getElementById("complete-note");
       const globalCommentEl = document.getElementById("global-comment");
+      const confirmModal = document.getElementById("confirm-modal");
+      const confirmMsg = document.getElementById("confirm-msg");
+      const confirmCancel = document.getElementById("confirm-cancel");
+      const confirmYes = document.getElementById("confirm-yes");
       const SVGNS = "http://www.w3.org/2000/svg";
 
       const vp = {
@@ -3175,9 +3258,11 @@
         });
         del.addEventListener("click", (e) => {
           e.stopPropagation();
-          vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
-          closeAnnPop();
-          vpRender();
+          openConfirm("Remove this comment?", () => {
+            vp.annotations = vp.annotations.filter((x) => x.id !== a.id);
+            closeAnnPop();
+            vpRender();
+          });
         });
       }
       function renderAnnEdit(a) {
@@ -3540,10 +3625,50 @@
       document.addEventListener("dragend", () => {
         vp.dragging = false;
       });
+      // Confirm modal — shared backstop for destructive actions (Remove, Clear).
+      let confirmPending = null;
+      function openConfirm(msg, onConfirm) {
+        confirmMsg.textContent = msg;
+        confirmPending = onConfirm;
+        confirmModal.hidden = false;
+        confirmYes.focus();
+      }
+      function closeConfirm() {
+        confirmModal.hidden = true;
+        confirmPending = null;
+      }
+      confirmCancel.addEventListener("click", closeConfirm);
+      confirmYes.addEventListener("click", () => {
+        const cb = confirmPending;
+        closeConfirm();
+        if (cb) cb();
+      });
+      confirmModal.addEventListener("click", (e) => {
+        if (e.target === confirmModal) closeConfirm();
+      });
+
+      function vpClear() {
+        vp.staged = {};
+        vp.comments = {};
+        vp.annotations = [];
+        if (globalCommentEl) globalCommentEl.value = "";
+        setNote("");
+        closeAnnPop();
+        vpRender();
+      }
+
       commentBtn.addEventListener("click", () => setInspect(!vp.inspect));
       completeBtn.addEventListener("click", vpComplete);
+      clearBtn.addEventListener("click", () =>
+        openConfirm("Clear all picks, comments, and the overall note?", vpClear)
+      );
       document.addEventListener("keydown", (e) => {
-        if (e.key !== "Escape" || !vp.inspect) return;
+        if (e.key !== "Escape") return;
+        if (!confirmModal.hidden) {
+          closeConfirm();
+          return;
+        }
+        if (!vp.inspect) return;
         // Don't tear down the inspector (and lose an in-progress comment) if
         // the user is typing — let the comment-pop's own Cancel handle that.
         const ae = document.activeElement;
