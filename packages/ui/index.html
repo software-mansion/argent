@@ -1706,9 +1706,36 @@
           .replace(/[,\s]+/g, " ")
           .trim();
       }
+      // Display-friendly element name for the spotlight label, the
+      // "Comment on …" header, and the annotation target. Prefers the
+      // screen-reader-visible label/value over the developer-facing
+      // identifier — on Android `identifier` is the raw resource-id
+      // ("com.google.android.apps.nexuslauncher:id/search_container_hotseat")
+      // which is hostile in a UI header. nodeMatch keeps the identifier
+      // priority since that's still the most reliable matching key.
+      function humanizeIdentifier(raw) {
+        const s = (raw || "").trim();
+        if (!s) return "";
+        // Android resource-id shape: "<pkg>:id/<name>". iOS identifiers don't
+        // carry the package prefix; pass them through unchanged after the
+        // separator-to-space normalization below.
+        const m = s.match(/^[\w.]+:id\/(.+)$/);
+        const tail = m ? m[1] : s;
+        return tail
+          .replace(/[_\-.]+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
       function nodeDesc(n) {
-        const raw = (n && (n.identifier || n.label || n.value || (n.role ? n.role : ""))) || "";
-        return cleanLabel(raw) || "element";
+        if (!n) return "element";
+        const lab = cleanLabel(n.label);
+        if (lab) return lab;
+        const val = cleanLabel(n.value);
+        if (val) return val;
+        const id = humanizeIdentifier(n.identifier);
+        if (id) return id;
+        const role = (n.role || "").trim();
+        return role || "element";
       }
       function nodeMatch(n) {
         if (n.identifier) return { by: "identifier", value: n.identifier };
