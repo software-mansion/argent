@@ -8,7 +8,6 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
-import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
@@ -162,13 +161,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    if (device.platform === "ios") {
-      // Enable accessibility automation before any app is launched so that apps
-      // start with their AX server running. If this is called after apps are already
-      // running (e.g. a pre-booted simulator), those apps won't pick up the flag
-      // until restarted — but new launches will work correctly.
-      await ensureAutomationEnabled(device.id).catch(() => {});
-    } else {
+    if (device.platform === "android") {
       await ensureDep("adb");
     }
 

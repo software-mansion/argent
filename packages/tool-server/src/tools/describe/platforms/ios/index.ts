@@ -12,7 +12,7 @@ export interface DescribeIosParams {
 }
 
 // describe on iOS resolves the ax-service via Registry; the blueprint factory
-// shells out to `xcrun simctl spawn` (ensureAutomationEnabled + spawnDaemon).
+// shells out to `xcrun simctl spawn` (spawnDaemon).
 // Without xcrun on PATH the spawn ENOENTs deep inside the factory and the
 // HTTP layer returns a 500 with a raw "spawn xcrun ENOENT" message — declare
 // the dep here so the preflight emits a 424 with the install hint instead,

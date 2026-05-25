@@ -1,9 +1,9 @@
 /**
  * `describe` on iOS shells out to xcrun via the ax-service blueprint factory
- * (`ensureAutomationEnabled` → `xcrun simctl spawn ...`). When xcrun is
- * missing — Linux runner, broken Xcode toolchain, etc. — the spawn rejects
- * with ENOENT and the error bubbles up to the HTTP layer as a 500 with a raw
- * "spawn xcrun ENOENT" message.
+ * (`spawnDaemon` → `xcrun simctl spawn ...`). When xcrun is missing — Linux
+ * runner, broken Xcode toolchain, etc. — the spawn rejects with ENOENT and
+ * the error bubbles up to the HTTP layer as a 500 with a raw "spawn xcrun
+ * ENOENT" message.
  *
  * Every other cross-platform iOS tool (`launch-app`, `restart-app`,
  * `open-url`, `reinstall-app`) declares `requires: ["xcrun"]` on its

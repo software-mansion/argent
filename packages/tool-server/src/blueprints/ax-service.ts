@@ -1,6 +1,5 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
   TypedEventEmitter,
@@ -10,9 +9,6 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { axServiceBinaryPath } from "@argent/native-devtools-ios";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
-
-const execFileAsync = promisify(execFile);
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
@@ -105,24 +101,6 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-export async function ensureAutomationEnabled(udid: string): Promise<void> {
-  await execFileAsync(
-    "xcrun",
-    [
-      "simctl",
-      "spawn",
-      udid,
-      "defaults",
-      "write",
-      "com.apple.Accessibility",
-      "AutomationEnabled",
-      "-bool",
-      "true",
-    ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  );
 }
 
 async function killExistingDaemon(socketPath: string): Promise<void> {
@@ -244,7 +222,6 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const socketPath = getSocketPath(udid);
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    await ensureAutomationEnabled(udid);
     await killExistingDaemon(socketPath);
 
     const proc = await spawnDaemon(udid, socketPath);

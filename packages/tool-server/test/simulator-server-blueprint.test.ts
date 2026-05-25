@@ -6,13 +6,12 @@ import type { DeviceInfo } from "@argent/registry";
 // ─── Mocks ───────────────────────────────────────────────────────────
 //
 // We mock at the module-boundary layer so the real blueprint factory runs —
-// this is a repro of the dispatch, stdio and AX-automation behaviour, not a
-// shape check. If any of these are quietly regressed, hands-on Android
-// sessions will start failing before this test does, so the assertions below
-// are deliberately specific (argv, stdio, ensureAutomationEnabled call count).
+// this is a repro of the dispatch and stdio behaviour, not a shape check.
+// If any of these are quietly regressed, hands-on Android sessions will start
+// failing before this test does, so the assertions below are deliberately
+// specific (argv, stdio).
 
 const spawnMock = vi.fn();
-const ensureAutomationEnabledMock = vi.fn();
 
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -21,10 +20,6 @@ vi.mock("node:child_process", async () => {
     spawn: spawnMock,
   };
 });
-
-vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: ensureAutomationEnabledMock,
-}));
 
 vi.mock("@argent/native-devtools-ios", () => ({
   simulatorServerBinaryPath: () => "/fake/bin/simulator-server",
@@ -67,7 +62,6 @@ function androidDevice(serial: string): DeviceInfo {
 describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
     // and the real probe would surface as a DependencyMissingError unrelated
@@ -83,7 +77,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     vi.clearAllMocks();
   });
 
-  it("spawns the `ios` subcommand and warms the AX automation flag for an iOS device", async () => {
+  it("spawns the `ios` subcommand for an iOS device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
 
@@ -106,9 +100,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     // as soon as the tool-server pipes /dev/null.
     expect(opts?.stdio).toEqual(["pipe", "pipe", "pipe"]);
 
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(udid);
-
     expect(instance.api.apiUrl).toBe("http://127.0.0.1:55555");
     expect(typeof instance.api.pressKey).toBe("function");
 
@@ -116,7 +107,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
   });
 
-  it("spawns the `android` subcommand and skips the iOS AX automation flag for an Android device", async () => {
+  it("spawns the `android` subcommand for an Android device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
 
@@ -130,9 +121,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
-
-    // No xcrun AX flag on Android — it is iOS-only and would error out.
-    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
   it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
@@ -152,7 +140,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await factoryPromise;
 
     expect(spawnMock.mock.calls[0]![1]![0]).toBe("android");
-    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
   it("pressKey writes the shared stdin command protocol regardless of platform", async () => {
@@ -170,23 +157,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(1, "key Down 41\n");
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
-  });
-
-  it("swallows an iOS AX-automation failure — the server must still start", async () => {
-    // ensureAutomationEnabled is best-effort: if xcrun isn't on PATH, or the
-    // simulator is pre-booted with the flag set already, we must continue.
-    ensureAutomationEnabledMock.mockRejectedValueOnce(new Error("xcrun missing"));
-
-    const fakeProc = makeFakeProc();
-    spawnMock.mockReturnValue(fakeProc);
-    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
-
-    const device = iosDevice("22222222-3333-4444-5555-666666666666");
-    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
-    signalReady(fakeProc, 55559);
-    const instance = await factoryPromise;
-
-    expect(instance.api.apiUrl).toBe("http://127.0.0.1:55559");
   });
 
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
