@@ -21,11 +21,10 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-// Mock the iOS 26.5+ AX-bypass plumbing at the module boundary so this test
-// pins boot-device's dispatch contract (state probe → pre-boot if shutdown →
-// boot → ensureAutomationEnabled fallback → native-devtools → open) without
-// dragging the plist/kickstart implementation into the exec-call assertions.
-// Implementation behaviour for those helpers is covered by ax-service tests.
+// Mock the AX-bypass helpers at the module boundary so this file asserts
+// boot-device's dispatch (state probe → pre-boot if shutdown → boot →
+// ensureAutomationEnabled fallback → native-devtools → open) without pulling
+// plist/kickstart internals into the exec-call sequence.
 const listIosSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
@@ -53,8 +52,8 @@ describe("boot-device — iOS path", () => {
       getCallback(args)(null, "", "");
       return {} as never;
     });
-    // Default: sim is Shutdown so the happy path (pre-boot plist write, no
-    // post-boot kickstart needed) runs. Individual tests override.
+    // Default state: 11111111 + 33333333 Shutdown (happy path), 22222222
+    // Booted (kickstart-fallback path). Individual tests override.
     listIosSimulatorsMock.mockReset().mockResolvedValue([
       { udid: "11111111-1111-1111-1111-111111111111", state: "Shutdown" },
       { udid: "22222222-2222-2222-2222-222222222222", state: "Booted" },
@@ -80,8 +79,9 @@ describe("boot-device — iOS path", () => {
       booted: true,
     });
 
-    // Pre-boot plist write must fire BEFORE simctl boot — that's the whole
-    // point of approach (B): SpringBoard reads the pref at first init.
+    // Pre-boot write must precede `simctl boot` so SB inherits the bypass at
+    // first init; ensureAutomationEnabled then runs as a defense-in-depth
+    // no-op (pref already cached, kickstart branch skipped).
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledTimes(1);
     expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
@@ -89,8 +89,6 @@ describe("boot-device — iOS path", () => {
     expect(setAccessibilityPrefsPreBootMock.mock.invocationCallOrder[0]).toBeLessThan(
       mockExecFile.mock.invocationCallOrder[0]
     );
-    // ensureAutomationEnabled still fires as a defense-in-depth no-op, but the
-    // pref is already set on disk so its internal kickstart-branch is skipped.
     expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
       "11111111-1111-1111-1111-111111111111"
@@ -132,10 +130,9 @@ describe("boot-device — iOS path", () => {
 
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
 
-    // Sim was Booted before we touched it: SB's AX server already cached the
-    // pref at its prior boot, so the pre-boot write would be undone by
-    // cfprefsd flushes. Skip it; rely on ensureAutomationEnabled's
-    // kickstart-if-needed branch to flip the bypass live.
+    // Already-Booted sim: in-sim cfprefsd would overwrite the host write, so
+    // skip it and let ensureAutomationEnabled's kickstart branch flip the
+    // bypass live.
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
       "22222222-2222-2222-2222-222222222222"
@@ -143,9 +140,8 @@ describe("boot-device — iOS path", () => {
   });
 
   it("still runs the fallback ensureAutomationEnabled when the state probe fails", async () => {
-    // simctl unavailable or udid unknown — listIosSimulators returns []
-    // (its own try/catch swallows errors). We must not block boot on the
-    // probe; let it fall through and rely on ensureAutomationEnabled, which
+    // listIosSimulators returns [] on xcrun failure / unknown udid; boot must
+    // not block on the probe — fall through to ensureAutomationEnabled which
     // self-detects whether a kickstart is needed.
     listIosSimulatorsMock.mockResolvedValueOnce([]);
 
@@ -162,9 +158,8 @@ describe("boot-device — iOS path", () => {
   });
 
   it("does not block boot on a pre-boot plist write failure", async () => {
-    // If plutil is missing or the data container is read-only, log to stderr
-    // and keep going — ensureAutomationEnabled will still apply the bypass
-    // (with a kickstart) on the post-boot side.
+    // plutil missing / data container read-only: log and continue;
+    // ensureAutomationEnabled applies the bypass post-boot with a kickstart.
     setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("plutil missing"));
 
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));

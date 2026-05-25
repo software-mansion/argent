@@ -195,15 +195,11 @@ async function bootIos(
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   await ensureDep("xcrun");
 
-  // iOS 26.5+ AX entitlement bypass — happy path. When the sim is currently
-  // Shutdown, write `IgnoreAXServerEntitlements`/`AutomationEnabled` directly
-  // to the host-side preference plist BEFORE `simctl boot`. SpringBoard reads
-  // and caches the pref at AX-server init, so this avoids the kickstart that
-  // ensureAutomationEnabled would otherwise need to issue post-boot — a
-  // kickstart that kills any foreground app and dismisses any in-flight TCC
-  // prompt. The state probe is best-effort: if `simctl list` is unavailable
-  // or the udid is unknown, fall through to the post-boot ensureAutomationEnabled
-  // path so the bypass still gets applied, just with the disruption.
+  // iOS 26.5+ AX bypass — happy path. If the sim is Shutdown, pre-write the
+  // AX prefs to the host plist so SB caches them at init and the kickstart
+  // never fires. Probe is best-effort: an unknown state falls through to the
+  // post-boot ensureAutomationEnabled fallback which still applies the bypass
+  // (with the SB-restart disruption).
   const wasShutdown = await listIosSimulators()
     .then((sims) => sims.find((s) => s.udid === udid)?.state === "Shutdown")
     .catch(() => false);
@@ -212,7 +208,7 @@ async function bootIos(
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
           err instanceof Error ? err.message : String(err)
-        }); falling back to post-boot kickstart path which will restart SpringBoard.\n`
+        }); falling back to post-boot kickstart which restarts SpringBoard.\n`
       );
     });
   }
@@ -227,18 +223,11 @@ async function bootIos(
   // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
 
-  // iOS 26.5+ AX entitlement bypass — fallback path. If the sim was already
-  // Booted before this call (or the pre-boot write was skipped/failed),
-  // SpringBoard's AX server has already cached the pref as its boot-time
-  // value. The only way to flip it now is to kickstart SB — which terminates
-  // the foreground app and any in-flight system alert. We do that work HERE,
-  // during boot-device, rather than letting it land lazily inside the
-  // simulator-server / ax-service factory on the agent's first interactive
-  // tool call. That way the disruption hits when the agent is explicitly
-  // preparing the device, not when it's mid-launch on the first app.
-  // ensureAutomationEnabled itself checks if the pref is already set and
-  // skips the kickstart in that case, so the common path (host plist
-  // pre-write succeeded → SB already has it cached) is a fast no-op.
+  // iOS 26.5+ AX bypass — fallback. No-op on the happy path (pref already
+  // cached from pre-boot write). When the sim was Booted before boot-device,
+  // SB cached the unset pref at its prior init — flip it via kickstart now,
+  // during boot-device, so the disruption (foreground app + in-flight alerts
+  // gone) lands here instead of lazily during the agent's first launch-app.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
