@@ -37,6 +37,27 @@ npx @swmansion/argent init
 - For iOS: macOS with **Xcode** installed
 - For Android: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 
+##### Linux host: extra prerequisites for Android emulators
+
+Argent runs Android emulators on Linux but the default install can be slow if a few host-side knobs aren't right. Cover these once and the experience matches macOS:
+
+- **KVM access.** The emulator falls back to slow software emulation (TCG) without `/dev/kvm`. Make sure virtualization is enabled in BIOS/UEFI (`vmx` for Intel, `svm` for AMD in `/proc/cpuinfo`) and that your user can read/write `/dev/kvm` — on most distros that means joining the `kvm` group:
+
+  ```bash
+  sudo usermod -aG kvm "$USER"
+  # log out and back in so the new group takes effect
+  ```
+
+- **GPU acceleration via host OpenGL.** The Android emulator ships its own Vulkan loader that only sees the bundled software ICDs (lavapipe and SwiftShader), so `-gpu auto` on Linux silently resolves to `hw.gpu.mode=lavapipe` and rasterizes every guest frame on the CPU — even on a host with hardware Vulkan installed. Argent works around this by launching emulators with `-gpu host` on Linux, which bypasses the bundled Vulkan stack and uses your host's `libGL.so` (Mesa or NVIDIA OpenGL) for surface composition. This matches what Android Studio uses on Linux.
+
+  For `-gpu host` to be hardware-accelerated, you need a working OpenGL driver — present on every desktop distro with a graphical session. If you're running headlessly or in a container, install your GPU's driver explicitly (`mesa-libGL` / `libgl1-mesa-glx` / `nvidia-utils`).
+
+  Argent also runs a host-side preflight on every boot and prints a warning if `/dev/kvm` isn't usable, virtualization is disabled, or no hardware Vulkan ICD is present. The Vulkan warning is informational — Argent itself doesn't depend on Vulkan in `-gpu host` mode — but a missing hardware ICD often correlates with a missing GPU driver more broadly.
+
+- **System image.** Prefer the `default` or `google_apis` variants of `x86_64` system images for headless agent workflows; `google_apis_playstore` adds noticeable boot-time CPU churn from Play services. Always pick `x86_64` on Intel/AMD hosts — ARM images run via QEMU translation and are dramatically slower.
+
+- **AVD config.** AVDs created via `avdmanager create avd` default to `hw.gpu.enabled=no`. Argent overrides this with `-gpu host` at launch (so the on-disk config doesn't need editing), but if you also want to use the emulator standalone, set `hw.gpu.enabled=yes` and `hw.gpu.mode=host` in `~/.android/avd/<name>.avd/config.ini`.
+
 #### Run `init` in your project
 
 From your project root:

@@ -145,6 +145,12 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(hotArgs).not.toContain("-no-snapshot-load");
     // Window is always visible — `-no-window` must never appear in spawn args.
     expect(hotArgs).not.toContain("-no-window");
+    // `-gpu` arg must be present and platform-appropriate. Linux uses `host`
+    // to bypass the emulator's bundled software-only Vulkan stack (lavapipe);
+    // every other host uses `auto`. See `boot-device.ts:selectGpuMode`.
+    const gpuIdx = hotArgs.indexOf("-gpu");
+    expect(gpuIdx).toBeGreaterThanOrEqual(0);
+    expect(hotArgs[gpuIdx + 1]).toBe(process.platform === "linux" ? "host" : "auto");
   });
 
   it("skips the hot-boot attempt and cold-boots when no snapshot exists on disk", async () => {

@@ -19,6 +19,7 @@ import {
   waitForBootCompleted,
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
+import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,6 +68,34 @@ const STAGE_BUDGET = {
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
 } as const;
+
+/**
+ * Pick the `-gpu` argument for `emulator` based on host OS.
+ *
+ * On macOS, `auto` is the right default: the emulator's bundled stack
+ * resolves it to ANGLE→Metal, which is hardware-accelerated and stable.
+ *
+ * On Linux, `auto` is a trap. The emulator ships its own Vulkan loader at
+ * `$ANDROID_HOME/emulator/lib64/vulkan/`, and that directory only contains
+ * `lvp_icd.json` (Mesa lavapipe — pure-CPU Vulkan) and `vk_swiftshader_icd.
+ * json` (SwiftShader — pure-CPU Vulkan). The bundled loader never looks at
+ * `/usr/share/vulkan/icd.d`, so `-gpu auto` enumerates only software ICDs
+ * and resolves to `hw.gpu.mode=lavapipe`. Every guest frame is then
+ * rasterized on the host CPU — visibly slow even on flagship hardware.
+ *
+ * `-gpu host` sidesteps the bundled Vulkan stack: the emulator uses the
+ * host's `libGL.so` (Mesa OpenGL drivers or NVIDIA's libGL) for surface
+ * composition, which is hardware-accelerated by whatever GPU the OpenGL
+ * driver targets. This matches what Android Studio launches with on Linux,
+ * and is the documented Android-emulator recommendation for the platform.
+ *
+ * No conditional on Windows yet — there's no Windows host support today;
+ * if/when added, evaluate `swiftshader_indirect` or `host` based on the
+ * Direct3D vs. OpenGL story on that platform.
+ */
+function selectGpuMode(): "host" | "auto" {
+  return process.platform === "linux" ? "host" : "auto";
+}
 
 async function killEmulatorQuietly(
   serial: string | null,
@@ -191,6 +220,17 @@ async function bootIos(
   udid: string,
   registry: Registry
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
+  // iOS Simulator only runs on macOS — `xcrun simctl boot` doesn't exist on
+  // Linux. We check this before `ensureDep("xcrun")` so a Linux user passing
+  // an iOS udid gets a clear root-cause error ("iOS requires macOS") instead
+  // of the misleading `xcode-select --install` hint, which would send them
+  // chasing a tool that has never had a Linux build.
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `iOS Simulator is unavailable on ${process.platform}: it requires a macOS host. ` +
+        `Pass \`avdName\` (Android) instead of \`udid\` (iOS) to boot a device from this host.`
+    );
+  }
   await ensureDep("xcrun");
   await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -431,6 +471,18 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   // resolver, which honors `$ANDROID_HOME` in addition to PATH.
   await ensureDep("adb");
   await ensureDep("emulator");
+
+  // Linux-host diagnostics. We log warnings (KVM-less, no hardware Vulkan,
+  // etc.) once per boot via console.warn so a developer who's about to wait
+  // for a software-emulated AVD sees *why* and what to install. We never
+  // throw — these are degraded-but-bootable conditions, and somebody who has
+  // a specific reason to boot without acceleration shouldn't be blocked.
+  const linuxDiag = linuxBootDiagnostics();
+  if (linuxDiag && linuxDiag.length > 0) {
+    for (const d of linuxDiag) {
+      console.warn(`[boot-device:linux] ${d.severity}: ${d.message}`);
+    }
+  }
   const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
@@ -528,18 +580,23 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // rather than hanging for the full overall budget. `-no-snapshot-save`
       // avoids overwriting a working snapshot with state captured after we
       // later force-kill the child from a failure path.
-      // `-gpu auto` overrides `hw.gpu.enabled=no` in AVDs created via
-      // `avdmanager create avd` (its default), which would otherwise force the
-      // emulator onto lavapipe/swangle software rendering even when the host
-      // has a usable Vulkan ICD. macOS hosts hit this less because their AVDs
-      // are usually created through Android Studio with hardware GPU on.
+      // GPU mode is platform-dependent. On macOS `-gpu auto` resolves to
+      // ANGLE→Metal via the emulator's bundled stack — fast. On Linux the
+      // bundled Vulkan loader only ships lavapipe/SwiftShader ICDs, so
+      // `-gpu auto` lands on `hw.gpu.mode=lavapipe` (software Vulkan) even
+      // on hosts with hardware Vulkan drivers, because the bundled loader
+      // never consults the system ICD path. `-gpu host` bypasses the
+      // emulator's Vulkan stack and uses the host's `libGL.so` (Mesa or
+      // NVIDIA OpenGL) for surface composition, which is hardware-
+      // accelerated by the host GPU. See `selectGpuMode` and the README
+      // (Linux prerequisites) for the full story.
       const hotArgs = [
         "-avd",
         params.avdName,
         "-force-snapshot-load",
         "-no-snapshot-save",
         "-gpu",
-        "auto",
+        selectGpuMode(),
       ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
@@ -579,7 +636,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", "auto"];
+  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", selectGpuMode()];
   let coldResult: { serial: string };
   try {
     coldResult = await attemptBoot({

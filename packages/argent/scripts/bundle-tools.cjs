@@ -149,11 +149,14 @@ esbuild.buildSync({
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
 
 // Copy simulator-server binary for every supported host platform that's
-// present in the staging area. At least darwin must be there — the macOS
-// binary is what the publish pipeline has always required. Linux is best-
-// effort: if the artifact wasn't downloaded yet (e.g. radon's Linux build
-// hasn't shipped to the release), we warn and continue rather than blocking
-// the macOS build.
+// present in the staging area. The publish pipeline runs on macOS and
+// requires `darwin/simulator-server` — that's the canonical release bundle.
+// But a Linux contributor running `npm run pack` locally (CI sanity, smoke
+// test, packaging the Linux-only bundle for ad-hoc use) shouldn't be blocked
+// by the absence of the macOS binary they have no way to produce. Treat the
+// darwin binary as required only when the host that's bundling can actually
+// produce it (i.e. when running on macOS); on Linux, warn and continue with
+// a Linux-only bundle.
 let copiedSimServers = 0;
 for (const platform of SUPPORTED_HOST_PLATFORMS) {
   const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
@@ -165,7 +168,7 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
     fs.chmodSync(dest, 0o755);
     console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
     copiedSimServers += 1;
-  } else if (platform === "darwin") {
+  } else if (platform === "darwin" && process.platform === "darwin") {
     throw new Error(
       `simulator-server binary not found at ${src}.\n` +
         `Run: bash scripts/download-simulator-server.sh`
@@ -173,6 +176,12 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
   } else {
     console.warn(`⚠ simulator-server (${platform}) not found at ${src} — skipping`);
   }
+}
+if (copiedSimServers === 0) {
+  throw new Error(
+    `No simulator-server binaries found under ${BIN_SRC_ROOT} for any supported host. ` +
+      `Run: bash scripts/download-simulator-server.sh`
+  );
 }
 
 // Copy ax-service binary (macOS-only — it runs inside an iOS Simulator)
