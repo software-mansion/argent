@@ -55,10 +55,15 @@ data_sources: {
 }
 
 # ----------------------------------------------------------------------------
-# Data source 2: kernel scheduler events (thread state — running/runnable/blocked)
+# Data source 2: kernel scheduler events + atrace app slices
 # ----------------------------------------------------------------------------
 # Feeds thread_state table; used in queries/ui-hangs.sql to attribute main-thread
 # stalls to "blocked on I/O", "blocked on lock", etc.
+#
+# atrace categories / atrace_apps are nested in ftrace_config (NOT as a separate
+# `android.atrace` data source with `atrace_config` — that field was removed
+# from DataSourceConfig and is rejected by perfetto >= v45). See
+# https://perfetto.dev/docs/data-sources/atrace.
 data_sources: {
   config: {
     name: "linux.ftrace"
@@ -73,20 +78,7 @@ data_sources: {
       # binder events — surfaces IPC contention on the main thread.
       ftrace_events: "binder/binder_transaction"
       ftrace_events: "binder/binder_transaction_received"
-    }
-  }
-}
-
-# ----------------------------------------------------------------------------
-# Data source 3: atrace app slices (the equivalent of Trace.beginSection from JS/Java)
-# ----------------------------------------------------------------------------
-# Categories cover the layers most likely to hang the main thread.
-data_sources: {
-  config: {
-    name: "android.atrace"
-    target_buffer: 0
-    atrace_config: {
-      # System categories — see `adb shell atrace --list_categories` for the full set.
+      # System atrace categories — see `adb shell atrace --list_categories` for the full set.
       atrace_categories: "view"        # View system: measure/layout/draw
       atrace_categories: "gfx"         # SurfaceFlinger/HWUI
       atrace_categories: "wm"          # WindowManager

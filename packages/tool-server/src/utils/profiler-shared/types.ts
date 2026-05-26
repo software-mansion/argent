@@ -96,4 +96,17 @@ export interface NativeProfilerAnalyzeResult {
   report: string;
   reportFile: string | null;
   bottlenecksTotal: number;
+  /**
+   * "ok" when every analyzer query/export succeeded; "analysis_failed" when
+   * one or more entries are present in `exportErrors`. Lets MCP/CLI callers
+   * tell a truly clean trace apart from a run where queries blew up and
+   * `bottlenecksTotal === 0` only because nothing could be analyzed.
+   */
+  status: "ok" | "analysis_failed";
+  /**
+   * Per-exporter error messages keyed by exporter name (Android: "cpu",
+   * "hangs", "rss"; iOS: "cpu", "hangs", "leaks"). Empty object when
+   * `status === "ok"`.
+   */
+  exportErrors: Record<string, string>;
 }

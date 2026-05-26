@@ -37,15 +37,18 @@ export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
   const { payload, traceFile } = input;
+  const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
+  const status: "ok" | "analysis_failed" =
+    Object.keys(exportErrors).length > 0 ? "analysis_failed" : "ok";
 
   const cpuHotspotsCount = payload.bottlenecks.filter((b) => b.type === "cpu_hotspot").length;
   const uiHangsCount = payload.bottlenecks.filter((b) => b.type === "ui_hang").length;
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, input.exportErrors)
-      : renderFullReport(payload, input.exportErrors, {
+      ? renderAllClear(payload, exportErrors)
+      : renderFullReport(payload, exportErrors, {
           hotspotLimit: Infinity,
           hangLimit: Infinity,
         });
@@ -55,8 +58,8 @@ export async function renderNativeProfilerReport(
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, input.exportErrors)
-      : renderFullReport(payload, input.exportErrors, {
+      ? renderAllClear(payload, exportErrors)
+      : renderFullReport(payload, exportErrors, {
           hotspotLimit: MAX_INLINE_HOTSPOTS,
           hangLimit: MAX_INLINE_HANGS,
         });
@@ -69,7 +72,13 @@ export async function renderNativeProfilerReport(
         `\n\n> Full report: \`${reportFile}\` — ${bottlenecksTotal} bottleneck(s) total, showing top ${shownHotspots} CPU hotspots and top ${shownHangs} hangs inline. Use the Read tool to view all details.`
       : inlineReport;
 
-  return { report, reportFile: wroteFile ? reportFile : null, bottlenecksTotal };
+  return {
+    report,
+    reportFile: wroteFile ? reportFile : null,
+    bottlenecksTotal,
+    status,
+    exportErrors,
+  };
 }
 
 // Legacy alias — iOS callers historically imported renderIosProfilerReport.
@@ -101,13 +110,25 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
     lines.push(...errorLines, ``);
   }
 
-  lines.push(
-    `---`,
-    ``,
-    `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
-    ``,
-    `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`
-  );
+  lines.push(`---`, ``);
+
+  const failedCount = exportErrors ? Object.keys(exportErrors).length : 0;
+  if (failedCount > 0) {
+    // Zero bottlenecks + at least one failed exporter is NOT "all clear" —
+    // the analysis itself could not run. Replace the misleading sentence
+    // with a banner that points back at the Export warnings block above.
+    lines.push(
+      `⚠️ **Analysis failed** — ${failedCount} of 3 ${
+        failedCount === 1 ? "query" : "queries"
+      } errored. See the **Export warnings** block above. No findings could be produced from this trace.`
+    );
+  } else {
+    lines.push(
+      `All clear — no CPU hotspots, UI hangs, or memory issues detected.`,
+      ``,
+      `Consider re-profiling under heavier load or longer duration to catch issues that don't appear in short sessions.`
+    );
+  }
   return lines.join("\n");
 }
 

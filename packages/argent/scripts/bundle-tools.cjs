@@ -52,6 +52,11 @@ const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/s
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
 const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
 const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
+const TP_BIN_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/bin/trace_processor_shell"
+);
+const TP_BIN_DEST = path.resolve(__dirname, "../bin/trace_processor_shell");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
@@ -61,9 +66,11 @@ const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
 const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
 const AGENTS_DEST = path.resolve(__dirname, "../agents");
+const QUERIES_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android/queries");
+const QUERIES_DEST = path.resolve(__dirname, "../queries");
 
 // Purge artifact directories so stale files don't survive across builds.
-for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) {
+for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST, QUERIES_DEST]) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -157,6 +164,22 @@ if (fs.existsSync(AX_BIN_SRC)) {
   console.warn(`⚠ ax-service binary not found at ${AX_BIN_SRC} — skipping copy`);
 }
 
+// Copy trace_processor_shell binary for Android profiling.
+if (fs.existsSync(TP_BIN_SRC)) {
+  fs.copyFileSync(TP_BIN_SRC, TP_BIN_DEST);
+  fs.chmodSync(TP_BIN_DEST, 0o755);
+  console.log(
+    `✓ Copied trace_processor_shell binary → ${path.relative(process.cwd(), TP_BIN_DEST)}`
+  );
+} else {
+  throw new Error(
+    `trace_processor_shell binary not found at ${TP_BIN_SRC}.\n` +
+      `Run: npm run pack:mcp (fetches from argent-private-releases)\n` +
+      `or for local-dev fallback: bash scripts/download-trace-processor-local.sh\n` +
+      `See packages/native-devtools-android/RELEASING.md for details.`
+  );
+}
+
 // Copy native devtools dylibs so the packaged tool-server can inject them at runtime.
 if (fs.existsSync(DYLIBS_SRC)) {
   fs.cpSync(DYLIBS_SRC, DYLIBS_DEST, { recursive: true });
@@ -194,6 +217,40 @@ if (fs.existsSync(TRACE_TEMPLATE_SRC)) {
   );
 } else {
   console.warn(`⚠ Argent.tracetemplate not found at ${TRACE_TEMPLATE_SRC} — skipping copy`);
+}
+
+// Copy argent.tracecfg.pbtxt so the Android profiler capture step can find it
+// at runtime via __dirname lookup next to the bundled tool-server.
+const TRACECFG_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/utils/android-profiler/argent.tracecfg.pbtxt"
+);
+const TRACECFG_DEST = path.resolve(__dirname, "../dist/argent.tracecfg.pbtxt");
+
+if (fs.existsSync(TRACECFG_SRC)) {
+  fs.copyFileSync(TRACECFG_SRC, TRACECFG_DEST);
+  console.log(`✓ Copied argent.tracecfg.pbtxt → ${path.relative(process.cwd(), TRACECFG_DEST)}`);
+} else {
+  throw new Error(
+    `argent.tracecfg.pbtxt not found at ${TRACECFG_SRC}.\n` +
+      `This file is required for Android native profiling.`
+  );
+}
+
+// Copy Android profiler SQL queries. run-tp.ts resolves QUERY_DIR via
+// `path.resolve(__dirname, "..", "queries")` — in the bundled tool-server.cjs
+// that is `<pkg>/queries/`, i.e. this exact destination.
+if (fs.existsSync(QUERIES_SRC)) {
+  fs.cpSync(QUERIES_SRC, QUERIES_DEST, { recursive: true });
+  const count = fs.readdirSync(QUERIES_SRC).filter((f) => f.endsWith(".sql")).length;
+  console.log(
+    `✓ Copied ${count} SQL queries → ${path.relative(process.cwd(), QUERIES_DEST)}`
+  );
+} else {
+  throw new Error(
+    `Android profiler queries directory not found at ${QUERIES_SRC}.\n` +
+      `This directory is required for native-profiler-analyze on Android.`
+  );
 }
 
 // Copy skills into the package so they ship on npm.

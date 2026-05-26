@@ -7,6 +7,12 @@ import * as fs from "node:fs";
 const BIN_DIR =
   process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR ?? path.join(__dirname, "..", "bin");
 
+// Queries live next to bin/ at the package root in dev mode, and next to
+// dist/ in the packaged argent bundle (copied there by argent's build script).
+const QUERIES_DIR =
+  process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_QUERIES_DIR ??
+  path.join(__dirname, "..", "queries");
+
 /**
  * Path to the Perfetto `trace_processor_shell` binary. Lazy — throws only when
  * called, not at module load — so iOS-only environments that import this
@@ -29,4 +35,15 @@ export function traceProcessorShellAvailable(): boolean {
 
 export function traceProcessorShellDir(): string {
   return BIN_DIR;
+}
+
+/**
+ * Directory containing the PerfettoSQL query files (`*.sql`) used by
+ * `runTpQuery`. Source-of-truth lives here in the native-devtools-android
+ * package; argent's bundler copies them next to the bundled tool-server at
+ * publish time so the same `path.join(__dirname, "..", "queries")` resolution
+ * works in both dev and published modes.
+ */
+export function traceProcessorQueriesDir(): string {
+  return QUERIES_DIR;
 }

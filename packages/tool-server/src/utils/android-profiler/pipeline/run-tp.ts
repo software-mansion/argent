@@ -2,13 +2,15 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { promises as fs } from "fs";
 import * as path from "path";
-import { traceProcessorShellPath } from "@argent/native-devtools-android";
+import {
+  traceProcessorShellPath,
+  traceProcessorQueriesDir,
+} from "@argent/native-devtools-android";
 
 const execFileAsync = promisify(execFile);
 
 const QUERY_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
-const QUERY_DIR = path.resolve(__dirname, "..", "queries");
 
 export interface RunTpQueryOptions {
   /** Path to the on-host .pftrace. */
@@ -35,7 +37,7 @@ export async function runTpQuery<Row = Record<string, unknown>>(
   opts: RunTpQueryOptions
 ): Promise<Row[]> {
   const tpPath = traceProcessorShellPath();
-  const queryPath = path.join(QUERY_DIR, opts.query);
+  const queryPath = path.join(traceProcessorQueriesDir(), opts.query);
 
   const template = await fs.readFile(queryPath, "utf8");
   let sql = template;

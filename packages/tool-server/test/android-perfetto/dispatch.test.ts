@@ -25,6 +25,8 @@ vi.mock("../../src/tools/profiler/native-profiler/platforms/ios", () => ({
     report: "ios",
     reportFile: null,
     bottlenecksTotal: 0,
+    status: "ok",
+    exportErrors: {},
   })),
   handleXctraceExit: vi.fn(),
 }));
@@ -42,6 +44,8 @@ vi.mock("../../src/tools/profiler/native-profiler/platforms/android", () => ({
     report: "android",
     reportFile: null,
     bottlenecksTotal: 0,
+    status: "ok",
+    exportErrors: {},
   })),
 }));
 
