@@ -131,20 +131,18 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
 }
 
 /**
- * iOS 26.5+: SB's AX server rejects unentitled MIG clients with
- * kAXError -25215. `IgnoreAXServerEntitlements` disables the check, but
- * SB caches it at init — so writing it post-boot only takes effect after
- * the next SB restart.
+ * Check whether `IgnoreAXServerEntitlements` is active on this sim.
  *
- * boot-device pre-writes the pref to the host plist before boot (the
- * happy path). This function is the post-boot fallback: it writes the
- * pref but does NOT kickstart SpringBoard, returning whether the pref
- * was already active so the caller can surface a degraded-quality hint.
+ * iOS 26.5+: SB's AX server rejects unentitled MIG clients with
+ * kAXError -25215. The pref disables the check, but SB caches it at
+ * init — writing it post-boot has no effect until the next restart.
+ * The only effective path is the pre-boot plist write in boot-device.
+ *
+ * This read-only probe tells the caller whether the pre-boot write
+ * happened so describe can surface a degraded-quality hint when it didn't.
  */
-export async function ensureEntitlementBypass(
-  udid: string
-): Promise<{ alreadyActive: boolean }> {
-  const alreadyActive = await execFileAsync(
+export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
+  return execFileAsync(
     "xcrun",
     [
       "simctl",
@@ -159,26 +157,6 @@ export async function ensureEntitlementBypass(
   )
     .then(({ stdout }) => stdout.trim() === "1")
     .catch(() => false);
-
-  if (!alreadyActive) {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "defaults",
-        "write",
-        "com.apple.Accessibility",
-        "IgnoreAXServerEntitlements",
-        "-bool",
-        "true",
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  return { alreadyActive };
 }
 
 /**
@@ -352,7 +330,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const events = new TypedEventEmitter<ServiceEvents>();
 
     await ensureAutomationEnabled(udid);
-    const { alreadyActive: entitlementBypassActive } = await ensureEntitlementBypass(udid);
+    const entitlementBypassActive = await isEntitlementBypassActive(udid);
     await killExistingDaemon(socketPath);
 
     const proc = await spawnDaemon(udid, socketPath);
