@@ -12,7 +12,7 @@ INCLUDE PERFETTO MODULE android.anrs;
 SELECT
   'anr' AS kind,
   ts AS ts_ns,
-  dur AS dur_ns,
+  anr_dur_ms * 1000000 AS dur_ns,
   process_name,
   subject AS reason,
   error_id AS error_id

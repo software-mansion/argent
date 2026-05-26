@@ -11,12 +11,17 @@
 
 SELECT
   ps.ts AS ts_ns,
-  spc.name AS leaf_function,
-  experimental_slice_callstack(spc.id) AS callstack_text
+  spf.name AS leaf_function,
+  (
+    SELECT GROUP_CONCAT(inner_spf.name, ' <- ' ORDER BY eac.depth DESC)
+    FROM experimental_annotated_callstack(ps.callsite_id) eac
+    LEFT JOIN stack_profile_frame inner_spf ON eac.frame_id = inner_spf.id
+  ) AS callstack_text
 FROM perf_sample ps
 JOIN thread t USING (utid)
 JOIN process p USING (upid)
 LEFT JOIN stack_profile_callsite spc ON ps.callsite_id = spc.id
+LEFT JOIN stack_profile_frame    spf ON spc.frame_id   = spf.id
 WHERE p.name = 'TARGET_PROCESS'
   AND t.is_main_thread
   AND ps.ts BETWEEN HANG_START_NS AND HANG_END_NS

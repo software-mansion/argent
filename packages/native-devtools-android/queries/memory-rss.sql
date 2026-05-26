@@ -11,11 +11,11 @@ INCLUDE PERFETTO MODULE android.memory.process;
 
 SELECT
   process_name,
-  MIN(anon_rss + file_rss) / 1024.0 AS start_rss_mb,
-  MAX(anon_rss + file_rss) / 1024.0 AS peak_rss_mb,
-  (MAX(anon_rss + file_rss) - MIN(anon_rss + file_rss)) / 1024.0 AS growth_mb,
-  MAX(anon_rss) / 1024.0 AS peak_anon_rss_mb,
-  MAX(swap) / 1024.0 AS peak_swap_mb
+  MIN(anon_rss + file_rss) / 1048576.0 AS start_rss_mb,
+  MAX(anon_rss + file_rss) / 1048576.0 AS peak_rss_mb,
+  (MAX(anon_rss + file_rss) - MIN(anon_rss + file_rss)) / 1048576.0 AS growth_mb,
+  MAX(anon_rss) / 1048576.0 AS peak_anon_rss_mb,
+  MAX(swap) / 1048576.0 AS peak_swap_mb
 FROM memory_oom_score_with_rss_and_swap_per_process
 WHERE process_name = 'TARGET_PROCESS'
 GROUP BY process_name;

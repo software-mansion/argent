@@ -23,7 +23,7 @@ WITH samples AS (
     ps.ts           AS ts_ns,
     t.name          AS thread_name,
     t.is_main_thread AS is_main_thread,
-    spc.name        AS leaf_function,
+    spf.name        AS leaf_function,
     sm.name         AS leaf_mapping
   FROM perf_sample ps
   JOIN thread t USING (utid)
