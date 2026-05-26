@@ -69,52 +69,63 @@ async function waitForHttp(url, timeoutMs = 20_000) {
 
 // ── Step 1: Build native devtools dylibs ─────────────────────────────────────
 
-const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
-const DYLIBS_EXIST = fs.existsSync(path.join(DYLIBS_DIR, "libNativeDevtoolsIos.dylib"));
-const PRIVATE_NATIVE_DEVTOOLS_SRC = path.join(
-  ROOT,
-  "packages",
-  "argent-private",
-  "packages",
-  "native-devtools-ios",
-  "Sources",
-  "NativeDevtoolsIos"
-);
+// The dylibs are macOS-only: they get injected into the iOS Simulator via
+// DYLD_INSERT_LIBRARIES, and the runtime resolver in `@argent/native-
+// devtools-ios` throws `requireDarwin` on every non-darwin host. Building
+// them requires Xcode (the build.sh under packages/native-devtools-ios
+// shells out to xcodebuild + codesign), so even attempting it on Linux is
+// a non-starter. Skip the entire block on non-darwin so a Linux contributor
+// without `argent-private` SSH access can still run `npm run dev`.
+if (process.platform === "darwin") {
+  const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
+  const DYLIBS_EXIST = fs.existsSync(path.join(DYLIBS_DIR, "libNativeDevtoolsIos.dylib"));
+  const PRIVATE_NATIVE_DEVTOOLS_SRC = path.join(
+    ROOT,
+    "packages",
+    "argent-private",
+    "packages",
+    "native-devtools-ios",
+    "Sources",
+    "NativeDevtoolsIos"
+  );
 
-// Try to init the submodule and rebuild. Failure is non-fatal if pre-built
-// dylibs are already present — developers without argent-private access can
-// still work on Argent using the committed binaries.
-let submoduleReady = false;
-try {
-  // Preserve an existing argent-private checkout so local branch switches
-  // are not reset back to the superproject's recorded gitlink on every dev run.
-  if (!fs.existsSync(PRIVATE_NATIVE_DEVTOOLS_SRC)) {
-    execSync("git submodule update --init packages/argent-private", {
-      cwd: ROOT,
-      stdio: "pipe",
+  // Try to init the submodule and rebuild. Failure is non-fatal if pre-built
+  // dylibs are already present — developers without argent-private access can
+  // still work on Argent using the committed binaries.
+  let submoduleReady = false;
+  try {
+    // Preserve an existing argent-private checkout so local branch switches
+    // are not reset back to the superproject's recorded gitlink on every dev run.
+    if (!fs.existsSync(PRIVATE_NATIVE_DEVTOOLS_SRC)) {
+      execSync("git submodule update --init packages/argent-private", {
+        cwd: ROOT,
+        stdio: "pipe",
+      });
+    }
+    submoduleReady = true;
+  } catch {
+    if (DYLIBS_EXIST) {
+      console.warn("⚠ argent-private submodule unavailable — using pre-built dylibs\n");
+    } else {
+      console.error("✗ argent-private submodule unavailable and no pre-built dylibs found.");
+      console.error("  Grant SSH access to github.com/software-mansion-labs/argent-private");
+      console.error(
+        "  or obtain pre-built dylibs and place them in packages/native-devtools-ios/dylibs/"
+      );
+      process.exit(1);
+    }
+  }
+
+  if (submoduleReady) {
+    console.log("Building native devtools dylibs...");
+    execSync("bash scripts/build.sh dev", {
+      cwd: NATIVE_DEVTOOLS_PKG,
+      stdio: "inherit",
     });
+    console.log("✓ Native devtools dylibs built\n");
   }
-  submoduleReady = true;
-} catch {
-  if (DYLIBS_EXIST) {
-    console.warn("⚠ argent-private submodule unavailable — using pre-built dylibs\n");
-  } else {
-    console.error("✗ argent-private submodule unavailable and no pre-built dylibs found.");
-    console.error("  Grant SSH access to github.com/software-mansion-labs/argent-private");
-    console.error(
-      "  or obtain pre-built dylibs and place them in packages/native-devtools-ios/dylibs/"
-    );
-    process.exit(1);
-  }
-}
-
-if (submoduleReady) {
-  console.log("Building native devtools dylibs...");
-  execSync("bash scripts/build.sh dev", {
-    cwd: NATIVE_DEVTOOLS_PKG,
-    stdio: "inherit",
-  });
-  console.log("✓ Native devtools dylibs built\n");
+} else {
+  console.log(`⊘ Skipping native devtools dylibs build (macOS-only on ${process.platform})\n`);
 }
 
 // ── Step 2: Build MCP TypeScript ─────────────────────────────────────────────
