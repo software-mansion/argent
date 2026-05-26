@@ -21,7 +21,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 // entry; resolved rows feed into the bottleneck transformers.
 vi.mock("../src/utils/android-profiler/pipeline/run-tp", () => ({
   runTpQuery: vi.fn(),
-  parseTpJsonOutput: vi.fn(),
+  parseTpCsvOutput: vi.fn(),
 }));
 
 import { runTpQuery } from "../src/utils/android-profiler/pipeline/run-tp";

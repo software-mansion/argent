@@ -29,9 +29,11 @@ export interface RunTpQueryOptions {
 
 /**
  * Run a SQL query against a .pftrace using trace_processor_shell, returning
- * the parsed JSON rows. trace_processor_shell's `-q <file> --query-output=json`
- * emits a single JSON object on stdout with `columns` + `values`; we
- * normalise that to a `Row[]` shape.
+ * the parsed rows. trace_processor_shell's `-q <file>` emits CSV on stdout
+ * by default (header + one row per result, strings quoted, numbers bare,
+ * NULL as `[NULL]`). All log noise goes to stderr, which `execFileAsync`
+ * does not capture. For multi-statement scripts only the final SELECT's
+ * rows reach stdout, so the parser does not need to demultiplex blocks.
  */
 export async function runTpQuery<Row = Record<string, unknown>>(
   opts: RunTpQueryOptions
@@ -54,10 +56,10 @@ export async function runTpQuery<Row = Record<string, unknown>>(
   try {
     const { stdout } = await execFileAsync(
       tpPath,
-      ["-q", tmpSql, "--query-output=json", opts.tracePath],
+      ["-q", tmpSql, opts.tracePath],
       { timeout: QUERY_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES }
     );
-    return parseTpJsonOutput<Row>(stdout);
+    return parseTpCsvOutput<Row>(stdout);
   } finally {
     await fs.unlink(tmpSql).catch(() => {
       // best-effort cleanup
@@ -65,68 +67,107 @@ export async function runTpQuery<Row = Record<string, unknown>>(
   }
 }
 
-interface TpJsonObject {
-  android_logs?: unknown;
-  columns?: string[];
-  values?: unknown[][];
-  /** Newer trace_processor_shell wraps query results under a top-level `query` array. */
-  query?: TpJsonObject[];
+export function parseTpCsvOutput<Row = Record<string, unknown>>(stdout: string): Row[] {
+  const rows = parseCsv(stdout);
+  if (rows.length === 0) return [];
+  const header = rows[0]!.map((cell) => coerceHeader(cell));
+  return rows.slice(1).map((cells) => {
+    const row: Record<string, unknown> = {};
+    for (let i = 0; i < header.length; i++) {
+      row[header[i]!] = coerce(cells[i]);
+    }
+    return row as Row;
+  }) as Row[];
+}
+
+function coerceHeader(raw: string | undefined): string {
+  if (raw === undefined) return "";
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    return raw.slice(1, -1).replaceAll('""', '"');
+  }
+  return raw;
+}
+
+function coerce(raw: string | undefined): unknown {
+  if (raw === undefined) return null;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+    const inner = raw.slice(1, -1).replaceAll('""', '"');
+    if (inner === "[NULL]") return null;
+    return inner;
+  }
+  if (raw === "[NULL]" || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : raw;
 }
 
 /**
- * Normalise trace_processor_shell's JSON output to a row-shaped array.
- *
- * trace_processor_shell prints one JSON object whose shape depends on its
- * version. The common cases we handle:
- *   - `{ columns: [...], values: [[...], ...] }` — legacy
- *   - `[{ ... }, { ... }]` — modern (one row object per result row)
- *   - Newline-delimited rows (`{...}\n{...}\n`) — rare but seen
- *   - `{ query: [{ columns, values }] }` — wrapper for multi-statement scripts
+ * RFC-4180-ish CSV parser as a state machine. Cells preserve their outer
+ * quotes when quoted in the input — the caller's `coerce` uses the leading
+ * `"` to tell quoted strings from bare tokens. Newlines inside a quoted
+ * cell extend the current cell; newlines elsewhere terminate the row.
  */
-export function parseTpJsonOutput<Row = Record<string, unknown>>(stdout: string): Row[] {
-  const trimmed = stdout.trim();
-  if (!trimmed) return [];
+function parseCsv(input: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuoted = false;
+  let cellStartedQuoted = false;
 
-  // Try top-level JSON parse first.
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    // Fallback: newline-delimited JSON
-    const rows: Row[] = [];
-    for (const line of trimmed.split("\n")) {
-      const ln = line.trim();
-      if (!ln) continue;
-      rows.push(JSON.parse(ln) as Row);
+  const pushCell = (): void => {
+    row.push(cellStartedQuoted ? `"${cell}"` : cell);
+    cell = "";
+    cellStartedQuoted = false;
+  };
+  const pushRow = (): void => {
+    pushCell();
+    rows.push(row);
+    row = [];
+  };
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!;
+
+    if (inQuoted) {
+      if (ch === '"') {
+        if (input[i + 1] === '"') {
+          cell += '""';
+          i++;
+        } else {
+          inQuoted = false;
+        }
+      } else {
+        cell += ch;
+      }
+      continue;
     }
-    return rows;
+
+    if (ch === '"' && cell.length === 0) {
+      inQuoted = true;
+      cellStartedQuoted = true;
+      continue;
+    }
+
+    if (ch === ",") {
+      pushCell();
+      continue;
+    }
+
+    if (ch === "\n") {
+      pushRow();
+      continue;
+    }
+
+    if (ch === "\r") {
+      // Swallow CR; the LF (if present) handles the row break.
+      continue;
+    }
+
+    cell += ch;
   }
 
-  if (Array.isArray(parsed)) {
-    return parsed as Row[];
+  if (cell.length > 0 || cellStartedQuoted || row.length > 0) {
+    pushRow();
   }
 
-  if (parsed && typeof parsed === "object") {
-    const obj = parsed as TpJsonObject;
-    if (Array.isArray(obj.query) && obj.query.length > 0) {
-      // Multi-statement script: take the last result set (the one our SELECT
-      // produces; earlier results are DDL like DROP VIEW / CREATE VIEW).
-      return tpColumnsValuesToRows<Row>(obj.query[obj.query.length - 1]!);
-    }
-    return tpColumnsValuesToRows<Row>(obj);
-  }
-
-  return [];
-}
-
-function tpColumnsValuesToRows<Row>(obj: TpJsonObject): Row[] {
-  if (!obj || !Array.isArray(obj.columns) || !Array.isArray(obj.values)) return [];
-  const cols = obj.columns;
-  return obj.values.map((rowArr) => {
-    const row: Record<string, unknown> = {};
-    for (let i = 0; i < cols.length; i++) {
-      row[cols[i]!] = rowArr[i];
-    }
-    return row as Row;
-  });
+  return rows.filter((r) => r.length > 1 || (r.length === 1 && r[0] !== ""));
 }
