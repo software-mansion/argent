@@ -5,7 +5,7 @@ import {
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
-import { NO_DEVTOOLS_HOOK_ERROR } from "./react-profiler-start";
+import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -51,18 +51,19 @@ const COLLECT_RENDERS_SCRIPT = `
 })()
 `;
 
-const HOOK_NOT_PRESENT_ERRORS = new Set([
-  "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
-  "no renderers attached to hook",
-]);
+const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
+const NO_RENDERERS_ERROR = "no renderers attached to hook";
+const HOOK_NOT_PRESENT_ERRORS = new Set([HOOK_MISSING_ERROR, NO_RENDERERS_ERROR]);
 
-// Mirror the verbose explanation from react-profiler-start so the operator
-// hears a consistent diagnosis (rebuild in dev mode) regardless of which
-// profiler entry point they hit first. "Try calling react-profiler-start
-// first to re-inject the hook" — the prior message — is wrong advice for a
-// release build because there is no DevTools backend to attach to in the
-// first place.
-const HOOK_MISSING_MESSAGE = NO_DEVTOOLS_HOOK_ERROR;
+// "Hook missing" and "renderers not attached" point at different runtime
+// states and have different remediations. The two codes funnel into
+// FIBER_ROOT_TRACKER_SCRIPT for the retry path, but the verbose throw
+// branches on the actual code so the operator gets accurate guidance.
+function messageForHookError(code: string): string {
+  if (code === HOOK_MISSING_ERROR) return NO_DEVTOOLS_HOOK_ERROR;
+  if (code === NO_RENDERERS_ERROR) return NO_RENDERERS_ATTACHED_ERROR;
+  return `React hook error: ${code}`;
+}
 
 type ParsedRenders =
   | Record<
@@ -171,11 +172,7 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
 
     const errorStr = getErrorString(parsed);
     if (errorStr !== null) {
-      throw new Error(
-        HOOK_NOT_PRESENT_ERRORS.has(errorStr)
-          ? HOOK_MISSING_MESSAGE
-          : `React hook error: ${errorStr}`
-      );
+      throw new Error(messageForHookError(errorStr));
     }
 
     const entries: RenderEntry[] = Object.entries(parsed)

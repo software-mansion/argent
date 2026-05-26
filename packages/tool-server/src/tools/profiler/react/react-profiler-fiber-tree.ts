@@ -5,17 +5,21 @@ import {
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
 import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
-import { NO_DEVTOOLS_HOOK_ERROR } from "./react-profiler-start";
+import { NO_DEVTOOLS_HOOK_ERROR, NO_RENDERERS_ATTACHED_ERROR } from "./react-profiler-start";
 
-const HOOK_NOT_PRESENT_ERRORS = new Set([
-  "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
-  "no renderers attached to hook",
-]);
+const HOOK_MISSING_ERROR = "no __REACT_DEVTOOLS_GLOBAL_HOOK__";
+const NO_RENDERERS_ERROR = "no renderers attached to hook";
+const HOOK_NOT_PRESENT_ERRORS = new Set([HOOK_MISSING_ERROR, NO_RENDERERS_ERROR]);
 
-// See `react-profiler-renders.ts` for the rationale — verbose remediation
-// matches the rest of the profiler tool tree instead of the misleading
-// "re-inject the hook" advice that pre-dated this change.
-const HOOK_MISSING_MESSAGE = NO_DEVTOOLS_HOOK_ERROR;
+// See `react-profiler-renders.ts` for the rationale — branch on the actual
+// error code so "hook missing" (rebuild in dev mode) and "renderers not
+// attached" (wait for first render / let start bootstrap) get accurate
+// remediation instead of being collapsed into one misleading message.
+function messageForHookError(code: string): string {
+  if (code === HOOK_MISSING_ERROR) return NO_DEVTOOLS_HOOK_ERROR;
+  if (code === NO_RENDERERS_ERROR) return NO_RENDERERS_ATTACHED_ERROR;
+  return `Fiber tree error: ${code}`;
+}
 
 function buildFiberTreeScript(maxDepth: number, filter: string): string {
   return `
@@ -168,11 +172,7 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
 
     if (typeof parsed === "object" && parsed !== null && "error" in parsed) {
       const errorMsg = (parsed as { error: string }).error;
-      throw new Error(
-        HOOK_NOT_PRESENT_ERRORS.has(errorMsg)
-          ? HOOK_MISSING_MESSAGE
-          : `Fiber tree error: ${errorMsg}`
-      );
+      throw new Error(messageForHookError(errorMsg));
     }
 
     if (Array.isArray(parsed) && parsed.length === 0) {
