@@ -518,19 +518,12 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   if (!hasSnapshot) {
     hotBootFailureReason = "no default_boot snapshot exists";
   } else {
-    // `-gpu auto` overrides `hw.gpu.enabled=no` in AVDs created via
-    // `avdmanager create avd` (its default), which would otherwise force the
-    // emulator onto lavapipe/swangle software rendering even when the host
-    // has a usable Vulkan ICD. macOS hosts hit this less because their AVDs
-    // are usually created through Android Studio with hardware GPU on.
-    //
-    // The exact same flag MUST be passed to `checkSnapshotLoadable` too: the
-    // probe resolves a renderer based on its own argv plus the AVD's config,
-    // so a probe without `-gpu auto` ends up on a different renderer than the
-    // boot does. The snapshot saved during a `-gpu auto` boot then trips the
-    // probe's "different renderer configured" check and routes every hot-boot
-    // attempt through the cold-boot fallback. Sharing one source of truth
-    // here keeps the two argvs in lockstep.
+    // `-gpu auto` overrides `hw.gpu.enabled=no` (avdmanager's default) so the
+    // emulator picks up a hardware Vulkan ICD when available instead of
+    // falling back to lavapipe/swangle. Probe and boot must share the same
+    // renderer-affecting argv — otherwise the probe resolves a different
+    // renderer than the boot and rejects every valid snapshot with "different
+    // renderer configured". RENDERER_ARGS keeps the two in lockstep.
     const RENDERER_ARGS = ["-gpu", "auto"] as const;
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
       extraArgs: RENDERER_ARGS,
@@ -589,10 +582,8 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  // `-gpu auto` mirrors the hot-boot path — both for parity and so the
-  // snapshot this cold boot eventually saves matches the renderer the next
-  // launch's probe will resolve. Without it, the saved snapshot bakes in a
-  // different renderer and we re-enter the "every boot is cold" cycle.
+  // `-gpu auto` mirrors the hot-boot path so the snapshot this cold boot
+  // saves matches the renderer the next launch's probe will resolve.
   const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", "auto"];
   let coldResult: { serial: string };
   try {

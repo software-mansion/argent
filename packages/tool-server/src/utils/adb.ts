@@ -364,15 +364,10 @@ export async function listAvds(): Promise<AvdInfo[]> {
 
 /**
  * Result of probing a named snapshot with `emulator -check-snapshot-loadable`.
- *
- * `loadable === true` is necessary but NOT sufficient for a successful hot
- * boot: the probe validates metadata (snapshot.pb, compatible.pb, hardware.ini)
- * and renderer compatibility, but not the integrity of ram.bin. A `ram.bin`
- * corrupted by a partial save or a host OOM still returns `Loadable` here and
- * later crashes the QEMU child with `std::bad_alloc`. Pair this probe with
- * `-force-snapshot-load` in the boot spawn and a tight deadline to catch the
- * residual failure cases loudly instead of letting them silently fall back to
- * a full cold boot.
+ * `loadable === true` is necessary but not sufficient — the probe validates
+ * metadata + renderer but not `ram.bin` integrity (a partial save still says
+ * "Loadable" then crashes QEMU with `std::bad_alloc`). Pair with
+ * `-force-snapshot-load` in the boot spawn so ram.bin corruption fails loudly.
  */
 export interface SnapshotProbeResult {
   loadable: boolean;
@@ -386,14 +381,10 @@ export async function checkSnapshotLoadable(
 ): Promise<SnapshotProbeResult> {
   try {
     const emulatorPath = await resolveEmulatorOrThrow();
-    // Renderer-affecting flags (`-gpu auto`, future `-accel`, etc.) MUST match
-    // the args we will pass to the actual hot-boot spawn, otherwise the probe
-    // resolves a different renderer than the boot will and reports `Not
-    // loadable | Reason: different renderer configured` for a snapshot the
-    // boot would have happily loaded. That false-negative routes every hot
-    // boot through the cold-boot fallback — the exact symptom this whole PR
-    // is trying to kill. Caller is responsible for handing us the same flags
-    // it'll use on the boot spawn; see boot-device.ts:RENDERER_ARGS.
+    // Renderer-affecting flags (`-gpu auto` etc.) MUST match the boot spawn's
+    // argv, or the probe resolves a different renderer and rejects valid
+    // snapshots with "different renderer configured". See
+    // boot-device.ts:RENDERER_ARGS — caller threads the same flags through.
     const args = [
       "-avd",
       avdName,
@@ -406,14 +397,10 @@ export async function checkSnapshotLoadable(
       maxBuffer: 4 * 1024 * 1024,
     });
     const tail = stdout.split("\n").slice(-6).join("\n");
-    // The emulator emits an informational "WARNING | change of renderer
-    // detected." whenever `hardware.ini` and `emu-launch-params.txt` disagree
-    // (e.g. `hw.gpu.mode=auto` in config.ini vs the resolved `swangle_indirect`
-    // recorded on save). It is noise, not a failure signal — actual
-    // incompatibility surfaces as a populated `Reason:` with no `Loadable`
-    // line (e.g. "snapshot was created with gfxstream=1, but this emulator has
-    // gfxstream=0"). The final `Loadable` line is the emulator's authoritative
-    // verdict; trust it.
+    // "WARNING | change of renderer detected" is noise, not a failure signal.
+    // Actual incompatibility surfaces as a `Reason:` line with no `Loadable`
+    // (e.g. gfxstream mismatch). Trust the final `Loadable` line — it's the
+    // emulator's authoritative verdict.
     if (/(^|\n)\s*Loadable\s*(\n|$)/.test(tail)) return { loadable: true, reason: null };
     const reasonMatch = tail.match(/Reason:\s*(.+)/);
     return { loadable: false, reason: reasonMatch?.[1]?.trim() ?? "unknown" };
@@ -426,19 +413,16 @@ export async function checkSnapshotLoadable(
 }
 
 /**
- * Candidate AVD-root directories, in the priority order the Android emulator
- * binary itself uses (see `external/qemu/android/android-emu/android/avd/util.cpp`):
+ * Candidate AVD-root directories, in the priority order the emulator binary
+ * itself uses (`external/qemu/.../avd/util.cpp`). Mirroring its order is what
+ * lets argent find AVDs on Linux Studio setups that default to `ANDROID_USER_HOME`
+ * or `XDG_CONFIG_HOME` instead of `$HOME`.
  *
- *   1. `$ANDROID_USER_HOME/avd`            — current Studio convention (≥ 4.2)
- *   2. `$ANDROID_AVD_HOME`                 — explicit override (files live directly here)
- *   3. `$XDG_CONFIG_HOME/Android/avd`      — Linux XDG convention
- *   4. `$ANDROID_SDK_HOME/.android/avd`    — legacy env
- *   5. `$HOME/.android/avd`                — default
- *
- * Mirroring the binary's order is what lets argent find AVDs on Linux setups
- * where Studio defaults to `$ANDROID_USER_HOME` or `$XDG_CONFIG_HOME` instead
- * of `$HOME` — exactly the configurations where the old `$HOME`-only lookup
- * silently returned false and forced a cold boot every time.
+ *   1. `$ANDROID_USER_HOME/avd`         — current Studio convention (≥ 4.2)
+ *   2. `$ANDROID_AVD_HOME`              — explicit override (files live here)
+ *   3. `$XDG_CONFIG_HOME/Android/avd`   — Linux XDG
+ *   4. `$ANDROID_SDK_HOME/.android/avd` — legacy
+ *   5. `$HOME/.android/avd`             — default
  */
 function avdRootCandidates(): string[] {
   const home = process.env.HOME ?? "";
@@ -453,16 +437,10 @@ function avdRootCandidates(): string[] {
 }
 
 /**
- * Resolve the absolute path of an AVD's `.avd` folder by reading its `.ini`
- * file. The `path=` line inside `<root>/<name>.ini` is the authoritative
- * source — the `.avd` folder can live anywhere (Studio lets users move AVDs
- * onto a faster disk; snap-installed Studio on Linux puts them under
- * `~/snap/android-studio/...`). The convention `<root>/<name>.avd` is just
- * the default; trusting it for the snapshot lookup mis-targets every AVD that
- * has been relocated, which is the second class of "cold boot every time"
- * symptom on Linux behind the mtime-skew bug.
- *
- * Returns null if no `<name>.ini` is found in any candidate root.
+ * Resolve an AVD's `.avd` folder by reading `path=` from `<root>/<name>.ini`.
+ * The `.avd` can live outside the convention root (Studio relocations,
+ * snap-installed Studio puts them under `~/snap/...`), so the `.ini` is
+ * the authoritative source. Returns null if no `<name>.ini` is found.
  */
 export async function resolveAvdPath(avdName: string): Promise<string | null> {
   const { readFile } = await import("node:fs/promises");
@@ -471,13 +449,9 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
       const ini = await readFile(`${root}/${avdName}.ini`, "utf-8");
       const match = ini.match(/^path\s*=\s*(.+?)\s*$/m);
       if (!match || !match[1]) continue;
-      // Trim again — the non-greedy `(.+?)` plus greedy `\s*$` strips most
-      // trailing whitespace, but a `path=   ` (whitespace-only value) still
-      // captures a single space because `(.+?)` is forced to match ≥1 char.
-      // Skip that, plus any non-absolute path: the emulator binary always
-      // writes an absolute `path=` and a relative one would resolve against
-      // `process.cwd()` here, silently mis-locating snapshots when callers
-      // are invoked from outside the project root.
+      // `(.+?)` must match ≥1 char, so `path=   ` captures a single space —
+      // trim it, then reject anything non-absolute (the emulator always
+      // writes an absolute path; relative would resolve against cwd).
       const trimmed = match[1].trim();
       if (!trimmed.startsWith("/")) continue;
       return trimmed;
@@ -490,29 +464,15 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
 
 /**
  * True iff a usable `default_boot` snapshot exists on disk for this AVD.
+ * Cheap pre-filter — `-snapshot-list` would spawn the emulator, the very
+ * hang we're trying to avoid.
  *
- * Cheap filesystem pre-filter: the emulator's own `-snapshot-list` requires
- * spawning the binary, which is the hang we are trying to avoid up-front.
- *
- * The check is intentionally lenient: `ram.bin` exists and is non-empty, and
- * `snapshot.pb` exists. That is enough because:
- *
- *   - The `-check-snapshot-loadable` probe (called after this returns true)
- *     validates metadata + renderer compatibility before we commit to a
- *     hot-boot spawn.
- *   - The hot-boot spawn passes `-force-snapshot-load`, so a truncated or
- *     corrupt `ram.bin` produces a loud early child-exit instead of a silent
- *     qemu fall-through to cold boot — caught by `attemptBoot`'s
- *     `earlyExitError` race and recovered via the cold-boot fallback.
- *
- * A previous version of this check required `snapshot.pb` and `ram.bin` to
- * have mtimes within 60 s of each other, on the theory that a save writes
- * both files in one batch. In practice the emulator updates `snapshot.pb`'s
- * metadata on *every load* (load count, last-loaded timestamp) even with
- * `-no-snapshot-save`, so the two mtimes drift apart by hours or days after
- * a few hot-boot sessions and the skew guard rejects every valid snapshot.
- * That manifested as "cold boot every single time" on macOS and Linux alike;
- * Linux just made it more painful because the cold boot is slower there.
+ * Intentionally lenient: just `snapshot.pb` exists and `ram.bin` is non-empty.
+ * `-check-snapshot-loadable` validates metadata + renderer next, and
+ * `-force-snapshot-load` in the boot spawn surfaces ram.bin corruption as a
+ * loud early-exit. Don't gate on mtime-skew: the emulator touches `snapshot.pb`
+ * on every load (even with `-no-snapshot-save`), so a few hot-boots drift it
+ * days ahead of `ram.bin` and the skew check rejects every valid snapshot.
  */
 export async function hasDefaultBootSnapshot(avdName: string): Promise<boolean> {
   const { stat } = await import("node:fs/promises");
