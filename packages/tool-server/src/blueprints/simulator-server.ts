@@ -8,6 +8,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
+import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
@@ -161,7 +162,9 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
-    if (device.platform === "android") {
+    if (device.platform === "ios") {
+      await ensureAutomationEnabled(device.id).catch(() => {});
+    } else {
       await ensureDep("adb");
     }
 
