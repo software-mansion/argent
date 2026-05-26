@@ -33,6 +33,9 @@ function openPreview(): void {
     return;
   }
 
+  const toolServerUrl = getToolServerUrl();
+  const port = portOf(toolServerUrl);
+
   const panel = vscode.window.createWebviewPanel(
     PANEL_VIEW_TYPE,
     PANEL_TITLE,
@@ -40,6 +43,7 @@ function openPreview(): void {
     {
       enableScripts: true,
       retainContextWhenHidden: true,
+      portMapping: [{ webviewPort: port, extensionHostPort: port }],
     }
   );
 
@@ -56,12 +60,16 @@ function openPreview(): void {
   });
 
   activePanel = panel;
-  panel.webview.html = renderHtml(getToolServerUrl());
+  panel.webview.html = renderHtml(toolServerUrl);
 }
 
 function reloadPreview(): void {
   if (!activePanel) return;
-  activePanel.webview.html = renderHtml(getToolServerUrl());
+  // portMapping is set at creation time, so a URL/port change needs a fresh
+  // panel. Dispose + reopen always — cheap, and avoids divergence between
+  // the iframe src and the mapped port.
+  activePanel.dispose();
+  openPreview();
 }
 
 function getToolServerUrl(): string {
@@ -76,14 +84,25 @@ function getToolServerUrl(): string {
   }
 }
 
+function portOf(url: string): number {
+  const u = new URL(url);
+  if (u.port) return parseInt(u.port, 10);
+  return u.protocol === "https:" ? 443 : 80;
+}
+
 function renderHtml(toolServerUrl: string): string {
-  const previewUrl = `${toolServerUrl}/preview/`;
+  // VSCode webviews block iframes pointing at arbitrary http origins; the only
+  // escape hatch is `portMapping` + an iframe whose host is literally
+  // `localhost`. Canonicalise the iframe / CSP origin to that form even when
+  // the user-facing URL is `127.0.0.1:<port>`.
+  const u = new URL(toolServerUrl);
+  const webviewOrigin = `${u.protocol}//localhost:${portOf(toolServerUrl)}`;
+  const previewUrl = `${webviewOrigin}/preview/`;
   const csp = [
     "default-src 'none'",
-    `frame-src ${toolServerUrl}`,
+    `frame-src ${webviewOrigin}`,
     "style-src 'unsafe-inline'",
     "script-src 'unsafe-inline'",
-    `connect-src ${toolServerUrl}`,
   ].join("; ");
 
   return `<!doctype html>
