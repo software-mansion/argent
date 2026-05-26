@@ -18,7 +18,6 @@ TAG="${1:-argent-main}"
 if ! gh release view "${TAG}" --repo "${REPO}" &>/dev/null; then
   echo "Error: release '${TAG}' not found in ${REPO}." >&2
   echo "Build and publish the native binaries for this version first, then retry." >&2
-  echo "See packages/native-devtools-android/RELEASING.md for the release flow." >&2
   exit 1
 fi
 DYLIBS_DIR="packages/native-devtools-ios/dylibs"

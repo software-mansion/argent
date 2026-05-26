@@ -9,7 +9,7 @@
 //   npm run pack:mcp -- argent-v0.7.1         # specific release tag
 //   npm run pack:mcp -- argent-my-branch      # tag produced by triggering
 //                                             # build-native-binaries.yml on a
-//                                             # branch (see RELEASING.md)
+//                                             # branch
 //
 // Only `download-native-binaries.sh` takes the tag; simulator-server lives in
 // a separate release stream with its own default and is left untouched.

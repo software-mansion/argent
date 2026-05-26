@@ -175,8 +175,7 @@ if (fs.existsSync(TP_BIN_SRC)) {
   throw new Error(
     `trace_processor_shell binary not found at ${TP_BIN_SRC}.\n` +
       `Run: npm run pack:mcp (fetches from argent-private-releases)\n` +
-      `or for local-dev fallback: bash scripts/download-trace-processor-local.sh\n` +
-      `See packages/native-devtools-android/RELEASING.md for details.`
+      `or for local-dev fallback: bash scripts/download-trace-processor-local.sh`
   );
 }
 
