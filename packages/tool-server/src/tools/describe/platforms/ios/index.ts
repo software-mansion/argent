@@ -30,7 +30,7 @@ export async function describeIos(
   const tree = adaptAXDescribeToDescribeResult(response);
 
   const hint = axApi.degraded
-    ? "This simulator was not started with boot-device — accessibility settings are applied but not yet active. System dialogs and native modals may be missing. Restart the simulator with boot-device for full describe coverage."
+    ? "This simulator was not booted through argent — system dialogs and native modals may not appear. Call boot-device with force=true to restart the simulator and apply full accessibility settings."
     : undefined;
 
   if (tree.children.length > 0) {

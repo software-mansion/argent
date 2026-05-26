@@ -8,7 +8,11 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
-import { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../blueprints/ax-service";
+import {
+  ensureAutomationEnabled,
+  isEntitlementBypassActive,
+  setAccessibilityPrefsPreBoot,
+} from "../../blueprints/ax-service";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -53,6 +57,10 @@ const zodSchema = z.object({
     .describe(
       "Android-only: overall budget for the full boot sequence. Defaults to 480000 (8 min). Clamped to [30s, 15min]. Ignored on iOS."
     ),
+  force: z
+    .boolean()
+    .optional()
+    .describe("Shut down and re-boot the device even if already running."),
 });
 
 type BootDeviceParams = z.infer<typeof zodSchema>;
@@ -191,19 +199,22 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
 
 async function bootIos(
   udid: string,
-  registry: Registry
+  registry: Registry,
+  force?: boolean
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   await ensureDep("xcrun");
 
-  // iOS 26.5+ AX bypass — happy path. If the sim is Shutdown, pre-write the
-  // AX prefs to the host plist so SB caches them at init. This is the only
-  // path that fully activates the prefs; if missed (sim already booted),
-  // ensureAutomationEnabled writes them best-effort but SB won't read them
-  // until the next restart — describe surfaces a hint in that case.
-  const wasShutdown = await listIosSimulators()
-    .then((sims) => sims.find((s) => s.udid === udid)?.state === "Shutdown")
-    .catch(() => false);
-  if (wasShutdown) {
+  const simState = await listIosSimulators()
+    .then((sims) => sims.find((s) => s.udid === udid)?.state)
+    .catch(() => undefined);
+
+  // force=true on a running sim: shut it down so we can pre-write AX prefs.
+  if (force && simState === "Booted") {
+    await execFileAsync("xcrun", ["simctl", "shutdown", udid]);
+  }
+
+  const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
+  if (needsPreBoot) {
     await setAccessibilityPrefsPreBoot(udid).catch((err: unknown) => {
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
@@ -215,18 +226,16 @@ async function bootIos(
 
   await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    // `simctl boot` errors when the device is already booted — treat as success.
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
 
   // Best-effort fallback: no-op on the happy path (pref already cached from
-  // pre-boot write). When the sim was already Booted, writes the prefs via
-  // `defaults write` — SB won't pick them up until next restart, but describe
-  // surfaces a hint about it.
+  // pre-boot write). When the sim was already Booted without force, writes
+  // prefs via `defaults write` — SB won't pick them up until next restart,
+  // but describe surfaces a hint about it.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
@@ -698,7 +707,7 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         throw new Error("Provide exactly one of `udid` (iOS) or `avdName` (Android).");
       }
       if (hasUdid) {
-        return bootIos(params.udid!, registry);
+        return bootIos(params.udid!, registry, params.force);
       }
       return bootAndroid({
         avdName: params.avdName!,

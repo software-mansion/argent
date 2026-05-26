@@ -28,6 +28,7 @@ vi.mock("node:child_process", async () => {
 const listIosSimulatorsMock = vi.fn();
 const setAccessibilityPrefsPreBootMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
+const isEntitlementBypassActiveMock = vi.fn();
 
 vi.mock("../src/utils/ios-devices", () => ({
   listIosSimulators: (...args: unknown[]) => listIosSimulatorsMock(...args),
@@ -36,6 +37,7 @@ vi.mock("../src/utils/ios-devices", () => ({
 vi.mock("../src/blueprints/ax-service", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
+  isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
 }));
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
@@ -61,6 +63,7 @@ describe("boot-device — iOS path", () => {
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
   });
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
@@ -231,6 +234,48 @@ describe("boot-device — iOS path", () => {
       "NativeDevtools:22222222-2222-2222-2222-222222222222",
       { device: { id: "22222222-2222-2222-2222-222222222222", platform: "ios", kind: "simulator" } }
     );
+  });
+
+  it("force=true on a Booted sim triggers shutdown → pre-boot write → boot", async () => {
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await expect(
+      tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222", force: true })
+    ).resolves.toEqual({
+      platform: "ios",
+      udid: "22222222-2222-2222-2222-222222222222",
+      booted: true,
+    });
+
+    expect(setAccessibilityPrefsPreBootMock).toHaveBeenCalledWith(
+      "22222222-2222-2222-2222-222222222222"
+    );
+    const execCalls = mockExecFile.mock.calls.map(([file, args]) => [file, args]);
+    expect(execCalls[0]).toEqual([
+      "xcrun",
+      ["simctl", "shutdown", "22222222-2222-2222-2222-222222222222"],
+    ]);
+    expect(execCalls[1]).toEqual([
+      "xcrun",
+      ["simctl", "boot", "22222222-2222-2222-2222-222222222222"],
+    ]);
+  });
+
+  it("force not set on a Booted sim does not shut down", async () => {
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const registry = { resolveService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
+
+    expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
+    const execCalls = mockExecFile.mock.calls.map(([, args]) => args);
+    const hasShutdown = execCalls.some(
+      (args: unknown[]) => Array.isArray(args) && args[1] === "shutdown"
+    );
+    expect(hasShutdown).toBe(false);
   });
 });
 
