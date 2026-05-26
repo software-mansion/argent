@@ -83,6 +83,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       );
     }
 
+    // Read profiling data from disk (transient — GC'd when function returns)
     let cpuProfile: HermesCpuProfile | null = null;
     if (sessionPaths.cpuProfilePath) {
       cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);

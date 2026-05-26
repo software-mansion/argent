@@ -83,6 +83,7 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
     }
   }
 
+  // Slow path: build index from raw CPU profile
   const cpuProfile = await readCpuProfile(sessionPaths.cpuProfilePath);
   let commitTree = null;
   let firstCommitTs: number | null = null;
