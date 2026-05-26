@@ -11,9 +11,9 @@ Mirrors `utils/ios-profiler/IOS_PROFILER_REFERENCE.md` for the iOS branch.
 | --------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
 | `perfetto` (device-side)    | Recording daemon, built into the Android system image. Spawned via `adb shell perfetto`.         | Driven from `utils/android-profiler/capture.ts`                   |
 | `traced` (device-side)      | Privileged trace muxer. Writes the output `.pftrace` under `/data/misc/perfetto-traces/`.        | Implicit — owned by Android                                       |
-| `argent.tracecfg.pbtxt`     | TraceConfig (textproto) — names the data sources, buffer sizes, and per-target filters.          | `utils/android-profiler/argent.tracecfg.pbtxt`                    |
+| `argent.tracecfg.pbtxt`     | TraceConfig (textproto) — names the data sources, buffer sizes, and per-target filters.          | `@argent/native-devtools-android` → `argent.tracecfg.pbtxt`       |
 | `trace_processor_shell`     | On-host binary that runs PerfettoSQL queries against a `.pftrace`.                               | `@argent/native-devtools-android` → `bin/trace_processor_shell`   |
-| `queries/*.sql`             | PerfettoSQL files — one per signal, with parameter placeholders substituted at runtime.          | `utils/android-profiler/queries/`                                 |
+| `queries/*.sql`             | PerfettoSQL files — one per signal, with parameter placeholders substituted at runtime.          | `@argent/native-devtools-android` → `queries/`                    |
 | `pipeline/index.ts`         | Drives `trace_processor_shell`, runs queries, folds rows into the shared `Bottleneck` shape.     | `utils/android-profiler/pipeline/index.ts`                        |
 
 ---

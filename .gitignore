@@ -38,6 +38,7 @@ packages/argent/skills/
 packages/argent/agents/
 packages/argent/rules/
 packages/argent/queries/
+packages/argent/argent.tracecfg.pbtxt
 packages/argent/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 

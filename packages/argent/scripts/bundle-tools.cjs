@@ -220,12 +220,15 @@ if (fs.existsSync(TRACE_TEMPLATE_SRC)) {
 }
 
 // Copy argent.tracecfg.pbtxt so the Android profiler capture step can find it
-// at runtime via __dirname lookup next to the bundled tool-server.
+// at runtime. capture.ts resolves the path via @argent/native-devtools-android's
+// `traceConfigPath()`, which does `path.join(__dirname, "..", "argent.tracecfg.pbtxt")`
+// — in the bundled tool-server.cjs that is `<pkg>/argent.tracecfg.pbtxt`,
+// i.e. this exact destination (sibling of dist/, not inside it).
 const TRACECFG_SRC = path.resolve(
   WORKSPACE_ROOT,
-  "packages/tool-server/src/utils/android-profiler/argent.tracecfg.pbtxt"
+  "packages/native-devtools-android/argent.tracecfg.pbtxt"
 );
-const TRACECFG_DEST = path.resolve(__dirname, "../dist/argent.tracecfg.pbtxt");
+const TRACECFG_DEST = path.resolve(__dirname, "../argent.tracecfg.pbtxt");
 
 if (fs.existsSync(TRACECFG_SRC)) {
   fs.copyFileSync(TRACECFG_SRC, TRACECFG_DEST);

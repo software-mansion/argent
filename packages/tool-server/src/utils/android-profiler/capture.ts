@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
-import * as path from "path";
+import { traceConfigPath } from "@argent/native-devtools-android";
 import { resolveAndroidBinary } from "../android-binary";
 import { runAdb, adbShell } from "../adb";
 
@@ -8,8 +8,6 @@ const ON_DEVICE_TRACE_DIR = "/data/misc/perfetto-traces";
 const START_TIMEOUT_MS = 15_000;
 const STOP_POLL_INTERVAL_MS = 200;
 const STOP_TOTAL_TIMEOUT_MS = 30_000;
-
-const BUNDLED_TRACECFG_PATH = path.resolve(__dirname, "argent.tracecfg.pbtxt");
 
 /**
  * Substitute the TARGET_*_PLACEHOLDER tokens in the bundled tracecfg with the
@@ -21,7 +19,7 @@ export async function buildTraceConfig(
   appPackage: string,
   configTemplate: string | null = null
 ): Promise<string> {
-  const tpl = configTemplate ?? (await fs.readFile(BUNDLED_TRACECFG_PATH, "utf8"));
+  const tpl = configTemplate ?? (await fs.readFile(traceConfigPath(), "utf8"));
   return tpl
     .replaceAll("TARGET_CMDLINE_PLACEHOLDER", appPackage)
     .replaceAll("TARGET_PACKAGE_PLACEHOLDER", appPackage);

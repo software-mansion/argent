@@ -13,6 +13,11 @@ const QUERIES_DIR =
   process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_QUERIES_DIR ??
   path.join(__dirname, "..", "queries");
 
+// TraceConfig (textproto) template — same dev/bundled resolution as queries.
+const TRACE_CONFIG_PATH =
+  process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_TRACECFG ??
+  path.join(__dirname, "..", "argent.tracecfg.pbtxt");
+
 /**
  * Path to the Perfetto `trace_processor_shell` binary. Lazy — throws only when
  * called, not at module load — so iOS-only environments that import this
@@ -46,4 +51,13 @@ export function traceProcessorShellDir(): string {
  */
 export function traceProcessorQueriesDir(): string {
   return QUERIES_DIR;
+}
+
+/**
+ * Path to the bundled Perfetto TraceConfig template (`argent.tracecfg.pbtxt`).
+ * Callers read this and substitute `TARGET_*_PLACEHOLDER` tokens before
+ * passing the config to `perfetto`.
+ */
+export function traceConfigPath(): string {
+  return TRACE_CONFIG_PATH;
 }

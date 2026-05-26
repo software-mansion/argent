@@ -37,6 +37,7 @@
     "agents/",
     "rules/",
     "queries/",
+    "argent.tracecfg.pbtxt",
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
