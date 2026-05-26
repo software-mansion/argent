@@ -73,6 +73,7 @@ This is an npm workspaces monorepo. All packages live under `packages/`:
 | `@argent/installer`           | `packages/argent-installer`    | Workspace setup logic: `argent init`, `update`, `uninstall`                                                                                             |
 | `@argent/skills`              | `packages/skills`              | Markdown skill files (prefixed `argent-*`) that instruct AI agents how to use Argent tools                                                              |
 | `@argent/native-devtools-ios` | `packages/native-devtools-ios` | Pre-built dylibs for iOS simulator injection (view hierarchy, network inspection). ObjC source lives in `packages/argent-private` _(private submodule)_ |
+| `@argent/vscode-extension`    | `packages/vscode-extension`    | VSCode extension that hosts the preview UI (`packages/ui`) inside an editor webview, talking to a running `@argent/tool-server`                         |
 
 The `tsconfig.json` at the root uses TypeScript project references; `tsconfig.base.json` holds shared compiler options (`strict`, `ES2022`, etc.).
 

@@ -66,8 +66,14 @@ function reloadPreview(): void {
 
 function getToolServerUrl(): string {
   const config = vscode.workspace.getConfiguration(SETTINGS_NS);
-  const raw = config.get<string>(SETTING_TOOL_SERVER) ?? DEFAULT_TOOL_SERVER;
-  return raw.trim().replace(/\/+$/, "") || DEFAULT_TOOL_SERVER;
+  const raw = (config.get<string>(SETTING_TOOL_SERVER) ?? DEFAULT_TOOL_SERVER).trim();
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return DEFAULT_TOOL_SERVER;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return DEFAULT_TOOL_SERVER;
+  }
 }
 
 function renderHtml(toolServerUrl: string): string {
@@ -84,7 +90,7 @@ function renderHtml(toolServerUrl: string): string {
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="${csp}" />
+    <meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}" />
     <title>${escapeHtml(PANEL_TITLE)}</title>
     <style>
       :root { color-scheme: dark light; }
