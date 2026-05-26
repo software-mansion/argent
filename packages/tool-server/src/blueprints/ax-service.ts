@@ -197,7 +197,6 @@ export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> 
     .then(() => true)
     .catch(() => false);
   if (!exists) {
-    // Empty binary plist in the format SB expects; -replace below adds the keys.
     await execFileAsync("plutil", ["-create", "binary1", plistPath]);
   }
   for (const key of [
