@@ -592,6 +592,10 @@ function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promi
       stdio: interactive ? "inherit" : ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
       ...(cwd ? { cwd } : {}),
+      env: {
+        ...process.env,
+        SKILLS_CLONE_TIMEOUT_MS: process.env.SKILLS_CLONE_TIMEOUT_MS ?? "600000",
+      },
     });
 
     let stdout = "";
