@@ -277,6 +277,26 @@ describe("text diff", () => {
     });
     expect(ocrMock.extractOcrTextBlocks).not.toHaveBeenCalled();
   });
+
+  it("returns unavailable when OCR is unavailable (e.g. missing system tesseract)", async () => {
+    ocrMock.extractOcrTextBlocks.mockResolvedValue({
+      status: "unavailable",
+      provider: "tesseract",
+      blocks: [],
+    });
+
+    const result = await analyzeScreenshotTextChanges({
+      baselinePath: "baseline.png",
+      currentPath: "current.png",
+      hasPixelDiff: true,
+    });
+
+    expect(result).toEqual({
+      status: "unavailable",
+      provider: "ocr",
+      changes: [],
+    });
+  });
 });
 
 function makeImage(

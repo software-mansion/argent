@@ -41,8 +41,7 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0",
-    "@tesseract.js-data/eng": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.20.0"
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",

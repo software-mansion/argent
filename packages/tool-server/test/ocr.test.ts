@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseTesseractTsv } from "../src/tools/screenshot-diff/screenshot-diff-ocr";
+import {
+  extractOcrTextBlocks,
+  parseTesseractTsv,
+} from "../src/tools/screenshot-diff/screenshot-diff-ocr";
 
 describe("Tesseract TSV parsing", () => {
   it("normalizes block and word confidence to a 0-1 scale", () => {
@@ -32,7 +35,7 @@ describe("Tesseract TSV parsing", () => {
     expect(blocks.map((block) => block.text)).toEqual(["Ready"]);
   });
 
-  it("parses headerless TSV from tesseract.js", () => {
+  it("parses headerless TSV output", () => {
     const blocks = parseTesseractTsv(
       [
         "1\t1\t0\t0\t0\t0\t0\t0\t1206\t2622\t-1\t",
@@ -168,6 +171,23 @@ describe("Tesseract TSV parsing", () => {
     );
 
     expect(blocks.map((block) => block.text)).toEqual(["ALBUM", "The Venue"]);
+  });
+});
+
+describe("extractOcrTextBlocks", () => {
+  it("returns unavailable without crashing when the system tesseract binary is missing", async () => {
+    const originalPath = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      const result = await extractOcrTextBlocks("/tmp/does-not-need-to-exist.png");
+      expect(result).toEqual({
+        status: "unavailable",
+        provider: "tesseract",
+        blocks: [],
+      });
+    } finally {
+      process.env.PATH = originalPath;
+    }
   });
 });
 

@@ -1,14 +1,15 @@
-import path from "path";
-import fs from "fs";
-import Tesseract from "tesseract.js";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import type { DiffBounds } from "./screenshot-diff";
 
+const execFileAsync = promisify(execFile);
+
 const OCR_TIMEOUT_MS = 10_000;
-const TESSDATA_PATH = path.join(
-  path.dirname(require.resolve("@tesseract.js-data/eng/package.json")),
-  "4.0.0_best_int"
-);
-const PACKAGED_TESSERACT_WORKER_PATH = path.join(__dirname, "tesseract-worker.cjs");
+const OCR_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const TESSERACT_BINARY = "tesseract";
+const TESSERACT_LANGUAGE = "eng";
+const TESSERACT_PSM_SPARSE_TEXT = "11";
+const TESSERACT_OEM_LSTM_ONLY = "1";
 const MIN_SEGMENT_GAP_PX = 48;
 const MAX_VERTICAL_GAP_LINE_HEIGHT_RATIO = 1.4;
 const MAX_LEFT_EDGE_DELTA_LINE_HEIGHT_RATIO = 2.0;
@@ -89,52 +90,22 @@ export async function extractOcrTextBlocks(imagePath: string): Promise<OcrExtrac
 }
 
 async function recognizeTsv(imagePath: string): Promise<string> {
-  const workerRef: { current: Tesseract.Worker | null } = { current: null };
-  let timedOut = false;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-
-  const recognition = (async () => {
-    workerRef.current = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {
-      cacheMethod: "none",
-      gzip: true,
-      langPath: TESSDATA_PATH,
-      logger: () => {},
-      ...resolvePackagedTesseractOptions(),
-    });
-    if (timedOut) {
-      await workerRef.current.terminate().catch(() => {});
-      throw new Error("OCR timed out.");
-    }
-    await workerRef.current.setParameters({
-      tessedit_pageseg_mode: Tesseract.PSM.SPARSE_TEXT,
-    });
-    const result = await workerRef.current.recognize(imagePath, {}, { text: true, tsv: true });
-    return result.data.tsv ?? "";
-  })();
-
-  try {
-    return await Promise.race([
-      recognition,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          timedOut = true;
-          void workerRef.current?.terminate().catch(() => {});
-          reject(new Error("OCR timed out."));
-        }, OCR_TIMEOUT_MS);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    await workerRef.current?.terminate().catch(() => {});
-    recognition.catch(() => {});
-  }
-}
-
-function resolvePackagedTesseractOptions(): Partial<Tesseract.WorkerOptions> {
-  if (!fs.existsSync(PACKAGED_TESSERACT_WORKER_PATH)) return {};
-  return {
-    workerPath: PACKAGED_TESSERACT_WORKER_PATH,
-  };
+  const { stdout } = await execFileAsync(
+    TESSERACT_BINARY,
+    [
+      imagePath,
+      "stdout",
+      "-l",
+      TESSERACT_LANGUAGE,
+      "--oem",
+      TESSERACT_OEM_LSTM_ONLY,
+      "--psm",
+      TESSERACT_PSM_SPARSE_TEXT,
+      "tsv",
+    ],
+    { timeout: OCR_TIMEOUT_MS, maxBuffer: OCR_MAX_BUFFER_BYTES }
+  );
+  return stdout;
 }
 
 export function parseTesseractTsv(tsv: string): OcrTextBlock[] {
