@@ -441,7 +441,11 @@ export function __resetInFlightBootsForTesting(): void {
   inFlightBoots.clear();
 }
 
-async function bootAndroid(params: { avdName: string; bootTimeoutMs: number }): Promise<{
+async function bootAndroid(params: {
+  avdName: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<{
   platform: "android";
   serial: string;
   avdName: string;
@@ -456,7 +460,11 @@ async function bootAndroid(params: { avdName: string; bootTimeoutMs: number }): 
   return promise;
 }
 
-async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number }): Promise<{
+async function bootAndroidImpl(params: {
+  avdName: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<{
   platform: "android";
   serial: string;
   avdName: string;
@@ -514,34 +522,40 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
     (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
   );
   if (alreadyRunning) {
-    // BUG GUARD — wedged-framebuffer detection on the reuse path.
-    // A long-running emulator can drift into the same sticky-blank
-    // SurfaceFlinger state that `assertScreencapAlive` defends against on a
-    // hot-boot restore (see its docstring): every Android-side readiness
-    // probe still passes, but `screencap` only returns null bytes — meaning
-    // the caller would silently get a serial whose screenshots are all
-    // black. Without this probe the fast-path returns that wedged serial
-    // forever and there is no way back, since `coldBoot` was removed.
-    // On failure the helper kills the wedged emulator; we then fall through
-    // to the snapshot/probe pipeline so the caller still gets a usable boot.
-    try {
-      await assertScreencapAlive(alreadyRunning.serial);
-      return {
-        platform: "android",
-        serial: alreadyRunning.serial,
-        avdName: params.avdName,
-        booted: true,
-      };
-    } catch (err) {
-      hotBootFailureReason = `running AVD framebuffer was wedged (${
-        err instanceof Error ? err.message : String(err)
-      }), respawning`;
-      // assertScreencapAlive already killed the emulator; refresh the
-      // existing-devices snapshot so the killed serial is included in
-      // serialsBefore (matching the hot-boot catch refresh below) and the
-      // upcoming spawn's "new serial" diff stays correct.
+    if (params.force) {
+      await killEmulatorQuietly(alreadyRunning.serial);
       const refreshed = await listAndroidDevices().catch(() => existingDevices);
       existingDevices.splice(0, existingDevices.length, ...refreshed);
+    } else {
+      // BUG GUARD — wedged-framebuffer detection on the reuse path.
+      // A long-running emulator can drift into the same sticky-blank
+      // SurfaceFlinger state that `assertScreencapAlive` defends against on a
+      // hot-boot restore (see its docstring): every Android-side readiness
+      // probe still passes, but `screencap` only returns null bytes — meaning
+      // the caller would silently get a serial whose screenshots are all
+      // black. Without this probe the fast-path returns that wedged serial
+      // forever and there is no way back, since `coldBoot` was removed.
+      // On failure the helper kills the wedged emulator; we then fall through
+      // to the snapshot/probe pipeline so the caller still gets a usable boot.
+      try {
+        await assertScreencapAlive(alreadyRunning.serial);
+        return {
+          platform: "android",
+          serial: alreadyRunning.serial,
+          avdName: params.avdName,
+          booted: true,
+        };
+      } catch (err) {
+        hotBootFailureReason = `running AVD framebuffer was wedged (${
+          err instanceof Error ? err.message : String(err)
+        }), respawning`;
+        // assertScreencapAlive already killed the emulator; refresh the
+        // existing-devices snapshot so the killed serial is included in
+        // serialsBefore (matching the hot-boot catch refresh below) and the
+        // upcoming spawn's "new serial" diff stays correct.
+        const refreshed = await listAndroidDevices().catch(() => existingDevices);
+        existingDevices.splice(0, existingDevices.length, ...refreshed);
+      }
     }
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
@@ -712,6 +726,7 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       return bootAndroid({
         avdName: params.avdName!,
         bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
+        force: params.force,
       });
     },
   };
