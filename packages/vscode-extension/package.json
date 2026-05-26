@@ -1,0 +1,51 @@
+{
+  "private": true,
+  "name": "@argent/vscode-extension",
+  "displayName": "Argent Preview",
+  "version": "0.0.1",
+  "description": "VSCode side panel hosting the Argent preview UI (variant proposals + simulator stream).",
+  "publisher": "argent",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "argent.openPreview",
+        "title": "Argent: Open Preview",
+        "category": "Argent"
+      },
+      {
+        "command": "argent.reloadPreview",
+        "title": "Argent: Reload Preview",
+        "category": "Argent"
+      }
+    ],
+    "configuration": {
+      "title": "Argent",
+      "properties": {
+        "argent.toolServerUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3001",
+          "description": "Base URL of the running argent tool-server. The preview UI is loaded from <url>/preview/."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "watch": "tsc --watch",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^6.0.3"
+  }
+}
