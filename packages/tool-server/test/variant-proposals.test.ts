@@ -232,3 +232,41 @@ describe("VariantProposalStore — timeout / abort / lifecycle", () => {
     ]);
   });
 });
+
+describe("VariantProposalStore — preview-window lifecycle events", () => {
+  it("emits awaitParked exactly when a waiter parks (not on fast-path returns)", async () => {
+    const s = new VariantProposalStore();
+    let parked = 0;
+    s.events.on("awaitParked", () => parked++);
+
+    // Fast path 1: no proposals → returns immediately, no park.
+    await s.awaitSelection({ timeoutMs: 10 });
+    expect(parked).toBe(0);
+
+    // Real park: proposals exist + nothing submitted yet.
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    const p = s.awaitSelection({ timeoutMs: 30 });
+    expect(parked).toBe(1);
+    await p; // timeout → pending
+
+    // Second real park on the same round.
+    const p2 = s.awaitSelection({ timeoutMs: 30 });
+    expect(parked).toBe(2);
+    await p2;
+  });
+
+  it("emits selectionSubmitted on every successful submit", () => {
+    const s = new VariantProposalStore();
+    let submitted = 0;
+    s.events.on("selectionSubmitted", () => submitted++);
+
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    s.submitSelection({ selections: [] });
+    expect(submitted).toBe(1);
+
+    // A second round must produce a second event.
+    s.proposeVariant({ element: "Bar", variant: variant("Tall") });
+    s.submitSelection({ selections: [] });
+    expect(submitted).toBe(2);
+  });
+});

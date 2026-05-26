@@ -4,6 +4,8 @@ import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from "./utils/idle-timer";
 import { startUpdateChecker } from "./utils/update-checker";
+import { createPreviewWindowManager } from "./utils/preview-window";
+import { variantProposalStore } from "./utils/variant-proposals";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 
@@ -77,9 +79,33 @@ export function start(): void {
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
+  // The Electron preview window is spawned on demand when an
+  // `await_user_selection` parks, and asked to animate-close itself when the
+  // user submits. The same child is reused across rounds within one
+  // tool-server lifetime.
+  const previewWindow = createPreviewWindowManager();
+  const previewWindowBaseUrl = (): string | null => {
+    if (!server) return null;
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : null;
+    return port ? `http://127.0.0.1:${port}/preview/` : null;
+  };
+  const onAwaitParked = (): void => {
+    const url = previewWindowBaseUrl();
+    if (url) previewWindow.ensureOpen(url);
+  };
+  const onSelectionSubmitted = (): void => {
+    previewWindow.requestClose();
+  };
+  variantProposalStore.events.on("awaitParked", onAwaitParked);
+  variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
+
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
   shutdown = async (exitCode = 0) => {
+    variantProposalStore.events.off("awaitParked", onAwaitParked);
+    variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
     httpHandle.dispose();

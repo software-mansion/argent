@@ -5,6 +5,7 @@
     { "path": "packages/update-core" },
     { "path": "packages/native-devtools-ios" },
     { "path": "packages/native-devtools-android" },
+    { "path": "packages/preview-window" },
     { "path": "packages/tool-server" },
     { "path": "packages/argent-tools-client" },
     { "path": "packages/argent-installer" },

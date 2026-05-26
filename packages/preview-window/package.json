@@ -1,0 +1,17 @@
+{
+  "name": "@argent/preview-window",
+  "version": "0.8.0",
+  "private": true,
+  "description": "Electron host for the Argent variant-selection preview UI.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc"
+  },
+  "dependencies": {
+    "electron": "^31.7.7"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "typescript": "^6.0.3"
+  }
+}

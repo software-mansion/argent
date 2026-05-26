@@ -125,6 +125,15 @@ export interface StoreSnapshot {
 type StoreEvents = {
   /** Emitted whenever proposals change (UI may live-refresh). */
   changed: () => void;
+  /**
+   * Emitted whenever an `await_user_selection` call parks for a round —
+   * fires every time (not just the first waiter) so listeners doing
+   * idempotent work (e.g. "ensure the preview window is open") get a wake
+   * signal on each fresh await.
+   */
+  awaitParked: () => void;
+  /** Emitted after a successful `submitSelection` — the round is done. */
+  selectionSubmitted: () => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -317,6 +326,7 @@ export class VariantProposalStore {
       w.settle(this.lastOutcome);
     }
     this.events.emit("changed");
+    this.events.emit("selectionSubmitted");
     return { ok: true, round, resolved: this.submitted.length };
   }
 
@@ -456,6 +466,7 @@ export class VariantProposalStore {
 
       this.waitersList.push(waiter);
       this.events.emit("changed");
+      this.events.emit("awaitParked");
 
       if (opts.signal) {
         if (opts.signal.aborted) return onAbort();
