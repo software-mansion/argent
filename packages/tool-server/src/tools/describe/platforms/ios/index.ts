@@ -8,7 +8,7 @@ import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
 const DEGRADED_HINT =
-  "This simulator was not booted through argent — system dialogs and native modals may not appear. Call boot-device with force=true to restart the simulator and apply full accessibility settings.";
+  "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
