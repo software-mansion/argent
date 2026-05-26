@@ -18,6 +18,9 @@
  *   argent tools describe <name>  Show one tool's flags
  *   argent run <tool> [flags]     Invoke a tool by name
  *   argent server status|stop|logs   Manage the shared tool-server
+ *   argent enable <flag>          Enable a feature flag (global by default)
+ *   argent disable <flag>         Disable a feature flag (global by default)
+ *   argent flags                  Show current feature-flag state
  */
 
 import * as fs from "node:fs";
@@ -64,6 +67,9 @@ Commands:
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (status / stop / logs)
+  enable      Enable a feature flag (global by default, --scope project for project)
+  disable     Disable a feature flag (global by default, --scope project for project)
+  flags       Show current feature-flag state
 
 Options:
   --help, -h     Show this help message
@@ -109,6 +115,12 @@ async function main(): Promise<void> {
       return (await loadCli()).run(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "server":
       return (await loadCli()).server(rest);
+    case "enable":
+      return (await loadCli()).enable(rest);
+    case "disable":
+      return (await loadCli()).disable(rest);
+    case "flags":
+      return (await loadCli()).flags(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");
