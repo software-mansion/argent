@@ -60,7 +60,7 @@ describe("boot-device — iOS path", () => {
       { udid: "33333333-3333-3333-3333-333333333333", state: "Shutdown" },
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue({ prefsAlreadyActive: true });
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {

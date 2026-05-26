@@ -112,9 +112,7 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
   }
 }
 
-export async function ensureAutomationEnabled(
-  udid: string
-): Promise<{ prefsAlreadyActive: boolean }> {
+export async function ensureAutomationEnabled(udid: string): Promise<void> {
   await execFileAsync(
     "xcrun",
     [
@@ -130,14 +128,23 @@ export async function ensureAutomationEnabled(
     ],
     { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   );
+}
 
-  // iOS 26.5+: SB's AX server rejects unentitled MIG clients with kAXError -25215;
-  // `IgnoreAXServerEntitlements` disables the check but SB caches it at init.
-  // boot-device pre-writes the pref to the host plist so the common path skips
-  // this branch entirely; this branch only fires when the sim was booted outside
-  // argent, and we intentionally do NOT kickstart SpringBoard — we accept
-  // degraded describe quality and surface a hint instead.
-  const isAlreadySet = await execFileAsync(
+/**
+ * iOS 26.5+: SB's AX server rejects unentitled MIG clients with
+ * kAXError -25215. `IgnoreAXServerEntitlements` disables the check, but
+ * SB caches it at init — so writing it post-boot only takes effect after
+ * the next SB restart.
+ *
+ * boot-device pre-writes the pref to the host plist before boot (the
+ * happy path). This function is the post-boot fallback: it writes the
+ * pref but does NOT kickstart SpringBoard, returning whether the pref
+ * was already active so the caller can surface a degraded-quality hint.
+ */
+export async function ensureEntitlementBypass(
+  udid: string
+): Promise<{ alreadyActive: boolean }> {
+  const alreadyActive = await execFileAsync(
     "xcrun",
     [
       "simctl",
@@ -153,7 +160,7 @@ export async function ensureAutomationEnabled(
     .then(({ stdout }) => stdout.trim() === "1")
     .catch(() => false);
 
-  if (!isAlreadySet) {
+  if (!alreadyActive) {
     await execFileAsync(
       "xcrun",
       [
@@ -171,7 +178,7 @@ export async function ensureAutomationEnabled(
     );
   }
 
-  return { prefsAlreadyActive: isAlreadySet };
+  return { alreadyActive };
 }
 
 /**
@@ -344,7 +351,8 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const socketPath = getSocketPath(udid);
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    const { prefsAlreadyActive } = await ensureAutomationEnabled(udid);
+    await ensureAutomationEnabled(udid);
+    const { alreadyActive: entitlementBypassActive } = await ensureEntitlementBypass(udid);
     await killExistingDaemon(socketPath);
 
     const proc = await spawnDaemon(udid, socketPath);
@@ -367,7 +375,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const api: AXServiceApi = {
-      degraded: !prefsAlreadyActive,
+      degraded: !entitlementBypassActive,
 
       async describe(): Promise<AXDescribeResponse> {
         const result = (await query("describe")) as AXDescribeResponse & {

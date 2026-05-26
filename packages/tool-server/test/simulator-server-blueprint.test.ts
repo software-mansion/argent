@@ -67,7 +67,7 @@ function androidDevice(serial: string): DeviceInfo {
 describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInfo", () => {
   beforeEach(async () => {
     spawnMock.mockReset();
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue({ prefsAlreadyActive: true });
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     // Pre-warm the dep cache so the Android branch's `ensureDep('adb')` doesn't
     // shell out to `command -v adb` — CI Linux runners don't have adb on PATH
     // and the real probe would surface as a DependencyMissingError unrelated
