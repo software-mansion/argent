@@ -74,8 +74,18 @@ async function createWindow(): Promise<void> {
   });
   // Load offscreen, then center+show+collapse so the first paint is at the
   // collapsed height — otherwise the user sees a full-size flash before the
-  // squeeze begins.
-  await win.loadURL(url);
+  // squeeze begins. A loadURL failure (tool-server gone, stale port) must
+  // exit the process rather than strand an invisible BrowserWindow keeping
+  // the Electron event loop alive.
+  try {
+    await win.loadURL(url);
+  } catch (err) {
+    process.stderr.write(
+      `[preview-window] loadURL failed for ${url}: ${err instanceof Error ? err.message : err}\n`
+    );
+    app.quit();
+    return;
+  }
   win.center();
   const placed = win.getBounds();
   centeredX = placed.x;
@@ -96,7 +106,11 @@ function foreground(url: string | undefined): void {
   win.show();
   win.focus();
   if (url && win.webContents.getURL() !== url) {
-    void win.loadURL(url);
+    win.loadURL(url).catch((err: unknown) => {
+      process.stderr.write(
+        `[preview-window] foreground loadURL failed: ${err instanceof Error ? err.message : err}\n`
+      );
+    });
   }
 }
 

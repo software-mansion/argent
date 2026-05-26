@@ -84,7 +84,14 @@ export function createPreviewWindowManager(
       env: { ...process.env, ARGENT_PREVIEW_URL: url },
       stdio: ["pipe", "ignore", "pipe"],
     });
-    next.on("error", reportError);
+    // `spawn` does not throw synchronously for ENOENT / EACCES — the error
+    // arrives asynchronously. Clear `child` here too so a follow-up
+    // `ensureOpen` retries cleanly instead of no-oping against a dead handle
+    // that hasn't yet emitted `exit`.
+    next.on("error", (err) => {
+      if (child === next) child = null;
+      reportError(err);
+    });
     next.on("exit", () => {
       if (child === next) child = null;
     });
