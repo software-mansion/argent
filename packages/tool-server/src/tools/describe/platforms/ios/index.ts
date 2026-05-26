@@ -29,8 +29,12 @@ export async function describeIos(
   const response = await axApi.describe();
   const tree = adaptAXDescribeToDescribeResult(response);
 
+  const hint = axApi.degraded
+    ? "This simulator was not started with boot-device — accessibility settings are applied but not yet active. System dialogs and native modals may be missing. Restart the simulator with boot-device for full describe coverage."
+    : undefined;
+
   if (tree.children.length > 0) {
-    return { tree, source: "ax-service" };
+    return { tree, source: "ax-service", hint };
   }
 
   // AX returned zero elements — attempt native-devtools fallback
@@ -41,7 +45,7 @@ export async function describeIos(
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
 
     if (await nativeApi.requiresAppRestart(target.bundleId)) {
-      return { tree, source: "ax-service", should_restart: true };
+      return { tree, source: "ax-service", should_restart: true, hint };
     }
 
     const rawResult = (await nativeApi.queryViewHierarchy(
@@ -50,14 +54,14 @@ export async function describeIos(
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (rawResult.error) {
-      return { tree, source: "ax-service" };
+      return { tree, source: "ax-service", hint };
     }
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
     const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
-    return { tree: nativeTree, source: "native-devtools" };
+    return { tree: nativeTree, source: "native-devtools", hint };
   } catch {
     // Native devtools unavailable or no connected app — return the empty AX result
-    return { tree, source: "ax-service" };
+    return { tree, source: "ax-service", hint };
   }
 }

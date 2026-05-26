@@ -52,6 +52,8 @@ export interface AXDescribeResponse {
 }
 
 export interface AXServiceApi {
+  /** True when AX prefs were written but SB hasn't picked them up yet (sim booted outside argent). */
+  degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
@@ -110,7 +112,9 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
   }
 }
 
-export async function ensureAutomationEnabled(udid: string): Promise<void> {
+export async function ensureAutomationEnabled(
+  udid: string
+): Promise<{ prefsAlreadyActive: boolean }> {
   await execFileAsync(
     "xcrun",
     [
@@ -129,8 +133,10 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
 
   // iOS 26.5+: SB's AX server rejects unentitled MIG clients with kAXError -25215;
   // `IgnoreAXServerEntitlements` disables the check but SB caches it at init.
-  // boot-device pre-writes the pref to the host plist so the common path skips this
-  // branch entirely; this branch only runs when the sim was booted outside argent.
+  // boot-device pre-writes the pref to the host plist so the common path skips
+  // this branch entirely; this branch only fires when the sim was booted outside
+  // argent, and we intentionally do NOT kickstart SpringBoard — we accept
+  // degraded describe quality and surface a hint instead.
   const isAlreadySet = await execFileAsync(
     "xcrun",
     [
@@ -163,26 +169,9 @@ export async function ensureAutomationEnabled(udid: string): Promise<void> {
       ],
       { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
     );
-    // Surface the disruption in tool output — foreground app and any in-flight
-    // system alert are about to disappear.
-    process.stderr.write(
-      `[ax ${udid.slice(0, 8)}] restarting SpringBoard to enable describe for ` +
-        `SB-hosted dialogs; dismisses any foreground app or in-flight alert. ` +
-        `boot-device avoids this via pre-boot pref write — reaching this path ` +
-        `means the sim was booted outside argent.\n`
-    );
-    // launchctl warns ("Please switch to user/foreground/...") but the kickstart
-    // still lands; tolerate the non-zero exit.
-    await execFileAsync(
-      "xcrun",
-      ["simctl", "spawn", udid, "launchctl", "kickstart", "-k", "system/com.apple.SpringBoard"],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    ).catch(() => undefined);
-    // Wait for SB to be back so the next tool call doesn't race a half-up system UI.
-    await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"], {
-      timeout: SIMCTL_SPAWN_TIMEOUT_MS,
-    }).catch(() => undefined);
   }
+
+  return { prefsAlreadyActive: isAlreadySet };
 }
 
 /**
@@ -355,7 +344,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const socketPath = getSocketPath(udid);
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    await ensureAutomationEnabled(udid);
+    const { prefsAlreadyActive } = await ensureAutomationEnabled(udid);
     await killExistingDaemon(socketPath);
 
     const proc = await spawnDaemon(udid, socketPath);
@@ -378,6 +367,8 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const api: AXServiceApi = {
+      degraded: !prefsAlreadyActive,
+
       async describe(): Promise<AXDescribeResponse> {
         const result = (await query("describe")) as AXDescribeResponse & {
           error?: string;

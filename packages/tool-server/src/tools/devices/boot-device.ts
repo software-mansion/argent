@@ -196,10 +196,10 @@ async function bootIos(
   await ensureDep("xcrun");
 
   // iOS 26.5+ AX bypass — happy path. If the sim is Shutdown, pre-write the
-  // AX prefs to the host plist so SB caches them at init and the kickstart
-  // never fires. Probe is best-effort: an unknown state falls through to the
-  // post-boot ensureAutomationEnabled fallback which still applies the bypass
-  // (with the SB-restart disruption).
+  // AX prefs to the host plist so SB caches them at init. This is the only
+  // path that fully activates the prefs; if missed (sim already booted),
+  // ensureAutomationEnabled writes them best-effort but SB won't read them
+  // until the next restart — describe surfaces a hint in that case.
   const wasShutdown = await listIosSimulators()
     .then((sims) => sims.find((s) => s.udid === udid)?.state === "Shutdown")
     .catch(() => false);
@@ -208,7 +208,7 @@ async function bootIos(
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
           err instanceof Error ? err.message : String(err)
-        }); falling back to post-boot kickstart which restarts SpringBoard.\n`
+        }); ensureAutomationEnabled will write prefs post-boot but SB won't pick them up until next restart.\n`
       );
     });
   }
@@ -223,11 +223,10 @@ async function bootIos(
   // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
 
-  // iOS 26.5+ AX bypass — fallback. No-op on the happy path (pref already
-  // cached from pre-boot write). When the sim was Booted before boot-device,
-  // SB cached the unset pref at its prior init — flip it via kickstart now,
-  // during boot-device, so the disruption (foreground app + in-flight alerts
-  // gone) lands here instead of lazily during the agent's first launch-app.
+  // Best-effort fallback: no-op on the happy path (pref already cached from
+  // pre-boot write). When the sim was already Booted, writes the prefs via
+  // `defaults write` — SB won't pick them up until next restart, but describe
+  // surfaces a hint about it.
   await ensureAutomationEnabled(udid).catch(() => undefined);
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });

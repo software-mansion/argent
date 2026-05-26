@@ -65,6 +65,7 @@ export interface DescribeTreeData {
   tree: DescribeNode;
   source: DescribeSource;
   should_restart?: boolean;
+  hint?: string;
 }
 
 // Public describe-tool response. The full JSON `tree` (the previous payload's
@@ -76,6 +77,7 @@ export interface DescribeResult {
   description: string;
   source: DescribeSource;
   should_restart?: boolean;
+  hint?: string;
 }
 
 export function parseDescribeResult(input: unknown): DescribeNode {

@@ -60,7 +60,7 @@ describe("boot-device — iOS path", () => {
       { udid: "33333333-3333-3333-3333-333333333333", state: "Shutdown" },
     ]);
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
-    ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
+    ensureAutomationEnabledMock.mockReset().mockResolvedValue({ prefsAlreadyActive: true });
   });
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
@@ -131,8 +131,7 @@ describe("boot-device — iOS path", () => {
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
 
     // Already-Booted sim: in-sim cfprefsd would overwrite the host write, so
-    // skip it and let ensureAutomationEnabled's kickstart branch flip the
-    // bypass live.
+    // skip it. ensureAutomationEnabled writes prefs best-effort (no kickstart).
     expect(setAccessibilityPrefsPreBootMock).not.toHaveBeenCalled();
     expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(
       "22222222-2222-2222-2222-222222222222"
@@ -142,7 +141,7 @@ describe("boot-device — iOS path", () => {
   it("still runs the fallback ensureAutomationEnabled when the state probe fails", async () => {
     // listIosSimulators returns [] on xcrun failure / unknown udid; boot must
     // not block on the probe — fall through to ensureAutomationEnabled which
-    // self-detects whether a kickstart is needed.
+    // writes prefs best-effort.
     listIosSimulatorsMock.mockResolvedValueOnce([]);
 
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
@@ -159,7 +158,7 @@ describe("boot-device — iOS path", () => {
 
   it("does not block boot on a pre-boot plist write failure", async () => {
     // plutil missing / data container read-only: log and continue;
-    // ensureAutomationEnabled applies the bypass post-boot with a kickstart.
+    // ensureAutomationEnabled writes prefs best-effort post-boot.
     setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("plutil missing"));
 
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
