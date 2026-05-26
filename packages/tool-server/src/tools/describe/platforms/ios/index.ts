@@ -3,9 +3,20 @@ import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import { DescribeTreeData } from "../../contract";
+import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
+
+const DEGRADED_HINT =
+  "This simulator was not booted through argent — system dialogs and native modals may not appear. Call boot-device with force=true to restart the simulator and apply full accessibility settings.";
+
+function emptyTree(): DescribeNode {
+  return parseDescribeResult({
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [],
+  });
+}
 
 export interface DescribeIosParams {
   bundleId?: string;
@@ -24,20 +35,27 @@ export async function describeIos(
   device: DeviceInfo,
   params: DescribeIosParams
 ): Promise<DescribeTreeData> {
-  const axRef = axServiceRef(device);
-  const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
-  const response = await axApi.describe();
-  const tree = adaptAXDescribeToDescribeResult(response);
+  let tree: DescribeNode;
+  let hint: string | undefined;
 
-  const hint = axApi.degraded
-    ? "This simulator was not booted through argent — system dialogs and native modals may not appear. Call boot-device with force=true to restart the simulator and apply full accessibility settings."
-    : undefined;
+  try {
+    const axRef = axServiceRef(device);
+    const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
+    const response = await axApi.describe();
+    tree = adaptAXDescribeToDescribeResult(response);
+    hint = axApi.degraded ? DEGRADED_HINT : undefined;
+  } catch {
+    // ax-service failed to start or timed out — treat as degraded with an
+    // empty tree so we still attempt the native-devtools fallback below.
+    tree = emptyTree();
+    hint = DEGRADED_HINT;
+  }
 
   if (tree.children.length > 0) {
     return { tree, source: "ax-service", hint };
   }
 
-  // AX returned zero elements — attempt native-devtools fallback
+  // AX returned zero elements (or failed entirely) — attempt native-devtools fallback
   try {
     const ndRef = nativeDevtoolsRef(device);
     const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);

@@ -260,13 +260,14 @@ describe("describe tool", () => {
     expect(result.should_restart).toBeUndefined();
   });
 
-  it("throws when ax-service is unavailable", async () => {
+  it("returns degraded result with hint when ax-service is unavailable", async () => {
     const registry = makeMockRegistry({});
     const tool = createDescribeTool(registry);
 
-    await expect(
-      tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" })
-    ).rejects.toThrow("ax-service not available");
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.source).toBe("ax-service");
+    expect(result.hint).toMatch(/boot-device/);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("returns multiple elements with correct roles", async () => {
