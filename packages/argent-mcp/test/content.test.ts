@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "../src/content.js";
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+const mockOk = (bytes: number[]) =>
+  vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new Uint8Array(bytes).buffer });
+
 // ── toMcpContent ─────────────────────────────────────────────────────
 
 describe("toMcpContent", () => {
@@ -20,18 +25,14 @@ describe("toMcpContent", () => {
   });
 
   it("fetches and base64-encodes image when outputHint is image", async () => {
-    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
-    const mockFetch = vi.fn().mockResolvedValue({
-      arrayBuffer: async () => pngBytes.buffer,
-    });
-    vi.stubGlobal("fetch", mockFetch);
+    const pngBytes = [...PNG_SIGNATURE, 0xde, 0xad];
+    vi.stubGlobal("fetch", mockOk(pngBytes));
 
     const result = await toMcpContent(
       { url: "http://localhost/img.png", path: "/tmp/img.png" },
       "image"
     );
 
-    expect(mockFetch).toHaveBeenCalledWith("http://localhost/img.png");
     expect(result).toHaveLength(2);
     expect(result[0]).toEqual({
       type: "image",
@@ -44,13 +45,7 @@ describe("toMcpContent", () => {
   });
 
   it("uses empty string for path when not present", async () => {
-    const pngBytes = new Uint8Array([0x89]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        arrayBuffer: async () => pngBytes.buffer,
-      })
-    );
+    vi.stubGlobal("fetch", mockOk(PNG_SIGNATURE));
 
     const result = await toMcpContent({ url: "http://x" }, "image");
     expect(result[1]).toEqual({ type: "text", text: "Saved: " });
@@ -61,6 +56,41 @@ describe("toMcpContent", () => {
   it("falls back to text when outputHint is image but no url", async () => {
     const result = await toMcpContent({ foo: 1 }, "image");
     expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }, null, 2) }]);
+  });
+
+  // Regression for #255 — fetched bytes that aren't a PNG must NOT be shipped
+  // labelled as image/png. The three cases below cover what `fetch(url)` can
+  // realistically return when the simulator-server's `/media/...` URL goes
+  // sideways: a 404 with an empty body, a 200 with a non-PNG body (any
+  // upstream error page), and the network throwing.
+  it("returns a placeholder when fetch returns 404", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, arrayBuffer: async () => new ArrayBuffer(0) })
+    );
+    const result = await toMcpContent({ url: "http://x/missing.png" }, "image");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.type).toBe("text");
+    expect(result.find((b) => b.type === "image")).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns a placeholder when fetched bytes are not a PNG", async () => {
+    vi.stubGlobal("fetch", mockOk(Array.from(Buffer.from("<!doctype html>"))));
+    const result = await toMcpContent({ url: "http://x/wrong.png" }, "image");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.type).toBe("text");
+    expect(result.find((b) => b.type === "image")).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns a placeholder when fetch throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    const result = await toMcpContent({ url: "http://127.0.0.1:1/x.png" }, "image");
+    expect(result).toHaveLength(1);
+    expect(result[0]?.type).toBe("text");
+    expect(result.find((b) => b.type === "image")).toBeUndefined();
+    vi.unstubAllGlobals();
   });
 });
 
@@ -130,13 +160,8 @@ describe("flowRunToMcpContent", () => {
   });
 
   it("renders image tool results as image blocks", async () => {
-    const pngBytes = new Uint8Array([0x89, 0x50]);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        arrayBuffer: async () => pngBytes.buffer,
-      })
-    );
+    const pngBytes = [...PNG_SIGNATURE, 0x01];
+    vi.stubGlobal("fetch", mockOk(pngBytes));
 
     const input: FlowExecuteResult = {
       flow: "f",
@@ -159,6 +184,31 @@ describe("flowRunToMcpContent", () => {
       mimeType: "image/png",
     });
     expect(blocks[3]).toEqual({ type: "text", text: "Saved: /tmp/s.png" });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("renders a text placeholder when an image step's fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, arrayBuffer: async () => new ArrayBuffer(0) })
+    );
+
+    const blocks = await flowRunToMcpContent({
+      flow: "f",
+      steps: [
+        {
+          kind: "tool",
+          tool: "screenshot",
+          result: { url: "http://x/gone.png", path: "/tmp/s.png" },
+          outputHint: "image",
+        },
+      ],
+    });
+
+    expect(blocks[1]).toEqual({ type: "text", text: "[1] screenshot" });
+    expect(blocks[2]?.type).toBe("text");
+    expect(blocks.find((b) => b.type === "image")).toBeUndefined();
 
     vi.unstubAllGlobals();
   });
