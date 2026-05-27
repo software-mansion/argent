@@ -71,8 +71,7 @@ function makeRi(
   ri.getProfilingData = vi.fn(() => ({
     dataForRoots: opts.commits ? [{ rootID: opts.rootID ?? 1, commitData: opts.commits }] : [],
   }));
-  const lookup = (id: number) =>
-    opts.names && opts.names[id] != null ? opts.names[id] : null;
+  const lookup = (id: number) => (opts.names && opts.names[id] != null ? opts.names[id] : null);
   const api = opts.nameApi ?? "element";
   if (api === "element" || api === "both") {
     ri.getDisplayNameForElementID = vi.fn(lookup);
