@@ -48,9 +48,9 @@ Argent runs Android emulators on Linux but the default install can be slow if a 
   # log out and back in so the new group takes effect
   ```
 
-- **GPU mode (`-gpu swiftshader_indirect` on Linux, override available).** The Android emulator's Linux GPU story is messy: `-gpu auto` frequently resolves to lavapipe (slow software Vulkan via host libvulkan, ~10× cold-boot regression on flagship hardware), and `-gpu host` silently produces a corrupted or black emulator window on hosts with non-trivial GL stacks — dual-GPU / Optimus laptops, NVIDIA + Mesa coexistence via libglvnd, Wayland sessions on hybrid graphics, headless / containerized hosts. The failure mode is invisible to argent's framebuffer-based screenshot tool, so an agent reports success while the developer sees a black window.
+- **GPU mode (`-gpu swiftshader` on Linux, override available).** The Android emulator's Linux GPU story is messy: `-gpu auto` frequently resolves to lavapipe (slow software Vulkan via host libvulkan, ~10× cold-boot regression on flagship hardware), and `-gpu host` silently produces a corrupted or black emulator window on hosts with non-trivial GL stacks — dual-GPU / Optimus laptops, NVIDIA + Mesa coexistence via libglvnd, Wayland sessions on hybrid graphics, headless / containerized hosts. The failure mode is invisible to argent's framebuffer-based screenshot tool, so an agent reports success while the developer sees a black window.
 
-  Argent picks `-gpu swiftshader_indirect` on Linux for universal compatibility: it sidesteps the host GL stack entirely and renders via the emulator's bundled SwiftShader. On modern multi-core machines this is indistinguishably smooth from hardware-accelerated `-gpu host` (and far faster than lavapipe).
+  Argent picks `-gpu swiftshader` on Linux for universal compatibility: it sidesteps the host GL stack entirely and renders via the emulator's bundled SwiftShader. On modern multi-core machines this is indistinguishably smooth from hardware-accelerated `-gpu host` (and far faster than lavapipe).
 
   Override with the `ARGENT_EMULATOR_GPU_MODE` env var if you've verified `-gpu host` works on your machine (typical single-GPU Mesa box with a healthy X session):
 
@@ -58,7 +58,7 @@ Argent runs Android emulators on Linux but the default install can be slow if a 
   ARGENT_EMULATOR_GPU_MODE=host argent ...
   ```
 
-  Argent also runs a host-side preflight on every boot and prints a warning if `/dev/kvm` isn't usable, virtualization is disabled, or no hardware Vulkan ICD is present. The Vulkan warning is informational — Argent's default Linux GPU mode (`swiftshader_indirect`) doesn't depend on host Vulkan — but a missing hardware ICD often correlates with a missing GPU driver more broadly.
+  Argent also runs a host-side preflight on every boot and prints a warning if `/dev/kvm` isn't usable, virtualization is disabled, or no hardware Vulkan ICD is present. The Vulkan warning is informational — Argent's default Linux GPU mode (`swiftshader`) doesn't depend on host Vulkan — but a missing hardware ICD often correlates with a missing GPU driver more broadly.
 
 - **System image.** Prefer the `default` or `google_apis` variants of `x86_64` system images for headless agent workflows; `google_apis_playstore` adds noticeable boot-time CPU churn from Play services. Always pick `x86_64` on Intel/AMD hosts — ARM images run via QEMU translation and are dramatically slower.
 

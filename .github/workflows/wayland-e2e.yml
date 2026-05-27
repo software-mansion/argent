@@ -191,14 +191,14 @@ jobs:
       - name: Verify GPU mode is swiftshader (not host or lavapipe)
         # On Wayland with no GPU drivers in the headless runner, `-gpu host`
         # would silently produce a non-functional emulator AND `-gpu auto`
-        # would resolve to lavapipe. The PR's choice of swiftshader_indirect
-        # is what makes this E2E pass at all; pin it here so a future
+        # would resolve to lavapipe. The PR's choice of `swiftshader` is
+        # what makes this E2E pass at all; pin it here so a future
         # selectGpuMode() change can't quietly regress.
         run: |
           GPU=$(cat /tmp/gpu-mode.txt)
           echo "Observed GPU mode: $GPU"
-          # The emulator writes the resolved backend to hardware-qemu.ini.
-          # swiftshader_indirect resolves to `hw.gpu.mode=swiftshader`.
+          # `-gpu swiftshader` writes `hw.gpu.mode = swiftshader` to
+          # hardware-qemu.ini.
           echo "$GPU" | grep -qi swiftshader || { echo "expected swiftshader, got $GPU"; exit 1; }
 
       - name: Screenshot has real pixels

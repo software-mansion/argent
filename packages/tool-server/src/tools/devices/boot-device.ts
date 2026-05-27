@@ -72,11 +72,14 @@ const STAGE_BUDGET = {
 /**
  * Pick the `-gpu` argument for `emulator` based on host OS.
  *
+ * Authoritative list of accepted modes (from `emulator -help-gpu` in
+ * emulator 36.5.11): `auto`, `host`, `software`, `lavapipe`,
+ * `swiftshader`, `swangle`.
+ *
  * On macOS, `auto` is the right default: the emulator's bundled stack
  * resolves it to ANGLE→Metal, which is hardware-accelerated and stable.
  *
- * On Linux, the choice is harder. There are three plausible defaults and
- * each has a real failure mode:
+ * On Linux, none of the modes is uncontroversially universal:
  *
  *   - `auto`: the emulator's bundled Vulkan loader at
  *     `$ANDROID_HOME/emulator/lib64/vulkan/` only ships software ICDs
@@ -102,30 +105,37 @@ const STAGE_BUDGET = {
  *     community and emulator docs do not have a robust fix for these
  *     hosts; advice is "use software mode".
  *
- *   - `swiftshader_indirect`: software rendering via the emulator's
- *     bundled SwiftShader (a different code path from lavapipe). Slower
- *     than `host` on hosts where `host` works, but indistinguishably
- *     smooth on modern multi-core machines and — critically — works
- *     universally because it sidesteps the host GL stack entirely.
- *     This is what `android-emulator-runner` and many CI setups
- *     default to. Officially deprecated in emulator 36.4.9 in favor of
- *     `software` / `swiftshader`, but still accepted in 36.5.11 and
- *     proven robust where the modern aliases sometimes silently
- *     resolve back to lavapipe.
+ *   - `swiftshader`: software rendering via the emulator's bundled
+ *     SwiftShader. Slower than `host` on hosts where `host` works,
+ *     but indistinguishably smooth on modern multi-core machines —
+ *     and, critically, works universally because it sidesteps the
+ *     host GL stack entirely. This is what `android-emulator-runner`
+ *     and many CI setups default to.
  *
- * Argent picks `swiftshader_indirect` on Linux for universal
- * compatibility. The `ARGENT_EMULATOR_GPU_MODE` env var overrides the
- * default for users who have verified that `host` works on their box
- * (typical dev machines with a single GPU and a clean Mesa stack).
+ *   - `software`: documented as "default software renderer". In
+ *     practice the auto-selector inside the emulator can resolve this
+ *     to `lavapipe` on hosts where Mesa is installed — the exact
+ *     failure mode `swiftshader` is chosen to avoid. We pin
+ *     `swiftshader` to keep the selection deterministic.
  *
- * No conditional on Windows yet — there's no Windows host support today;
- * if/when added, evaluate `swangle_indirect` or `host` based on the
+ *   - `lavapipe`, `swangle`: niche; not better than `swiftshader` on
+ *     the hosts we care about (lavapipe is the slow path we're
+ *     escaping; swangle adds an ANGLE translation layer on top with no
+ *     benefit on Linux).
+ *
+ * Argent picks `swiftshader` on Linux for universal compatibility.
+ * The `ARGENT_EMULATOR_GPU_MODE` env var overrides the default for
+ * users who have verified that `host` (or any other mode) works on
+ * their box.
+ *
+ * No conditional on Windows yet — there's no Windows host support
+ * today; if/when added, evaluate `swangle` or `host` based on the
  * Direct3D vs. OpenGL story on that platform.
  */
 function selectGpuMode(): string {
   const override = process.env.ARGENT_EMULATOR_GPU_MODE;
   if (override && override.trim()) return override.trim();
-  return process.platform === "linux" ? "swiftshader_indirect" : "auto";
+  return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
 async function killEmulatorQuietly(
@@ -612,8 +622,8 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // avoids overwriting a working snapshot with state captured after we
       // later force-kill the child from a failure path.
       // GPU mode is platform-dependent. `selectGpuMode` picks `auto` on
-      // macOS (ANGLE→Metal, hardware-accelerated) and `swiftshader_indirect`
-      // on Linux (software-rendered but universally compatible — `host` and
+      // macOS (ANGLE→Metal, hardware-accelerated) and `swiftshader` on
+      // Linux (software-rendered but universally compatible — `host` and
       // `auto` both have silent-failure modes on Linux: see selectGpuMode's
       // doc for the full reasoning). Users with verified working host GL
       // can override via `ARGENT_EMULATOR_GPU_MODE`.

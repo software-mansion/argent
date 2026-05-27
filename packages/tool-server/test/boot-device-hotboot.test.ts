@@ -146,15 +146,13 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     // Window is always visible — `-no-window` must never appear in spawn args.
     expect(hotArgs).not.toContain("-no-window");
     // `-gpu` arg must be present and platform-appropriate. Linux uses
-    // `swiftshader_indirect` for universal compatibility (sidesteps the
+    // `swiftshader` for universal compatibility (sidesteps the
     // host GL stack, which silently fails on Optimus / dual-GPU /
     // Wayland-with-NVIDIA setups); every other host uses `auto`. See
     // `boot-device.ts:selectGpuMode` for the full reasoning.
     const gpuIdx = hotArgs.indexOf("-gpu");
     expect(gpuIdx).toBeGreaterThanOrEqual(0);
-    expect(hotArgs[gpuIdx + 1]).toBe(
-      process.platform === "linux" ? "swiftshader_indirect" : "auto"
-    );
+    expect(hotArgs[gpuIdx + 1]).toBe(process.platform === "linux" ? "swiftshader" : "auto");
   });
 
   it("honors ARGENT_EMULATOR_GPU_MODE env override", async () => {
@@ -193,7 +191,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       await tool.execute!({}, { avdName: "Pixel_7_API_34" });
       const args = spawnMock.mock.calls[0]![1];
       const gpuIdx = args.indexOf("-gpu");
-      expect(args[gpuIdx + 1]).toBe(process.platform === "linux" ? "swiftshader_indirect" : "auto");
+      expect(args[gpuIdx + 1]).toBe(process.platform === "linux" ? "swiftshader" : "auto");
     } finally {
       if (prev === undefined) delete process.env.ARGENT_EMULATOR_GPU_MODE;
       else process.env.ARGENT_EMULATOR_GPU_MODE = prev;
