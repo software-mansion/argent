@@ -92,16 +92,28 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Install Weston (headless) + xkbcommon + xkb data
-        # The Wayland compositor itself + the keymap data Weston's input
-        # path requires at startup, even in headless mode.
+      - name: Install Weston + emulator native deps
+        # weston, xkb-data, libxkbcommon0, seatd: the Wayland compositor
+        # and the keymap data Weston's input path requires at startup
+        # (even in headless mode).
+        #
+        # libgoogle-perftools4t64: provides libtcmalloc_minimal.so.4
+        # which qemu-system-x86_64 in the Android emulator links against.
+        # GitHub's ubuntu-latest tends to have this preinstalled, but on
+        # a slimmer Ubuntu image (e.g. a self-hosted runner built from
+        # ubuntu:24.04) it's missing and qemu fails with `error while
+        # loading shared libraries: libtcmalloc_minimal.so.4: cannot
+        # open shared object file`. Empirically validated as the
+        # blocker in a privileged ubuntu:24.04 container running this
+        # workflow's logic.
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             weston \
             xkb-data \
             libxkbcommon0 \
-            seatd
+            seatd \
+            libgoogle-perftools4t64
 
       - name: Start Weston (headless backend)
         run: |
