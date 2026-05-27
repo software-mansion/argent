@@ -24,10 +24,15 @@ What is left:
 - **Row → Bottleneck transform** (`pipeline/index.ts`). Maps SQL rows to the
   platform-agnostic `Bottleneck` shape consumed by the render layer. Includes
   thread normalisation, severity banding, jank reason carry-through.
-- **Per-hang fold** (`pipeline/hang-fold.ts`). For each detected hang we run
-  two additional queries (`hang-state-breakdown.sql`, `hang-gc-overlap.sql`)
-  and fold the rows back into the hang object. Kept in its own file so the
-  N+1 query loop is testable in isolation.
+- **Per-hang fold** (`pipeline/hang-fold.ts` + `pipeline/hang-folds-batched.ts`).
+  For each detected hang we need a main-thread state breakdown +
+  GC-overlap annotation. These are computed in SQL by JOINing the
+  `thread_state` and `slice` tables against a runtime
+  `argent_hang_windows` table built from the hang list. The fold runs in
+  a **single** `trace_processor_shell` invocation regardless of hang
+  count; `hang-fold.ts` then merges the rows back into each
+  `UiHang` object. The pure row → annotation merge lives in
+  `hang-fold.ts` so it stays trivially testable.
 
 Splitting these further would be cargo-culting iOS's shape onto a domain
 where the work isn't there.
@@ -64,10 +69,67 @@ walks per query), so re-running it per drill-down would be wasteful.
 
 Android does the opposite: `api.parsedData = null` after analyze, and
 `profiler-stack-query` re-runs the matching SQL file against the `.pftrace`
-on each call. `trace_processor_shell` is fast (~30 ms per query against a
-multi-MB trace), so the overhead is well below the round-trip cost of caching
-hundreds of thousands of perf_sample rows in JS memory.
+on each call. Drill-down is interactive — the user requests one stack at
+a time — so a fresh `trace_processor_shell` fork per call is acceptable
+(~1.4 s for a 76 MB trace, dominated by the trace load, not the SQL).
 
-This is the v1 architecture; if profile traces ever grow to the point where
-re-query becomes slow, the move is to cache the rows on disk (per-session
-JSON sidecars next to the `.pftrace`), not to mirror the iOS in-memory cache.
+**Caveat (important):** "30 ms per query" is the *SQL execution* time
+once the trace is loaded, NOT the wall-clock cost of a fresh invocation.
+A fresh invocation pays ~1.3 s of trace load + parser warmup before any
+SQL runs. The analyze pipeline used to assume the 30 ms figure was the
+whole cost and looped one fork per hang per query, which on a trace with
+1000+ jank rows blew through the tool-call deadline. That loop is now
+collapsed into a single batched SQL invocation (see §4).
+
+If the drill-down path ever needs to fire many queries per second, the
+right move is to stand up `trace_processor_shell` in HTTP RPC mode
+(`-D --http-port <p>`) and POST `QueryArgs` protobufs over a persistent
+connection — see `research/perfetto-rpc-options.md`. That is a real
+architectural change; do not undertake it for the current single-query
+interactive drill-down volume.
+
+If profile traces grow to the point where the analyze-stage fold queries
+themselves slow down, the next move is to cache the per-hang fold rows
+on disk (per-session JSON sidecars next to the `.pftrace`), not to mirror
+the iOS in-memory cache.
+
+---
+
+## 4. The per-hang fold: batched, not looped
+
+`runBatchedHangFolds` in `pipeline/hang-folds-batched.ts` is the entire
+per-hang annotation pass. It:
+
+1. Builds a `(hang_index, start_ns, end_ns)` tuple per hang from the
+   `ui-hangs.sql` result, in the trace's NATIVE (CLOCK_MONOTONIC) ns
+   domain.
+2. Inlines them as a `VALUES (...)` table into a SQL script that creates
+   `argent_hang_windows`, two derived `PERFETTO VIEW`s
+   (`argent_hang_state` joining `thread_state`, `argent_hang_gc` joining
+   `slice`), and a single terminal `UNION ALL` SELECT tagged with
+   `row_kind` ∈ {'state','gc'}.
+3. Runs the script in **one** `trace_processor_shell` invocation via
+   `runTpInline`, paying one trace load (~1.3 s) regardless of hang
+   count.
+4. Demultiplexes the rows by `hang_index` and `row_kind` into two `Map`s,
+   which `pipeline/index.ts` then hands to `foldHangAnnotations` per
+   hang.
+
+Two reasons the SQL has the exact shape it does:
+
+- **`trace_processor_shell -q` rejects multi-statement scripts where
+  more than one statement returns rows.** ("Result rows were returned
+  for multiples queries. Ensure that only the final statement is a
+  SELECT statement.") So the per-hang state and GC queries cannot be
+  two separate top-level SELECTs — they must be materialised as views
+  and unioned in one terminal SELECT.
+- **Perfetto SQL does not accept `VALUES (...) AS t(col1, col2)`** — the
+  column-alias form. The script uses
+  `SELECT column1 AS hang_index, column2 AS start_ns, column3 AS end_ns
+  FROM (VALUES ...)`, leaning on SQLite's implicit `columnN` naming.
+
+End-to-end against a 76 MB trace with 1013 jank rows: **6.3 s** total
+(was: ~47 minutes projected, never completed). See
+`research/perfetto-n-plus-1-fix/README.md` for the full diagnosis,
+benchmark table, and rationale for choosing the batched-SQL approach
+over the HTTP-RPC alternative.

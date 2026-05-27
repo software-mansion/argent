@@ -10,6 +10,7 @@ import {
 } from "../../profiler-shared/aggregate";
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
+import { runBatchedHangFolds, type HangWindowInput } from "./hang-folds-batched";
 import type {
   AndroidCpuHotspotRow,
   AndroidJankRow,
@@ -62,10 +63,15 @@ export interface AndroidPipelineResult {
  * Drive trace_processor_shell against an Android .pftrace and produce the
  * platform-agnostic Bottleneck[] the render layer consumes.
  *
- * The pipeline is N+1 in queries: one CPU + one hangs + one RSS query, plus
- * one state-breakdown + one GC-overlap query per detected hang. Each
- * trace_processor_shell invocation re-opens the trace — roughly 30 ms of
- * overhead per call on a typical machine, which is fine at v1 hang counts.
+ * Three top-level queries (cpu + hangs + rss) run in parallel via
+ * `Promise.allSettled` — each is its own trace_processor_shell invocation,
+ * paying the trace-load cost once. The per-hang state-breakdown + GC-overlap
+ * work used to loop one trace_processor_shell invocation per hang per query,
+ * which scaled linearly with hang count: ~1.4 s × 2 queries × N hangs. On
+ * traces with hundreds of janky frames that exceeded the tool-call deadline
+ * before completing. All per-hang folds are now batched into a single
+ * additional invocation in `runBatchedHangFolds`, so the worst case is now
+ * fixed-cost (~4 invocations end-to-end).
  */
 export async function runAndroidProfilerPipeline(
   tracePath: string,
@@ -75,9 +81,10 @@ export async function runAndroidProfilerPipeline(
   const exportErrors: Record<string, string> = {};
 
   // Per-hang queries need their bounds in the trace's NATIVE (monotonic) ns
-  // domain, so we keep `hang.ts_ns` in native ns until we substitute into SQL
-  // — then we subtract traceStartNs from the hang values we store on UiHang
-  // so the cross-tool combined-report can apply trace-relative time-align math.
+  // domain, so we keep `hang.ts_ns` in native ns when we hand it to
+  // `runBatchedHangFolds` — then we subtract traceStartNs from the values we
+  // store on UiHang so the cross-tool combined-report can apply
+  // trace-relative time-align math.
   const traceStartNs = await getTraceStartNs(tracePath);
 
   const [cpuRowsResult, hangRowsResult, rssRowsResult] = await Promise.allSettled([
@@ -125,38 +132,34 @@ export async function runAndroidProfilerPipeline(
 
   const uiHangsBase = hangRowsToBottlenecks(hangRows, traceStartNs);
 
-  const uiHangs: UiHang[] = [];
-  for (const hang of uiHangsBase) {
-    // Native ns bounds for the perfetto SQL — convert trace-relative back.
-    const nativeStartNs = hang.startNs + traceStartNs;
-    const nativeEndNs = hang.endNs + traceStartNs;
-    const [stateRowsResult, gcRowsResult] = await Promise.allSettled([
-      runTpQuery<AndroidHangStateRow>({
-        tracePath,
-        query: "hang-state-breakdown.sql",
-        substitutions: {
-          TARGET_PROCESS: target,
-          HANG_START_NS: String(nativeStartNs),
-          HANG_END_NS: String(nativeEndNs),
-        },
-      }),
-      runTpQuery<AndroidHangGcRow>({
-        tracePath,
-        query: "hang-gc-overlap.sql",
-        substitutions: {
-          TARGET_PROCESS: target,
-          HANG_START_NS: String(nativeStartNs),
-          HANG_END_NS: String(nativeEndNs),
-        },
-      }),
-    ]);
-    const stateRows = unwrapOr(stateRowsResult, [], () => {});
-    const gcRowsNative = unwrapOr(gcRowsResult, [], () => {});
+  // Single batched call replaces the legacy 2N per-hang loop. A failure here
+  // degrades to "every hang gets an empty fold" without aborting the rest of
+  // the pipeline — same shape as a failure in any of the top-level queries
+  // above.
+  const hangFolds = await runBatchedHangFolds({
+    tracePath,
+    target,
+    hangs: uiHangsBase.map<HangWindowInput>((hang, hangIndex) => ({
+      hangIndex,
+      startNs: hang.startNs + traceStartNs,
+      endNs: hang.endNs + traceStartNs,
+    })),
+  }).catch<{
+    state: Map<number, AndroidHangStateRow[]>;
+    gc: Map<number, AndroidHangGcRow[]>;
+  }>((err: unknown) => {
+    exportErrors.hang_folds = err instanceof Error ? err.message : String(err);
+    return { state: new Map(), gc: new Map() };
+  });
+
+  const uiHangs: UiHang[] = uiHangsBase.map((hang, hangIndex) => {
+    const stateRows = hangFolds.state.get(hangIndex) ?? [];
     // Normalise gc rows into trace-relative ns so foldHangAnnotations can do
     // the overlap math against trace-relative hang.startNs/endNs.
+    const gcRowsNative = hangFolds.gc.get(hangIndex) ?? [];
     const gcRows = gcRowsNative.map((r) => ({ ...r, ts_ns: r.ts_ns - traceStartNs }));
-    uiHangs.push(foldHangAnnotations(hang, stateRows, gcRows));
-  }
+    return foldHangAnnotations(hang, stateRows, gcRows);
+  });
 
   const rssGrowth = rssRowsToBottlenecks(rssRows);
 

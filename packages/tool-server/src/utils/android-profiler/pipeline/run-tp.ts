@@ -27,6 +27,13 @@ export interface RunTpQueryOptions {
   substitutions: Record<string, string>;
 }
 
+export interface RunTpInlineOptions {
+  /** Path to the on-host .pftrace. */
+  tracePath: string;
+  /** Fully-rendered SQL — no token substitution performed. */
+  sql: string;
+}
+
 /**
  * Run a SQL query against a .pftrace using trace_processor_shell, returning
  * the parsed rows. trace_processor_shell's `-q <file>` emits CSV on stdout
@@ -38,21 +45,34 @@ export interface RunTpQueryOptions {
 export async function runTpQuery<Row = Record<string, unknown>>(
   opts: RunTpQueryOptions
 ): Promise<Row[]> {
-  const tpPath = traceProcessorShellPath();
   const queryPath = path.join(traceProcessorQueriesDir(), opts.query);
-
   const template = await fs.readFile(queryPath, "utf8");
   let sql = template;
   for (const [token, value] of Object.entries(opts.substitutions)) {
     sql = sql.replaceAll(token, value);
   }
+  return runTpInline<Row>({ tracePath: opts.tracePath, sql });
+}
 
+/**
+ * Run a fully-rendered SQL string against a .pftrace. Used by the batched
+ * hang-fold path, which composes SQL in-memory from a runtime hang list
+ * rather than from a static `queries/*.sql` template.
+ *
+ * Each invocation still pays the trace_processor_shell trace-load cost
+ * (~1.3 s for a 76 MB trace) — callers that need to run many queries should
+ * fold them into a single SQL script using CREATE PERFETTO VIEW + a
+ * terminal UNION SELECT, not loop this function.
+ */
+export async function runTpInline<Row = Record<string, unknown>>(
+  opts: RunTpInlineOptions
+): Promise<Row[]> {
+  const tpPath = traceProcessorShellPath();
   const tmpSql = path.join(
     path.dirname(opts.tracePath),
     `.argent-tp-${Date.now()}-${Math.random().toString(36).slice(2)}.sql`
   );
-  await fs.writeFile(tmpSql, sql, "utf8");
-
+  await fs.writeFile(tmpSql, opts.sql, "utf8");
   try {
     const { stdout } = await execFileAsync(
       tpPath,

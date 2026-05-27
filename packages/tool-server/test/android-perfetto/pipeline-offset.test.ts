@@ -1,8 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Each test plans the queries it expects in order and the mock pops them.
+// Top-level queries (cpu-hotspots, ui-hangs, memory-rss, trace-bounds) still
+// flow through runTpQuery — each test plans the queries it expects in order
+// and the mock pops them.
 const queryResponses: Array<{ name: string; rows: unknown[] }> = [];
-const substitutionsSeen: Array<{ query: string; substitutions: Record<string, string> }> = [];
+
+// The per-hang fold path now goes through runTpInline (one batched call),
+// so we capture the rendered SQL and respond with a precanned row set.
+const inlineCalls: Array<{ sql: string }> = [];
+let inlineResponse: unknown[] = [];
 
 vi.mock("@argent/native-devtools-android", () => ({
   traceProcessorShellPath: () => "/fake/tp",
@@ -10,7 +16,6 @@ vi.mock("@argent/native-devtools-android", () => ({
 }));
 vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({
   runTpQuery: vi.fn(async (opts: { query: string; substitutions: Record<string, string> }) => {
-    substitutionsSeen.push({ query: opts.query, substitutions: opts.substitutions });
     const next = queryResponses.shift();
     if (!next) throw new Error(`runTpQuery called for "${opts.query}" with no queued response`);
     if (next.name !== opts.query) {
@@ -19,6 +24,10 @@ vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({
       );
     }
     return next.rows;
+  }),
+  runTpInline: vi.fn(async (opts: { sql: string }) => {
+    inlineCalls.push({ sql: opts.sql });
+    return inlineResponse;
   }),
   parseTpJsonOutput: vi.fn(),
 }));
@@ -32,7 +41,8 @@ const HANG_DUR_NS = 500_000_000; // 500ms
 describe("runAndroidProfilerPipeline timestamp normalisation", () => {
   beforeEach(() => {
     queryResponses.length = 0;
-    substitutionsSeen.length = 0;
+    inlineCalls.length = 0;
+    inlineResponse = [];
   });
 
   it("subtracts trace_bounds.start_ts from hang ts before storing UiHang.startNs/endNs", async () => {
@@ -52,9 +62,7 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
           },
         ],
       },
-      { name: "memory-rss.sql", rows: [] },
-      { name: "hang-state-breakdown.sql", rows: [] },
-      { name: "hang-gc-overlap.sql", rows: [] }
+      { name: "memory-rss.sql", rows: [] }
     );
 
     const result = await runAndroidProfilerPipeline("/fake.pftrace", "com.example.app");
@@ -66,7 +74,7 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
     expect(hang.endNs).toBe(1_000_000_000 + HANG_DUR_NS);
   });
 
-  it("passes the NATIVE-domain ns bounds to the per-hang state/gc queries", async () => {
+  it("inlines NATIVE-domain ns bounds into the batched hang-fold SQL", async () => {
     queryResponses.push(
       { name: "trace-bounds.sql", rows: [{ start_ts: TRACE_START_NS }] },
       { name: "cpu-hotspots.sql", rows: [] },
@@ -83,18 +91,21 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
           },
         ],
       },
-      { name: "memory-rss.sql", rows: [] },
-      { name: "hang-state-breakdown.sql", rows: [] },
-      { name: "hang-gc-overlap.sql", rows: [] }
+      { name: "memory-rss.sql", rows: [] }
     );
 
     await runAndroidProfilerPipeline("/fake.pftrace", "com.example.app");
 
-    const stateCall = substitutionsSeen.find((c) => c.query === "hang-state-breakdown.sql");
-    const gcCall = substitutionsSeen.find((c) => c.query === "hang-gc-overlap.sql");
-    expect(stateCall?.substitutions.HANG_START_NS).toBe(String(HANG_START_NATIVE));
-    expect(stateCall?.substitutions.HANG_END_NS).toBe(String(HANG_START_NATIVE + HANG_DUR_NS));
-    expect(gcCall?.substitutions.HANG_START_NS).toBe(String(HANG_START_NATIVE));
+    expect(inlineCalls).toHaveLength(1);
+    const sql = inlineCalls[0]!.sql;
+    // The VALUES row for the single hang must carry the native (not
+    // trace-relative) ns bounds, since the JOIN matches against thread_state.ts
+    // and slice.ts, both of which are in the native CLOCK_MONOTONIC domain.
+    expect(sql).toContain(String(HANG_START_NATIVE));
+    expect(sql).toContain(String(HANG_START_NATIVE + HANG_DUR_NS));
+    // And the negative-test: the trace-relative value (1s) must NOT appear as
+    // a bound — that would mean we mixed domains and the JOIN finds nothing.
+    expect(sql).not.toMatch(/,1000000000,1500000000\)/);
   });
 
   it("accepts trace_bounds.start_ts emitted as a JSON string (tp version drift)", async () => {
@@ -116,9 +127,7 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
           },
         ],
       },
-      { name: "memory-rss.sql", rows: [] },
-      { name: "hang-state-breakdown.sql", rows: [] },
-      { name: "hang-gc-overlap.sql", rows: [] }
+      { name: "memory-rss.sql", rows: [] }
     );
 
     const result = await runAndroidProfilerPipeline("/fake.pftrace", "com.example.app");
@@ -143,21 +152,24 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
           },
         ],
       },
-      { name: "memory-rss.sql", rows: [] },
-      { name: "hang-state-breakdown.sql", rows: [] },
-      // GC slice in NATIVE ns — pipeline must normalise before fold
-      {
-        name: "hang-gc-overlap.sql",
-        rows: [
-          {
-            gc_reason: "GC: concurrent copying",
-            // 100ms after hang start, 200ms duration → 200ms overlap
-            ts_ns: HANG_START_NATIVE + 100_000_000,
-            dur_ns: 200_000_000,
-          },
-        ],
-      }
+      { name: "memory-rss.sql", rows: [] }
     );
+    // The batched-fold call returns the GC slice in NATIVE ns — the pipeline
+    // must normalise to trace-relative before handing it to foldHangAnnotations.
+    inlineResponse = [
+      {
+        hang_index: 0,
+        row_kind: "gc",
+        state_v: null,
+        blocked_function_v: null,
+        total_dur_ns_v: null,
+        occurrences_v: null,
+        gc_reason_v: "GC: concurrent copying",
+        // 100ms after hang start, 200ms duration → 200ms overlap
+        gc_ts_ns_v: String(HANG_START_NATIVE + 100_000_000),
+        gc_dur_ns_v: String(200_000_000),
+      },
+    ];
 
     const result = await runAndroidProfilerPipeline("/fake.pftrace", "com.example.app");
 
