@@ -72,6 +72,8 @@ Argent runs Android emulators on Linux but the default install can be slow if a 
 
   Stock 2 GB / 4 vCPU AVDs can be CPU-starved into wedged-system_server states by a concurrent gradle/Kotlin compile.
 
+- **Headless / CI mode (`ARGENT_EMULATOR_NO_WINDOW=1`).** Argent shows the emulator window by default so a local developer can see the AVD UI. In a headless context — CI runner, container, or a Wayland-only session where the emulator's bundled Qt has no `wayland` platform plugin and SIGABRTs on the crash-consent dialog — opt out by exporting `ARGENT_EMULATOR_NO_WINDOW=1` before starting the tool-server. This appends `-no-window` to the spawn args, selecting `qemu-system-x86_64-headless` which doesn't need a Qt window. Argent's screencap-based screenshot tool reads the in-memory framebuffer correctly without a visible window.
+
 #### Run `init` in your project
 
 From your project root:

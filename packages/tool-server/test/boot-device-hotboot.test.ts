@@ -143,7 +143,9 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(hotArgs).toContain("-force-snapshot-load");
     expect(hotArgs).toContain("-no-snapshot-save");
     expect(hotArgs).not.toContain("-no-snapshot-load");
-    // Window is always visible — `-no-window` must never appear in spawn args.
+    // Window is visible by default — `-no-window` only appears when the
+    // user opts in via `ARGENT_EMULATOR_NO_WINDOW`. The opt-in path is
+    // exercised by a separate test below.
     expect(hotArgs).not.toContain("-no-window");
     // `-gpu` arg must be present and platform-appropriate. Linux uses
     // `swiftshader` for universal compatibility (sidesteps the
@@ -174,6 +176,52 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     } finally {
       if (prev === undefined) delete process.env.ARGENT_EMULATOR_GPU_MODE;
       else process.env.ARGENT_EMULATOR_GPU_MODE = prev;
+    }
+  });
+
+  it("appends -no-window when ARGENT_EMULATOR_NO_WINDOW is set", async () => {
+    // The Android emulator's bundled Qt doesn't ship a wayland platform
+    // plugin and the crash-consent dialog SIGABRTs under Qt's offscreen
+    // plugin. Both manifest in CI / containers / Wayland-only sessions.
+    // The opt-in `-no-window` selects qemu-system-x86_64-headless which
+    // skips the Qt window machinery; argent's screencap-based screenshot
+    // tool still reads the in-memory framebuffer correctly.
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const prev = process.env.ARGENT_EMULATOR_NO_WINDOW;
+    process.env.ARGENT_EMULATOR_NO_WINDOW = "1";
+    try {
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const args = spawnMock.mock.calls[0]![1];
+      expect(args).toContain("-no-window");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_EMULATOR_NO_WINDOW;
+      else process.env.ARGENT_EMULATOR_NO_WINDOW = prev;
+    }
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace", "   "],
+    ["zero", "0"],
+  ])("treats ARGENT_EMULATOR_NO_WINDOW=%s as off", async (_label, value) => {
+    // `export FOO=` is a common shell mis-setting; `0` is the obvious
+    // "disable" value. Neither should silently enable headless mode.
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const prev = process.env.ARGENT_EMULATOR_NO_WINDOW;
+    process.env.ARGENT_EMULATOR_NO_WINDOW = value;
+    try {
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const args = spawnMock.mock.calls[0]![1];
+      expect(args).not.toContain("-no-window");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_EMULATOR_NO_WINDOW;
+      else process.env.ARGENT_EMULATOR_NO_WINDOW = prev;
     }
   });
 

@@ -46,7 +46,24 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
       WAYLAND_DISPLAY: wayland-0
-      QT_QPA_PLATFORM: wayland
+      # The Android emulator's bundled Qt does NOT ship a wayland platform
+      # plugin (only linuxfb / offscreen / minimal / vnc / xcb). With Qt's
+      # default auto-detection and WAYLAND_DISPLAY set, the emulator's Qt6
+      # picks wayland → no plugin → FATAL → SIGABRT before any boot. Pin
+      # `offscreen` so the emulator's UI renders into an in-memory buffer
+      # regardless of session. Argent's screenshot tool reads the guest
+      # framebuffer via SurfaceFlinger (not the host-side Qt window), so
+      # nothing the test asserts depends on the window being visible.
+      QT_QPA_PLATFORM: offscreen
+      # Argent's boot-device defaults to showing the emulator window so a
+      # local developer can see the AVD UI. In a headless runner there's
+      # no display: the emulator's bundled Qt has no wayland plugin and
+      # SIGABRTs trying to show a crash-consent dialog. This env var
+      # makes boot-device append `-no-window` to the spawn args, picking
+      # qemu-system-x86_64-headless which doesn't need Qt or a display.
+      # Argent's screencap-based screenshot tool reads the in-memory
+      # framebuffer correctly without a window.
+      ARGENT_EMULATOR_NO_WINDOW: "1"
 
     steps:
       - name: Checkout

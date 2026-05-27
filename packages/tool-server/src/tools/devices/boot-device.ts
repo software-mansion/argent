@@ -138,6 +138,30 @@ function selectGpuMode(): string {
   return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
+/**
+ * Returns the extra emulator args needed when running in a context where
+ * the emulator can't open a real window — CI runners, containers,
+ * Wayland-only sessions where the emulator's bundled Qt has no wayland
+ * platform plugin. Opt-in via `ARGENT_EMULATOR_NO_WINDOW=1`. Default off
+ * so the local dev experience keeps showing the window.
+ *
+ * Without `-no-window` the emulator picks `qemu-system-x86_64` (the
+ * windowed binary), which initializes Qt and tries to show a crash-
+ * consent dialog at startup. With Qt's `offscreen` platform plugin the
+ * dialog code path SIGABRTs; with no usable platform plugin Qt fatals
+ * before the dialog. `-no-window` selects `qemu-system-x86_64-headless`
+ * which skips the Qt window machinery entirely and renders into an
+ * in-memory framebuffer that argent's screencap-based screenshot tool
+ * still reads correctly.
+ */
+function selectExtraEmulatorArgs(): string[] {
+  const noWindow = process.env.ARGENT_EMULATOR_NO_WINDOW;
+  if (noWindow && noWindow.trim() && noWindow.trim() !== "0") {
+    return ["-no-window"];
+  }
+  return [];
+}
+
 async function killEmulatorQuietly(
   serial: string | null,
   child?: import("node:child_process").ChildProcess
@@ -634,6 +658,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
         "-no-snapshot-save",
         "-gpu",
         selectGpuMode(),
+        ...selectExtraEmulatorArgs(),
       ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
@@ -673,7 +698,14 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", selectGpuMode()];
+  const coldArgs = [
+    "-avd",
+    params.avdName,
+    "-no-snapshot-load",
+    "-gpu",
+    selectGpuMode(),
+    ...selectExtraEmulatorArgs(),
+  ];
   let coldResult: { serial: string };
   try {
     coldResult = await attemptBoot({
