@@ -17,13 +17,6 @@ REPO="software-mansion-labs/simulator-server-releases"
 TAG="${1:-radon-main}"
 DEST_DIR="packages/native-devtools-ios/bin"
 
-# Track the most recent gh-stderr tmpfile across the loop so a SIGINT during
-# `gh release download` doesn't leak it. mktemp returns a path under $TMPDIR
-# that the OS cleans on reboot, but a long-running CI runner that re-uses
-# the same TMPDIR across builds would accumulate them otherwise.
-GH_STDERR=""
-trap '[[ -n "${GH_STDERR}" ]] && rm -f "${GH_STDERR}"; exit' EXIT INT TERM
-
 # release-asset-name → process.platform key. Asset names follow the upstream
 # build matrix (`simulator-server-argent-{macos,linux}`); the keys mirror
 # Node's process.platform so the resolver can lookup by host platform.

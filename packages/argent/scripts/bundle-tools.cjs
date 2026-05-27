@@ -157,7 +157,6 @@ console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT
 // darwin binary as required only when the host that's bundling can actually
 // produce it (i.e. when running on macOS); on Linux, warn and continue with
 // a Linux-only bundle.
-let copiedSimServers = 0;
 for (const platform of SUPPORTED_HOST_PLATFORMS) {
   const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
   const destDir = path.join(BIN_DIR, platform);
@@ -167,7 +166,6 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
     fs.copyFileSync(src, dest);
     fs.chmodSync(dest, 0o755);
     console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
-    copiedSimServers += 1;
   } else if (platform === "darwin" && process.platform === "darwin") {
     throw new Error(
       `simulator-server binary not found at ${src}.\n` +
@@ -176,12 +174,6 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
   } else {
     console.warn(`⚠ simulator-server (${platform}) not found at ${src} — skipping`);
   }
-}
-if (copiedSimServers === 0) {
-  throw new Error(
-    `No simulator-server binaries found under ${BIN_SRC_ROOT} for any supported host. ` +
-      `Run: bash scripts/download-simulator-server.sh`
-  );
 }
 
 // Copy ax-service binary (macOS-only — it runs inside an iOS Simulator)

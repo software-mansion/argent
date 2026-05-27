@@ -537,11 +537,11 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   await ensureDep("adb");
   await ensureDep("emulator");
 
-  // Linux-host diagnostics. We log warnings (KVM-less, no hardware Vulkan,
-  // etc.) once per boot via console.warn so a developer who's about to wait
-  // for a software-emulated AVD sees *why* and what to install. We never
-  // throw — these are degraded-but-bootable conditions, and somebody who has
-  // a specific reason to boot without acceleration shouldn't be blocked.
+  // Linux-host diagnostics. KVM-less and virt-flag-less hosts boot the AVD
+  // 10–50× slower under TCG; log a warning so a developer who's about to
+  // wait sees *why* and what to fix. We never throw — these are
+  // degraded-but-bootable conditions, and somebody who has a specific
+  // reason to boot without acceleration shouldn't be blocked.
   const linuxDiag = linuxBootDiagnostics();
   if (linuxDiag && linuxDiag.length > 0) {
     for (const d of linuxDiag) {
