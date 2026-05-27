@@ -30,7 +30,7 @@ const zodSchema = z.object({
             "Tool name — one of: gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
           ),
         args: z
-          .record(z.unknown())
+          .record(z.string(), z.unknown())
           .describe("Tool arguments (excluding udid, which is injected automatically)"),
         delayMs: z
           .number()
