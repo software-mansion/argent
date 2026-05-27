@@ -69,69 +69,15 @@ const STAGE_BUDGET = {
   bootCompleted: 300_000, // sys.boot_completed = 1
 } as const;
 
-/**
- * Pick the `-gpu` argument for `emulator` based on host OS.
- *
- * Authoritative list of accepted modes (from `emulator -help-gpu` in
- * emulator 36.5.11): `auto`, `host`, `software`, `lavapipe`,
- * `swiftshader`, `swangle`.
- *
- * On macOS, `auto` is the right default: the emulator's bundled stack
- * resolves it to ANGLE→Metal, which is hardware-accelerated and stable.
- *
- * On Linux, none of the modes is uncontroversially universal:
- *
- *   - `auto`: the emulator's bundled Vulkan loader at
- *     `$ANDROID_HOME/emulator/lib64/vulkan/` only ships software ICDs
- *     (`lvp_icd.json` for Mesa lavapipe, `vk_swiftshader_icd.json` for
- *     SwiftShader). The bundled loader doesn't consult the system ICD
- *     path, so `auto` enumerates only software backends and frequently
- *     resolves to `hw.gpu.mode=lavapipe`. Lavapipe is CPU-rendered AND
- *     routes through host libvulkan + Mesa shims — measurably slower
- *     than SwiftShader on the same hardware (10× cold boot deltas
- *     observed on flagship hardware).
- *
- *   - `host`: forces the emulator's gfxstream backend to use host
- *     `libGL.so` for surface composition. Hardware-accelerated when it
- *     works. But on hosts with a non-trivial GL stack — dual-GPU /
- *     Optimus laptops, NVIDIA + Mesa coexistence via libglvnd, Wayland
- *     sessions on hybrid graphics, headless / containerized hosts —
- *     `host` silently produces a corrupted or black X11 window even
- *     though SurfaceFlinger inside the guest is rendering fine
- *     (verified: `screencap` succeeds, only the on-host composition
- *     fails). The failure mode is invisible to argent's framebuffer-
- *     based screenshot tool: an agent thinks everything works while
- *     the developer sees a black emulator window. The Android Studio
- *     community and emulator docs do not have a robust fix for these
- *     hosts; advice is "use software mode".
- *
- *   - `swiftshader`: software rendering via the emulator's bundled
- *     SwiftShader. Slower than `host` on hosts where `host` works,
- *     but indistinguishably smooth on modern multi-core machines —
- *     and, critically, works universally because it sidesteps the
- *     host GL stack entirely. This is what `android-emulator-runner`
- *     and many CI setups default to.
- *
- *   - `software`: documented as "default software renderer". In
- *     practice the auto-selector inside the emulator can resolve this
- *     to `lavapipe` on hosts where Mesa is installed — the exact
- *     failure mode `swiftshader` is chosen to avoid. We pin
- *     `swiftshader` to keep the selection deterministic.
- *
- *   - `lavapipe`, `swangle`: niche; not better than `swiftshader` on
- *     the hosts we care about (lavapipe is the slow path we're
- *     escaping; swangle adds an ANGLE translation layer on top with no
- *     benefit on Linux).
- *
- * Argent picks `swiftshader` on Linux for universal compatibility.
- * The `ARGENT_EMULATOR_GPU_MODE` env var overrides the default for
- * users who have verified that `host` (or any other mode) works on
- * their box.
- *
- * No conditional on Windows yet — there's no Windows host support
- * today; if/when added, evaluate `swangle` or `host` based on the
- * Direct3D vs. OpenGL story on that platform.
- */
+// Linux: `-gpu auto` lands on `hw.gpu.mode=lavapipe` (slow CPU Vulkan via host
+// libvulkan + Mesa shims, ~10× cold-boot regression), and `-gpu host` silently
+// produces a corrupted/black emulator window on dual-GPU laptops, NVIDIA+Mesa
+// hosts via libglvnd, Wayland sessions on hybrid graphics, and containerized
+// hosts — argent's screencap-based screenshot tool reports success while the
+// developer sees a black window. `swiftshader` (emulator's bundled CPU
+// renderer) sidesteps both traps and is indistinguishable from `host` on
+// modern multi-core machines. `ARGENT_EMULATOR_GPU_MODE` overrides. macOS
+// uses `auto` (resolves to ANGLE→Metal, hardware-accelerated).
 function selectGpuMode(): string {
   const override = process.env.ARGENT_EMULATOR_GPU_MODE;
   if (override && override.trim()) return override.trim();
