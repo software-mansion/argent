@@ -748,16 +748,21 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
     const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
+    // Small delay: the step's configured delayMs is honored before the tool
+    // runs. The magnitude is irrelevant to the regression guard — without the
+    // delay this completes in ~0ms, so a 25ms wait still proves the behavior
+    // while keeping the test off a real ~300ms sleep.
+    const delayMs = 25;
     await fs.writeFile(
       path.join(dir, "pre-delay.yaml"),
       serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "tool", name: "tap", args: { x: 0.5 }, delayMs: 300 }],
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5 }, delayMs }],
       })
     );
     const start = Date.now();
     await runFlow.execute({}, { name: "pre-delay", project_root: tmpDir });
-    expect(Date.now() - start).toBeGreaterThanOrEqual(290);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(delayMs - 5);
   });
 
   it("does not interfere with active recording state", async () => {
