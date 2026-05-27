@@ -75,26 +75,57 @@ const STAGE_BUDGET = {
  * On macOS, `auto` is the right default: the emulator's bundled stack
  * resolves it to ANGLE→Metal, which is hardware-accelerated and stable.
  *
- * On Linux, `auto` is a trap. The emulator ships its own Vulkan loader at
- * `$ANDROID_HOME/emulator/lib64/vulkan/`, and that directory only contains
- * `lvp_icd.json` (Mesa lavapipe — pure-CPU Vulkan) and `vk_swiftshader_icd.
- * json` (SwiftShader — pure-CPU Vulkan). The bundled loader never looks at
- * `/usr/share/vulkan/icd.d`, so `-gpu auto` enumerates only software ICDs
- * and resolves to `hw.gpu.mode=lavapipe`. Every guest frame is then
- * rasterized on the host CPU — visibly slow even on flagship hardware.
+ * On Linux, the choice is harder. There are three plausible defaults and
+ * each has a real failure mode:
  *
- * `-gpu host` sidesteps the bundled Vulkan stack: the emulator uses the
- * host's `libGL.so` (Mesa OpenGL drivers or NVIDIA's libGL) for surface
- * composition, which is hardware-accelerated by whatever GPU the OpenGL
- * driver targets. This matches what Android Studio launches with on Linux,
- * and is the documented Android-emulator recommendation for the platform.
+ *   - `auto`: the emulator's bundled Vulkan loader at
+ *     `$ANDROID_HOME/emulator/lib64/vulkan/` only ships software ICDs
+ *     (`lvp_icd.json` for Mesa lavapipe, `vk_swiftshader_icd.json` for
+ *     SwiftShader). The bundled loader doesn't consult the system ICD
+ *     path, so `auto` enumerates only software backends and frequently
+ *     resolves to `hw.gpu.mode=lavapipe`. Lavapipe is CPU-rendered AND
+ *     routes through host libvulkan + Mesa shims — measurably slower
+ *     than SwiftShader on the same hardware (10× cold boot deltas
+ *     observed on flagship hardware).
+ *
+ *   - `host`: forces the emulator's gfxstream backend to use host
+ *     `libGL.so` for surface composition. Hardware-accelerated when it
+ *     works. But on hosts with a non-trivial GL stack — dual-GPU /
+ *     Optimus laptops, NVIDIA + Mesa coexistence via libglvnd, Wayland
+ *     sessions on hybrid graphics, headless / containerized hosts —
+ *     `host` silently produces a corrupted or black X11 window even
+ *     though SurfaceFlinger inside the guest is rendering fine
+ *     (verified: `screencap` succeeds, only the on-host composition
+ *     fails). The failure mode is invisible to argent's framebuffer-
+ *     based screenshot tool: an agent thinks everything works while
+ *     the developer sees a black emulator window. The Android Studio
+ *     community and emulator docs do not have a robust fix for these
+ *     hosts; advice is "use software mode".
+ *
+ *   - `swiftshader_indirect`: software rendering via the emulator's
+ *     bundled SwiftShader (a different code path from lavapipe). Slower
+ *     than `host` on hosts where `host` works, but indistinguishably
+ *     smooth on modern multi-core machines and — critically — works
+ *     universally because it sidesteps the host GL stack entirely.
+ *     This is what `android-emulator-runner` and many CI setups
+ *     default to. Officially deprecated in emulator 36.4.9 in favor of
+ *     `software` / `swiftshader`, but still accepted in 36.5.11 and
+ *     proven robust where the modern aliases sometimes silently
+ *     resolve back to lavapipe.
+ *
+ * Argent picks `swiftshader_indirect` on Linux for universal
+ * compatibility. The `ARGENT_EMULATOR_GPU_MODE` env var overrides the
+ * default for users who have verified that `host` works on their box
+ * (typical dev machines with a single GPU and a clean Mesa stack).
  *
  * No conditional on Windows yet — there's no Windows host support today;
- * if/when added, evaluate `swiftshader_indirect` or `host` based on the
+ * if/when added, evaluate `swangle_indirect` or `host` based on the
  * Direct3D vs. OpenGL story on that platform.
  */
-function selectGpuMode(): "host" | "auto" {
-  return process.platform === "linux" ? "host" : "auto";
+function selectGpuMode(): string {
+  const override = process.env.ARGENT_EMULATOR_GPU_MODE;
+  if (override && override.trim()) return override.trim();
+  return process.platform === "linux" ? "swiftshader_indirect" : "auto";
 }
 
 async function killEmulatorQuietly(
@@ -580,16 +611,12 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // rather than hanging for the full overall budget. `-no-snapshot-save`
       // avoids overwriting a working snapshot with state captured after we
       // later force-kill the child from a failure path.
-      // GPU mode is platform-dependent. On macOS `-gpu auto` resolves to
-      // ANGLE→Metal via the emulator's bundled stack — fast. On Linux the
-      // bundled Vulkan loader only ships lavapipe/SwiftShader ICDs, so
-      // `-gpu auto` lands on `hw.gpu.mode=lavapipe` (software Vulkan) even
-      // on hosts with hardware Vulkan drivers, because the bundled loader
-      // never consults the system ICD path. `-gpu host` bypasses the
-      // emulator's Vulkan stack and uses the host's `libGL.so` (Mesa or
-      // NVIDIA OpenGL) for surface composition, which is hardware-
-      // accelerated by the host GPU. See `selectGpuMode` and the README
-      // (Linux prerequisites) for the full story.
+      // GPU mode is platform-dependent. `selectGpuMode` picks `auto` on
+      // macOS (ANGLE→Metal, hardware-accelerated) and `swiftshader_indirect`
+      // on Linux (software-rendered but universally compatible — `host` and
+      // `auto` both have silent-failure modes on Linux: see selectGpuMode's
+      // doc for the full reasoning). Users with verified working host GL
+      // can override via `ARGENT_EMULATOR_GPU_MODE`.
       const hotArgs = [
         "-avd",
         params.avdName,

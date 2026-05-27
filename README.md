@@ -48,15 +48,29 @@ Argent runs Android emulators on Linux but the default install can be slow if a 
   # log out and back in so the new group takes effect
   ```
 
-- **GPU acceleration via host OpenGL.** The Android emulator ships its own Vulkan loader that only sees the bundled software ICDs (lavapipe and SwiftShader), so `-gpu auto` on Linux silently resolves to `hw.gpu.mode=lavapipe` and rasterizes every guest frame on the CPU — even on a host with hardware Vulkan installed. Argent works around this by launching emulators with `-gpu host` on Linux, which bypasses the bundled Vulkan stack and uses your host's `libGL.so` (Mesa or NVIDIA OpenGL) for surface composition. This matches what Android Studio uses on Linux.
+- **GPU mode (`-gpu swiftshader_indirect` on Linux, override available).** The Android emulator's Linux GPU story is messy: `-gpu auto` frequently resolves to lavapipe (slow software Vulkan via host libvulkan, ~10× cold-boot regression on flagship hardware), and `-gpu host` silently produces a corrupted or black emulator window on hosts with non-trivial GL stacks — dual-GPU / Optimus laptops, NVIDIA + Mesa coexistence via libglvnd, Wayland sessions on hybrid graphics, headless / containerized hosts. The failure mode is invisible to argent's framebuffer-based screenshot tool, so an agent reports success while the developer sees a black window.
 
-  For `-gpu host` to be hardware-accelerated, you need a working OpenGL driver — present on every desktop distro with a graphical session. If you're running headlessly or in a container, install your GPU's driver explicitly (`mesa-libGL` / `libgl1-mesa-glx` / `nvidia-utils`).
+  Argent picks `-gpu swiftshader_indirect` on Linux for universal compatibility: it sidesteps the host GL stack entirely and renders via the emulator's bundled SwiftShader. On modern multi-core machines this is indistinguishably smooth from hardware-accelerated `-gpu host` (and far faster than lavapipe).
 
-  Argent also runs a host-side preflight on every boot and prints a warning if `/dev/kvm` isn't usable, virtualization is disabled, or no hardware Vulkan ICD is present. The Vulkan warning is informational — Argent itself doesn't depend on Vulkan in `-gpu host` mode — but a missing hardware ICD often correlates with a missing GPU driver more broadly.
+  Override with the `ARGENT_EMULATOR_GPU_MODE` env var if you've verified `-gpu host` works on your machine (typical single-GPU Mesa box with a healthy X session):
+
+  ```bash
+  ARGENT_EMULATOR_GPU_MODE=host argent ...
+  ```
+
+  Argent also runs a host-side preflight on every boot and prints a warning if `/dev/kvm` isn't usable, virtualization is disabled, or no hardware Vulkan ICD is present. The Vulkan warning is informational — Argent's default Linux GPU mode (`swiftshader_indirect`) doesn't depend on host Vulkan — but a missing hardware ICD often correlates with a missing GPU driver more broadly.
 
 - **System image.** Prefer the `default` or `google_apis` variants of `x86_64` system images for headless agent workflows; `google_apis_playstore` adds noticeable boot-time CPU churn from Play services. Always pick `x86_64` on Intel/AMD hosts — ARM images run via QEMU translation and are dramatically slower.
 
-- **AVD config.** AVDs created via `avdmanager create avd` default to `hw.gpu.enabled=no`. Argent overrides this with `-gpu host` at launch (so the on-disk config doesn't need editing), but if you also want to use the emulator standalone, set `hw.gpu.enabled=yes` and `hw.gpu.mode=host` in `~/.android/avd/<name>.avd/config.ini`.
+- **AVD config.** AVDs created via `avdmanager create avd` default to `hw.gpu.enabled=no`. Argent overrides this with an explicit `-gpu` arg at launch (so the on-disk config doesn't need editing). For the smoothest experience under heavy native builds (gradle compilations alongside the AVD), bump the AVD's RAM and CPU count — edit `~/.android/avd/<name>.avd/config.ini`:
+
+  ```
+  hw.ramSize = 8192
+  hw.cpu.ncore = 6
+  vm.heapSize = 512
+  ```
+
+  Stock 2 GB / 4 vCPU AVDs can be CPU-starved into wedged-system_server states by a concurrent gradle/Kotlin compile.
 
 #### Run `init` in your project
 

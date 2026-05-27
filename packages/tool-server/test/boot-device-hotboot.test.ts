@@ -145,12 +145,59 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(hotArgs).not.toContain("-no-snapshot-load");
     // Window is always visible — `-no-window` must never appear in spawn args.
     expect(hotArgs).not.toContain("-no-window");
-    // `-gpu` arg must be present and platform-appropriate. Linux uses `host`
-    // to bypass the emulator's bundled software-only Vulkan stack (lavapipe);
-    // every other host uses `auto`. See `boot-device.ts:selectGpuMode`.
+    // `-gpu` arg must be present and platform-appropriate. Linux uses
+    // `swiftshader_indirect` for universal compatibility (sidesteps the
+    // host GL stack, which silently fails on Optimus / dual-GPU /
+    // Wayland-with-NVIDIA setups); every other host uses `auto`. See
+    // `boot-device.ts:selectGpuMode` for the full reasoning.
     const gpuIdx = hotArgs.indexOf("-gpu");
     expect(gpuIdx).toBeGreaterThanOrEqual(0);
-    expect(hotArgs[gpuIdx + 1]).toBe(process.platform === "linux" ? "host" : "auto");
+    expect(hotArgs[gpuIdx + 1]).toBe(
+      process.platform === "linux" ? "swiftshader_indirect" : "auto"
+    );
+  });
+
+  it("honors ARGENT_EMULATOR_GPU_MODE env override", async () => {
+    // Power users on hosts with a verified working `-gpu host` (single-GPU
+    // Mesa, headed X session, no glvnd dispatch quirks) need an escape
+    // hatch to opt back into hardware acceleration. The env var is the
+    // escape hatch; this test pins the contract.
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const prev = process.env.ARGENT_EMULATOR_GPU_MODE;
+    process.env.ARGENT_EMULATOR_GPU_MODE = "host";
+    try {
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const args = spawnMock.mock.calls[0]![1];
+      const gpuIdx = args.indexOf("-gpu");
+      expect(args[gpuIdx + 1]).toBe("host");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_EMULATOR_GPU_MODE;
+      else process.env.ARGENT_EMULATOR_GPU_MODE = prev;
+    }
+  });
+
+  it("ignores empty/whitespace-only ARGENT_EMULATOR_GPU_MODE", async () => {
+    // Empty string is a common shell mis-setting (`export FOO=`); falling
+    // through to the platform default keeps users out of "I set the env
+    // var to nothing and got a different bug" trap.
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const prev = process.env.ARGENT_EMULATOR_GPU_MODE;
+    process.env.ARGENT_EMULATOR_GPU_MODE = "   ";
+    try {
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const args = spawnMock.mock.calls[0]![1];
+      const gpuIdx = args.indexOf("-gpu");
+      expect(args[gpuIdx + 1]).toBe(process.platform === "linux" ? "swiftshader_indirect" : "auto");
+    } finally {
+      if (prev === undefined) delete process.env.ARGENT_EMULATOR_GPU_MODE;
+      else process.env.ARGENT_EMULATOR_GPU_MODE = prev;
+    }
   });
 
   it("skips the hot-boot attempt and cold-boots when no snapshot exists on disk", async () => {
