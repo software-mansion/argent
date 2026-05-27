@@ -11,7 +11,8 @@ set -euo pipefail
 #   release-tag  Optional tag to download from. Defaults to radon-main.
 #
 # Requires:
-#   - gh CLI (no authentication needed — the repo is public)
+#   - gh CLI, authenticated (`gh auth login` or `GH_TOKEN` env var). The release
+#     repo is public but `gh release download` still requires authentication.
 
 REPO="software-mansion-labs/simulator-server-releases"
 TAG="${1:-radon-main}"
@@ -34,16 +35,11 @@ for entry in "${TARGETS[@]}"; do
   mkdir -p "${PLATFORM_DIR}"
 
   echo "Downloading ${ASSET_NAME} → ${PLATFORM_DIR}/simulator-server"
-  # The Linux artifact comes from radon's separate `build_argent_simulator_
-  # server_linux` job, which is independent of the macOS release. Tolerate it
-  # being absent (e.g. on releases produced before that job landed) so this
-  # script keeps working for macOS-only consumers in the meantime.
-  #
-  # We capture gh's stderr so the "asset not found" vs. "not authenticated"
-  # vs. "rate-limited" distinction is visible to the operator — previously
-  # `2>/dev/null` swallowed all three and made every failure look like a
-  # missing asset, which sent Linux contributors chasing a non-existent
-  # release artifact when the real problem was `gh auth login`.
+  # Tolerate missing assets so the script keeps working for macOS-only
+  # consumers when the Linux artifact lags behind a release. Capture gh's
+  # stderr and print it on failure so "not authenticated" vs "asset missing"
+  # vs "rate-limited" stays distinguishable (the prior `2>/dev/null` masked
+  # all three).
   GH_STDERR="$(mktemp)"
   if ! gh release download "${TAG}" \
        --repo "${REPO}" \
@@ -53,11 +49,7 @@ for entry in "${TARGETS[@]}"; do
     GH_MSG=$(<"${GH_STDERR}")
     rm -f "${GH_STDERR}"
     echo "  ⚠ ${ASSET_NAME} not downloaded — skipping (binary won't be available on ${PLATFORM} hosts)"
-    if [[ -n "${GH_MSG}" ]]; then
-      # Indent gh's output so it's clearly contextual rather than the script's
-      # own message; useful for distinguishing "asset missing" from auth/quota.
-      printf '    gh: %s\n' "${GH_MSG//$'\n'/$'\n    gh: '}"
-    fi
+    [[ -n "${GH_MSG}" ]] && printf '    gh: %s\n' "${GH_MSG//$'\n'/$'\n    gh: '}"
     rmdir "${PLATFORM_DIR}" 2>/dev/null || true
     continue
   fi

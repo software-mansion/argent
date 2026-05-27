@@ -148,15 +148,10 @@ esbuild.buildSync({
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
 
-// Copy simulator-server binary for every supported host platform that's
-// present in the staging area. The publish pipeline runs on macOS and
-// requires `darwin/simulator-server` — that's the canonical release bundle.
-// But a Linux contributor running `npm run pack` locally (CI sanity, smoke
-// test, packaging the Linux-only bundle for ad-hoc use) shouldn't be blocked
-// by the absence of the macOS binary they have no way to produce. Treat the
-// darwin binary as required only when the host that's bundling can actually
-// produce it (i.e. when running on macOS); on Linux, warn and continue with
-// a Linux-only bundle.
+// Copy simulator-server for every supported host platform that's present in
+// the staging area. Require the darwin binary only when bundling ON darwin
+// (the publish pipeline) — a Linux contributor running `npm run pack` locally
+// can't produce the macOS binary, so don't block them on its absence.
 for (const platform of SUPPORTED_HOST_PLATFORMS) {
   const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
   const destDir = path.join(BIN_DIR, platform);

@@ -84,22 +84,9 @@ function selectGpuMode(): string {
   return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
-/**
- * Returns the extra emulator args needed when running in a context where
- * the emulator can't open a real window — CI runners, containers,
- * Wayland-only sessions where the emulator's bundled Qt has no wayland
- * platform plugin. Opt-in via `ARGENT_EMULATOR_NO_WINDOW=1`. Default off
- * so the local dev experience keeps showing the window.
- *
- * Without `-no-window` the emulator picks `qemu-system-x86_64` (the
- * windowed binary), which initializes Qt and tries to show a crash-
- * consent dialog at startup. With Qt's `offscreen` platform plugin the
- * dialog code path SIGABRTs; with no usable platform plugin Qt fatals
- * before the dialog. `-no-window` selects `qemu-system-x86_64-headless`
- * which skips the Qt window machinery entirely and renders into an
- * in-memory framebuffer that argent's screencap-based screenshot tool
- * still reads correctly.
- */
+// Opt-in `-no-window` for CI/containers/Wayland sessions where the emulator's
+// bundled Qt has no wayland plugin (would SIGABRT). `-no-window` selects
+// qemu-system-x86_64-headless which skips Qt entirely; screencap still works.
 function selectExtraEmulatorArgs(): string[] {
   const noWindow = process.env.ARGENT_EMULATOR_NO_WINDOW;
   if (noWindow && noWindow.trim() && noWindow.trim() !== "0") {
@@ -231,11 +218,8 @@ async function bootIos(
   udid: string,
   registry: Registry
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
-  // iOS Simulator only runs on macOS — `xcrun simctl boot` doesn't exist on
-  // Linux. We check this before `ensureDep("xcrun")` so a Linux user passing
-  // an iOS udid gets a clear root-cause error ("iOS requires macOS") instead
-  // of the misleading `xcode-select --install` hint, which would send them
-  // chasing a tool that has never had a Linux build.
+  // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
+  // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
     throw new Error(
       `iOS Simulator is unavailable on ${process.platform}: it requires a macOS host. ` +
@@ -483,11 +467,6 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   await ensureDep("adb");
   await ensureDep("emulator");
 
-  // Linux-host diagnostics. KVM-less and virt-flag-less hosts boot the AVD
-  // 10–50× slower under TCG; log a warning so a developer who's about to
-  // wait sees *why* and what to fix. We never throw — these are
-  // degraded-but-bootable conditions, and somebody who has a specific
-  // reason to boot without acceleration shouldn't be blocked.
   for (const msg of linuxBootDiagnostics() ?? []) {
     console.warn(`[boot-device:linux] ${msg}`);
   }

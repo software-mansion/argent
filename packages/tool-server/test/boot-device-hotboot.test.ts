@@ -158,10 +158,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   });
 
   it("honors ARGENT_EMULATOR_GPU_MODE env override", async () => {
-    // Power users on hosts with a verified working `-gpu host` (single-GPU
-    // Mesa, headed X session, no glvnd dispatch quirks) need an escape
-    // hatch to opt back into hardware acceleration. The env var is the
-    // escape hatch; this test pins the contract.
+    // Escape hatch for power users with verified-working `-gpu host`.
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
 
@@ -180,12 +177,8 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   });
 
   it("appends -no-window when ARGENT_EMULATOR_NO_WINDOW is set", async () => {
-    // The Android emulator's bundled Qt doesn't ship a wayland platform
-    // plugin and the crash-consent dialog SIGABRTs under Qt's offscreen
-    // plugin. Both manifest in CI / containers / Wayland-only sessions.
-    // The opt-in `-no-window` selects qemu-system-x86_64-headless which
-    // skips the Qt window machinery; argent's screencap-based screenshot
-    // tool still reads the in-memory framebuffer correctly.
+    // Opt-in for CI / containers / Wayland-only sessions where the emulator
+    // can't open a Qt window. See selectExtraEmulatorArgs.
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
 
@@ -207,8 +200,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     ["whitespace", "   "],
     ["zero", "0"],
   ])("treats ARGENT_EMULATOR_NO_WINDOW=%s as off", async (_label, value) => {
-    // `export FOO=` is a common shell mis-setting; `0` is the obvious
-    // "disable" value. Neither should silently enable headless mode.
+    // `export FOO=` is a common shell mis-setting; `0` reads as "disable".
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
 
@@ -226,9 +218,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   });
 
   it("ignores empty/whitespace-only ARGENT_EMULATOR_GPU_MODE", async () => {
-    // Empty string is a common shell mis-setting (`export FOO=`); falling
-    // through to the platform default keeps users out of "I set the env
-    // var to nothing and got a different bug" trap.
+    // `export FOO=` foot-gun: fall through to platform default, don't crash.
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
 

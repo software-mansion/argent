@@ -58,7 +58,7 @@ Argent runs Android emulators on Linux but the default install can be slow if a 
   ARGENT_EMULATOR_GPU_MODE=host argent ...
   ```
 
-  Argent also runs a host-side preflight on every boot and prints a warning if `/dev/kvm` isn't usable or `vmx`/`svm` is missing from `/proc/cpuinfo` — the two conditions that cause a 10–50× TCG-vs-KVM slowdown.
+  Argent's boot-device preflight prints a warning if `/dev/kvm` isn't usable — the condition that causes a 10–50× TCG-vs-KVM slowdown.
 
 - **System image.** Prefer the `default` or `google_apis` variants of `x86_64` system images for headless agent workflows; `google_apis_playstore` adds noticeable boot-time CPU churn from Play services. Always pick `x86_64` on Intel/AMD hosts — ARM images run via QEMU translation and are dramatically slower.
 

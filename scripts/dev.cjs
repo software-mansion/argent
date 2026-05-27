@@ -67,14 +67,10 @@ async function waitForHttp(url, timeoutMs = 20_000) {
   return false;
 }
 
-// ── Step 1: Build native devtools dylibs ─────────────────────────────────────
+// ── Step 1: Build native devtools dylibs (macOS only) ───────────────────────
 
-// The dylibs are macOS-only: they get injected into the iOS Simulator via
-// DYLD_INSERT_LIBRARIES, and the runtime resolver in `@argent/native-
-// devtools-ios` throws `requireDarwin` on every non-darwin host. Building
-// them requires Xcode (the build.sh under packages/native-devtools-ios
-// shells out to xcodebuild + codesign), so even attempting it on Linux is
-// a non-starter. Skip the entire block on non-darwin so a Linux contributor
+// Dylibs are macOS-only at runtime (DYLD_INSERT_LIBRARIES into iOS Simulator)
+// and macOS-only at build time (Xcode). Skip on Linux/Windows so a contributor
 // without `argent-private` SSH access can still run `npm run dev`.
 if (process.platform === "darwin") {
   const DYLIBS_DIR = path.join(NATIVE_DEVTOOLS_PKG, "dylibs");
