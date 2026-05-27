@@ -1,38 +1,29 @@
 import * as fs from "node:fs";
 
 /**
- * Linux-host preflight for `boot-device` (Android emulator).
+ * Linux-host preflight for `boot-device` (Android emulator). Returns the
+ * two warnings worth surfacing on a Linux host that silently kneecap AVD
+ * performance, each with an unambiguous fix:
  *
- * `linuxBootDiagnostics()` checks for the two host conditions that silently
- * kneecap AVD performance with an unambiguous fix: KVM device accessibility
- * and CPU virtualization extensions. `bootAndroid` logs the warnings once
- * per boot so a user about to wait for a TCG-emulated AVD sees *why* and
- * what to fix, instead of attributing the 10–50× slowdown to argent.
+ *   - `/dev/kvm` not present or not RW → emulator falls back to TCG
+ *     full-software emulation (10–50× slower than KVM).
+ *   - CPU `flags` line lacks `vmx`/`svm` → same TCG fallback, but the
+ *     fix is different (enable nested virt on the parent hypervisor).
  *
  * Returns `null` on non-Linux hosts so the call site can be one-lined.
- * Pure-fs/sync (no spawning) so it's cheap to call on every boot.
+ * Never throws; never blocks a boot — KVM-less hosts still boot, just
+ * very slowly.
  *
- * Deliberately narrow: argent's Linux GPU choice (`-gpu swiftshader` —
- * see `boot-device.ts:selectGpuMode`) doesn't depend on host Vulkan or
+ * Scope note: argent's Linux GPU choice (`-gpu swiftshader` — see
+ * `boot-device.ts:selectGpuMode`) doesn't depend on host Vulkan or
  * OpenGL, so we don't probe those. The Linux-emulator-perf advice that
  * IS argent-relevant lives in the README.
  */
 
 export interface LinuxBootDiagnostic {
-  /** `warning` is degraded-but-bootable; `info` is purely informational. */
-  severity: "warning" | "info";
   message: string;
 }
 
-/**
- * Run the Linux-only host checks and return a list of diagnostics worth
- * surfacing to the user. Returns `null` on non-Linux hosts so the call site
- * can be one-lined.
- *
- * No fatal severity: we never block a boot from preflight — KVM-less hosts
- * still boot, just very slowly, and a developer who knowingly works on a
- * VPS without nested virt has the right to that pain. We only inform.
- */
 export function linuxBootDiagnostics(): LinuxBootDiagnostic[] | null {
   if (process.platform !== "linux") return null;
   const diags: LinuxBootDiagnostic[] = [];
@@ -48,13 +39,11 @@ export function linuxBootDiagnostics(): LinuxBootDiagnostic[] | null {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
       diags.push({
-        severity: "warning",
         message:
           "/dev/kvm is missing — KVM module is not loaded or virtualization is disabled in BIOS/UEFI. The emulator will fall back to TCG software emulation (10–50× slower). Enable VT-x/AMD-V in BIOS and load the kvm module (`modprobe kvm_intel` or `modprobe kvm_amd`).",
       });
     } else {
       diags.push({
-        severity: "warning",
         message:
           "/dev/kvm exists but is not readable/writable by this user (code=" +
           (code ?? "unknown") +
@@ -72,7 +61,6 @@ export function linuxBootDiagnostics(): LinuxBootDiagnostic[] | null {
     const cpuinfo = fs.readFileSync("/proc/cpuinfo", "utf8");
     if (!/^flags\s*:[^\n]*\b(vmx|svm)\b/m.test(cpuinfo)) {
       diags.push({
-        severity: "warning",
         message:
           "CPU `flags` line in /proc/cpuinfo lists no `vmx` (Intel) or `svm` (AMD) — hardware virtualization extensions are unavailable to this kernel. If you're inside a VM, enable nested virtualization on the host hypervisor. Without virt extensions, the emulator runs in TCG software mode (very slow).",
       });

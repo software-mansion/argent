@@ -545,7 +545,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   const linuxDiag = linuxBootDiagnostics();
   if (linuxDiag && linuxDiag.length > 0) {
     for (const d of linuxDiag) {
-      console.warn(`[boot-device:linux] ${d.severity}: ${d.message}`);
+      console.warn(`[boot-device:linux] ${d.message}`);
     }
   }
   const emulatorBinary = await resolveEmulatorOrThrow();
@@ -644,13 +644,8 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // so ram.bin corruption (which the probe misses) surfaces in seconds
       // rather than hanging for the full overall budget. `-no-snapshot-save`
       // avoids overwriting a working snapshot with state captured after we
-      // later force-kill the child from a failure path.
-      // GPU mode is platform-dependent. `selectGpuMode` picks `auto` on
-      // macOS (ANGLE→Metal, hardware-accelerated) and `swiftshader` on
-      // Linux (software-rendered but universally compatible — `host` and
-      // `auto` both have silent-failure modes on Linux: see selectGpuMode's
-      // doc for the full reasoning). Users with verified working host GL
-      // can override via `ARGENT_EMULATOR_GPU_MODE`.
+      // later force-kill the child from a failure path. `-gpu` value and the
+      // optional `-no-window` come from `selectGpuMode` / `selectExtraEmulatorArgs`.
       const hotArgs = [
         "-avd",
         params.avdName,
