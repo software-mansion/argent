@@ -53,7 +53,7 @@ describe("linuxBootDiagnostics", () => {
       fsMock.readFileSync.mockReturnValue("flags : vmx\n");
 
       const diags = linuxBootDiagnostics()!;
-      expect(diags.some((d) => /\/dev\/kvm is missing/.test(d.message))).toBe(true);
+      expect(diags.some((d) => /\/dev\/kvm is missing/.test(d))).toBe(true);
     });
 
     it("warns when /dev/kvm exists but is not RW (EACCES → group hint)", () => {
@@ -63,9 +63,7 @@ describe("linuxBootDiagnostics", () => {
       fsMock.readFileSync.mockReturnValue("flags : vmx\n");
 
       const diags = linuxBootDiagnostics()!;
-      const kvmDiag = diags.find((d) => /kvm/i.test(d.message))!;
-      expect(kvmDiag).toBeTruthy();
-      expect(kvmDiag.message).toMatch(/usermod -aG kvm/);
+      expect(diags.some((d) => /usermod -aG kvm/.test(d))).toBe(true);
     });
 
     it("warns when CPU flags lack vmx/svm", () => {
@@ -73,7 +71,7 @@ describe("linuxBootDiagnostics", () => {
       fsMock.readFileSync.mockReturnValue("flags : sse4_2 avx\n");
 
       const diags = linuxBootDiagnostics()!;
-      expect(diags.some((d) => /vmx.*svm|virtualization extensions/.test(d.message))).toBe(true);
+      expect(diags.some((d) => /vmx.*svm|virtualization extensions/.test(d))).toBe(true);
     });
 
     it("returns no diagnostics on a healthy host (KVM RW + vmx)", () => {

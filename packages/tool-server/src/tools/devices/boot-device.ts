@@ -542,11 +542,8 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   // wait sees *why* and what to fix. We never throw — these are
   // degraded-but-bootable conditions, and somebody who has a specific
   // reason to boot without acceleration shouldn't be blocked.
-  const linuxDiag = linuxBootDiagnostics();
-  if (linuxDiag && linuxDiag.length > 0) {
-    for (const d of linuxDiag) {
-      console.warn(`[boot-device:linux] ${d.message}`);
-    }
+  for (const msg of linuxBootDiagnostics() ?? []) {
+    console.warn(`[boot-device:linux] ${msg}`);
   }
   const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
