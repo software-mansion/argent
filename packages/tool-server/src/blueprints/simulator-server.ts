@@ -163,10 +163,6 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     }
 
     if (device.platform === "ios") {
-      // Enable accessibility automation before any app is launched so that apps
-      // start with their AX server running. If this is called after apps are already
-      // running (e.g. a pre-booted simulator), those apps won't pick up the flag
-      // until restarted — but new launches will work correctly.
       await ensureAutomationEnabled(device.id).catch(() => {});
     } else {
       await ensureDep("adb");

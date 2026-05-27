@@ -11,8 +11,9 @@ import type { DescribeFrame, DescribeNode, DescribeSource } from "./contract";
 //   - "ax-service" and "native-devtools" (the iOS providers) emit a flat list
 //     of leaves under a synthetic root; the flat renderer sorts those in
 //     reading order (top-to-bottom, then left-to-right).
-//   - "uiautomator" (Android) emits a real parent/child tree; the nested
-//     renderer is an iterative DFS that preserves depth via indentation.
+//   - "uiautomator" and "android-devtools" (Android) emit a real parent/child
+//     tree; the nested renderer is an iterative DFS that preserves depth via
+//     indentation.
 // Picking by source (rather than checking `every child has no grandchildren`)
 // keeps behaviour stable for callers that diff two close-in-time describes —
 // a single accidental grandchild used to flip an ax-service response into
@@ -162,7 +163,8 @@ export interface FormatDescribeOptions {
 }
 
 export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptions): string {
-  const mode: "flat" | "nested" = opts.source === "uiautomator" ? "nested" : "flat";
+  const mode: "flat" | "nested" =
+    opts.source === "uiautomator" || opts.source === "android-devtools" ? "nested" : "flat";
   const header: string[] = [];
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
