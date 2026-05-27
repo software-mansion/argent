@@ -17,6 +17,7 @@ function withDescription(data: DescribeTreeData): DescribeResult {
     source: data.source,
   };
   if (data.should_restart) out.should_restart = data.should_restart;
+  if (data.hint) out.hint = data.hint;
   return out;
 }
 
