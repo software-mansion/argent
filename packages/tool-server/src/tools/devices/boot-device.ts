@@ -467,7 +467,7 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   await ensureDep("adb");
   await ensureDep("emulator");
 
-  for (const msg of linuxBootDiagnostics() ?? []) {
+  for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {
     console.warn(`[boot-device:linux] ${msg}`);
   }
   const emulatorBinary = await resolveEmulatorOrThrow();
