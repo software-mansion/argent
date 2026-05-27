@@ -213,22 +213,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         try {
           const screenshotResult = await callTool("screenshot", { udid });
           const screenshotContent = await toMcpContent(screenshotResult.result, "image");
-          content = [
-            ...content,
-            {
-              type: "text" as const,
-              text: "--- Screen after action ---",
-            },
-            ...screenshotContent,
-          ];
-        } catch (ssErr) {
-          content = [
-            ...content,
-            {
-              type: "text" as const,
-              text: `(Auto-screenshot skipped: ${ssErr instanceof Error ? ssErr.message : String(ssErr)})`,
-            },
-          ];
+          const hasImage = screenshotContent.some((b) => b.type === "image");
+          if (hasImage) {
+            content = [
+              ...content,
+              {
+                type: "text" as const,
+                text: "--- Screen after action ---",
+              },
+              ...screenshotContent,
+            ];
+          }
+        } catch {
+          // Auto-screenshot failed — silently drop it.
         }
       }
 
