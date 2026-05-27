@@ -1,25 +1,11 @@
 name: Wayland E2E
 
-# Verifies that argent boots an Android AVD and drives it via the tool-server
-# under a real Wayland compositor (Weston, headless). This is the regression
-# guard for the Linux GPU-mode choice made in 4d4cc46: `-gpu host` was known
-# to silently produce a corrupted/black emulator window on Wayland-with-NVIDIA
-# and similar host-GL configurations, while argent's screencap-based tools
-# reported success. Running through a headless Weston in CI catches any
-# future regression that re-introduces a host-GL dependency.
-#
-# Why Weston-headless and not Xvfb: Xvfb only provides an X11 server, which
-# argent's runtime would happily use via the host's libGL — not a Wayland
-# test. Weston's headless backend renders into an off-screen buffer using
-# pixman (CPU), so the compositor itself is software-only and reproducible
-# across runners. The emulator's process still picks its own renderer per
-# the `-gpu` arg; argent's job is to default to a renderer that works in
-# this environment, and this workflow asserts that.
-#
-# Manual trigger only — the job takes ~12-15 min (KVM-less CI runners boot
-# the AVD via TCG, which is the slow path). Trigger from the Actions tab
-# when you change `boot-device.ts`, `linux-preflight.ts`, the publish
-# workflows' bin paths, or anything else that touches the Linux boot path.
+# Regression guard for the Linux GPU-mode + headless-window choices. Boots
+# an AVD through the tool-server under headless Weston; asserts `hw.gpu.mode
+# = swiftshader` and that screenshots + gesture-tap work without a display.
+# A future change that re-introduces `-gpu host` (silent black-window
+# failure mode) or drops `ARGENT_EMULATOR_NO_WINDOW` support fails this job.
+# Manual + on-change trigger only — the job takes ~12-15 min.
 
 on:
   workflow_dispatch:
@@ -39,30 +25,17 @@ jobs:
     timeout-minutes: 30
 
     env:
-      # Mirror the Linux defaults a real argent user would inherit. The
-      # tool-server reads ANDROID_HOME for its SDK resolver; Wayland session
-      # vars steer Qt apps to the wayland backend.
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
       WAYLAND_DISPLAY: wayland-0
-      # The Android emulator's bundled Qt does NOT ship a wayland platform
-      # plugin (only linuxfb / offscreen / minimal / vnc / xcb). With Qt's
-      # default auto-detection and WAYLAND_DISPLAY set, the emulator's Qt6
-      # picks wayland → no plugin → FATAL → SIGABRT before any boot. Pin
-      # `offscreen` so the emulator's UI renders into an in-memory buffer
-      # regardless of session. Argent's screenshot tool reads the guest
-      # framebuffer via SurfaceFlinger (not the host-side Qt window), so
-      # nothing the test asserts depends on the window being visible.
+      # Emulator's bundled Qt has no wayland plugin; with WAYLAND_DISPLAY set
+      # it'd auto-pick wayland and SIGABRT. `offscreen` keeps Qt happy without
+      # a real display.
       QT_QPA_PLATFORM: offscreen
-      # Argent's boot-device defaults to showing the emulator window so a
-      # local developer can see the AVD UI. In a headless runner there's
-      # no display: the emulator's bundled Qt has no wayland plugin and
-      # SIGABRTs trying to show a crash-consent dialog. This env var
-      # makes boot-device append `-no-window` to the spawn args, picking
-      # qemu-system-x86_64-headless which doesn't need Qt or a display.
-      # Argent's screencap-based screenshot tool reads the in-memory
-      # framebuffer correctly without a window.
+      # Opt into headless-emulator path. Required here: the runner has no
+      # display so the windowed qemu-system-x86_64 SIGABRTs on the crash-
+      # consent dialog.
       ARGENT_EMULATOR_NO_WINDOW: "1"
 
     steps:
@@ -93,27 +66,13 @@ jobs:
           ls -l /dev/kvm
 
       - name: Install Weston + emulator native deps
-        # weston, xkb-data, libxkbcommon0, seatd: the Wayland compositor
-        # and the keymap data Weston's input path requires at startup
-        # (even in headless mode).
-        #
-        # libgoogle-perftools4t64: provides libtcmalloc_minimal.so.4
-        # which qemu-system-x86_64 in the Android emulator links against.
-        # GitHub's ubuntu-latest tends to have this preinstalled, but on
-        # a slimmer Ubuntu image (e.g. a self-hosted runner built from
-        # ubuntu:24.04) it's missing and qemu fails with `error while
-        # loading shared libraries: libtcmalloc_minimal.so.4: cannot
-        # open shared object file`. Empirically validated as the
-        # blocker in a privileged ubuntu:24.04 container running this
-        # workflow's logic.
+        # libgoogle-perftools4t64 ships libtcmalloc_minimal.so.4 which
+        # qemu-system-x86_64 links against; ubuntu-latest usually has it
+        # but slimmer images don't (verified blocker in ubuntu:24.04).
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            weston \
-            xkb-data \
-            libxkbcommon0 \
-            seatd \
-            libgoogle-perftools4t64
+            weston xkb-data libxkbcommon0 seatd libgoogle-perftools4t64
 
       - name: Start Weston (headless backend)
         run: |
@@ -138,13 +97,8 @@ jobs:
           test -S "$XDG_RUNTIME_DIR/wayland-0" || { cat /tmp/weston.log; exit 1; }
 
       - name: Install Android SDK packages
-        # We don't use the github-runner-bundled SDK because we want a fresh
-        # accept-licenses path that matches what a Linux user gets via
-        # `sdkmanager` (rather than the runner's preinstalled bits drifting
-        # over time).
         run: |
           set -e
-          # platform-tools comes preinstalled on ubuntu-latest, but emulator + image must be added.
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "emulator" \
@@ -154,13 +108,7 @@ jobs:
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
 
-      - name: Create AVD (4 GB RAM, 2 vCPUs — fits 4-vCPU runner without oversubscription)
-        # README recommends 8 GB / 6 vCPUs for dev boxes running native builds
-        # alongside the AVD. CI here only boots the AVD and runs a couple of
-        # tool calls — no concurrent gradle. 4 GB / 2 vCPU keeps the host
-        # under-subscribed (2 vCPU guest + 2 vCPU left for tool-server +
-        # weston + adb) and avoids KVM scheduling thrash on the small CI
-        # runner.
+      - name: Create AVD (4 GB / 2 vCPUs, sized for the 4-vCPU runner)
         run: |
           set -e
           echo no | avdmanager create avd \
@@ -178,13 +126,10 @@ jobs:
           npm install @rollup/rollup-linux-x64-gnu --no-save
           npx tsc --build
 
-      - name: Start tool-server (from source, ts-node)
+      - name: Start tool-server (ts-node from src)
         run: |
           mkdir -p ~/.argent
           : > ~/.argent/tool-server.log
-          # Inherit WAYLAND_DISPLAY etc. so spawned emulator child sees them.
-          # ts-node is dev-flow; the bundled CLI is exercised by separate
-          # release tests. The default `-gpu` arg comes from selectGpuMode().
           cd packages/tool-server
           nohup env PORT=3033 npx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
@@ -217,24 +162,15 @@ jobs:
           echo "$GPU" > /tmp/gpu-mode.txt
           echo "gpu_mode=$GPU" >> $GITHUB_OUTPUT
 
-      - name: Verify GPU mode is swiftshader (not host or lavapipe)
-        # On Wayland with no GPU drivers in the headless runner, `-gpu host`
-        # would silently produce a non-functional emulator AND `-gpu auto`
-        # would resolve to lavapipe. The PR's choice of `swiftshader` is
-        # what makes this E2E pass at all; pin it here so a future
-        # selectGpuMode() change can't quietly regress.
+      - name: Verify GPU mode is swiftshader
+        # Pins the selectGpuMode() decision: any future change that
+        # re-introduces `-gpu host` / `auto` will fail here.
         run: |
           GPU=$(cat /tmp/gpu-mode.txt)
-          echo "Observed GPU mode: $GPU"
-          # `-gpu swiftshader` writes `hw.gpu.mode = swiftshader` to
-          # hardware-qemu.ini.
-          echo "$GPU" | grep -qi swiftshader || { echo "expected swiftshader, got $GPU"; exit 1; }
+          echo "Observed: $GPU"
+          echo "$GPU" | grep -qi swiftshader || { echo "expected swiftshader"; exit 1; }
 
-      - name: Screenshot has real pixels
-        # Catches the "screencap returns all-zero buffer" wedged-framebuffer
-        # mode that hot-boot fast-path already guards against (see
-        # assertScreencapAlive in boot-device.ts); useful here as a
-        # cold-boot end-to-end smoke check too.
+      - name: Screenshot returns real pixels (not all-zero framebuffer)
         run: |
           set -e
           curl -sS -m 60 -X POST http://127.0.0.1:3033/tools/screenshot \
@@ -243,23 +179,17 @@ jobs:
           PATH_PNG=$(python3 -c "import json,sys;print(json.load(open('/tmp/shot.json'))['data']['path'])")
           cp "$PATH_PNG" /tmp/wayland-cold-boot.png
           SZ=$(stat -c%s /tmp/wayland-cold-boot.png)
-          echo "screenshot size=${SZ}B"
-          # A real screen is > 5 KB; an all-zero framebuffer is ~3-7 KB after
-          # PNG compression. Use 20 KB as the bar (lockscreen has battery
-          # icon + clock + nav pill, well over 20 KB).
-          test "$SZ" -gt 20000 || { echo "screenshot too small — framebuffer likely empty"; exit 1; }
+          echo "size=${SZ}B"
+          # All-zero framebuffer PNG-compresses to ~3-7 KB. Lockscreen UI
+          # (clock + battery + nav pill) is reliably > 20 KB.
+          test "$SZ" -gt 20000 || { echo "screenshot too small"; exit 1; }
 
-      - name: gesture-tap survives round-trip
-        # Sanity-checks the input plumbing on Wayland. We don't assert the
-        # tap lands on any particular UI element (cold-boot lockscreen
-        # state varies between runs); we only check that the tool returns
-        # success (the input event was accepted by the guest).
+      - name: gesture-tap round-trips
         run: |
           OUT=$(curl -sS -m 30 -X POST http://127.0.0.1:3033/tools/gesture-tap \
             -H 'Content-Type: application/json' \
             -d '{"udid":"emulator-5554","x":0.5,"y":0.5}')
-          echo "gesture-tap: $OUT"
-          echo "$OUT" | grep -q '"tapped":true' || { echo "gesture-tap did not succeed"; exit 1; }
+          echo "$OUT" | grep -q '"tapped":true' || { echo "gesture-tap failed"; exit 1; }
 
       - name: Upload artifacts on failure or success
         if: always()
