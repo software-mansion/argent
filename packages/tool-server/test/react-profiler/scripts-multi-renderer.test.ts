@@ -31,7 +31,12 @@ interface MockRi {
   startProfiling: ReturnType<typeof vi.fn>;
   stopProfiling: ReturnType<typeof vi.fn>;
   getProfilingData: ReturnType<typeof vi.fn>;
-  getDisplayNameForElementID: ReturnType<typeof vi.fn>;
+  // Either name may exist on a real rendererInterface depending on
+  // react-devtools-core version (`Element` in modern, `Fiber` in older
+  // bundles). Both are optional in the mock so individual tests can prove
+  // the scripts handle each surface.
+  getDisplayNameForElementID?: ReturnType<typeof vi.fn>;
+  getDisplayNameForFiberID?: ReturnType<typeof vi.fn>;
 }
 
 function makeRi(
@@ -41,6 +46,11 @@ function makeRi(
     rootID?: number;
     commits?: BackendCommit[];
     names?: Record<number, string>;
+    // 'element' → only getDisplayNameForElementID exists (modern devtools)
+    // 'fiber'   → only getDisplayNameForFiberID exists (RN ≤0.75-ish)
+    // 'both'    → both (defensive)
+    // 'none'    → neither (unrecognized devtools version)
+    nameApi?: "element" | "fiber" | "both" | "none";
   } = {}
 ): MockRi {
   const ri = {
@@ -61,9 +71,15 @@ function makeRi(
   ri.getProfilingData = vi.fn(() => ({
     dataForRoots: opts.commits ? [{ rootID: opts.rootID ?? 1, commitData: opts.commits }] : [],
   }));
-  ri.getDisplayNameForElementID = vi.fn((id: number) =>
-    opts.names && opts.names[id] != null ? opts.names[id] : null
-  );
+  const lookup = (id: number) =>
+    opts.names && opts.names[id] != null ? opts.names[id] : null;
+  const api = opts.nameApi ?? "element";
+  if (api === "element" || api === "both") {
+    ri.getDisplayNameForElementID = vi.fn(lookup);
+  }
+  if (api === "fiber" || api === "both") {
+    ri.getDisplayNameForFiberID = vi.fn(lookup);
+  }
   return ri;
 }
 
@@ -108,6 +124,7 @@ interface StartResult {
 interface StopReadResult {
   live: { dataForRoots: Array<{ rootID: number; commitData: BackendCommit[] }> } | null;
   displayNameById: Record<string, string | null>;
+  displayNameApiAvailable?: boolean;
 }
 
 afterEach(() => {
@@ -287,7 +304,7 @@ describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
     expect(r.displayNameById["99"]).toBe("PaperNode");
   });
 
-  it("falls back to the per-renderer cache when getDisplayNameForElementID returns null", () => {
+  it("falls back to the per-renderer cache when the live accessor returns null", () => {
     const fabric = makeRi({ rootID: 10, commits: [commit(42)] }); // returns null for 42
     const ris = new Map<number, MockRi>([[1, fabric]]);
     const out = withHook(ris, () => {
@@ -311,6 +328,78 @@ describe("STOP_AND_READ_SCRIPT (multi-renderer)", () => {
     const r = JSON.parse(out) as StopReadResult;
     expect(r.live).toBeNull();
     expect(r.displayNameById).toEqual({});
+  });
+
+  // Regression: this is the exact bug observed against RN 0.74-era runtimes
+  // whose bundled react-devtools-core exposes getDisplayNameForFiberID
+  // instead of getDisplayNameForElementID. Pre-fix the script blindly called
+  // ElementID, every call threw, the catch dropped every fiber, and the stop
+  // tool reported 0 captured / 18,921 unattributed.
+  it("resolves names via getDisplayNameForFiberID when ElementID is absent (old react-devtools)", () => {
+    const ri = makeRi({
+      rootID: 10,
+      commits: [commit(42)],
+      names: { 42: "FromFiberID" },
+      nameApi: "fiber",
+    });
+    const ris = new Map<number, MockRi>([[1, ri]]);
+    const out = withHook(ris, () => {
+      // Setup wrapper stashes __argent_getDisplayName__ once per ri.
+      evalIIFE(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+      return evalIIFE<string>(STOP_AND_READ_SCRIPT);
+    });
+    const r = JSON.parse(out) as StopReadResult;
+
+    expect(r.displayNameById["42"]).toBe("FromFiberID");
+    expect(r.displayNameApiAvailable).toBe(true);
+    expect(ri.getDisplayNameForFiberID).toHaveBeenCalled();
+  });
+
+  it("also works when ElementID is present (modern react-devtools)", () => {
+    const ri = makeRi({
+      rootID: 10,
+      commits: [commit(42)],
+      names: { 42: "FromElementID" },
+      nameApi: "element",
+    });
+    const ris = new Map<number, MockRi>([[1, ri]]);
+    const out = withHook(ris, () => {
+      evalIIFE(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+      return evalIIFE<string>(STOP_AND_READ_SCRIPT);
+    });
+    const r = JSON.parse(out) as StopReadResult;
+
+    expect(r.displayNameById["42"]).toBe("FromElementID");
+    expect(r.displayNameApiAvailable).toBe(true);
+    expect(ri.getDisplayNameForElementID).toHaveBeenCalled();
+  });
+
+  it("prefers ElementID when both names exist (modern-name precedence)", () => {
+    const ri = makeRi({
+      rootID: 10,
+      commits: [commit(42)],
+      names: { 42: "Shared" },
+      nameApi: "both",
+    });
+    const ris = new Map<number, MockRi>([[1, ri]]);
+    withHook(ris, () => {
+      evalIIFE(REACT_NATIVE_PROFILER_SETUP_SCRIPT);
+      return evalIIFE<string>(STOP_AND_READ_SCRIPT);
+    });
+    expect(ri.getDisplayNameForElementID).toHaveBeenCalled();
+    expect(ri.getDisplayNameForFiberID).not.toHaveBeenCalled();
+  });
+
+  it("flags displayNameApiAvailable=false when no accessor exists on any ri", () => {
+    // This is the diagnostic that distinguishes "wrong react-devtools version"
+    // from "transient-unmount race" in the unattributed-fibers report.
+    const ri = makeRi({ rootID: 10, commits: [commit(42)], nameApi: "none" });
+    const ris = new Map<number, MockRi>([[1, ri]]);
+    const out = withHook(ris, () => evalIIFE<string>(STOP_AND_READ_SCRIPT));
+    const r = JSON.parse(out) as StopReadResult;
+
+    expect(r.displayNameApiAvailable).toBe(false);
+    expect(r.displayNameById["42"]).toBeNull();
   });
 });
 
