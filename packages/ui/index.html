@@ -863,6 +863,50 @@
         background: var(--color-danger-bg);
         color: var(--color-danger-fg);
       }
+
+      /* Post-submit confirmation card — centred above everything, fades and
+         pops in via --ease-pop, then either auto-dismisses (browser mode) or
+         is overrun by the Electron window's close-squeeze. */
+      .success-toast {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        z-index: var(--z-modal);
+      }
+      .success-toast[hidden] {
+        display: none;
+      }
+      .success-toast .success-card {
+        background: var(--color-ok);
+        color: var(--color-on-accent);
+        padding: var(--pad-modal) calc(var(--pad-modal) * 1.6);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-pop);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-stack);
+        opacity: 0;
+        transform: scale(0.82);
+        transition:
+          opacity var(--dur-fade) ease,
+          transform var(--dur-card-in) var(--ease-pop);
+      }
+      .success-toast.show .success-card {
+        opacity: 1;
+        transform: scale(1);
+      }
+      .success-toast .success-icon {
+        font-size: 26px;
+        font-weight: var(--fw-extrabold);
+        line-height: 1;
+      }
+      .success-toast .success-text {
+        font-size: var(--fs-title);
+        font-weight: var(--fw-bold);
+      }
     </style>
   </head>
   <body>
@@ -911,6 +955,12 @@
             </div>
           </div>
         </div>
+        <div class="success-toast" id="success-toast" hidden>
+          <div class="success-card">
+            <span class="success-icon" aria-hidden="true">✓</span>
+            <span class="success-text" id="success-text">Selection sent</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -956,6 +1006,7 @@
         spotTrajHitboxMargin: cssNum("--spot-traj-hitbox-margin", 0.2),
         spotMaxFrameArea: cssNum("--spot-max-frame-area", 0.85),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
+        successToastShowMs: cssNum("--success-toast-show-ms", 1200),
       };
 
       // Browser KeyboardEvent.code → USB HID Keyboard Usage Page (0x07) keycode.
@@ -1741,6 +1792,8 @@
       const confirmMsg = document.getElementById("confirm-msg");
       const confirmCancel = document.getElementById("confirm-cancel");
       const confirmYes = document.getElementById("confirm-yes");
+      const successToast = document.getElementById("success-toast");
+      const successText = document.getElementById("success-text");
       const SVGNS = "http://www.w3.org/2000/svg";
 
       const vp = {
@@ -2818,6 +2871,20 @@
         const vy = (last.y - early.y) / dt;
         return { x: last.x, y: last.y, vx, vy, speed: Math.hypot(vx, vy) };
       }
+      // True if (x,y) is inside `frame` after inflating each side by
+      // `margin * dim`. Used to make hover focus *sticky*: once an element
+      // is focused, the cursor can drift this far outside its real frame
+      // before the spotlight is released. The same `margin` token feeds the
+      // trajectory predictor below, so both forgiveness behaviours move
+      // together when the token is tuned.
+      function pointInPaddedFrame(f, x, y, margin) {
+        if (!f || f.width <= 0 || f.height <= 0) return false;
+        const mw = f.width * (margin || 0);
+        const mh = f.height * (margin || 0);
+        return (
+          x >= f.x - mw && x <= f.x + f.width + mw && y >= f.y - mh && y <= f.y + f.height + mh
+        );
+      }
       // Slab-method ray/AABB test in normalized coords. Returns true if the
       // forward ray from (x,y) in unit direction (ux,uy) enters `frame` within
       // `reach` normalized units. Points already inside the frame count as
@@ -2960,11 +3027,23 @@
           const x = (ev.clientX - mainEl.getBoundingClientRect().left - r.x) / r.w;
           const y = (ev.clientY - mainEl.getBoundingClientRect().top - r.y) / r.h;
           pushTrajSample(x, y);
-          const node = vpNodeAtPoint(vp.tree, x, y);
+          let node = vpNodeAtPoint(vp.tree, x, y);
+          // Sticky focus: if strict containment finds nothing but the cursor
+          // is still in the previously-focused element's padded zone, keep
+          // it. Strict containment ALWAYS wins (so entering another element
+          // takes precedence), which preserves the "don't let margins steal
+          // focus from an obviously hovered element" rule.
+          if (!node && vp.focus) {
+            const ff = vp.focus.frame;
+            if (pointInPaddedFrame(ff, x, y, THEME.spotTrajHitboxMargin)) {
+              node = vp.focus;
+            }
+          }
           if (node) {
-            // Over an element → cancel any pending idle release and move the
-            // spotlight there. Trajectory history is reset so a fresh exit
-            // measures the *new* element's departure, not stale samples.
+            // Over an element (strictly, or in the previous focus's padded
+            // zone) → cancel any pending idle release and move the spotlight
+            // there. Trajectory history is reset so a fresh exit measures
+            // the *new* element's departure, not stale samples.
             clearSpotIdle();
             pushTrajSample(x, y);
             if (node !== vp.focus) {
@@ -3549,6 +3628,35 @@
       }
       requestAnimationFrame(vpTick);
 
+      // Brief green confirmation card centred on the viewport. In Electron
+      // host mode the surrounding window squeezes closed shortly after this
+      // appears (tool-server adds a delay before sending the close cmd, so
+      // the toast is fully visible first). In a regular browser the toast
+      // auto-dismisses after spotTraj* feel — purely cosmetic feedback.
+      let successToastTimer = null;
+      function showSuccessToast(picked, comments) {
+        if (!successToast) return;
+        successText.textContent =
+          comments > 0
+            ? `Sent ${picked} pick(s) + ${comments} comment(s)`
+            : `Sent ${picked} pick(s)`;
+        successToast.hidden = false;
+        // Force a layout pass so the .show transition fires from the
+        // hidden→visible state (otherwise the browser may batch and skip
+        // the transition entirely).
+        // eslint-disable-next-line no-unused-expressions
+        successToast.offsetHeight;
+        successToast.classList.add("show");
+        if (successToastTimer) clearTimeout(successToastTimer);
+        successToastTimer = setTimeout(() => {
+          successToast.classList.remove("show");
+          // Wait for the fade-out before hiding so the transition plays.
+          setTimeout(() => {
+            if (!successToast.classList.contains("show")) successToast.hidden = true;
+          }, 250);
+        }, THEME.successToastShowMs);
+      }
+
       async function vpComplete() {
         if (vp.submitting) return;
         if (vp.proposals.length === 0 && vp.annotations.length === 0) return;
@@ -3582,6 +3690,7 @@
             `Sent ${picked} pick(s) + ${vp.annotations.length} comment(s) to the agent.`,
             "ok"
           );
+          showSuccessToast(picked, vp.annotations.length);
         } catch (err) {
           setNote(`Failed: ${err.message || err}`, "err");
         } finally {

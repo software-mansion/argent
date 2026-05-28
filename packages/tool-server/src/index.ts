@@ -9,6 +9,12 @@ import { variantProposalStore } from "./utils/variant-proposals";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 
+// After a successful selection submit, wait this long before asking the
+// Electron preview window to play its close animation. Gives the renderer
+// time to show the green "Selection sent" toast first; the agent's await
+// has already been resolved by this point, so the delay is purely cosmetic.
+const PREVIEW_CLOSE_DELAY_MS = 1_000;
+
 /**
  * Prepends an ISO timestamp to every line written to stdout/stderr.
  *
@@ -94,8 +100,13 @@ export function start(): void {
     const url = previewWindowBaseUrl();
     if (url) previewWindow.ensureOpen(url);
   };
+  let pendingCloseTimer: NodeJS.Timeout | null = null;
   const onSelectionSubmitted = (): void => {
-    previewWindow.requestClose();
+    if (pendingCloseTimer) clearTimeout(pendingCloseTimer);
+    pendingCloseTimer = setTimeout(() => {
+      pendingCloseTimer = null;
+      previewWindow.requestClose();
+    }, PREVIEW_CLOSE_DELAY_MS);
   };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
@@ -105,6 +116,7 @@ export function start(): void {
   shutdown = async (exitCode = 0) => {
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    if (pendingCloseTimer) clearTimeout(pendingCloseTimer);
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
