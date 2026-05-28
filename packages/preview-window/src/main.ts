@@ -6,47 +6,90 @@ import * as readline from "node:readline";
 // pipes single-line JSON commands ({cmd:"foreground"|"close",url?}) over
 // stdin to reuse or dismiss the window across rounds.
 //
-// Feel constants live at the top so the squeeze animation is tunable from
-// one place. Width is fixed; only height animates (iris from the vertical
-// midpoint), so the toolbar's horizontal centring never jumps.
+// The squeeze animation is done by transforming <html> in the renderer
+// (CSS scaleY, GPU-composited) — NOT by resizing the OS window. Resizing
+// the window forces Chromium to relayout the heavy preview content on
+// every frame, which was the lag the previous setBounds-based approach
+// surfaced. With a transparent BrowserWindow at full size + a scaleY
+// transform on <html>, the only work per frame is a compositor matrix
+// multiply, and there's no post-animation residual because the OS window
+// never shrinks (it just disappears with app.quit at the end).
 const TARGET_WIDTH = 1200;
 const TARGET_HEIGHT = 820;
-const COLLAPSED_HEIGHT = 1;
-const ANIMATION_MS = 280;
-const FRAME_MS = 16;
-const BG_COLOR = "#0e0e10"; // matches packages/ui/theme.css --color-bg
+const ANIMATION_MS = 320;
 
 let win: BrowserWindow | null = null;
-// Captured after the first natural placement so subsequent animations
-// (re-foreground, close) keep the same visual centre.
-let centeredX = 0;
-let centeredCY = 0;
 
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
+// Both phases of the squeeze run as CSS transitions inside the renderer.
+// The Promise the snippet returns to `executeJavaScript` resolves on
+// `transitionend`, so the main process learns when the animation has
+// actually finished instead of having to time it.
+function squeezeSnippet(toScale: number, durationMs: number): string {
+  return `
+    new Promise(resolve => {
+      const root = document.documentElement;
+      const s = root.style;
+      s.transformOrigin = '50% 50%';
+      s.transition = 'transform ${durationMs}ms cubic-bezier(0.22, 1, 0.36, 1)';
+      // Two rAFs so the previous transform (set just before this snippet)
+      // has been committed and rendered before the transition starts.
+      // Without this, the browser collapses both writes into one frame
+      // and skips the animation.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const onEnd = () => { root.removeEventListener('transitionend', onEnd); resolve(); };
+        root.addEventListener('transitionend', onEnd, { once: true });
+        // Safety in case transitionend never fires (off-screen tab, e.g.):
+        setTimeout(resolve, ${durationMs + 80});
+        s.transform = 'scaleY(${toScale})';
+      }));
+    });
+  `;
 }
 
-function animateHeight(from: number, to: number, onDone?: () => void): void {
-  if (!win) {
-    onDone?.();
-    return;
-  }
-  const startedAt = Date.now();
-  const tick = (): void => {
-    const current = win;
-    if (!current) {
-      onDone?.();
-      return;
-    }
-    const elapsed = Date.now() - startedAt;
-    const t = Math.min(1, elapsed / ANIMATION_MS);
-    const h = Math.max(1, Math.round(from + (to - from) * easeOutCubic(t)));
-    const y = Math.round(centeredCY - h / 2);
-    current.setBounds({ x: centeredX, y, width: TARGET_WIDTH, height: h });
-    if (t < 1) setTimeout(tick, FRAME_MS);
-    else onDone?.();
-  };
-  tick();
+// CSS injected on every load: forces the page canvas transparent so the
+// transparent BrowserWindow actually shows OS pixels around the squeezed
+// content. Without this, the renderer's `html { background: --color-bg }`
+// rule propagates to the document canvas (per CSS Backgrounds L3), which
+// paints the entire viewport dark grey even though the renderer itself
+// is scaled. The dark surface is moved to #root so the "card" still has
+// the right colour where it's actually drawn.
+const HOST_CSS = `
+  html, body { background: transparent !important; }
+  #root { background: var(--color-bg); }
+`;
+
+// Pre-show prep: install the host CSS + snap <html> to scaleY(0). Runs
+// while the BrowserWindow is still `show: false`, so the very first frame
+// the OS composites is "transparent window + collapsed card" with no
+// flash of the full-size dark page.
+async function prepareSqueeze(): Promise<void> {
+  const current = win;
+  if (!current) return;
+  await current.webContents.executeJavaScript(`
+    (() => {
+      const style = document.createElement('style');
+      style.setAttribute('data-argent-preview-host', '');
+      style.textContent = ${JSON.stringify(HOST_CSS)};
+      document.head.appendChild(style);
+      const s = document.documentElement.style;
+      s.transformOrigin = '50% 50%';
+      s.transition = 'none';
+      s.transform = 'scaleY(0)';
+      void document.documentElement.offsetHeight;
+    })();
+  `);
+}
+
+async function squeezeIn(): Promise<void> {
+  const current = win;
+  if (!current) return;
+  await current.webContents.executeJavaScript(squeezeSnippet(1, ANIMATION_MS));
+}
+
+async function squeezeOut(): Promise<void> {
+  const current = win;
+  if (!current) return;
+  await current.webContents.executeJavaScript(squeezeSnippet(0, ANIMATION_MS));
 }
 
 async function createWindow(): Promise<void> {
@@ -61,7 +104,12 @@ async function createWindow(): Promise<void> {
     height: TARGET_HEIGHT,
     frame: false,
     show: false,
-    backgroundColor: BG_COLOR,
+    // Transparent + no native shadow: the OS window is just a passthrough
+    // for the renderer. The visible "card" is whatever <html> + <body>
+    // paints, which is what we squeeze with the CSS transform.
+    transparent: true,
+    hasShadow: false,
+    backgroundColor: "#00000000",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -72,11 +120,6 @@ async function createWindow(): Promise<void> {
     win = null;
     app.quit();
   });
-  // Load offscreen, then center+show+collapse so the first paint is at the
-  // collapsed height — otherwise the user sees a full-size flash before the
-  // squeeze begins. A loadURL failure (tool-server gone, stale port) must
-  // exit the process rather than strand an invisible BrowserWindow keeping
-  // the Electron event loop alive.
   try {
     await win.loadURL(url);
   } catch (err) {
@@ -87,17 +130,11 @@ async function createWindow(): Promise<void> {
     return;
   }
   win.center();
-  const placed = win.getBounds();
-  centeredX = placed.x;
-  centeredCY = placed.y + Math.round(placed.height / 2);
-  win.setBounds({
-    x: centeredX,
-    y: centeredCY - Math.round(COLLAPSED_HEIGHT / 2),
-    width: TARGET_WIDTH,
-    height: COLLAPSED_HEIGHT,
-  });
+  // Install the host CSS + snap to collapsed BEFORE show — otherwise the
+  // first frame is the fully-painted dark page (1 frame of flash).
+  await prepareSqueeze();
   win.show();
-  animateHeight(COLLAPSED_HEIGHT, TARGET_HEIGHT);
+  void squeezeIn();
 }
 
 function foreground(url: string | undefined): void {
@@ -114,13 +151,15 @@ function foreground(url: string | undefined): void {
   }
 }
 
-function closeWithAnimation(): void {
+async function closeWithAnimation(): Promise<void> {
   if (!win) {
     app.quit();
     return;
   }
-  const startHeight = win.getBounds().height;
-  animateHeight(startHeight, COLLAPSED_HEIGHT, () => app.quit());
+  await squeezeOut();
+  // The OS window disappears the instant `app.quit` runs — no residual
+  // tiny strip lingering after the animation.
+  app.quit();
 }
 
 app.whenReady().then(createWindow);
@@ -136,7 +175,7 @@ rl.on("line", (line) => {
     return;
   }
   if (msg.cmd === "foreground") foreground(msg.url);
-  else if (msg.cmd === "close") closeWithAnimation();
+  else if (msg.cmd === "close") void closeWithAnimation();
 });
 // If the tool-server goes away (stdin closed), exit so we never strand a
 // window without a controller.
