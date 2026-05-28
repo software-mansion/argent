@@ -98,24 +98,47 @@ jobs:
 
       - name: Install Android SDK packages
         run: |
-          set -e
+          set -eo pipefail
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "emulator" \
             "platforms;android-34" \
             "system-images;android-34;google_apis;x86_64" >/dev/null
+          # sdkmanager exits 0 even when a package fails to install, so
+          # assert the system image files actually landed before avdmanager
+          # would silently fail on a missing -k target.
+          SYSIMG="$ANDROID_HOME/system-images/android-34/google_apis/x86_64"
+          test -f "$SYSIMG/system.img" || test -f "$SYSIMG/userdata.img" || {
+            echo "::error::system image not installed under $SYSIMG"
+            ls -la "$ANDROID_HOME/system-images/android-34" 2>&1 || true
+            exit 1
+          }
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_HOME/emulator" >> $GITHUB_PATH
 
       - name: Create AVD (4 GB / 2 vCPUs, sized for the 4-vCPU runner)
         run: |
-          set -e
-          echo no | avdmanager create avd \
+          set -eo pipefail
+          # avdmanager has a long-standing bug where it can write errors to
+          # stderr but still exit 0 (e.g. unrecognised device, missing parent
+          # dirs). Pre-create the prefs dir, route stderr into the log, and
+          # assert config.ini exists before continuing — otherwise the next
+          # step fails with a confusing `sed: can't read` instead of telling
+          # us what avdmanager actually complained about.
+          mkdir -p "$HOME/.android"
+          echo no | avdmanager -v create avd \
             -n argent-test \
             -k "system-images;android-34;google_apis;x86_64" \
-            -d "pixel_6"
+            -d "pixel_6" 2>&1 | tee /tmp/avdmanager.log
           CFG=$HOME/.android/avd/argent-test.avd/config.ini
+          if [ ! -f "$CFG" ]; then
+            echo "::error::avdmanager did not produce $CFG"
+            echo "--- avdmanager.log ---"; cat /tmp/avdmanager.log
+            echo "--- avdmanager list avd ---"; avdmanager list avd || true
+            echo "--- $HOME/.android tree ---"; find "$HOME/.android" -maxdepth 4 || true
+            exit 1
+          fi
           sed -i 's/^hw.ramSize.*$/hw.ramSize = 4096/' "$CFG" || echo "hw.ramSize = 4096" >> "$CFG"
           sed -i 's/^hw.cpu.ncore.*$/hw.cpu.ncore = 2/' "$CFG" || echo "hw.cpu.ncore = 2" >> "$CFG"
           grep -E "^(hw\.ramSize|hw\.cpu\.ncore|hw\.gpu)" "$CFG"
