@@ -11,6 +11,7 @@ import {
   readFlags,
   resolveProjectRoot,
   setFlag,
+  unsetFlag,
 } from "../src/flags.js";
 
 // All tests redirect global+project storage into tmp dirs by mutating
@@ -110,9 +111,17 @@ describe("resolveProjectRoot", () => {
     fs.mkdirSync(nested);
     expect(resolveProjectRoot(nested)).toBe(tmpProject);
   });
+
+  it("treats existing .git as a marker", () => {
+    fs.rmSync(path.join(tmpProject, "package.json"));
+    fs.mkdirSync(path.join(tmpProject, ".git"));
+    const nested = path.join(tmpProject, "sub");
+    fs.mkdirSync(nested);
+    expect(resolveProjectRoot(nested)).toBe(tmpProject);
+  });
 });
 
-describe("setFlag / readFlags", () => {
+describe("setFlag / unsetFlag / readFlags", () => {
   it("writes the flag to disk and reads it back", () => {
     setFlag("alpha", true, "global");
     expect(readFlags("global")).toEqual({ alpha: true });
@@ -131,6 +140,31 @@ describe("setFlag / readFlags", () => {
     setFlag("alpha", true, "global");
     setFlag("alpha", false, "global");
     expect(readFlags("global")).toEqual({ alpha: false });
+  });
+
+  it("unsetFlag removes the entry and reports whether it existed", () => {
+    setFlag("alpha", true, "global");
+    setFlag("beta", true, "global");
+    expect(unsetFlag("alpha", "global")).toBe(true);
+    expect(readFlags("global")).toEqual({ beta: true });
+    expect(unsetFlag("missing", "global")).toBe(false);
+  });
+
+  it("removes the file (and empty .argent dir) when the last flag is unset", () => {
+    setFlag("alpha", true, "global");
+    unsetFlag("alpha", "global");
+    expect(fs.existsSync(getFlagsPath("global"))).toBe(false);
+    expect(fs.existsSync(path.join(tmpHome, ".argent"))).toBe(false);
+  });
+
+  it("keeps the .argent dir when sibling state lives next to flags.json", () => {
+    setFlag("alpha", true, "global");
+    const sibling = path.join(tmpHome, ".argent", "tool-server.json");
+    fs.writeFileSync(sibling, "{}");
+    unsetFlag("alpha", "global");
+    expect(fs.existsSync(getFlagsPath("global"))).toBe(false);
+    expect(fs.existsSync(sibling)).toBe(true);
+    expect(fs.existsSync(path.join(tmpHome, ".argent"))).toBe(true);
   });
 
   it("project + global live in separate files", () => {
@@ -163,6 +197,14 @@ describe("setFlag / readFlags", () => {
     expect(readFlags("global")).toEqual({});
     expect(readFlags("project")).toEqual({});
   });
+
+  it("writes are atomic — no .tmp leftover in the .argent dir", () => {
+    setFlag("alpha", true, "global");
+    setFlag("beta", true, "global");
+    const dir = path.join(tmpHome, ".argent");
+    const leftovers = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
+    expect(leftovers).toEqual([]);
+  });
 });
 
 describe("isFlagEnabled", () => {
@@ -170,7 +212,7 @@ describe("isFlagEnabled", () => {
     expect(isFlagEnabled("unknown")).toBe(false);
   });
 
-  it("project value overrides global value", () => {
+  it("project value overrides global value (explicit false masks global true)", () => {
     setFlag("alpha", true, "global");
     setFlag("alpha", false, "project");
     expect(isFlagEnabled("alpha")).toBe(false);
@@ -198,12 +240,18 @@ interface CapturedConsole {
   stderr: string;
 }
 
-function captureConsole(fn: () => void): CapturedConsole {
+// Replaces console.log / console.error / process.exit with capturing stubs
+// for the duration of `fn`. If `fn` throws (the process.exit stub throws
+// `__test_exit_<code>` to escape the call site without killing the test
+// runner), `expectExit` propagates the throw through `expect(...).toThrow`
+// — the captured streams are returned either way.
+function withMockedConsole(fn: () => void): { stdout: string; stderr: string; threw: unknown } {
   const originalLog = console.log;
   const originalError = console.error;
   const originalExit = process.exit;
   let stdout = "";
   let stderr = "";
+  let threw: unknown = undefined;
   console.log = ((...args: unknown[]) => {
     stdout += args.join(" ") + "\n";
   }) as typeof console.log;
@@ -215,39 +263,26 @@ function captureConsole(fn: () => void): CapturedConsole {
   }) as typeof process.exit;
   try {
     fn();
+  } catch (err) {
+    threw = err;
   } finally {
     console.log = originalLog;
     console.error = originalError;
     process.exit = originalExit;
   }
+  return { stdout, stderr, threw };
+}
+
+function captureConsole(fn: () => void): CapturedConsole {
+  const { stdout, stderr, threw } = withMockedConsole(fn);
+  if (threw !== undefined) throw threw;
   return { stdout, stderr };
 }
 
 function expectExit(code: number, fn: () => void): CapturedConsole {
-  // Can't use captureConsole + expect().toThrow() — the assignment never
-  // completes when the right-hand side throws, leaving `captured` undefined.
-  // Inline the capture so we always get the buffered stdout/stderr back.
-  const originalLog = console.log;
-  const originalError = console.error;
-  const originalExit = process.exit;
-  let stdout = "";
-  let stderr = "";
-  console.log = ((...args: unknown[]) => {
-    stdout += args.join(" ") + "\n";
-  }) as typeof console.log;
-  console.error = ((...args: unknown[]) => {
-    stderr += args.join(" ") + "\n";
-  }) as typeof console.error;
-  process.exit = ((c?: number) => {
-    throw new Error(`__test_exit_${c ?? 0}`);
-  }) as typeof process.exit;
-  try {
-    expect(fn).toThrow(`__test_exit_${code}`);
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-    process.exit = originalExit;
-  }
+  const { stdout, stderr, threw } = withMockedConsole(fn);
+  expect(threw).toBeInstanceOf(Error);
+  expect((threw as Error).message).toBe(`__test_exit_${code}`);
   return { stdout, stderr };
 }
 
@@ -259,10 +294,17 @@ describe("enable / disable CLI", () => {
     expect(readFlags("project")).toEqual({});
   });
 
-  it("disable writes flag=false globally by default", () => {
+  it("disable removes the flag entry from the chosen scope", () => {
+    setFlag("my-feature-flag", true, "global");
     const out = captureConsole(() => disable(["my-feature-flag"]));
     expect(out.stdout).toContain('Disabled flag "my-feature-flag" (global)');
-    expect(readFlags("global")).toEqual({ "my-feature-flag": false });
+    expect(readFlags("global")).toEqual({});
+  });
+
+  it("disable on an unset flag is a no-op (still succeeds)", () => {
+    const out = captureConsole(() => disable(["never-set"]));
+    expect(out.stdout).toContain('Disabled flag "never-set" (global)');
+    expect(readFlags("global")).toEqual({});
   });
 
   it("--scope project targets project storage", () => {
@@ -279,6 +321,16 @@ describe("enable / disable CLI", () => {
   it("supports --scope=global syntax (explicit)", () => {
     captureConsole(() => enable(["g", "--scope=global"]));
     expect(readFlags("global")).toEqual({ g: true });
+  });
+
+  it("-- ends flag parsing and treats the next token as the flag name", () => {
+    captureConsole(() => enable(["--", "after-dashdash"]));
+    expect(readFlags("global")).toEqual({ "after-dashdash": true });
+  });
+
+  it("-- with no following positional still surfaces the usage error", () => {
+    const out = expectExit(2, () => enable(["--"]));
+    expect(out.stderr).toContain("Usage: argent enable <flag-name>");
   });
 
   it("rejects an invalid scope value", () => {
@@ -312,10 +364,11 @@ describe("enable / disable CLI", () => {
     expect(readFlags("global")).toEqual({});
   });
 
-  it("toggling disable after enable in the same scope flips the boolean", () => {
+  it("enable → disable round trip leaves a clean tree (no stub entry)", () => {
     captureConsole(() => enable(["x"]));
     captureConsole(() => disable(["x"]));
-    expect(readFlags("global")).toEqual({ x: false });
+    expect(readFlags("global")).toEqual({});
+    expect(fs.existsSync(getFlagsPath("global"))).toBe(false);
     expect(isFlagEnabled("x")).toBe(false);
   });
 });

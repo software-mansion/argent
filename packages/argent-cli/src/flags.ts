@@ -4,11 +4,11 @@
 //   ~/.argent/flags.json                 (global, default scope)
 //   <project-root>/.argent/flags.json    (project scope)
 //
-// Project-scoped values override global ones for code running inside the
-// project tree (isFlagEnabled walks project first, then global). `enable` and
-// `disable` both write an explicit boolean — disable is not a delete — so a
-// user can override a global enable inside a single project by running
-// `argent disable <flag> --scope project`.
+// `enable` writes `true`, `disable` removes the entry at the chosen scope.
+// `isFlagEnabled` walks project → global, so an entry at the project scope
+// shadows the same key at the global scope. To opt a single project out of
+// a globally-enabled flag, hand-edit `<project>/.argent/flags.json` to
+// `{"flags":{"name":false}}` — there is no CLI for an explicit override.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -20,21 +20,10 @@ interface FlagsFile {
   flags?: Record<string, boolean>;
 }
 
-// Markers used to find the project root for --scope project. Walks upward
-// from the cwd until one is found, mirroring the project-root logic used by
-// the installer so flags land alongside .mcp.json / .claude / etc.
-const PROJECT_MARKERS = [
-  ".argent",
-  ".git",
-  ".mcp.json",
-  ".claude",
-  ".cursor",
-  ".vscode",
-  ".gemini",
-  ".codex",
-  ".agents",
-  "package.json",
-];
+// Markers used to find the project root for --scope project. Trimmed to the
+// minimum needed: an existing `.argent` (so subsequent runs in subdirs find
+// the dir created by the first run), a git repo, or an npm package.
+const PROJECT_MARKERS = [".argent", ".git", "package.json"];
 
 export interface FlagsPathOptions {
   cwd?: string;
@@ -87,9 +76,27 @@ function readFlagsFile(filePath: string): Record<string, boolean> {
 }
 
 function writeFlagsFile(filePath: string, flags: Record<string, boolean>): void {
+  // No flags left ⇒ remove the file (and the .argent dir if it becomes empty)
+  // so disable-after-enable round trips leave a clean tree. Sibling files
+  // (tool-server.json, tool-server.log, etc.) keep the dir alive when present.
+  if (Object.keys(flags).length === 0) {
+    if (fs.existsSync(filePath)) fs.rmSync(filePath, { force: true });
+    const parent = path.dirname(filePath);
+    try {
+      if (fs.existsSync(parent) && fs.readdirSync(parent).length === 0) {
+        fs.rmdirSync(parent);
+      }
+    } catch {
+      // non-fatal
+    }
+    return;
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const payload: FlagsFile = { flags };
-  fs.writeFileSync(filePath, JSON.stringify(payload, null, 2) + "\n");
+  // Atomic write via tmp+rename so two concurrent argent processes can't
+  // produce a torn JSON payload or lose each other's edits.
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ flags } satisfies FlagsFile, null, 2) + "\n");
+  fs.renameSync(tmp, filePath);
 }
 
 export function readFlags(
@@ -109,6 +116,17 @@ export function setFlag(
   const current = readFlagsFile(filePath);
   current[name] = value;
   writeFlagsFile(filePath, current);
+}
+
+// Removes the entry from the given scope so the next layer (or the default)
+// takes effect. Returns true when an entry was removed.
+export function unsetFlag(name: string, scope: FlagScope, options: FlagsPathOptions = {}): boolean {
+  const filePath = getFlagsPath(scope, options);
+  const current = readFlagsFile(filePath);
+  if (!(name in current)) return false;
+  delete current[name];
+  writeFlagsFile(filePath, current);
+  return true;
 }
 
 // Effective value: project overrides global. Returns false when the flag is
@@ -132,16 +150,24 @@ interface ParsedToggleArgs {
   scope: FlagScope;
 }
 
-class ToggleArgsHelpRequested {}
-
 function parseToggleArgs(argv: string[], command: "enable" | "disable"): ParsedToggleArgs {
   let name: string | null = null;
   let scope: FlagScope = "global";
+  let positionalOnly = false;
 
   for (let i = 0; i < argv.length; i++) {
     const tok = argv[i]!;
-    if (tok === "--help" || tok === "-h") {
-      throw new ToggleArgsHelpRequested();
+
+    if (positionalOnly) {
+      if (name !== null) throw new Error(`Unexpected extra argument: "${tok}"`);
+      name = tok;
+      continue;
+    }
+
+    if (tok === "--") {
+      // POSIX positional escape — everything after is treated as a positional.
+      positionalOnly = true;
+      continue;
     }
     if (tok === "--scope") {
       const v = argv[i + 1];
@@ -180,46 +206,56 @@ function parseScope(raw: string): FlagScope {
 }
 
 function printToggleHelp(command: "enable" | "disable"): void {
-  const verb = command === "enable" ? "Enable" : "Disable";
+  const summary =
+    command === "enable"
+      ? "Enable a feature flag at the chosen scope."
+      : "Remove a feature flag entry at the chosen scope. Falls back to the global value if set; otherwise the flag is treated as off.";
+
   console.log(`Usage: argent ${command} <flag-name> [--scope project|global]
 
-${verb} a feature flag. Flags are stored as JSON in:
+${summary}
+
+Storage:
   ~/.argent/flags.json                 (global, default)
   <project-root>/.argent/flags.json    (project, with --scope project)
 
-Project-scoped flags override global ones for code running inside the
-project's working tree. The project root is the nearest ancestor with a
-.argent, .git, package.json, .mcp.json, or recognised editor directory.
-
 Options:
-  --scope <global|project>   Where to write the value (default: global)
+  --scope <global|project>   Where to write (default: global)
   --help, -h                 Show this help
 `);
 }
 
 function runToggle(argv: string[], command: "enable" | "disable"): void {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printToggleHelp(command);
+    return;
+  }
+
   let parsed: ParsedToggleArgs;
   try {
     parsed = parseToggleArgs(argv, command);
   } catch (err) {
-    if (err instanceof ToggleArgsHelpRequested) {
-      printToggleHelp(command);
-      return;
-    }
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(2);
   }
 
-  const value = command === "enable";
+  const filePath = getFlagsPath(parsed.scope);
   try {
-    setFlag(parsed.name, value, parsed.scope);
+    if (command === "enable") {
+      setFlag(parsed.name, true, parsed.scope);
+    } else {
+      unsetFlag(parsed.name, parsed.scope);
+    }
   } catch (err) {
     console.error(`Failed to ${command} flag: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
-  const filePath = getFlagsPath(parsed.scope);
-  const verb = command === "enable" ? "Enabled" : "Disabled";
-  console.log(`${verb} flag "${parsed.name}" (${parsed.scope}). Stored at ${filePath}.`);
+
+  if (command === "enable") {
+    console.log(`Enabled flag "${parsed.name}" (${parsed.scope}). Stored at ${filePath}.`);
+  } else {
+    console.log(`Disabled flag "${parsed.name}" (${parsed.scope}).`);
+  }
 }
 
 export function enable(argv: string[]): void {
