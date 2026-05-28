@@ -168,7 +168,11 @@ jobs:
         # of packages/native-devtools-ios/bin/<platform>/; without this
         # download the linux binary is missing and the boot succeeds but
         # every downstream tool call fails.
-        run: bash scripts/download-simulator-server.sh
+        #
+        # TODO: switch back to the default (radon-main) once
+        # `simulator-server-argent-linux` ships there. It currently only
+        # exists as an asset in the `radon-daily` pre-release.
+        run: bash scripts/download-simulator-server.sh radon-daily
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
