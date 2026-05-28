@@ -299,6 +299,61 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     expect(spawnMock.mock.calls[0]![1]).toContain("-no-snapshot-load");
   });
 
+  it("throws after cold boot when SurfaceFlinger never composites a real frame", async () => {
+    // Cold-boot post-condition: under Linux + Weston-headless + SwiftShader
+    // the lockscreen composite lags sys.boot_completed by 5–60 s. boot-device
+    // must not return `booted:true` until `screencap` reports at least one
+    // non-zero pixel byte, else callers chaining boot → screenshot get a
+    // silent all-black PNG. Here we keep screencap stuck on "0" forever and
+    // assert the cold-boot path eventually surfaces the timeout instead of
+    // returning a serial whose screenshots would all be blank.
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(false);
+      let devicesCalls = 0;
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "emulator" && args[0] === "-list-avds")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "version")
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          devicesCalls += 1;
+          const emuLine = devicesCalls >= 2 ? "emulator-5554\tdevice\n" : "";
+          return { stdout: `List of devices attached\n${emuLine}`, stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+          return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          const shellCmd = args[3] ?? "";
+          if (shellCmd.startsWith("getprop sys.boot_completed"))
+            return { stdout: "1\n", stderr: "" };
+          if (shellCmd === "pm path android")
+            return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+          if (shellCmd.startsWith("screencap")) return { stdout: "0\n", stderr: "" };
+          return { stdout: "\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
+
+      const tool = createBootDeviceTool(registry);
+      const resultP = tool.execute!({}, { avdName: "Pixel_7_API_34" }).then(
+        (v) => ({ ok: true, value: v }) as const,
+        (e) => ({ ok: false, error: e as Error }) as const
+      );
+      // 90 s firstRealFrame budget + the cold-boot stages all park on
+      // setTimeout. 200 s of fake time is ample to drain the deadline.
+      await vi.advanceTimersByTimeAsync(200_000);
+      const outcome = await resultP;
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.error.message).toMatch(/SurfaceFlinger did not composite a real frame/);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to cold boot when hot-boot child exits early (ram.bin corruption class)", async () => {
     // Fake timers: the impl parks the stage-2 adb-register loop on a real
     // 1s setTimeout while it waits for the hot child to crash. Driving it
@@ -346,6 +401,7 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
             return { stdout: "1\n", stderr: "" };
           if (shellCmd === "pm path android")
             return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+          if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
           return { stdout: "\n", stderr: "" };
         }
         return { stdout: "", stderr: "" };

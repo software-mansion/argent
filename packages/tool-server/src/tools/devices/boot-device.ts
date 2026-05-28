@@ -77,6 +77,7 @@ const STAGE_BUDGET = {
   adbRegister: 60_000, // adb devices sees the serial for this AVD
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
+  firstRealFrame: 90_000, // screencap returns ≥1 non-zero pixel after cold boot
 } as const;
 
 // Linux: `-gpu auto` lands on `hw.gpu.mode=lavapipe` (slow CPU Vulkan via host
@@ -208,6 +209,50 @@ async function assertScreencapAlive(serial: string): Promise<void> {
         "Falling back to cold boot so screenshots are usable."
     );
   }
+}
+
+/**
+ * Cold-boot counterpart to `assertScreencapAlive`.
+ *
+ * `sys.boot_completed=1` fires before SurfaceFlinger has actually composited
+ * the lockscreen — on Linux + Weston-headless + SwiftShader software rendering
+ * the gap is 5–60 s. Callers that trust `booted:true` and immediately screenshot
+ * get an all-black 324×720 PNG (~5 KB) instead of a real lockscreen frame.
+ *
+ * Unlike the hot-boot case the blank is *transient* — we just need to wait for
+ * the first real composite. Same on-device probe as `assertScreencapAlive`,
+ * polled until any non-zero pixel appears or the deadline is hit. We also
+ * issue `KEYCODE_WAKEUP` once on entry in case the display was driven straight
+ * to dim/off after boot (cheap, idempotent — no-op if already awake).
+ *
+ * On deadline expiry we throw without killing the emulator: the caller's outer
+ * cold-boot catch already wraps with the "wipe-data" hint, and at this point
+ * the device is otherwise healthy, so we'd rather surface the timeout than
+ * orphan a working AVD.
+ */
+async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<void> {
+  await adbShell(serial, "input keyevent 224", { timeoutMs: 5_000 }).catch(() => {
+    // KEYCODE_WAKEUP best-effort; absence of input service is non-fatal.
+  });
+  const deadline = Date.now() + timeoutMs;
+  let lastError: string | null = null;
+  // Same screencap | header-strip | drop-nulls | head -c1 trick as
+  // assertScreencapAlive. "1" = at least one non-zero pixel byte survived.
+  const probe = "screencap | tail -c +17 | tr -d '\\0' | head -c 1 | wc -c";
+  while (Date.now() < deadline) {
+    try {
+      const out = await adbShell(serial, probe, { timeoutMs: 10_000 });
+      if (out.trim() === "1") return;
+      lastError = `screencap reading was "${out.trim()}"`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  throw new Error(
+    `SurfaceFlinger did not composite a real frame within ${timeoutMs / 1000}s of boot_completed ` +
+      `(${lastError ?? "no probe response"}). The emulator booted but every screenshot would be all-black.`
+  );
 }
 
 async function findSerialByAvdName(avdName: string, deadline: number): Promise<string | null> {
@@ -715,6 +760,11 @@ async function bootAndroidImpl(params: {
         ` If this keeps happening, wipe the AVD with \`emulator -avd ${params.avdName} -wipe-data\`.${suffix}`
     );
   }
+
+  // Cold-boot post-condition: under SwiftShader the lockscreen composite lags
+  // boot_completed by 5–60 s. Without this, a caller chaining boot-device →
+  // screenshot gets a silent all-black PNG. See `awaitFirstRealFrame`.
+  await awaitFirstRealFrame(coldResult.serial, STAGE_BUDGET.firstRealFrame);
 
   return {
     platform: "android",
