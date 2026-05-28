@@ -98,7 +98,10 @@ jobs:
 
       - name: Install Android SDK packages
         run: |
-          set -eo pipefail
+          # No `pipefail` here: `yes | sdkmanager --licenses` SIGPIPEs
+          # `yes` (rc 141) as soon as sdkmanager closes stdin, which is
+          # normal — pipefail would turn that into a spurious step failure.
+          set -e
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
             "emulator" \
