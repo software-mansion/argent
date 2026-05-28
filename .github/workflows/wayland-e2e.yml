@@ -27,6 +27,13 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      # Pin AVDs to the legacy ~/.android location. Newer cmdline-tools
+      # (the version on ubuntu-latest) default ANDROID_USER_HOME to
+      # $XDG_CONFIG_HOME/.android = ~/.config/.android — which silently
+      # diverges from the ~/.android paths this job uses for sed/grep
+      # of config.ini and hardware-qemu.ini. Forcing it back keeps all
+      # downstream steps pointing at the right directory.
+      ANDROID_USER_HOME: /home/runner/.android
       XDG_RUNTIME_DIR: /tmp/xdg-runtime
       WAYLAND_DISPLAY: wayland-0
       # Emulator's bundled Qt has no wayland plugin; with WAYLAND_DISPLAY set
