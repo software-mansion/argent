@@ -163,6 +163,15 @@ jobs:
           npm install @rollup/rollup-linux-x64-gnu --no-save
           npx tsc --build
 
+      - name: Download signed simulator-server binary
+        # The screenshot/gesture-tap tools spawn the simulator-server out
+        # of packages/native-devtools-ios/bin/<platform>/; without this
+        # download the linux binary is missing and the boot succeeds but
+        # every downstream tool call fails.
+        run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Start tool-server (ts-node from src)
         run: |
           mkdir -p ~/.argent
