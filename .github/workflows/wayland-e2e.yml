@@ -119,21 +119,25 @@ jobs:
 
       - name: Create AVD (4 GB / 2 vCPUs, sized for the 4-vCPU runner)
         run: |
-          set -eo pipefail
+          set -e
           # avdmanager has a long-standing bug where it can write errors to
           # stderr but still exit 0 (e.g. unrecognised device, missing parent
-          # dirs). Pre-create the prefs dir, route stderr into the log, and
-          # assert config.ini exists before continuing — otherwise the next
-          # step fails with a confusing `sed: can't read` instead of telling
-          # us what avdmanager actually complained about.
+          # dirs). Pre-create the prefs dir, capture stderr, and verify BOTH
+          # the exit code and config.ini before continuing — otherwise the
+          # next step fails with a confusing `sed: can't read` instead of
+          # telling us what avdmanager actually complained about. We
+          # deliberately do not set pipefail here: we want the post-check
+          # to run regardless of how avdmanager exited, so the diagnostic
+          # dump always fires when something is wrong.
           mkdir -p "$HOME/.android"
           echo no | avdmanager -v create avd \
             -n argent-test \
             -k "system-images;android-34;google_apis;x86_64" \
             -d "pixel_6" 2>&1 | tee /tmp/avdmanager.log
+          AVD_RC=${PIPESTATUS[1]}
           CFG=$HOME/.android/avd/argent-test.avd/config.ini
-          if [ ! -f "$CFG" ]; then
-            echo "::error::avdmanager did not produce $CFG"
+          if [ "$AVD_RC" -ne 0 ] || [ ! -f "$CFG" ]; then
+            echo "::error::avdmanager exit=$AVD_RC, config.ini=$([ -f "$CFG" ] && echo present || echo missing)"
             echo "--- avdmanager.log ---"; cat /tmp/avdmanager.log
             echo "--- avdmanager list avd ---"; avdmanager list avd || true
             echo "--- $HOME/.android tree ---"; find "$HOME/.android" -maxdepth 4 || true
@@ -224,6 +228,7 @@ jobs:
             /tmp/weston.log
             /tmp/shot.json
             /tmp/gpu-mode.txt
+            /tmp/avdmanager.log
             ~/.argent/tool-server.log
             ~/.android/avd/argent-test.avd/hardware-qemu.ini
           if-no-files-found: warn
