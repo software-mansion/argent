@@ -58,14 +58,30 @@ const HOST_CSS = `
   #root { background: var(--color-bg); }
 `;
 
+// All three helpers wrap `executeJavaScript` in try/catch so that a
+// renderer crash or a webContents destroyed mid-animation (the only
+// realistic rejection paths) is logged instead of crashing the Electron
+// main process. The callers all use `void fn()` for fire-and-forget, so
+// an uncaught rejection here would otherwise bubble up unhandled.
+async function runInRenderer(snippet: string, label: string): Promise<void> {
+  const current = win;
+  if (!current) return;
+  try {
+    await current.webContents.executeJavaScript(snippet);
+  } catch (err) {
+    process.stderr.write(
+      `[preview-window] ${label} failed: ${err instanceof Error ? err.message : err}\n`
+    );
+  }
+}
+
 // Pre-show prep: install the host CSS + snap <html> to scaleY(0). Runs
 // while the BrowserWindow is still `show: false`, so the very first frame
 // the OS composites is "transparent window + collapsed card" with no
 // flash of the full-size dark page.
 async function prepareSqueeze(): Promise<void> {
-  const current = win;
-  if (!current) return;
-  await current.webContents.executeJavaScript(`
+  await runInRenderer(
+    `
     (() => {
       const style = document.createElement('style');
       style.setAttribute('data-argent-preview-host', '');
@@ -77,19 +93,17 @@ async function prepareSqueeze(): Promise<void> {
       s.transform = 'scaleY(0)';
       void document.documentElement.offsetHeight;
     })();
-  `);
+  `,
+    "prepareSqueeze"
+  );
 }
 
 async function squeezeIn(): Promise<void> {
-  const current = win;
-  if (!current) return;
-  await current.webContents.executeJavaScript(squeezeSnippet(1, ANIMATION_MS));
+  await runInRenderer(squeezeSnippet(1, ANIMATION_MS), "squeezeIn");
 }
 
 async function squeezeOut(): Promise<void> {
-  const current = win;
-  if (!current) return;
-  await current.webContents.executeJavaScript(squeezeSnippet(0, ANIMATION_MS));
+  await runInRenderer(squeezeSnippet(0, ANIMATION_MS), "squeezeOut");
 }
 
 async function createWindow(): Promise<void> {

@@ -96,13 +96,23 @@ export function start(): void {
     const port = typeof addr === "object" && addr ? addr.port : null;
     return port ? `http://127.0.0.1:${port}/preview/` : null;
   };
+  let pendingCloseTimer: NodeJS.Timeout | null = null;
+  const cancelPendingClose = (): void => {
+    if (pendingCloseTimer) {
+      clearTimeout(pendingCloseTimer);
+      pendingCloseTimer = null;
+    }
+  };
   const onAwaitParked = (): void => {
+    // If a fresh round parks within PREVIEW_CLOSE_DELAY_MS of a submit,
+    // the pending close would fire seconds after the new window opened
+    // and squeeze it away under the user. Cancel the close instead.
+    cancelPendingClose();
     const url = previewWindowBaseUrl();
     if (url) previewWindow.ensureOpen(url);
   };
-  let pendingCloseTimer: NodeJS.Timeout | null = null;
   const onSelectionSubmitted = (): void => {
-    if (pendingCloseTimer) clearTimeout(pendingCloseTimer);
+    cancelPendingClose();
     pendingCloseTimer = setTimeout(() => {
       pendingCloseTimer = null;
       previewWindow.requestClose();
@@ -116,7 +126,7 @@ export function start(): void {
   shutdown = async (exitCode = 0) => {
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
-    if (pendingCloseTimer) clearTimeout(pendingCloseTimer);
+    cancelPendingClose();
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();

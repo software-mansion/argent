@@ -3632,7 +3632,8 @@
       // host mode the surrounding window squeezes closed shortly after this
       // appears (tool-server adds a delay before sending the close cmd, so
       // the toast is fully visible first). In a regular browser the toast
-      // auto-dismisses after spotTraj* feel — purely cosmetic feedback.
+      // auto-dismisses after THEME.successToastShowMs — purely cosmetic
+      // feedback that the round was submitted.
       let successToastTimer = null;
       function showSuccessToast(picked, comments) {
         if (!successToast) return;
