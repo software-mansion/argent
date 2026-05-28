@@ -55,6 +55,7 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   function __argent_fail(msg) {
     __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:msg}));
   }
+  try {
   var hook = (typeof globalThis !== 'undefined' ? globalThis : window).__REACT_DEVTOOLS_GLOBAL_HOOK__;
   if (!hook) { __argent_fail(${noHookMsg}); return; }
   if (!hook.renderers || typeof hook.renderers.values !== 'function' || hook.renderers.size === 0) {
@@ -142,5 +143,8 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
     }
   );
   return 'ok';
+  } catch (e) {
+    __argent_fail('Inspect script crashed: ' + (e && e.message ? e.message : String(e)));
+  }
 })()`;
 }
