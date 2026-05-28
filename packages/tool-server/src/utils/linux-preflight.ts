@@ -95,7 +95,10 @@ export function diagnoseAvdSizing(
 // accepts both no-suffix integers (interpreted as MB) and `G` suffixes; we
 // match the same convention so the recommendation matches reality.
 function readMb(content: string, key: string): number | null {
-  const re = new RegExp(`^\\s*${key.replace(/\./g, "\\.")}\\s*=\\s*(\\d+)\\s*([MmGg][Bb]?)?\\s*$`, "m");
+  const re = new RegExp(
+    `^\\s*${key.replace(/\./g, "\\.")}\\s*=\\s*(\\d+)\\s*([MmGg][Bb]?)?\\s*$`,
+    "m"
+  );
   const m = content.match(re);
   if (!m) return null;
   const n = Number(m[1]);
