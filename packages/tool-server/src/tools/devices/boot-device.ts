@@ -118,6 +118,17 @@ const BOOT_POLL_INTERVALS_MS = {
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
 } as const;
 
+// Probe pipeline shared by assertScreencapAlive (hot-boot guard) and
+// awaitFirstRealFrame (cold-boot guard). `screencap -p` emits a PNG of the
+// current frame; awk thresholds the byte count. Real content is reliably
+// >20 KB; a uniform-color frame (sticky-blank or pre-composite) RLE/deflates
+// to <10 KB regardless of resolution — see assertScreencapAlive's docstring
+// for why raw-RGBA byte sniffing isn't sufficient. Outputs exactly "1" or "0".
+// `wc -c` of empty input is "0" so a missing/failed screencap surfaces as
+// "0" rather than a silent pass. Starts with the literal token "screencap"
+// so existing test mocks that match on shellCmd.startsWith("screencap") still fire.
+const FRAME_PROBE = "screencap -p 2>/dev/null | wc -c | awk '$1>20000{print 1;exit} {print 0}'";
+
 async function killEmulatorQuietly(
   serial: string | null,
   child?: import("node:child_process").ChildProcess
@@ -182,22 +193,23 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
  * image, which is worse than a slower boot; we pay ~200 ms per hot boot to
  * eliminate that failure mode entirely.
  *
- * Detection: run the check on-device. `screencap` writes a 16-byte header
- * (width, height, format, colorspace) followed by raw RGBA pixel bytes;
- * `tail -c +17` skips the header, `tr -d '\0'` drops null bytes, and
- * `head -c 1 | wc -c` prints `1` if any byte survived or `0` if the stream
- * past the header was entirely null. `head` short-circuits as soon as one
- * non-zero byte appears, so a healthy frame costs microseconds of pixel
- * inspection — no host-side decode, no allocation, no iteration we own.
+ * Detection: take a PNG of the current frame and threshold its byte count.
+ * A uniform-color image (the sticky-blank / pre-composite case) compresses
+ * to a few KB even at full resolution; a real frame with any UI on it is
+ * reliably >20 KB. We can't probe the raw RGBA buffer with a simple
+ * "any non-zero byte" check because Android fills uninitialised framebuffers
+ * with `(0,0,0,0xFF)` — opaque black — so every 4th byte (alpha) is already
+ * non-zero before SurfaceFlinger has drawn anything, which would silently
+ * report a blank frame as healthy. PNG byte-count sidesteps the alpha
+ * pitfall: uniform alpha-only content RLE/deflates to ~7 KB regardless of
+ * pixel count, real content blows past the threshold.
  *
  * On detection we throw; the outer catch in `bootAndroid` kills the hot child
  * and falls through to the cold path, so the serial that eventually reaches
  * the caller is always usable for screenshots.
  */
 async function assertScreencapAlive(serial: string): Promise<void> {
-  const out = await adbShell(serial, "screencap | tail -c +17 | tr -d '\\0' | head -c 1 | wc -c", {
-    timeoutMs: 10_000,
-  });
+  const out = await adbShell(serial, FRAME_PROBE, { timeoutMs: 10_000 });
   // Match success on "1" specifically: empty output (screencap binary missing,
   // exec-out drained nothing) used to trim to "" which !== "0" and silently
   // returned success — i.e. a broken capture path was reported as healthy.
@@ -220,10 +232,11 @@ async function assertScreencapAlive(serial: string): Promise<void> {
  * get an all-black 324×720 PNG (~5 KB) instead of a real lockscreen frame.
  *
  * Unlike the hot-boot case the blank is *transient* — we just need to wait for
- * the first real composite. Same on-device probe as `assertScreencapAlive`,
- * polled until any non-zero pixel appears or the deadline is hit. We also
- * issue `KEYCODE_WAKEUP` once on entry in case the display was driven straight
- * to dim/off after boot (cheap, idempotent — no-op if already awake).
+ * the first real composite. Same on-device probe as `assertScreencapAlive`
+ * (PNG byte-count, see `FRAME_PROBE`), polled until a frame crosses the size
+ * threshold or the deadline is hit. We also issue `KEYCODE_WAKEUP` once on
+ * entry in case the display was driven straight to dim/off after boot
+ * (cheap, idempotent — no-op if already awake).
  *
  * On deadline expiry we throw without killing the emulator: the caller's outer
  * cold-boot catch already wraps with the "wipe-data" hint, and at this point
@@ -236,12 +249,9 @@ async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<v
   });
   const deadline = Date.now() + timeoutMs;
   let lastError: string | null = null;
-  // Same screencap | header-strip | drop-nulls | head -c1 trick as
-  // assertScreencapAlive. "1" = at least one non-zero pixel byte survived.
-  const probe = "screencap | tail -c +17 | tr -d '\\0' | head -c 1 | wc -c";
   while (Date.now() < deadline) {
     try {
-      const out = await adbShell(serial, probe, { timeoutMs: 10_000 });
+      const out = await adbShell(serial, FRAME_PROBE, { timeoutMs: 10_000 });
       if (out.trim() === "1") return;
       lastError = `screencap reading was "${out.trim()}"`;
     } catch (err) {
