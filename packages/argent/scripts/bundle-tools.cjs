@@ -76,6 +76,17 @@ for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) 
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
 // Bundle the tools server
+//
+// `@fails-components/webtransport` and its http3-quiche transport ship native
+// addons (quiche, prebuilt .node binaries) that can't be inlined into a single
+// CJS bundle. Keep them external so npm resolves them from the published
+// package's `node_modules/` at runtime — they're listed in
+// `@swmansion/argent`'s `dependencies` so they install alongside the package.
+const TOOL_SERVER_EXTERNAL = [
+  "@fails-components/webtransport",
+  "@fails-components/webtransport-transport-http3-quiche",
+];
+
 esbuild.buildSync({
   entryPoints: [TOOLS_ENTRY],
   bundle: true,
@@ -85,6 +96,7 @@ esbuild.buildSync({
   outfile: OUT_FILE,
   alias: ALIASES,
   mainFields: MAIN_FIELDS,
+  external: TOOL_SERVER_EXTERNAL,
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);

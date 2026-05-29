@@ -4,6 +4,7 @@ import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import type { OpenUrlResult, OpenUrlServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 
 const zodSchema = z.object({
   udid: z
@@ -21,6 +22,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -38,5 +40,6 @@ Returns { opened, url }. Fails if no app is registered to handle the URI.`,
     capability,
     ios: iosImpl,
     android: androidImpl,
+    iosRemote: iosRemoteImpl,
   }),
 };

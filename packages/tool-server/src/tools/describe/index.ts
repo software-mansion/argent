@@ -40,6 +40,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -92,6 +93,14 @@ For React Native apps, debugger-component-tree returns React component names wit
         requires: androidRequires,
         handler: async (_services, params) =>
           withDescription(await describeAndroid(registry, params.udid, params.bundleId)),
+      },
+      iosRemote: {
+        // describeIos already handles both ax-service (TCP) and native-devtools
+        // fallback — both blueprints route through sim-remote when the device
+        // is ios-remote. Only the preflight dep differs.
+        requires: ["sim-remote"],
+        handler: async (_services, params, device) =>
+          withDescription(await describeIos(registry, device, params)),
       },
     }),
   };

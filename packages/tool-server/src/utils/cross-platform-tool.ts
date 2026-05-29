@@ -52,11 +52,19 @@ export function dispatchByPlatform<
   AndroidServices,
   Params extends { udid: string },
   Result,
+  IosRemoteServices = IosServices,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: PlatformImpl<IosServices, Params, Result>;
   android: PlatformImpl<AndroidServices, Params, Result>;
+  /**
+   * Optional ios-remote branch. When omitted, an ios-remote device will hit
+   * `assertSupported` and fail there if the tool's capability matrix doesn't
+   * include `appleRemote` — so adding ios-remote support is two changes (this
+   * branch + the matrix), and the absence of either is a clean 400.
+   */
+  iosRemote?: PlatformImpl<IosRemoteServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -70,6 +78,23 @@ export function dispatchByPlatform<
         await ensureDeps(opts.ios.requires);
       }
       return opts.ios.handler(services as unknown as IosServices, params, device, invokeOptions);
+    }
+    if (device.platform === "ios-remote") {
+      if (!opts.iosRemote) {
+        throw new Error(
+          `Tool '${opts.toolId}' declares ios-remote capability but has no iosRemote branch. ` +
+            `Add an iosRemote PlatformImpl to dispatchByPlatform().`
+        );
+      }
+      if (opts.iosRemote.requires?.length) {
+        await ensureDeps(opts.iosRemote.requires);
+      }
+      return opts.iosRemote.handler(
+        services as unknown as IosRemoteServices,
+        params,
+        device,
+        invokeOptions
+      );
     }
     if (opts.android.requires?.length) {
       await ensureDeps(opts.android.requires);

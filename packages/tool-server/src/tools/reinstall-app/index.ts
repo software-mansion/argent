@@ -4,6 +4,7 @@ import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import type { ReinstallAppResult, ReinstallAppServices } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 
 const zodSchema = z.object({
   udid: z
@@ -26,6 +27,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -47,5 +49,6 @@ Returns { reinstalled, bundleId }. Fails if the app path does not exist or the p
     capability,
     ios: iosImpl,
     android: androidImpl,
+    iosRemote: iosRemoteImpl,
   }),
 };

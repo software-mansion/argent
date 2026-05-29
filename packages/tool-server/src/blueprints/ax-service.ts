@@ -4,6 +4,7 @@ import * as fsAsync from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
@@ -15,6 +16,11 @@ import {
 } from "@argent/registry";
 import { axServiceBinaryPath, axServiceBinaryPathTcp } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+import {
+  proxyStart as simRemoteProxyStart,
+  proxyStop as simRemoteProxyStop,
+  setupAxService as simRemoteSetupAxService,
+} from "../utils/sim-remote";
 
 const execFileAsync = promisify(execFile);
 
@@ -209,7 +215,44 @@ function startListener(
   });
 }
 
-function spawnDaemon(udid: string, endpoint: AXEndpoint): ChildProcess {
+/**
+ * Local-iOS preflight: ensure AutomationEnabled and probe whether the
+ * entitlement bypass is active. Returns true when the bypass is in place
+ * (describe is non-degraded). Skipped on ios-remote — sim-remote owns the
+ * equivalent setup there.
+ */
+async function runLocalAxBootstrap(udid: string): Promise<boolean> {
+  await ensureAutomationEnabled(udid);
+  return isEntitlementBypassActive(udid);
+}
+
+function spawnDaemon(
+  udid: string,
+  endpoint: AXEndpoint,
+  options?: { remote?: boolean }
+): ChildProcess {
+  if (options?.remote) {
+    // ios-remote: the orchestrator-supplied daemon is started by
+    // `sim-remote setup ax-service`. There is no local child process to
+    // shepherd — we return a no-op ChildProcess stub so the surrounding
+    // factory code (exit/error wiring, kill on dispose) still type-checks.
+    if (endpoint.transport !== "tcp") {
+      throw new Error("ios-remote ax-service requires TCP transport");
+    }
+    // Fire-and-forget: `sim-remote setup ax-service` returns once the daemon
+    // has been started inside the remote simulator. We propagate failures
+    // through the proc's "error" event so factory teardown engages normally.
+    const noop = new EventEmitter() as unknown as ChildProcess;
+    (noop as unknown as { kill: () => boolean }).kill = () => true;
+    void simRemoteSetupAxService(udid, { port: endpoint.port, timeoutSecs: 3600 }).catch(
+      (err: Error) => {
+        // Defer the emit so listeners attached after this call still see it.
+        setImmediate(() => noop.emit("error", err));
+      }
+    );
+    return noop;
+  }
+
   const binaryPath =
     endpoint.transport === "tcp" ? axServiceBinaryPathTcp() : axServiceBinaryPath();
 
@@ -304,7 +347,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const { device } = opts;
-    if (device.platform !== "ios") {
+    if (device.platform !== "ios" && device.platform !== "ios-remote") {
       throw new Error(
         `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — describe falls back to uiautomator on Android, which does not need this service.`
       );
@@ -320,7 +363,10 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const udid = device.id;
-    const transport: AXServiceTransport = opts.transport ?? "unix";
+    const isRemote = device.platform === "ios-remote";
+    // Force TCP on remote — unix sockets do not bridge across the QUIC tunnel
+    // sim-remote sets up between the orchestrator and the dev's machine.
+    const transport: AXServiceTransport = isRemote ? "tcp" : (opts.transport ?? "unix");
     const endpoint: AXEndpoint =
       transport === "tcp"
         ? { transport: "tcp", port: AX_SERVICE_TCP_PORT }
@@ -340,8 +386,12 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       pendingRpc.clear();
     };
 
-    await ensureAutomationEnabled(udid);
-    const entitlementBypassActive = await isEntitlementBypassActive(udid);
+    // ios-remote skips local xcrun calls — sim-remote applies the
+    // accessibility defaults at boot via `setup accessibility-defaults`,
+    // and the entitlement-bypass plist is managed there too. We mark the
+    // service as non-degraded on the assumption sim-remote did the right
+    // thing; if not, describe will still surface useful errors.
+    const entitlementBypassActive = isRemote ? true : await runLocalAxBootstrap(udid);
 
     // Host listens first, then we spawn the daemon and wait for it to dial in.
     const server = await startListener(endpoint, (socket) => {
@@ -390,7 +440,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       });
     });
 
-    const proc = spawnDaemon(udid, endpoint);
+    if (isRemote && endpoint.transport === "tcp") {
+      // Wire the reverse tunnel BEFORE asking the orchestrator to start the
+      // daemon — the daemon will dial 127.0.0.1:<port> inside the simulator
+      // and that dial gets QUIC-forwarded back to our host listener above.
+      await simRemoteProxyStart(udid, endpoint.port);
+    }
+
+    const proc = spawnDaemon(udid, endpoint, { remote: isRemote });
 
     proc.on("exit", (code) => {
       if (disposed) return;
@@ -414,6 +471,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         try {
           fs.unlinkSync(endpoint.socketPath);
         } catch {}
+      }
+      if (isRemote && endpoint.transport === "tcp") {
+        await simRemoteProxyStop(udid, endpoint.port);
       }
       throw err;
     }
@@ -479,6 +539,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           try {
             fs.unlinkSync(endpoint.socketPath);
           } catch {}
+        }
+        if (isRemote && endpoint.transport === "tcp") {
+          await simRemoteProxyStop(udid, endpoint.port);
         }
       },
       events,
