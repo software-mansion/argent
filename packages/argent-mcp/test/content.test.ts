@@ -73,10 +73,11 @@ describe("toMcpContent", () => {
   });
 
   it("attaches the image when args.includeImageInContext is undefined or true", async () => {
-    const pngBytes = new Uint8Array([0x89]);
+    const pngBytes = new Uint8Array(PNG_SIGNATURE);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
+        ok: true,
         arrayBuffer: async () => pngBytes.buffer,
       })
     );
@@ -94,10 +95,11 @@ describe("toMcpContent", () => {
   });
 
   it("attaches the image when args.includeImageInContext is undefined or true", async () => {
-    const pngBytes = new Uint8Array([0x89]);
+    const pngBytes = new Uint8Array(PNG_SIGNATURE);
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
+        ok: true,
         arrayBuffer: async () => pngBytes.buffer,
       })
     );
@@ -162,7 +164,7 @@ describe("toMcpContent", () => {
     expect(result.find((b) => b.type === "image")).toBeUndefined();
     vi.unstubAllGlobals();
   });
-});─────────────────────────────────────
+});
 
 describe("screenshotDiffToMcpContent", () => {
   it("returns a context image followed by the summary text", async () => {
