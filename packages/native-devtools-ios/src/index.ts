@@ -15,12 +15,16 @@ function requireDylibIn(dir: string, name: string): string {
   return p;
 }
 
-export const bootstrapDylibPath = () => requireDylibIn(DYLIB_DIR, "libArgentInjectionBootstrap.dylib");
-export const nativeDevtoolsDylibPath = () => requireDylibIn(DYLIB_DIR, "libNativeDevtoolsIos.dylib");
+export const bootstrapDylibPath = () =>
+  requireDylibIn(DYLIB_DIR, "libArgentInjectionBootstrap.dylib");
+export const nativeDevtoolsDylibPath = () =>
+  requireDylibIn(DYLIB_DIR, "libNativeDevtoolsIos.dylib");
 export const keyboardPatchDylibPath = () => requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
 
-export const bootstrapDylibPathTcp = () => requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
-export const nativeDevtoolsDylibPathTcp = () => requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
+export const bootstrapDylibPathTcp = () =>
+  requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
+export const nativeDevtoolsDylibPathTcp = () =>
+  requireDylibIn(DYLIB_TCP_DIR, "libNativeDevtoolsIos.dylib");
 
 const BIN_DIR = process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "bin");
 const BIN_TCP_DIR = process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR ?? path.join(BIN_DIR, "tcp");

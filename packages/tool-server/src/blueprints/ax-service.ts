@@ -75,9 +75,7 @@ function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
 }
 
-type AXEndpoint =
-  | { transport: "unix"; socketPath: string }
-  | { transport: "tcp"; port: number };
+type AXEndpoint = { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number };
 
 interface PendingRpc {
   resolve: (value: unknown) => void;

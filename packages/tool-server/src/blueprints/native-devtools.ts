@@ -15,8 +15,7 @@ import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
 
-export const NATIVE_DEVTOOLS_TCP_PORT =
-  Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
+export const NATIVE_DEVTOOLS_TCP_PORT = Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
 
 const execFileAsync = promisify(execFile);
 
