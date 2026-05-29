@@ -1,29 +1,20 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as readline from "node:readline";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { bootstrapDylibPath, bootstrapDylibPathTcp } from "@argent/native-devtools-ios";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
-import {
-  proxyStart as simRemoteProxyStart,
-  proxyStop as simRemoteProxyStop,
-  setupNativeDevtools as simRemoteSetupNativeDevtools,
-  setupRunningBundleIds as simRemoteRunningBundleIds,
-} from "../utils/sim-remote";
+import { pickIosHost, buildDyldInsertLibraries } from "../utils/ios-host";
+
+// Re-exported for the env-merging unit test that imports it from this module.
+export { buildDyldInsertLibraries };
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
 
 export const NATIVE_DEVTOOLS_TCP_PORT = Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
-
-const execFileAsync = promisify(execFile);
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
@@ -187,188 +178,10 @@ interface AppConnection {
   networkLog: NetworkEvent[];
 }
 
-/** Current bootstrap filename; `libInjectionBootstrap.dylib` is legacy (pre-rename) and still stripped when merging env. */
-const ARGENT_BOOTSTRAP_DYLIB_BASENAMES = new Set([
-  "libArgentInjectionBootstrap.dylib",
-  "libInjectionBootstrap.dylib",
-]);
-
 function getNativeDevtoolsSocketPath(udid: string): string {
   // Deterministic, short — well under the 104-char macOS Unix socket limit
   // /tmp/argent-nd-XXXXXXXX.sock = 28 chars
   return `/tmp/argent-nd-${udid.slice(0, 8)}.sock`;
-}
-
-function splitDyldInsertLibraries(value: string): string[] {
-  return value
-    .split(":")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
-/**
- * Strips Argent bootstrap dylibs (by basename, including the legacy pre-rename name)
- * and entries that don't exist on disk (truncated artifacts from the simctl getenv
- * 127-byte bug, stale paths from old installs, etc.).
- * Entries starting with '@' (loader-path references) are always preserved.
- * Third-party dylibs present on disk (e.g. SimCam) are kept verbatim.
- */
-function shouldPreserveDyldInsertLibrariesEntry(entry: string, bootstrapPath: string): boolean {
-  if (entry === bootstrapPath) {
-    return false;
-  }
-
-  if (ARGENT_BOOTSTRAP_DYLIB_BASENAMES.has(path.basename(entry))) {
-    return false;
-  }
-
-  if (entry.startsWith("@")) {
-    return true;
-  }
-
-  return fs.existsSync(entry);
-}
-
-export function buildDyldInsertLibraries(currentValue: string, bootstrapPath: string): string {
-  const preserved = splitDyldInsertLibraries(currentValue).filter((entry) =>
-    shouldPreserveDyldInsertLibrariesEntry(entry, bootstrapPath)
-  );
-  return [...preserved, bootstrapPath].join(":");
-}
-
-async function ensureAccessibilityEnabled(udid: string): Promise<void> {
-  // iOS 26+ requires AccessibilityEnabled and ApplicationAccessibilityEnabled to be set
-  // in the simulator's defaults for SwiftUI to populate the accessibility tree.
-  // Without these flags, all UIAccessibility APIs return nil/0 for SwiftUI views.
-  const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
-  await Promise.all(
-    flags.map((flag) =>
-      execFileAsync(
-        "xcrun",
-        [
-          "simctl",
-          "spawn",
-          udid,
-          "defaults",
-          "write",
-          "com.apple.Accessibility",
-          flag,
-          "-bool",
-          "true",
-        ],
-        { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-      )
-    )
-  );
-}
-
-async function ensureEnv(
-  udid: string,
-  endpoint: { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number }
-): Promise<void> {
-  const bootstrapPath =
-    endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
-
-  // Read from launchctl inside the simulator (via simctl spawn) instead of
-  // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
-  // which corrupts the colon-separated path list and causes stale entries to
-  // accumulate on every ensureEnv() cycle.
-  const result = await execFileAsync(
-    "xcrun",
-    ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
-
-  const existing = (result.stdout ?? "").trim();
-  const updated = buildDyldInsertLibraries(existing, bootstrapPath);
-
-  if (updated !== existing) {
-    await execFileAsync(
-      "xcrun",
-      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  // Always re-set the endpoint env var — deterministic value, cheap no-op if already correct,
-  // ensures correctness after tool-server restarts.
-  if (endpoint.transport === "tcp") {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_PORT",
-        String(endpoint.port),
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  } else {
-    await execFileAsync(
-      "xcrun",
-      [
-        "simctl",
-        "spawn",
-        udid,
-        "launchctl",
-        "setenv",
-        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
-        endpoint.socketPath,
-      ],
-      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-    );
-  }
-
-  // Ensure the accessibility runtime is enabled so that describeScreen works on iOS 26+.
-  await ensureAccessibilityEnabled(udid);
-}
-
-/**
- * Bare basename of the bootstrap dylib the orchestrator should inject. The
- * dylib lives on the orchestrator side (it's the TCP variant of the local
- * `libArgentInjectionBootstrap.dylib`) and `sim-remote setup native-devtools`
- * resolves it by basename against the orchestrator's own dylib directory —
- * we never need a local copy. Hardcoding the basename avoids a
- * `bootstrapDylibPathTcp()` lookup that would throw on dev machines that
- * don't ship the local TCP variant.
- */
-const REMOTE_BOOTSTRAP_DYLIB_BASENAME = "libArgentInjectionBootstrap.dylib";
-
-/**
- * Remote analogue of `ensureEnv` for ios-remote devices. Instead of poking
- * launchd via `xcrun simctl spawn`, we delegate dylib injection and
- * environment setup to the orchestrator via `sim-remote setup native-devtools`.
- *
- * The dylib dials `127.0.0.1:<cdpPort>` inside the simulator — that
- * connection arrives on our host listener via the QUIC reverse tunnel that
- * the caller must have already wired with `simRemoteProxyStart`.
- */
-async function ensureEnvRemote(
-  udid: string,
-  endpoint: { transport: "tcp"; port: number }
-): Promise<void> {
-  await simRemoteSetupNativeDevtools(udid, {
-    libs: [REMOTE_BOOTSTRAP_DYLIB_BASENAME],
-    cdpPort: endpoint.port,
-  });
-}
-
-async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<string>> {
-  const { stdout } = await execFileAsync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
-    encoding: "utf8",
-  });
-
-  const bundleIds = new Set<string>();
-  for (const line of stdout.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
-    if (match) {
-      bundleIds.add(match[1].trim());
-    }
-  }
-  return bundleIds;
 }
 
 export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, DeviceInfo> = {
@@ -393,10 +206,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
       );
     }
-    const isRemote = device.platform === "ios-remote";
+    const host = pickIosHost(device);
     // Remote sims can't use unix sockets because the QUIC reverse tunnel
     // only bridges TCP streams.
-    const transport: NativeDevtoolsTransport = isRemote ? "tcp" : (opts.transport ?? "unix");
+    const transport: NativeDevtoolsTransport = host.requiresTcp ? "tcp" : (opts.transport ?? "unix");
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
@@ -439,12 +252,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       if (envSetup || initFailure?.givenUp) return Promise.resolve();
       if (inFlight) return inFlight;
 
-      const setup = isRemote
-        ? () => ensureEnvRemote(udid, endpoint as { transport: "tcp"; port: number })
-        : () => ensureEnv(udid, endpoint);
-
       inFlight = Promise.resolve()
-        .then(setup)
+        .then(() => host.setupNativeDevtoolsEnv(udid, endpoint))
         .then(() => {
           envSetup = true;
           initFailure = null;
@@ -461,9 +270,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
-      const runningBundleIds = isRemote
-        ? new Set(await simRemoteRunningBundleIds(udid))
-        : await listRunningUIKitApplicationBundleIds(udid);
+      const runningBundleIds = await host.listRunningBundleIds(udid);
       return runningBundleIds.has(bundleId);
     };
 
@@ -593,11 +400,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       server.listen(socketPath);
     }
 
-    if (isRemote && transport === "tcp") {
-      // Wire the reverse tunnel before kicking off ensureEnv so the dylib's
-      // first dial (which can happen as soon as the env is written) lands on
-      // our listener.
-      await simRemoteProxyStart(udid, tcpPort);
+    if (transport === "tcp") {
+      // Wire the reverse tunnel (no-op on local) before kicking off ensureEnv
+      // so the dylib's first dial — which can happen as soon as the env is
+      // written — lands on our listener.
+      await host.startProxy(udid, tcpPort);
     }
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the
@@ -719,8 +526,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           reject(new Error("NativeDevtools service disposed"));
         }
         pendingRpc.clear();
-        if (isRemote && transport === "tcp") {
-          await simRemoteProxyStop(udid, tcpPort);
+        if (transport === "tcp") {
+          await host.stopProxy(udid, tcpPort);
         }
       },
       events,

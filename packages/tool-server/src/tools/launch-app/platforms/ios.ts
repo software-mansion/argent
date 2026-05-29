@@ -1,17 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { precheckNativeDevtools } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
+import { localSimctl } from "../../../utils/simctl-backend";
 import type { LaunchAppIosServices, LaunchAppParams, LaunchAppResult } from "../types";
-
-const execFileAsync = promisify(execFile);
+import { buildIosLaunchHandler } from "./shared";
 
 export const iosImpl: PlatformImpl<LaunchAppIosServices, LaunchAppParams, LaunchAppResult> = {
   requires: ["xcrun"],
-  handler: async (services, params) => {
-    const blocked = await precheckNativeDevtools(services.nativeDevtools, params.udid);
-    if (blocked) return blocked;
-    await execFileAsync("xcrun", ["simctl", "launch", params.udid, params.bundleId]);
-    return { launched: true, bundleId: params.bundleId };
-  },
+  handler: buildIosLaunchHandler(localSimctl),
 };
