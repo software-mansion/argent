@@ -31,6 +31,13 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import {
+  simctlBoot as simRemoteBoot,
+  simctlBootstatus as simRemoteBootstatus,
+  simctlListDevices as simRemoteListDevices,
+  simctlShutdown as simRemoteShutdown,
+} from "../../utils/sim-remote";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
 import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
@@ -105,6 +112,7 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
+  | { platform: "ios-remote"; udid: string; booted: true }
   | { platform: "android"; serial: string; avdName: string; booted: true }
   | VegaBootResult
   | ElectronBootResult
@@ -555,6 +563,64 @@ async function bootIos(
   ]);
   await execFileAsync("open", ["-a", "Simulator.app"]);
   return { platform: "ios", udid, booted: true };
+}
+
+/**
+ * Boot a remote iOS simulator through `sim-remote`. Mirrors `bootIos` but:
+ *
+ * - Uses `sim-remote simctl` for boot/shutdown/bootstatus (no local xcrun).
+ * - Pre-warms the native-devtools blueprint so the dylib injection env is
+ *   set inside the remote sim before the app launches. Accessibility defaults
+ *   are applied lazily by the ax-service blueprint's `bootstrapAx` (which runs
+ *   the `defaults write` through the orchestrator's generic spawn) before the
+ *   first describe-driven tool — we have no filesystem access to the remote sim.
+ */
+async function bootIosRemote(
+  id: string,
+  registry: Registry,
+  force?: boolean
+): Promise<
+  { platform: "ios-remote"; udid: string; booted: true } | NativeDevtoolsInitFailedResult
+> {
+  await ensureDep("sim-remote");
+  const udid = stripRemotePrefix(id);
+
+  // Look up current state via sim-remote. Treat lookup failures as "unknown
+  // state" — the boot/bootstatus dance below tolerates an already-booted sim.
+  let simState: string | undefined;
+  try {
+    const list = await simRemoteListDevices();
+    outer: for (const devices of Object.values(list.devices)) {
+      for (const d of devices) {
+        if (d.udid === udid) {
+          simState = d.state;
+          break outer;
+        }
+      }
+    }
+  } catch {
+    simState = undefined;
+  }
+
+  if (force && simState === "Booted") {
+    await simRemoteShutdown(id).catch(() => undefined);
+  }
+
+  // Boot. `Booted` exit-code error from sim-remote means it's already up —
+  // benign; the bootstatus call below normalizes the state regardless.
+  await simRemoteBoot(id).catch((err: Error) => {
+    if (!/Booted/i.test(err.message)) throw err;
+  });
+  await simRemoteBootstatus(id, { boot: true });
+
+  const ndRef = nativeDevtoolsRef({ id, platform: "ios-remote", kind: "simulator" });
+  const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  const initFailure = ndApi.getInitFailure();
+  if (initFailure?.givenUp) {
+    return buildInitFailedResult(id, initFailure);
+  }
+
+  return { platform: "ios-remote", udid: id, booted: true };
 }
 
 // Tight budget for a hot boot attempt. A successful hot boot completes well
@@ -1262,6 +1328,7 @@ function bootVega(params: {
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   vega: { vvd: true },
@@ -1301,6 +1368,9 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         );
       }
       if (hasUdid) {
+        if (classifyDevice(params.udid!) === "ios-remote") {
+          return bootIosRemote(params.udid!, registry, params.force);
+        }
         return bootIos(params.udid!, registry, params.force);
       }
       if (hasAvd) {

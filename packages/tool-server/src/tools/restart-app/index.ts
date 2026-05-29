@@ -1,8 +1,11 @@
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
+import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { RestartAppResult, RestartAppVegaServices } from "./types";
+import type { RestartAppResult, RestartAppVegaServices, RestartAppIosServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 
@@ -37,6 +40,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   vega: { vvd: true },
 };
@@ -61,10 +65,16 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
     zodSchema,
     capability,
-    // No eager service: the iOS handler resolves native-devtools lazily so a
-    // tvOS udid never spins up the iOS-only injection (see header comment);
-    // Android and Vega need no service.
-    services: () => ({}),
+    // ios-remote declares an eager native-devtools service (its handler shares
+    // the local iOS relaunch path, which reads `services.nativeDevtools`). Local
+    // iOS resolves native-devtools lazily in its handler so a tvOS udid never
+    // spins up the iOS-only injection (see header comment); Android and Vega
+    // need no service.
+    services: (params): Record<string, ServiceRef> => {
+      const device = resolveDevice(params.udid);
+      if (device.platform === "ios-remote") return { nativeDevtools: nativeDevtoolsRef(device) };
+      return {};
+    },
     execute: dispatchByPlatform<
       Record<string, unknown>,
       Record<string, unknown>,
@@ -72,11 +82,13 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
       RestartAppResult,
       // No chromium branch — falls back to the ChromiumServices default.
       Record<string, unknown>,
-      RestartAppVegaServices
+      RestartAppVegaServices,
+      RestartAppIosServices
     >({
       toolId: "restart-app",
       capability,
       ios: makeIosImpl(registry),
+      iosRemote: iosRemoteImpl,
       android: androidImpl,
       vega: vegaImpl,
     }),

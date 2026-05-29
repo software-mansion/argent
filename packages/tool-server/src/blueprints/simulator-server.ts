@@ -15,6 +15,10 @@ import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
 import { isTvOsSimulator } from "../utils/ios-devices";
 import { UnsupportedOperationError } from "../utils/capability";
+import { openMoqClient } from "../utils/moq-client";
+import { createMoqTransport } from "../utils/simulator-client";
+import { simctlPbcopy } from "../utils/sim-remote";
+import { encodeKey } from "../utils/datachannel-proto";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -53,6 +57,63 @@ export interface SimulatorServerApi {
   streamUrl: string;
   /** Send a key Down or Up event by USB HID keycode (stdin `key <direction> <keyCode>` command). */
   pressKey(direction: "Down" | "Up", keyCode: number): void;
+  /**
+   * Optional alternate transport. Set by the remote (MoQ) blueprint so that
+   * the shared `sendCommand` / `httpScreenshot` helpers in `simulator-client.ts`
+   * route through MoQ instead of WebSocket + HTTP. Undefined for local sims.
+   */
+  transport?: import("../utils/simulator-client").SimulatorServerTransport;
+}
+
+/**
+ * Build the SimulatorServerApi for an ios-remote device. The MoQ client
+ * connects to the remote simulator-server via WebTransport pinned to the
+ * fingerprint returned by `sim-remote moq-info`, and a MoQ-backed transport
+ * is attached so the shared `sendCommand` / `httpScreenshot` helpers route
+ * touch/screenshot/etc through MoQ instead of the local WS+HTTP path.
+ */
+async function buildRemoteInstance(
+  device: DeviceInfo
+): Promise<ServiceInstance<SimulatorServerApi>> {
+  const moq = await openMoqClient(device.id);
+  const events = new TypedEventEmitter<ServiceEvents>();
+
+  const transport = createMoqTransport(moq, {
+    pasteText: async (text: string) => {
+      await simctlPbcopy(device.id, text);
+      // USB HID keyboard usage ids: 0xE3 = Left GUI (Cmd), 0x19 = V.
+      // Trigger Cmd+V on the remote sim to fire the actual paste.
+      const CMD = 0xe3;
+      const V = 0x19;
+      await moq.sendControl(encodeKey({ action: "Down", code: CMD }));
+      await moq.sendControl(encodeKey({ action: "Down", code: V }));
+      await moq.sendControl(encodeKey({ action: "Up", code: V }));
+      await moq.sendControl(encodeKey({ action: "Up", code: CMD }));
+    },
+  });
+
+  // Local sims expose apiUrl/streamUrl as HTTP/WS endpoints; nothing remote
+  // analogue exists since input/screenshot/video are all in MoQ. Fill these
+  // with a tagged stub so the few places that read them log clearly instead
+  // of silently dialing a nonexistent local port.
+  const stubUrl = `moq+remote://${device.id}`;
+
+  const api: SimulatorServerApi = {
+    apiUrl: stubUrl,
+    streamUrl: stubUrl,
+    pressKey: (direction, keyCode) => {
+      void moq.sendControl(encodeKey({ action: direction, code: keyCode }));
+    },
+    transport,
+  };
+
+  return {
+    api,
+    dispose: async () => {
+      await moq.close();
+    },
+    events,
+  };
 }
 
 // iOS UDIDs and Android serials (e.g. "emulator-5554", "192.168.1.5:5555",
@@ -244,6 +305,10 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
           error_kind: "validation",
         }
       );
+    }
+
+    if (device.platform === "ios-remote") {
+      return buildRemoteInstance(device);
     }
 
     if (device.platform === "ios") {

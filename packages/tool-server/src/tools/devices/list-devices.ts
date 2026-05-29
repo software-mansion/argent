@@ -8,6 +8,8 @@ import {
 } from "../../utils/adb";
 import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { simctlListDevices } from "../../utils/sim-remote";
+import { withRemotePrefix } from "../../utils/device-info";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
   listVegaDevices,
@@ -15,6 +17,14 @@ import {
   type VegaDevice,
 } from "../../utils/vega-devices";
 type IosDevice = IosSimulator & { platform: "ios" };
+
+type IosRemoteDevice = {
+  platform: "ios-remote";
+  udid: string;
+  name: string;
+  state: string;
+  runtime: string;
+};
 
 type AndroidDevice = {
   platform: "android";
@@ -33,7 +43,7 @@ type AndroidDevice = {
 };
 
 type ListDevicesResult = {
-  devices: Array<IosDevice | AndroidDevice | ChromiumDevice | VegaDevice>;
+  devices: Array<IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice>;
   avds: Array<{ name: string }>;
 };
 
@@ -57,11 +67,46 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 
 // Float booted/ready devices to the top of the merged list regardless of
 // platform — without this, all iOS entries are emitted before any Android.
-function readinessRank(d: IosDevice | AndroidDevice | ChromiumDevice | VegaDevice): number {
-  if (d.platform === "ios") return d.state === "Booted" ? 0 : 1;
+function readinessRank(
+  d: IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice
+): number {
   if (d.platform === "android") return d.state === "device" ? 0 : 1;
   if (d.platform === "vega") return d.state === "running" || d.state === "device" ? 0 : 1;
-  return 0; // Chromium entries are only listed when their CDP is responsive
+  if (d.platform === "chromium") return 0; // Chromium entries are only listed when their CDP is responsive
+  return d.state === "Booted" ? 0 : 1; // ios + ios-remote
+}
+
+/**
+ * List remote iOS simulators via `sim-remote`. Returns [] (silently) if
+ * sim-remote isn't installed or the user isn't logged in — list-devices
+ * already treats CLI absence as "platform unavailable" rather than failing.
+ */
+async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
+  try {
+    const result = await simctlListDevices();
+    const out: IosRemoteDevice[] = [];
+    for (const [runtime, devices] of Object.entries(result.devices)) {
+      for (const d of devices) {
+        if (d.isAvailable === false) continue;
+        out.push({
+          platform: "ios-remote",
+          udid: withRemotePrefix(d.udid),
+          name: d.name,
+          state: d.state,
+          runtime,
+        });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function sortIosRemote(a: IosRemoteDevice, b: IosRemoteDevice): number {
+  const aBooted = a.state === "Booted" ? 0 : 1;
+  const bBooted = b.state === "Booted" ? 0 : 1;
+  return aBooted - bBooted;
 }
 
 // A running VVD also shows on adb as `emulator-<consolePort>` (or `127.0.0.1:<port+1>`
@@ -168,8 +213,9 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     // timer is cleared on the fast happy path). The deadline only substitutes a
     // fallback on *slowness*; a rejection still propagates exactly as before — so the
     // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
-    const [ios, android, avds, chromium, vega] = await Promise.all([
+    const [ios, iosRemote, android, avds, chromium, vega] = await Promise.all([
       withDeadline(listIosSimulators(), [], "ios"),
+      withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
       withDeadline(
         // Opt into runtimeKind enrichment (list-devices surfaces TV vs mobile to
         // the agent, so the extra feature probe per device is warranted here — the
@@ -196,6 +242,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     ]);
     const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
     iosTagged.sort(sortIos);
+    iosRemote.sort(sortIosRemote);
     const androidTagged: AndroidDevice[] = android.map((d) => ({
       platform: "android",
       serial: d.serial,
@@ -212,12 +259,9 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, vvdShadowSerials);
     androidDeduped.sort(sortAndroid);
 
-    const devices: Array<IosDevice | AndroidDevice | ChromiumDevice | VegaDevice> = [
-      ...iosTagged,
-      ...androidDeduped,
-      ...chromium,
-      ...vega,
-    ];
+    const devices: Array<
+      IosDevice | IosRemoteDevice | AndroidDevice | ChromiumDevice | VegaDevice
+    > = [...iosTagged, ...iosRemote, ...androidDeduped, ...chromium, ...vega];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
     return { devices, avds };
