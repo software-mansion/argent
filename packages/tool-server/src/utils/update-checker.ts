@@ -1,10 +1,35 @@
+import fs from "node:fs";
 import https from "node:https";
+import os from "node:os";
+import path from "node:path";
 import semver from "semver";
 import { version as currentVersion } from "../../package.json";
 
 const PACKAGE_NAME = "@swmansion/argent";
 const CHECK_INTERVAL_MS = 60 * 60 * 1000 * 24; // 24 hour
 const REQUEST_TIMEOUT_MS = 10_000;
+
+function getSuppressionFilePath(): string {
+  return path.join(os.homedir(), ".argent", "update-suppression.json");
+}
+
+function loadSuppressUntil(): number {
+  try {
+    const raw = fs.readFileSync(getSuppressionFilePath(), "utf8");
+    const parsed = JSON.parse(raw) as { suppressUntil?: unknown };
+    const value = parsed.suppressUntil;
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  } catch {
+    // Missing file, parse error, or read error — treat as "no suppression".
+    return 0;
+  }
+}
+
+function persistSuppressUntil(value: number): void {
+  const filePath = getSuppressionFilePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ suppressUntil: value }));
+}
 
 export interface UpdateState {
   /** Whether a newer version is available on npm. */
@@ -22,7 +47,7 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
-let suppressUntil = 0;
+let suppressUntil = loadSuppressUntil();
 
 /** Returns the current update state (read-only snapshot). */
 export function getUpdateState(): Readonly<UpdateState> {
@@ -34,9 +59,15 @@ export function isUpdateNoteSuppressed(): boolean {
   return Date.now() < suppressUntil;
 }
 
-/** Suppress update notifications for the given duration (milliseconds). */
+/**
+ * Suppress update notifications for the given duration (milliseconds).
+ * Persists across tool-server restarts. Throws if the suppression file
+ * cannot be written.
+ */
 export function suppressUpdateNote(durationMs: number): void {
-  suppressUntil = Date.now() + durationMs;
+  const next = Date.now() + durationMs;
+  persistSuppressUntil(next);
+  suppressUntil = next;
 }
 
 function isNewerVersion(latest: string, current: string): boolean {
