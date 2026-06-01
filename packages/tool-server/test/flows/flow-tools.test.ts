@@ -465,12 +465,14 @@ describe("flow-execute", () => {
       tool: "tap",
       result: { tapped: true },
       outputHint: undefined,
+      args: { x: 0.5 },
     });
     expect(result.steps[3]).toEqual({
       kind: "tool",
       tool: "screenshot",
       result: { url: "http://img", path: "/tmp/img.png" },
       outputHint: "image",
+      args: {},
     });
 
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);

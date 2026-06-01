@@ -21,7 +21,7 @@ const zodSchema = z.object({
 
 type StepResult =
   | { kind: "echo"; message: string }
-  | { kind: "tool"; tool: string; result: unknown; outputHint?: string }
+  | { kind: "tool"; tool: string; result: unknown; outputHint?: string; args?: unknown }
   | { kind: "tool"; tool: string; error: string };
 
 export type FlowRunResult = {
@@ -91,6 +91,7 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
             tool: step.name,
             result,
             outputHint: toolDef?.outputHint,
+            args: step.args,
           });
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
