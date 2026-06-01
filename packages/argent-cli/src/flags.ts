@@ -92,8 +92,9 @@ function writeFlagsFile(filePath: string, flags: Record<string, boolean>): void 
     return;
   }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  // Atomic write via tmp+rename so two concurrent argent processes can't
-  // produce a torn JSON payload or lose each other's edits.
+  // Atomic write via tmp+rename so a reader never observes a torn/partial JSON
+  // payload. (Concurrent read-modify-write is still last-writer-wins, but two
+  // argent CLI invocations racing on the same flag file are not expected.)
   const tmp = `${filePath}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ flags } satisfies FlagsFile, null, 2) + "\n");
   fs.renameSync(tmp, filePath);
@@ -123,7 +124,10 @@ export function setFlag(
 export function unsetFlag(name: string, scope: FlagScope, options: FlagsPathOptions = {}): boolean {
   const filePath = getFlagsPath(scope, options);
   const current = readFlagsFile(filePath);
-  if (!(name in current)) return false;
+  // hasOwn, not `in`: flag names like "toString"/"constructor" are valid per
+  // FLAG_NAME_RE but live on Object.prototype, so `in` would report them as
+  // present (and delete a no-op) even when they were never stored.
+  if (!Object.hasOwn(current, name)) return false;
   delete current[name];
   writeFlagsFile(filePath, current);
   return true;
@@ -132,10 +136,12 @@ export function unsetFlag(name: string, scope: FlagScope, options: FlagsPathOpti
 // Effective value: project overrides global. Returns false when the flag is
 // not set in either scope — flags are opt-in.
 export function isFlagEnabled(name: string, options: FlagsPathOptions = {}): boolean {
+  // hasOwn, not `in`: otherwise prototype keys ("toString", "constructor", …)
+  // resolve to a truthy Object.prototype member for a flag that was never set.
   const projectFlags = readFlags("project", options);
-  if (name in projectFlags) return projectFlags[name]!;
+  if (Object.hasOwn(projectFlags, name)) return projectFlags[name]!;
   const globalFlags = readFlags("global", options);
-  if (name in globalFlags) return globalFlags[name]!;
+  if (Object.hasOwn(globalFlags, name)) return globalFlags[name]!;
   return false;
 }
 

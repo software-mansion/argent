@@ -233,6 +233,36 @@ describe("isFlagEnabled", () => {
   });
 });
 
+describe("prototype-named flags (Object.prototype keys)", () => {
+  // FLAG_NAME_RE allows names like "toString"/"constructor"/"valueOf", which
+  // also exist on Object.prototype. A naive `name in obj` check would treat
+  // these as set (returning a truthy prototype member) even when storage is
+  // empty — these guard that hasOwn semantics are used throughout.
+  const protoNames = ["toString", "constructor", "valueOf", "hasOwnProperty"];
+
+  for (const name of protoNames) {
+    it(`isFlagEnabled("${name}") is false (and a real boolean) when unset`, () => {
+      const result = isFlagEnabled(name);
+      expect(result).toBe(false);
+      expect(typeof result).toBe("boolean");
+    });
+
+    it(`unsetFlag("${name}") on storage without it returns false and is a no-op`, () => {
+      setFlag("real", true, "global");
+      expect(unsetFlag(name, "global")).toBe(false);
+      expect(readFlags("global")).toEqual({ real: true });
+    });
+
+    it(`enable/disable round trip works for a flag literally named "${name}"`, () => {
+      setFlag(name, true, "global");
+      expect(readFlags("global")).toEqual({ [name]: true });
+      expect(isFlagEnabled(name)).toBe(true);
+      expect(unsetFlag(name, "global")).toBe(true);
+      expect(isFlagEnabled(name)).toBe(false);
+    });
+  }
+});
+
 // ── CLI ──────────────────────────────────────────────────────────────────────
 
 interface CapturedConsole {
