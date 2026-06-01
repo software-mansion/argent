@@ -19,9 +19,9 @@ const TRACE_CONFIG_PATH =
   process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_TRACECFG ??
   path.join(__dirname, "..", "argent.tracecfg.pbtxt");
 
-// Helper-APK distribution dir. ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR lets a
-// launcher override the dist directory (e.g. when ts-node runs from src/).
-// Mirror of @argent/native-devtools-ios's index.ts.
+// Helper-APK distribution dir (where the version-stamped helper APK lives).
+// ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR lets a launcher override it (e.g. when
+// ts-node runs from src/ instead of the packaged dist/).
 const DIST_DIR =
   process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR ?? path.join(__dirname, "..", "dist");
 

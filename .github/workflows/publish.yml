@@ -36,7 +36,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download signed native binaries (dylibs + ax-service)
+      - name: Download signed native binaries (dylibs, ax-service, trace_processor_shell, Android helper APK)
         run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,6 +52,11 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      - run: test -x packages/argent/bin/trace_processor_shell
+      - run: test -f packages/argent/argent.tracecfg.pbtxt
+      - run: test -d packages/argent/queries
+      - run: test -f packages/argent/manifest.json
+      - run: ls packages/argent/dist/argent-android-devtools-*.apk
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent

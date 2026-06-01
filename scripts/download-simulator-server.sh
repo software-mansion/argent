@@ -15,7 +15,6 @@ ASSET_NAME="simulator-server-argent-macos"
 DEST_DIR="packages/native-devtools-ios/bin"
 DEST_PATH="${DEST_DIR}/simulator-server"
 
-TAG_ARGS=()
 echo "Downloading ${ASSET_NAME} from ${REPO} (tag: ${TAG})..."
 
 mkdir -p "${DEST_DIR}"
