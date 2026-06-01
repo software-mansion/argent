@@ -294,9 +294,9 @@ const ASSETS = [
 
 /**
  * Bundle a single entry point with esbuild and log the result.
- * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string }} opts
+ * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string, external?: string[] }} opts
  */
-function buildBundle({ entry, out, format, label }) {
+function buildBundle({ entry, out, format, label, external = [] }) {
   esbuild.buildSync({
     entryPoints: [entry],
     bundle: true,
@@ -307,8 +307,13 @@ function buildBundle({ entry, out, format, label }) {
     alias: ALIASES,
     mainFields: MAIN_FIELDS,
     // ESM bundles need the require() shim (for inlined CJS deps) and must keep
-    // node: builtins external; the CJS bundle needs neither.
-    ...(format === "esm" ? { banner: ESM_REQUIRE_BANNER, external: ["node:*"] } : {}),
+    // node: builtins external; the CJS bundle needs neither. Any caller-supplied
+    // externals (e.g. tree-sitter native addons) are merged on top.
+    ...(format === "esm"
+      ? { banner: ESM_REQUIRE_BANNER, external: ["node:*", ...external] }
+      : external.length
+        ? { external }
+        : {}),
   });
   console.log(`✓ Bundled ${label} → ${path.relative(process.cwd(), out)}`);
 }
@@ -438,7 +443,16 @@ fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
 // Bundle the tools server (CJS — the dispatcher loads it via require()).
-buildBundle({ entry: TOOLS_ENTRY, out: OUT_FILE, format: "cjs", label: "tools server" });
+// tree-sitter / tree-sitter-typescript are native addons (.node) that esbuild
+// cannot inline; keep them external so the bundle `require()`s them at runtime
+// from the published package's own dependencies (see package.json).
+buildBundle({
+  entry: TOOLS_ENTRY,
+  out: OUT_FILE,
+  format: "cjs",
+  label: "tools server",
+  external: ["tree-sitter", "tree-sitter-typescript"],
+});
 
 // The remaining bundles are ESM so that:
 //   - installer: import.meta.dirname works at runtime (the dispatcher
