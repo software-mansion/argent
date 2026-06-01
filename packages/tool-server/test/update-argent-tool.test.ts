@@ -22,16 +22,22 @@ function makeChild() {
 function stateWithUpdate(latestVersion = "99.0.0") {
   return {
     updateAvailable: true,
+    updateInstallable: true,
     currentVersion: "1.0.0",
     latestVersion,
+    latestPublishedAt: null,
+    minReleaseAgeMs: 0,
   };
 }
 
 function stateUpToDate() {
   return {
     updateAvailable: false,
+    updateInstallable: false,
     currentVersion: "1.0.0",
     latestVersion: "1.0.0",
+    latestPublishedAt: null,
+    minReleaseAgeMs: 0,
   };
 }
 

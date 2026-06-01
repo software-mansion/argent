@@ -185,8 +185,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
-        const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
-        const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
+        const { updateInstallable, currentVersion, latestVersion } = getUpdateState();
+        // Gate on `updateInstallable`, not `updateAvailable`: a newer version
+        // that is still held back by the machine's minimum-release-age policy
+        // cannot be installed yet, so reminding about it is pure noise.
+        const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
           suppressUpdateNote(AUTO_SUPPRESS_MS);
         }
