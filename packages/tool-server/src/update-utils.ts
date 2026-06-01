@@ -7,7 +7,6 @@ How to update:
   - Manual (user-initiated): run \`npx @swmansion/argent update\` in the terminal
   - Agent-assisted (requires explicit user consent): call the \`update-argent\` tool — only after the user has explicitly asked you to update Argent in this conversation
   - To postpone this reminder: call the \`dismiss-update\` tool with the number of hours to suppress it
-  - To turn this reminder off permanently: the user can set \`ARGENT_DISABLE_UPDATE_NOTIFICATIONS=1\` in the tools-server environment
 
 ACTION REQUIRED: Save a note (via TODO, task list) that an Argent update to v${latestVersion} is available so you can remind the user about it later. This notification will not repeat for the next 30 minutes. 
 
