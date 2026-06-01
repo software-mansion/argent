@@ -1,6 +1,19 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { Registry } from "@argent/registry";
+
+// Parametrize platform-dependent assertions so a single CI runner exercises
+// both branches. Without this, macOS CI never tests the linux branch and
+// linux CI never tests the darwin branch — a regression that swapped them
+// would pass on both runners. See selectGpuMode in boot-device.ts.
+const PLATFORMS: ReadonlyArray<readonly [NodeJS.Platform, string]> = [
+  ["linux", "swiftshader"],
+  ["darwin", "auto"],
+];
+const originalPlatform = process.platform;
+function setPlatform(value: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value, configurable: true });
+}
 
 const execFileMock = vi.fn();
 const spawnMock = vi.fn();
@@ -82,6 +95,12 @@ beforeEach(() => {
   __resetInFlightBootsForTesting();
 });
 
+afterEach(() => {
+  // Restore process.platform after every test, even ones that don't pin it,
+  // so a forgotten cleanup in one test can't leak into the next.
+  setPlatform(originalPlatform);
+});
+
 /**
  * Common happy-path mock: AVD exists, adb is healthy, `adb devices` reveals
  * one new emulator after spawn, wait-for-device succeeds, getprop returns 1,
@@ -122,68 +141,73 @@ function mockHappyBootChain(newSerial = "emulator-5554") {
 }
 
 describe("boot-device Android — hot-boot with cold-boot fallback", () => {
-  it("picks the hot-boot spawn args when a default_boot snapshot probes as Loadable", async () => {
-    hasSnapshotMock.mockResolvedValue(true);
-    probeMock.mockResolvedValue({ loadable: true, reason: null });
-    mockHappyBootChain();
+  it.each(PLATFORMS)(
+    "picks the hot-boot spawn args + `-gpu %s` on %s when default_boot probes Loadable",
+    async (platform, expectedGpu) => {
+      setPlatform(platform);
+      hasSnapshotMock.mockResolvedValue(true);
+      probeMock.mockResolvedValue({ loadable: true, reason: null });
+      mockHappyBootChain();
 
-    const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const tool = createBootDeviceTool(registry);
+      const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
-    expect(result).toMatchObject({
-      platform: "android",
-      serial: "emulator-5554",
-      avdName: "Pixel_7_API_34",
-      booted: true,
-    });
+      expect(result).toMatchObject({
+        platform: "android",
+        serial: "emulator-5554",
+        avdName: "Pixel_7_API_34",
+        booted: true,
+      });
 
-    // Exactly one emulator spawn and it is the hot-boot arg set.
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const hotArgs = spawnMock.mock.calls[0]![1];
-    expect(hotArgs).toContain("-force-snapshot-load");
-    expect(hotArgs).toContain("-no-snapshot-save");
-    expect(hotArgs).not.toContain("-no-snapshot-load");
-    // Window is visible by default — `-no-window` only appears when the
-    // user opts in via `ARGENT_EMULATOR_NO_WINDOW`. The opt-in path is
-    // exercised by a separate test below.
-    expect(hotArgs).not.toContain("-no-window");
-    // `-gpu` arg must be present and platform-appropriate. Linux uses
-    // `swiftshader` for universal compatibility (sidesteps the
-    // host GL stack, which silently fails on Optimus / dual-GPU /
-    // Wayland-with-NVIDIA setups); every other host uses `auto`. See
-    // `boot-device.ts:selectGpuMode` for the full reasoning.
-    const gpuIdx = hotArgs.indexOf("-gpu");
-    expect(gpuIdx).toBeGreaterThanOrEqual(0);
-    expect(hotArgs[gpuIdx + 1]).toBe(process.platform === "linux" ? "swiftshader" : "auto");
-  });
+      // Exactly one emulator spawn and it is the hot-boot arg set.
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const hotArgs = spawnMock.mock.calls[0]![1];
+      expect(hotArgs).toContain("-force-snapshot-load");
+      expect(hotArgs).toContain("-no-snapshot-save");
+      expect(hotArgs).not.toContain("-no-snapshot-load");
+      // Window is visible by default — `-no-window` only appears when the
+      // user opts in via `ARGENT_EMULATOR_NO_WINDOW`. The opt-in path is
+      // exercised by a separate test below.
+      expect(hotArgs).not.toContain("-no-window");
+      // `-gpu` arg must be present and platform-appropriate. Linux uses
+      // `swiftshader` for universal compatibility (sidesteps the host GL
+      // stack, which silently fails on Optimus / dual-GPU / Wayland-with-
+      // NVIDIA setups); every other host uses `auto`. See `selectGpuMode`.
+      const gpuIdx = hotArgs.indexOf("-gpu");
+      expect(gpuIdx).toBeGreaterThanOrEqual(0);
+      expect(hotArgs[gpuIdx + 1]).toBe(expectedGpu);
+    }
+  );
 
-  it("hands the same renderer args to the probe and the hot-boot spawn", async () => {
-    // Sibling test of the assertion above, focused on parity: the probe argv
-    // and the spawn argv must agree on every renderer-affecting flag, or the
-    // emulator's `-check-snapshot-loadable` resolves a different renderer
-    // than the boot does and rejects perfectly loadable snapshots. The bug
-    // this guards against is "every boot is cold on Linux even with a fresh
-    // snapshot on disk" — caught only end-to-end because both unit-mocked
-    // halves test green in isolation.
-    hasSnapshotMock.mockResolvedValue(true);
-    probeMock.mockResolvedValue({ loadable: true, reason: null });
-    mockHappyBootChain();
+  it.each(PLATFORMS)(
+    "hands `-gpu %s` to both probe and hot-boot spawn on %s",
+    async (platform, expectedGpu) => {
+      // Sibling test of the assertion above, focused on parity: the probe
+      // argv and the spawn argv must agree on every renderer-affecting flag,
+      // or the emulator's `-check-snapshot-loadable` resolves a different
+      // renderer than the boot does and rejects perfectly loadable snapshots.
+      // The bug this guards against is "every boot is cold on Linux even
+      // with a fresh snapshot on disk" — caught only end-to-end because both
+      // unit-mocked halves test green in isolation.
+      setPlatform(platform);
+      hasSnapshotMock.mockResolvedValue(true);
+      probeMock.mockResolvedValue({ loadable: true, reason: null });
+      mockHappyBootChain();
 
-    const tool = createBootDeviceTool(registry);
-    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
-    const expectedGpu = process.platform === "linux" ? "swiftshader" : "auto";
+      expect(probeMock).toHaveBeenCalledTimes(1);
+      const [, , probeOptions] = probeMock.mock.calls[0]!;
+      expect(probeOptions).toMatchObject({ extraArgs: ["-gpu", expectedGpu] });
 
-    expect(probeMock).toHaveBeenCalledTimes(1);
-    const [, , probeOptions] = probeMock.mock.calls[0]!;
-    expect(probeOptions).toMatchObject({ extraArgs: ["-gpu", expectedGpu] });
-
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const hotArgs = spawnMock.mock.calls[0]![1] as string[];
-    const gpuIdx = hotArgs.indexOf("-gpu");
-    expect(gpuIdx).toBeGreaterThanOrEqual(0);
-    expect(hotArgs[gpuIdx + 1]).toBe(expectedGpu);
-  });
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const hotArgs = spawnMock.mock.calls[0]![1] as string[];
+      const gpuIdx = hotArgs.indexOf("-gpu");
+      expect(gpuIdx).toBeGreaterThanOrEqual(0);
+      expect(hotArgs[gpuIdx + 1]).toBe(expectedGpu);
+    }
+  );
 
   it("honors ARGENT_EMULATOR_GPU_MODE env override", async () => {
     // Escape hatch for power users with verified-working `-gpu host`.
@@ -245,46 +269,74 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     }
   });
 
-  it("ignores empty/whitespace-only ARGENT_EMULATOR_GPU_MODE", async () => {
-    // `export FOO=` foot-gun: fall through to platform default, don't crash.
+  it.each(PLATFORMS)(
+    "ignores empty/whitespace ARGENT_EMULATOR_GPU_MODE, falls through to `%s` default on %s",
+    async (platform, expectedGpu) => {
+      // `export FOO=` foot-gun: fall through to platform default, don't crash.
+      setPlatform(platform);
+      hasSnapshotMock.mockResolvedValue(false);
+      mockHappyBootChain();
+
+      const prev = process.env.ARGENT_EMULATOR_GPU_MODE;
+      process.env.ARGENT_EMULATOR_GPU_MODE = "   ";
+      try {
+        const tool = createBootDeviceTool(registry);
+        await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+        const args = spawnMock.mock.calls[0]![1];
+        const gpuIdx = args.indexOf("-gpu");
+        expect(args[gpuIdx + 1]).toBe(expectedGpu);
+      } finally {
+        if (prev === undefined) delete process.env.ARGENT_EMULATOR_GPU_MODE;
+        else process.env.ARGENT_EMULATOR_GPU_MODE = prev;
+      }
+    }
+  );
+
+  it("throws on an unknown ARGENT_EMULATOR_GPU_MODE rather than letting emulator -gpu fail later", async () => {
+    // A typoed override (`ARGENT_EMULATOR_GPU_MODE=hsot`) used to be passed
+    // through verbatim and the emulator binary rejected it mid-launch — that
+    // path burns the full hot-boot budget before surfacing the error. We
+    // validate against the whitelist at boot-start so the user sees the
+    // mistake immediately.
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
-
     const prev = process.env.ARGENT_EMULATOR_GPU_MODE;
-    process.env.ARGENT_EMULATOR_GPU_MODE = "   ";
+    process.env.ARGENT_EMULATOR_GPU_MODE = "hsot";
     try {
       const tool = createBootDeviceTool(registry);
-      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
-      const args = spawnMock.mock.calls[0]![1];
-      const gpuIdx = args.indexOf("-gpu");
-      expect(args[gpuIdx + 1]).toBe(process.platform === "linux" ? "swiftshader" : "auto");
+      await expect(tool.execute!({}, { avdName: "Pixel_7_API_34" })).rejects.toThrow(
+        /ARGENT_EMULATOR_GPU_MODE=.*not a known emulator -gpu value/
+      );
     } finally {
       if (prev === undefined) delete process.env.ARGENT_EMULATOR_GPU_MODE;
       else process.env.ARGENT_EMULATOR_GPU_MODE = prev;
     }
   });
 
-  it("skips the hot-boot attempt and cold-boots when no snapshot exists on disk", async () => {
-    hasSnapshotMock.mockResolvedValue(false);
-    mockHappyBootChain();
+  it.each(PLATFORMS)(
+    "skips hot-boot and cold-boots with `-gpu %s` on %s when no snapshot exists",
+    async (platform, expectedGpu) => {
+      setPlatform(platform);
+      hasSnapshotMock.mockResolvedValue(false);
+      mockHappyBootChain();
 
-    const tool = createBootDeviceTool(registry);
-    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const tool = createBootDeviceTool(registry);
+      await tool.execute!({}, { avdName: "Pixel_7_API_34" });
 
-    expect(probeMock).not.toHaveBeenCalled();
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const args = spawnMock.mock.calls[0]![1];
-    expect(args).toContain("-no-snapshot-load");
-    expect(args).not.toContain("-force-snapshot-load");
-    expect(args).not.toContain("-no-window");
-    // Cold boot must also pass the platform-appropriate `-gpu` value so the
-    // snapshot it eventually saves matches the renderer the next launch's
-    // probe will resolve. Without this, the cold-boot fallback bakes a
-    // renderer mismatch into the saved snapshot and re-enters the "every
-    // boot is cold" cycle.
-    const expectedGpu = process.platform === "linux" ? "swiftshader" : "auto";
-    expect(args).toEqual(expect.arrayContaining(["-gpu", expectedGpu]));
-  });
+      expect(probeMock).not.toHaveBeenCalled();
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const args = spawnMock.mock.calls[0]![1];
+      expect(args).toContain("-no-snapshot-load");
+      expect(args).not.toContain("-force-snapshot-load");
+      expect(args).not.toContain("-no-window");
+      // Cold boot must also pass the platform-appropriate `-gpu` value so the
+      // snapshot it eventually saves matches the renderer the next launch's
+      // probe will resolve. Without this, the cold-boot fallback bakes a
+      // renderer mismatch into the saved snapshot and re-enters the "every
+      // boot is cold" cycle.
+      expect(args).toEqual(expect.arrayContaining(["-gpu", expectedGpu]));
+    }
+  );
 
   it("skips the hot-boot attempt and cold-boots when -check-snapshot-loadable rejects", async () => {
     hasSnapshotMock.mockResolvedValue(true);
@@ -426,55 +478,68 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
   });
 
   it("falls back to cold boot when hot-restore leaves screencap returning a blank frame", async () => {
-    hasSnapshotMock.mockResolvedValue(true);
-    probeMock.mockResolvedValue({ loadable: true, reason: null });
+    // assertScreencapAlive polls within firstRealFrameHot (8 s) before
+    // declaring a sticky-blank state — uses fake timers so we don't wall-clock
+    // through the budget. Without this the test would real-time wait 8 s.
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(true);
+      probeMock.mockResolvedValue({ loadable: true, reason: null });
 
-    // First spawn (hot) boots cleanly but screencap returns a blank frame —
-    // the SurfaceFlinger composite-restore artefact. Second spawn (cold) is
-    // fully healthy. Each spawn registers a distinct serial so the cold-boot
-    // poll picks up a genuinely new emulator.
-    let spawnCount = 0;
-    spawnMock.mockImplementation(() => {
-      spawnCount += 1;
-      return fakeChild();
-    });
+      // First spawn (hot) boots cleanly but screencap returns a blank frame —
+      // the SurfaceFlinger composite-restore artefact. Second spawn (cold) is
+      // fully healthy. Each spawn registers a distinct serial so the cold-boot
+      // poll picks up a genuinely new emulator.
+      let spawnCount = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCount += 1;
+        return fakeChild();
+      });
 
-    execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "emulator" && args[0] === "-list-avds")
-        return { stdout: "Pixel_7_API_34\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "version")
-        return { stdout: "Android Debug Bridge\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
-      if (cmd === "adb" && args[0] === "devices") {
-        let lines = "";
-        if (spawnCount >= 1) lines += "emulator-5554\tdevice\n";
-        if (spawnCount >= 2) lines += "emulator-5556\tdevice\n";
-        return { stdout: `List of devices attached\n${lines}`, stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
-        return { stdout: "", stderr: "" };
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        const serial = args[1];
-        const shellCmd = args[3] ?? "";
-        if (shellCmd.startsWith("getprop sys.boot_completed")) return { stdout: "1\n", stderr: "" };
-        if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
-        if (shellCmd === "pm path android")
-          return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
-        if (shellCmd.startsWith("screencap")) {
-          return { stdout: serial === "emulator-5554" ? "0\n" : "1\n", stderr: "" };
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "emulator" && args[0] === "-list-avds")
+          return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "version")
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          let lines = "";
+          if (spawnCount >= 1) lines += "emulator-5554\tdevice\n";
+          if (spawnCount >= 2) lines += "emulator-5556\tdevice\n";
+          return { stdout: `List of devices attached\n${lines}`, stderr: "" };
         }
-        return { stdout: "\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+          return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          const serial = args[1];
+          const shellCmd = args[3] ?? "";
+          if (shellCmd.startsWith("getprop sys.boot_completed"))
+            return { stdout: "1\n", stderr: "" };
+          if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+          if (shellCmd === "pm path android")
+            return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+          if (shellCmd.startsWith("screencap")) {
+            return { stdout: serial === "emulator-5554" ? "0\n" : "1\n", stderr: "" };
+          }
+          return { stdout: "\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const tool = createBootDeviceTool(registry);
+      const resultP = tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      // Drain the 8 s polling budget + a margin for the post-fail cold-boot
+      // chain (also parks on setTimeout).
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await resultP;
 
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]![1]).toContain("-force-snapshot-load");
-    expect(spawnMock.mock.calls[1]![1]).toContain("-no-snapshot-load");
-    expect(result).toMatchObject({ serial: "emulator-5556" });
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      expect(spawnMock.mock.calls[0]![1]).toContain("-force-snapshot-load");
+      expect(spawnMock.mock.calls[1]![1]).toContain("-no-snapshot-load");
+      expect(result).toMatchObject({ serial: "emulator-5556" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns the already-running emulator without spawning when the AVD is live and its framebuffer is healthy", async () => {
@@ -519,58 +584,69 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     // sticky-blank screencap state, returning that serial unchanged would
     // hand the caller a device whose screenshots are silently all-zero.
     // The guard kills the wedged emulator and falls through to a fresh boot.
-    hasSnapshotMock.mockResolvedValue(false); // force the cold-boot path post-kill
-    let killed = false;
-    let spawned = false;
-    spawnMock.mockImplementation(() => {
-      spawned = true;
-      return fakeChild();
-    });
-    execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "adb" && args[0] === "version")
-        return { stdout: "Android Debug Bridge\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
-      if (cmd === "emulator" && args[0] === "-list-avds")
-        return { stdout: "Pixel_7_API_34\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "devices") {
-        // Pre-kill: wedged emulator-5554 is listed. After kill but before
-        // the cold-boot spawn registers: empty (so emulator-5556 is *new*
-        // when it appears). Post-spawn: emulator-5556 is listed.
-        let line = "";
-        if (!killed) line = "emulator-5554\tdevice\n";
-        else if (spawned) line = "emulator-5556\tdevice\n";
-        return { stdout: `List of devices attached\n${line}`, stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
-        return { stdout: "", stderr: "" };
-      if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
-        killed = true;
-        return { stdout: "OK\n", stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        const serial = args[1];
-        const shellCmd = args[3] ?? "";
-        if (shellCmd === "getprop ro.boot.qemu.avd_name")
+    // Fake timers: assertScreencapAlive polls for firstRealFrameHot (8 s)
+    // before declaring a wedge, then the cold-boot fallback parks on its own
+    // setTimeout cadence. Without fake timers this would real-time wait.
+    vi.useFakeTimers();
+    try {
+      hasSnapshotMock.mockResolvedValue(false); // force the cold-boot path post-kill
+      let killed = false;
+      let spawned = false;
+      spawnMock.mockImplementation(() => {
+        spawned = true;
+        return fakeChild();
+      });
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "adb" && args[0] === "version")
+          return { stdout: "Android Debug Bridge\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        if (cmd === "emulator" && args[0] === "-list-avds")
           return { stdout: "Pixel_7_API_34\n", stderr: "" };
-        if (shellCmd.startsWith("getprop sys.boot_completed")) return { stdout: "1\n", stderr: "" };
-        if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
-        if (shellCmd === "pm path android")
-          return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
-        if (shellCmd.startsWith("screencap")) {
-          // Wedged frame on the original serial; healthy on the respawn.
-          return { stdout: serial === "emulator-5554" ? "0\n" : "1\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          // Pre-kill: wedged emulator-5554 is listed. After kill but before
+          // the cold-boot spawn registers: empty (so emulator-5556 is *new*
+          // when it appears). Post-spawn: emulator-5556 is listed.
+          let line = "";
+          if (!killed) line = "emulator-5554\tdevice\n";
+          else if (spawned) line = "emulator-5556\tdevice\n";
+          return { stdout: `List of devices attached\n${line}`, stderr: "" };
         }
-      }
-      return { stdout: "", stderr: "" };
-    });
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+          return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+          killed = true;
+          return { stdout: "OK\n", stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          const serial = args[1];
+          const shellCmd = args[3] ?? "";
+          if (shellCmd === "getprop ro.boot.qemu.avd_name")
+            return { stdout: "Pixel_7_API_34\n", stderr: "" };
+          if (shellCmd.startsWith("getprop sys.boot_completed"))
+            return { stdout: "1\n", stderr: "" };
+          if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+          if (shellCmd === "pm path android")
+            return { stdout: "package:/system/framework/framework-res.apk\n", stderr: "" };
+          if (shellCmd.startsWith("screencap")) {
+            // Wedged frame on the original serial; healthy on the respawn.
+            return { stdout: serial === "emulator-5554" ? "0\n" : "1\n", stderr: "" };
+          }
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    const tool = createBootDeviceTool(registry);
-    const result = await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      const tool = createBootDeviceTool(registry);
+      const resultP = tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const result = await resultP;
 
-    expect(killed).toBe(true);
-    // Exactly one fresh spawn (the cold-boot fallback after the kill).
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(spawnMock.mock.calls[0]![1]).toContain("-no-snapshot-load");
-    expect(result).toMatchObject({ serial: "emulator-5556" });
+      expect(killed).toBe(true);
+      // Exactly one fresh spawn (the cold-boot fallback after the kill).
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawnMock.mock.calls[0]![1]).toContain("-no-snapshot-load");
+      expect(result).toMatchObject({ serial: "emulator-5556" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
