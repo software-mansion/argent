@@ -68,6 +68,7 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
+import { screenshotDiffTool } from "../tools/screenshot-diff";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -88,6 +89,7 @@ export function createRegistry(): Registry {
   registry.registerTool(reinstallAppTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(screenshotTool);
+  registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureCustomTool);

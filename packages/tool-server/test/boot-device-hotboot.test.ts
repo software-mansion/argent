@@ -199,7 +199,14 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
 
       expect(probeMock).toHaveBeenCalledTimes(1);
       const [, , probeOptions] = probeMock.mock.calls[0]!;
-      expect(probeOptions).toMatchObject({ extraArgs: ["-gpu", expectedGpu] });
+      // Renderer args (`-gpu`) AND launch-hardening args (`-noaudio`,
+      // `-netfast`) all change qemu device topology — any one of them
+      // differing between probe and boot is enough to reject a perfectly
+      // loadable snapshot. Assert both halves arrive in the probe's extraArgs
+      // so the parity test catches a regression in either group.
+      expect(probeOptions).toMatchObject({
+        extraArgs: expect.arrayContaining(["-gpu", expectedGpu, "-noaudio", "-netfast"]),
+      });
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
       const hotArgs = spawnMock.mock.calls[0]![1] as string[];
@@ -208,6 +215,58 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       expect(hotArgs[gpuIdx + 1]).toBe(expectedGpu);
     }
   );
+
+  it("passes launch-hardening flags on the hot-boot spawn", async () => {
+    // `-noaudio`, `-no-boot-anim`, `-netfast` are the perf cuts; the consent
+    // dialogs that `-crash-report-mode never` and `-no-metrics` suppress are
+    // what block MCP-driven boots on emulator crash or first run. All five
+    // must reach the spawn or argent loses the qemu device parity the probe
+    // relies on (and the dialog protection). See LAUNCH_HARDENING_ARGS in
+    // boot-device.ts for the per-flag rationale.
+    hasSnapshotMock.mockResolvedValue(true);
+    probeMock.mockResolvedValue({ loadable: true, reason: null });
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const hotArgs = spawnMock.mock.calls[0]![1] as string[];
+    expect(hotArgs).toEqual(
+      expect.arrayContaining([
+        "-noaudio",
+        "-no-boot-anim",
+        "-netfast",
+        "-crash-report-mode",
+        "never",
+        "-no-metrics",
+      ])
+    );
+  });
+
+  it("passes the same launch-hardening flags on the cold-boot spawn", async () => {
+    // Cold boot WRITES a snapshot (no `-no-snapshot-save`); the next hot boot
+    // reads it. If cold-boot's qemu config differs from hot-boot's, the saved
+    // snapshot is unloadable and argent re-enters cold-boot forever.
+    hasSnapshotMock.mockResolvedValue(false);
+    mockHappyBootChain();
+
+    const tool = createBootDeviceTool(registry);
+    await tool.execute!({}, { avdName: "Pixel_7_API_34" });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const coldArgs = spawnMock.mock.calls[0]![1] as string[];
+    expect(coldArgs).toEqual(
+      expect.arrayContaining([
+        "-noaudio",
+        "-no-boot-anim",
+        "-netfast",
+        "-crash-report-mode",
+        "never",
+        "-no-metrics",
+      ])
+    );
+  });
 
   it("honors ARGENT_EMULATOR_GPU_MODE env override", async () => {
     // Escape hatch for power users with verified-working `-gpu host`.
