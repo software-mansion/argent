@@ -31,6 +31,18 @@ function stateWithUpdate(latestVersion = "99.0.0") {
   };
 }
 
+function stateHeldByPolicy(latestVersion = "99.0.0") {
+  return {
+    updateAvailable: true,
+    updateInstallable: false,
+    installableVersion: null,
+    currentVersion: "1.0.0",
+    latestVersion,
+    latestPublishedAt: null,
+    minReleaseAgeMs: 7 * 24 * 60 * 60 * 1000,
+  };
+}
+
 function stateUpToDate() {
   return {
     updateAvailable: false,
@@ -75,7 +87,7 @@ describe("update-argent tool", () => {
 
     vi.advanceTimersByTime(1);
     expect(mockSpawn).toHaveBeenCalledOnce();
-    expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes"], {
+    expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes", "--version", "99.0.0"], {
       detached: true,
       stdio: "ignore",
     });
@@ -102,6 +114,15 @@ describe("update-argent tool", () => {
 
     const result = await updateArgentTool.execute({}, undefined, undefined);
     expect((result as { message: string }).message).toContain("already up to date");
+    vi.advanceTimersByTime(5000);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("returns a held-by-policy message and does not spawn when the latest update is not installable yet", async () => {
+    mockGetUpdateState.mockReturnValue(stateHeldByPolicy());
+
+    const result = await updateArgentTool.execute({}, undefined, undefined);
+    expect((result as { message: string }).message).toContain("not installable yet");
     vi.advanceTimersByTime(5000);
     expect(mockSpawn).not.toHaveBeenCalled();
   });

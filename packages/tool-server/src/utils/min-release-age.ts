@@ -12,44 +12,77 @@ const MINUTE_MS = 60 * 1000;
 const OVERRIDE_ENV = "ARGENT_MIN_RELEASE_AGE_DAYS";
 
 interface PmPolicyProbe {
-  bin: string;
-  key: string;
+  command: string;
   /** Convert the raw config value (in the PM's native unit) to milliseconds. */
-  toMs: (raw: number) => number;
+  parse: (stdout: string) => number;
 }
 
 // bun also supports this (minimumReleaseAge, seconds) but has no `config get`,
 // so it is covered by the ARGENT_MIN_RELEASE_AGE_DAYS override instead.
 const PM_PROBES: readonly PmPolicyProbe[] = [
-  { bin: "npm", key: "min-release-age", toMs: (days) => days * DAY_MS },
-  { bin: "pnpm", key: "minimumReleaseAge", toMs: (min) => min * MINUTE_MS },
-  { bin: "yarn", key: "npmMinimalAgeGate", toMs: (min) => min * MINUTE_MS },
+  // npm flattens `min-release-age` to an effective `before` cutoff, and some
+  // npm 11.x builds report `min-release-age=null` even while the policy is
+  // active. Probe `before`, which is what the resolver actually uses.
+  { command: "npm config get before", parse: parseBeforeConfigValue },
+  {
+    command: "pnpm config get minimumReleaseAge",
+    parse: (stdout) => parseConfigValue(stdout) * MINUTE_MS,
+  },
+  {
+    command: "yarn config get npmMinimalAgeGate",
+    parse: (stdout) => parseConfigValue(stdout) * MINUTE_MS,
+  },
 ];
+
+function trimConfigValue(stdout: string): string | null {
+  const trimmed = stdout.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") return null;
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
 
 /** Parse `<pm> config get <key>` stdout to a positive number, else 0 (unset). */
 export function parseConfigValue(stdout: string): number {
-  const trimmed = stdout.trim();
-  if (!trimmed || trimmed === "undefined" || trimmed === "null") return 0;
-  const n = Number(trimmed);
+  const value = trimConfigValue(stdout);
+  if (!value) return 0;
+  const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Parse npm's effective `before` cutoff into an equivalent age in ms.
+ * Returns 0 when unset, invalid, or in the future (no effective gate).
+ */
+export function parseBeforeConfigValue(stdout: string, now = Date.now()): number {
+  const value = trimConfigValue(stdout);
+  if (!value) return 0;
+
+  const candidates = [value, value.replace(/\s+\([^)]*\)$/, "")];
+  for (const candidate of candidates) {
+    const ts = Date.parse(candidate);
+    if (!Number.isNaN(ts)) {
+      return ts < now ? now - ts : 0;
+    }
+  }
+  return 0;
 }
 
 function probePm(probe: PmPolicyProbe): Promise<number> {
   return new Promise((resolve) => {
     // Shell (not execFile) so Windows `.cmd`/`.ps1` shims resolve via PATH;
     // command is compile-time constants only, no caller input.
-    exec(
-      `${probe.bin} config get ${probe.key}`,
-      { timeout: PROBE_TIMEOUT_MS, windowsHide: true },
-      (err, stdout) => {
-        if (err) {
-          resolve(0); // PM not installed / errored — treat as no policy.
-          return;
-        }
-        const raw = parseConfigValue(stdout);
-        resolve(raw > 0 ? probe.toMs(raw) : 0);
+    exec(probe.command, { timeout: PROBE_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
+      if (err) {
+        resolve(0); // PM not installed / errored — treat as no policy.
+        return;
       }
-    );
+      resolve(probe.parse(stdout));
+    });
   });
 }
 
