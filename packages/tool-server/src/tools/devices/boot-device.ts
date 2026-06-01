@@ -78,7 +78,29 @@ const STAGE_BUDGET = {
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
   firstRealFrame: 90_000, // screencap returns ≥1 non-zero pixel after cold boot
+  firstRealFrameHot: 8_000, // tighter budget for snapshot-restore composite —
+  // the broken state is sticky (per assertScreencapAlive's docstring), so a
+  // few seconds is enough to discriminate transient blanks from genuine wedge.
 } as const;
+
+// Whitelist of -gpu values the emulator binary accepts (per `emulator -help-gpu`).
+// We validate the override at boot-start instead of letting the emulator reject
+// a typoed value mid-launch: that path otherwise burns the full hot-boot budget
+// before surfacing the error, which is the worst possible UX for a 1-line fix.
+const VALID_GPU_MODES = new Set([
+  "auto",
+  "host",
+  "guest",
+  "off",
+  "swiftshader",
+  "swiftshader_indirect",
+  "angle",
+  "angle_indirect",
+  "angle9",
+  "angle9_indirect",
+  "swangle",
+  "swangle_indirect",
+]);
 
 // Linux: `-gpu auto` lands on `hw.gpu.mode=lavapipe` (slow CPU Vulkan via host
 // libvulkan + Mesa shims, ~10× cold-boot regression), and `-gpu host` silently
@@ -91,7 +113,16 @@ const STAGE_BUDGET = {
 // uses `auto` (resolves to ANGLE→Metal, hardware-accelerated).
 function selectGpuMode(): string {
   const override = process.env.ARGENT_EMULATOR_GPU_MODE;
-  if (override && override.trim()) return override.trim();
+  if (override && override.trim()) {
+    const value = override.trim();
+    if (!VALID_GPU_MODES.has(value)) {
+      throw new Error(
+        `ARGENT_EMULATOR_GPU_MODE=${JSON.stringify(value)} is not a known emulator -gpu value. ` +
+          `Valid values: ${[...VALID_GPU_MODES].join(", ")}.`
+      );
+    }
+    return value;
+  }
   return process.platform === "linux" ? "swiftshader" : "auto";
 }
 
@@ -204,23 +235,40 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
  * pitfall: uniform alpha-only content RLE/deflates to ~7 KB regardless of
  * pixel count, real content blows past the threshold.
  *
- * On detection we throw; the outer catch in `bootAndroid` kills the hot child
- * and falls through to the cold path, so the serial that eventually reaches
- * the caller is always usable for screenshots.
+ * Polling, not a single probe: snapshot restore can produce a transient blank
+ * for up to 30 s under SwiftShader before the composite hydrates. A
+ * single-probe assertion landing inside that window would kill the emulator
+ * and force a cold boot every time, defeating the whole point of hot-booting.
+ * We poll until either a real frame shows up (success) or `budgetMs` expires
+ * (sticky blank — kill the emulator so the outer catch can fall through to
+ * cold boot, and the eventual serial is always usable for screenshots).
  */
-async function assertScreencapAlive(serial: string): Promise<void> {
-  const out = await adbShell(serial, FRAME_PROBE, { timeoutMs: 10_000 });
+async function assertScreencapAlive(
+  serial: string,
+  budgetMs: number = STAGE_BUDGET.firstRealFrameHot
+): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   // Match success on "1" specifically: empty output (screencap binary missing,
   // exec-out drained nothing) used to trim to "" which !== "0" and silently
   // returned success — i.e. a broken capture path was reported as healthy.
   // Any non-"1" reading (zero pixels OR no output at all) is a failure.
-  if (out.trim() !== "1") {
-    await killEmulatorQuietly(serial);
-    throw new Error(
-      "hot-boot composite not restored: `screencap` returned an all-zero or empty frame. " +
-        "Falling back to cold boot so screenshots are usable."
-    );
+  let lastReading: string | null = null;
+  while (Date.now() < deadline) {
+    try {
+      const out = await adbShell(serial, FRAME_PROBE, { timeoutMs: 10_000 });
+      lastReading = out.trim();
+      if (lastReading === "1") return;
+    } catch (err) {
+      lastReading = err instanceof Error ? err.message : String(err);
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 1_500));
   }
+  await killEmulatorQuietly(serial);
+  throw new Error(
+    `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
+      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`
+  );
 }
 
 /**
