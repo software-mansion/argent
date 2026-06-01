@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
   "repository": {
