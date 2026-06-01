@@ -25,3 +25,15 @@ export {
   type ToolInvocationResult,
   type CreateToolsClientOptions,
 } from "./tools-client.js";
+
+export {
+  readLinkConfig,
+  writeLinkConfig,
+  clearLinkConfig,
+  getResolvedToolsUrl,
+  isRemoteRouted,
+  LINK_PATHS,
+  type LinkConfig,
+  type ResolvedToolsUrl,
+  type ToolsUrlSource,
+} from "./link-config.js";
