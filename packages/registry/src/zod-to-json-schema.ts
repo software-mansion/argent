@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export function zodObjectToJsonSchema(schema: z.ZodObject<any>): Record<string, unknown> {
-  const shape = schema.shape as Record<string, z.ZodTypeAny>;
+  const shape = schema.shape as Record<string, z.ZodType>;
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
 
@@ -19,16 +19,19 @@ export function zodObjectToJsonSchema(schema: z.ZodObject<any>): Record<string, 
   return result;
 }
 
-function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
+function zodTypeToJsonSchema(type: z.core.$ZodType): Record<string, unknown> {
   if (type instanceof z.ZodString) return { type: "string" };
   if (type instanceof z.ZodNumber) return { type: "number" };
   if (type instanceof z.ZodBoolean) return { type: "boolean" };
   if (type instanceof z.ZodOptional) return zodTypeToJsonSchema(type.unwrap());
   if (type instanceof z.ZodDefault) {
-    return { ...zodTypeToJsonSchema(type._def.innerType), default: type._def.defaultValue() };
+    return {
+      ...zodTypeToJsonSchema(type.def.innerType),
+      default: type.def.defaultValue,
+    };
   }
   if (type instanceof z.ZodArray) {
-    return { type: "array", items: zodTypeToJsonSchema(type.element) };
+    return { type: "array", items: zodTypeToJsonSchema(type.def.element) };
   }
   if (type instanceof z.ZodObject) {
     return zodObjectToJsonSchema(type);
@@ -42,6 +45,6 @@ function zodTypeToJsonSchema(type: z.ZodTypeAny): Record<string, unknown> {
   return {};
 }
 
-function isOptional(type: z.ZodTypeAny): boolean {
+function isOptional(type: z.ZodType): boolean {
   return type instanceof z.ZodOptional || type instanceof z.ZodDefault;
 }

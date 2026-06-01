@@ -35,7 +35,7 @@ function getAvailableToolIds(): string[] {
 export interface McpServerEntry {
   command: string;
   args: string[];
-  env: Record<string, string>;
+  env?: Record<string, string>;
 }
 
 export interface McpConfigAdapter {
@@ -65,16 +65,21 @@ type CodexConfig = {
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 function buildMcpEntry(): McpServerEntry {
-  const logFile = path.join(homedir(), ".argent", "mcp-calls.log");
+  // No env vars by default: the MCP server falls back to
+  // `${homedir()}/.argent/mcp-calls.log` when ARGENT_MCP_LOG is unset, so we
+  // keep this generated config portable — see issue #238.
   return {
     command: MCP_BINARY_NAME,
     args: ["mcp"],
-    env: { ARGENT_MCP_LOG: logFile },
   };
 }
 
 export function getMcpEntry(): McpServerEntry {
   return buildMcpEntry();
+}
+
+function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<string, string> } {
+  return entry.env != null && Object.keys(entry.env).length > 0;
 }
 
 function removeDirIfEmpty(dirPath: string): void {
@@ -158,7 +163,7 @@ const cursorAdapter: McpConfigAdapter = {
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     };
     config.mcpServers = servers;
     writeJson(configPath, config);
@@ -232,7 +237,7 @@ const claudeAdapter: McpConfigAdapter = {
       type: "stdio",
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     };
     config.mcpServers = servers;
     writeJson(configPath, config);
@@ -286,7 +291,7 @@ const vscodeAdapter: McpConfigAdapter = {
       type: "stdio",
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     };
     config.servers = servers;
     writeJson(configPath, config);
@@ -329,7 +334,7 @@ const windsurfAdapter: McpConfigAdapter = {
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     };
     config.mcpServers = servers;
     writeJson(configPath, config);
@@ -397,7 +402,7 @@ const zedAdapter: McpConfigAdapter = {
       source: "custom",
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     });
   },
 
@@ -468,7 +473,7 @@ const geminiAdapter: McpConfigAdapter = {
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     };
     config.mcpServers = servers;
     writeJson(configPath, config);
@@ -546,7 +551,7 @@ const codexAdapter: McpConfigAdapter = {
     servers[MCP_SERVER_KEY] = {
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     };
     config.mcp_servers = servers;
     writeToml(configPath, config);
@@ -648,7 +653,7 @@ const hermesAdapter: McpConfigAdapter = {
     doc.setIn(["mcp_servers", MCP_SERVER_KEY], {
       command: entry.command,
       args: entry.args,
-      env: entry.env,
+      ...(hasEnv(entry) ? { env: entry.env } : {}),
     });
     writeYaml(configPath, doc);
   },
@@ -724,7 +729,7 @@ const openCodeAdapter: McpConfigAdapter = {
       type: "local",
       command: [entry.command, ...entry.args],
       enabled: true,
-      environment: entry.env,
+      ...(hasEnv(entry) ? { environment: entry.env } : {}),
     });
   },
 

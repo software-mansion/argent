@@ -60,6 +60,11 @@ const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
 const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
 const AGENTS_DEST = path.resolve(__dirname, "../agents");
+const ANDROID_PKG_DIR = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android");
+const ANDROID_MANIFEST_SRC = path.join(ANDROID_PKG_DIR, "manifest.json");
+const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../manifest.json");
+const ANDROID_APK_DIST_SRC = path.join(ANDROID_PKG_DIR, "dist");
+const ANDROID_APK_DEST_DIR = path.resolve(__dirname, "../dist");
 
 // Purge artifact directories so stale files don't survive across builds.
 for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) {
@@ -163,6 +168,28 @@ if (fs.existsSync(DYLIBS_SRC)) {
   console.log(`✓ Copied ${count} native dylib(s) → ${path.relative(process.cwd(), DYLIBS_DEST)}`);
 } else {
   console.warn(`⚠ Native devtools dylibs not found at ${DYLIBS_SRC} — skipping copy`);
+}
+
+// Copy the Android helper APK + its manifest.json into the published package.
+if (fs.existsSync(ANDROID_MANIFEST_SRC)) {
+  const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
+  const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
+  const apkSrc = path.join(ANDROID_APK_DIST_SRC, apkName);
+  if (fs.existsSync(apkSrc)) {
+    fs.copyFileSync(ANDROID_MANIFEST_SRC, ANDROID_MANIFEST_DEST);
+    fs.copyFileSync(apkSrc, path.join(ANDROID_APK_DEST_DIR, apkName));
+    console.log(
+      `✓ Copied Android helper APK + manifest → ${path.relative(process.cwd(), ANDROID_APK_DEST_DIR)}/${apkName}`
+    );
+  } else {
+    console.warn(
+      `⚠ Android helper APK not found at ${apkSrc} — run ` +
+        `\`bash packages/native-devtools-android/scripts/build.sh\` ` +
+        `or \`bash scripts/download-native-binaries.sh\` first`
+    );
+  }
+} else {
+  console.warn(`⚠ Android manifest not found at ${ANDROID_MANIFEST_SRC} — skipping copy`);
 }
 
 // Copy preview UI (@argent/ui) next to the bundled tool-server so that

@@ -1,10 +1,10 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
 import { execFileSync } from "node:child_process";
+import semver from "semver";
 import { detectAdapters, getMcpEntry, copyRulesAndAgents } from "./mcp-configs.js";
 import {
   getGloballyInstalledVersion,
-  getLatestVersion,
   isGloballyInstalled,
   isNewerVersion,
   detectPackageManager,
@@ -16,10 +16,25 @@ import {
 } from "./utils.js";
 import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
+import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServer } from "@argent/tools-client";
+
+function getRequestedVersion(args: string[]): string | null {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--version") {
+      return args[i + 1] ?? null;
+    }
+    if (arg?.startsWith("--version=")) {
+      return arg.slice("--version=".length) || null;
+    }
+  }
+  return null;
+}
 
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const requestedVersion = getRequestedVersion(args);
 
   p.intro(pc.bgCyan(pc.black(" argent update ")));
 
@@ -41,13 +56,37 @@ export async function update(args: string[]): Promise<void> {
   const spinner = p.spinner();
   spinner.start("Checking for updates...");
 
-  let latest: string;
-  try {
-    latest = getLatestVersion();
-  } catch (err) {
-    spinner.stop(pc.red("Could not reach registry."));
-    p.log.error(`Failed to check registry: ${err}`);
-    process.exit(1);
+  const pm = detectPackageManager();
+  let latest: string | null = null;
+  let target: string | null = null;
+  let minReleaseAgeMs = 0;
+
+  if (requestedVersion !== null) {
+    if (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion)) {
+      spinner.stop(pc.red("Invalid update target."));
+      p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
+      process.exit(1);
+    }
+    target = requestedVersion;
+  } else {
+    let resolved;
+    try {
+      resolved = await resolveInstallableUpdateTarget(pm, installed);
+    } catch (err) {
+      spinner.stop(pc.red("Could not reach registry."));
+      p.log.error(`Failed to check registry: ${err}`);
+      process.exit(1);
+    }
+
+    if (resolved === null) {
+      spinner.stop(pc.red("Could not reach registry."));
+      p.log.error("Failed to determine the latest Argent release from the registry.");
+      process.exit(1);
+    }
+
+    latest = resolved.latestVersion;
+    target = resolved.targetVersion;
+    minReleaseAgeMs = resolved.minReleaseAgeMs;
   }
 
   spinner.stop("Version check complete.");
@@ -57,17 +96,24 @@ export async function update(args: string[]): Promise<void> {
   } else {
     p.log.warn(`${PACKAGE_NAME} is not installed globally.`);
   }
-  p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
+  if (latest) {
+    p.log.info(`Latest:    ${pc.cyan(`v${latest}`)}`);
+  }
+  if (target) {
+    const label = latest && latest !== target ? "Target:    " : "Version:   ";
+    const suffix = latest && latest !== target ? pc.dim(" (newest installable)") : "";
+    p.log.info(`${label}${pc.cyan(`v${target}`)}${suffix}`);
+  }
 
-  const needsInstall = !installed || isNewerVersion(latest, installed);
+  const needsInstall = target !== null && (!installed || isNewerVersion(target, installed));
+  const latestIsNewer = latest !== null && (!installed || isNewerVersion(latest, installed));
 
-  if (needsInstall) {
+  if (needsInstall && target !== null) {
     if (installed) {
-      p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${latest}`)}`);
+      p.log.warn(`Update available: ${pc.yellow(`v${installed}`)} -> ${pc.green(`v${target}`)}`);
     }
 
-    const pm = detectPackageManager();
-    const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
+    const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${target}`);
     const cmdStr = formatShellCommand(cmd);
 
     if (!nonInteractive) {
@@ -75,8 +121,8 @@ export async function update(args: string[]): Promise<void> {
 
       const proceed = await p.confirm({
         message: installed
-          ? `Update to v${latest}?`
-          : `Install ${PACKAGE_NAME}@${latest} globally?`,
+          ? `Update to v${target}?`
+          : `Install ${PACKAGE_NAME}@${target} globally?`,
         initialValue: true,
       });
 
@@ -100,7 +146,16 @@ export async function update(args: string[]): Promise<void> {
       process.exit(1);
     }
   } else {
-    p.log.success("Already on the latest version.");
+    if (latest && target === null && latestIsNewer && minReleaseAgeMs > 0) {
+      p.log.warn(
+        `Latest version ${pc.cyan(`v${latest}`)} is still held by your minimum-release-age policy.`
+      );
+      p.log.info("No installable update is available yet.");
+    } else if (latest && target && latest !== target) {
+      p.log.success("Already on the latest installable version.");
+    } else {
+      p.log.success("Already on the latest version.");
+    }
   }
 
   // Refresh configuration
