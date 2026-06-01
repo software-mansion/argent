@@ -4,6 +4,12 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import {
+  init as telemetryInit,
+  trackImmediate,
+  isEnabled as telemetryIsEnabled,
+  shutdown as telemetryShutdown,
+} from "@argent/telemetry";
+import {
   detectAdapters,
   ALL_ADAPTERS,
   getMcpEntry,
@@ -62,6 +68,45 @@ function extractFlag(args: string[], flag: string): string | null {
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const fromTar = extractFlag(args, "--from");
+  const initStartTime = performance.now();
+
+  telemetryInit("installer");
+  printTelemetryNotice();
+
+  await trackImmediate("installation:cli_init_start", {
+    package_manager: detectPackageManager(),
+    is_non_interactive: nonInteractive,
+  });
+
+  let editorsConfiguredCount = 0;
+  let initSucceeded = false;
+  const finalizeInitTelemetry = async (): Promise<void> => {
+    await trackImmediate("installation:cli_init_complete", {
+      duration_ms: performance.now() - initStartTime,
+      is_success: initSucceeded,
+      editors_configured_count: editorsConfiguredCount,
+    });
+    await telemetryShutdown();
+  };
+
+  const trackPackageAction = async (
+    action:
+      | "fresh_install"
+      | "already_installed"
+      | "init_triggered_update"
+      | "no_update"
+      | "update_skipped"
+      | "update_failed",
+    startedAt: number,
+    isSuccess: boolean
+  ): Promise<void> => {
+    await trackImmediate("installation:package_action", {
+      trigger: "init",
+      action,
+      is_success: isSuccess,
+      duration_ms: performance.now() - startedAt,
+    });
+  };
 
   printBanner();
 
@@ -92,10 +137,15 @@ export async function init(args: string[]): Promise<void> {
       });
 
       if (p.isCancel(installChoice) || installChoice === "cancel") {
+        await trackImmediate("installation:global_install_decision", { decision: "cancel" });
+        await trackImmediate("installation:cli_init_cancel", { step: "global_install" });
+        await finalizeInitTelemetry();
         p.cancel("Installation cancelled.");
         process.exit(0);
       }
     }
+
+    await trackImmediate("installation:global_install_decision", { decision: "install" });
 
     const pm = detectPackageManager();
     const installTarget = fromTar ?? PACKAGE_NAME;
@@ -103,18 +153,22 @@ export async function init(args: string[]): Promise<void> {
     const cmdStr = formatShellCommand(cmd);
     const spinner = p.spinner();
     spinner.start(`Installing ${PACKAGE_NAME} globally...`);
+    const packageActionStartedAt = performance.now();
     try {
       await runShellCommand(cmd);
       spinner.stop(pc.green("Installed globally."));
       version = getInstalledVersion() ?? version;
+      await trackPackageAction("fresh_install", packageActionStartedAt, true);
     } catch (err) {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
       p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
+      await trackPackageAction("fresh_install", packageActionStartedAt, false);
+      await finalizeInitTelemetry();
       process.exit(1);
     }
   } else if (fromTar) {
-    // --from flag: reinstall from the specified tarball/path
+    // Developer-only reinstall path; it is not a product install decision.
     const pm = detectPackageManager();
     const cmd = globalInstallCommand(pm, fromTar);
     const cmdStr = formatShellCommand(cmd);
@@ -128,21 +182,30 @@ export async function init(args: string[]): Promise<void> {
       spinner.stop(pc.red("Installation failed."));
       p.log.error(`${err}`);
       p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
+      await finalizeInitTelemetry();
       process.exit(1);
     }
   } else {
+    const packageActionStartedAt = performance.now();
+    await trackImmediate("installation:global_install_decision", { decision: "already_installed" });
+    await trackPackageAction("already_installed", packageActionStartedAt, true);
     let latest: string | null = null;
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
     try {
       latest = getLatestVersion();
     } catch {
+      await trackPackageAction("update_skipped", packageActionStartedAt, false);
       // Registry unreachable - silently skip
     }
     spinner.stop(pc.dim("Version check complete."));
 
     if (latest && isNewerVersion(latest, version)) {
-      if (!nonInteractive) {
+      const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
+      const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
+      if (nonInteractive) {
+        await trackPackageAction("update_skipped", packageActionStartedAt, true);
+      } else {
         const updateChoice = await p.select({
           message: `Update available: ${pc.yellow(`v${version}`)} → ${pc.green(`v${latest}`)}`,
           options: [
@@ -158,16 +221,26 @@ export async function init(args: string[]): Promise<void> {
           ],
         });
 
-        if (!p.isCancel(updateChoice) && updateChoice === "update") {
+        await trackImmediate("installation:update_decision", {
+          from_major: fromMajor,
+          to_major: toMajor,
+          decision: p.isCancel(updateChoice) ? "skip" : (updateChoice as "update" | "skip"),
+        });
+
+        if (p.isCancel(updateChoice) || updateChoice === "skip") {
+          await trackPackageAction("update_skipped", packageActionStartedAt, true);
+        } else if (updateChoice === "update") {
           const pm = detectPackageManager();
           const cmd = globalInstallCommand(pm, `${PACKAGE_NAME}@${latest}`);
           const cmdStr = formatShellCommand(cmd);
           const updateSpinner = p.spinner();
           updateSpinner.start(`Updating to v${latest}...`);
+          const updateStartedAt = performance.now();
           try {
             await runShellCommand(cmd);
             updateSpinner.stop(pc.green(`Updated to v${latest}.`));
             version = getInstalledVersion() ?? version;
+            await trackPackageAction("init_triggered_update", updateStartedAt, true);
 
             // The user just bumped to a newer argent. Re-sync and prune
             // argent skills in every scope that already tracks them — this
@@ -184,9 +257,19 @@ export async function init(args: string[]): Promise<void> {
             updateSpinner.stop(pc.red("Update failed."));
             p.log.error(`${err}`);
             p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
+            await trackPackageAction("update_failed", updateStartedAt, false);
           }
         }
       }
+    } else if (latest) {
+      const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
+      const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
+      await trackImmediate("installation:update_decision", {
+        from_major: fromMajor,
+        to_major: toMajor,
+        decision: "no_update",
+      });
+      await trackPackageAction("no_update", packageActionStartedAt, true);
     }
   }
 
@@ -229,6 +312,8 @@ export async function init(args: string[]): Promise<void> {
     });
 
     if (p.isCancel(selected)) {
+      await trackImmediate("installation:cli_init_cancel", { step: "editors" });
+      await finalizeInitTelemetry();
       p.cancel("Initialization cancelled.");
       process.exit(0);
     }
@@ -236,6 +321,7 @@ export async function init(args: string[]): Promise<void> {
     selectedAdapters = selected as McpConfigAdapter[];
   }
 
+  editorsConfiguredCount = selectedAdapters.length;
   p.log.info(`Editors: ${selectedAdapters.map((a) => pc.cyan(a.name)).join(", ")}`);
 
   // Ask scope: global, local, or custom path
@@ -269,6 +355,8 @@ export async function init(args: string[]): Promise<void> {
     });
 
     if (p.isCancel(scopeChoice)) {
+      await trackImmediate("installation:cli_init_cancel", { step: "scope" });
+      await finalizeInitTelemetry();
       p.cancel("Initialization cancelled.");
       process.exit(0);
     }
@@ -288,6 +376,8 @@ export async function init(args: string[]): Promise<void> {
       });
 
       if (p.isCancel(customPathInput)) {
+        await trackImmediate("installation:cli_init_cancel", { step: "scope" });
+        await finalizeInitTelemetry();
         p.cancel("Initialization cancelled.");
         process.exit(0);
       }
@@ -299,6 +389,13 @@ export async function init(args: string[]): Promise<void> {
   const projectRoot = resolveProjectRoot(process.cwd());
   const effectiveRoot = scope === "custom" ? customRoot! : projectRoot;
   const normalizedScope: "local" | "global" = scope === "global" ? "global" : "local";
+
+  await trackImmediate("installation:editors_select", {
+    editors: selectedAdapters.map((a) => sanitizeEditorName(a.name)),
+    detected_editor_count: detected.length,
+    scope,
+  });
+
   const mcpEntry = getMcpEntry();
   const mcpResults: string[] = [];
 
@@ -370,6 +467,8 @@ export async function init(args: string[]): Promise<void> {
       });
 
       if (p.isCancel(allowlistChoice)) {
+        await trackImmediate("installation:cli_init_cancel", { step: "allowlist" });
+        await finalizeInitTelemetry();
         p.cancel("Initialization cancelled.");
         process.exit(0);
       }
@@ -377,6 +476,11 @@ export async function init(args: string[]): Promise<void> {
       allowlistEnabled = allowlistChoice as boolean;
     }
   }
+
+  await trackImmediate("installation:allowlist_decision", {
+    is_enabled: allowlistEnabled,
+    applicable_adapter_count: adaptersWithAllowlist.length,
+  });
 
   if (allowlistEnabled) {
     const allowlistResults: string[] = [];
@@ -455,12 +559,20 @@ export async function init(args: string[]): Promise<void> {
     });
 
     if (p.isCancel(choice)) {
+      await trackImmediate("installation:cli_init_cancel", { step: "skills" });
+      await finalizeInitTelemetry();
       p.cancel("Initialization cancelled.");
       process.exit(0);
     }
 
     skillsMethod = choice as SkillsMethod;
   }
+
+  await trackImmediate("installation:skill_install", {
+    method: skillsMethod,
+    is_online: online,
+    has_offline_cache: offlineWithCache,
+  });
 
   // Prefer the GitHub-pinned source. SKILLS_DIR as a fallback.
   const useGitHubSource = online && !fromTar && version !== "unknown";
@@ -515,12 +627,16 @@ export async function init(args: string[]): Promise<void> {
       if (skillsMethod === "default") {
         spinner.stop("Skills installed.");
       }
+      await trackImmediate("installation:skill_install_result", { is_success: true });
     } catch (err) {
       if (skillsMethod === "default") {
         spinner.stop(pc.red("Skills installation failed."));
       }
       p.log.error(`Failed to run npx skills: ${err}`);
       p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
+      await trackImmediate("installation:skill_install_result", {
+        is_success: false,
+      });
     }
   }
 
@@ -541,6 +657,8 @@ export async function init(args: string[]): Promise<void> {
   } else {
     p.log.info(pc.dim("No rules or agents to copy for selected editors."));
   }
+
+  await trackImmediate("installation:rules_agents_copy", { copied_count: copyResults.length });
 
   // ── Summary ─────────────────────────────────────────────────────────────────
 
@@ -566,6 +684,37 @@ export async function init(args: string[]): Promise<void> {
     pc.bgGreen(pc.black(" Get Started "))
   );
   p.outro("Done.");
+
+  initSucceeded = true;
+  await finalizeInitTelemetry();
+}
+
+// Print the notice only when this run may send telemetry.
+function printTelemetryNotice(): void {
+  if (!telemetryIsEnabled()) return;
+  p.log.info(
+    [
+      pc.bold("Telemetry"),
+      pc.dim("Argent collects anonymous, opt-out usage telemetry (PostHog EU) so we can"),
+      pc.dim("prioritise the features and bugs that matter most. No raw arguments, paths,"),
+      pc.dim("error messages, or environment values are ever sent — only event names and"),
+      pc.dim("a small set of typed, validator-enforced properties."),
+      pc.dim(""),
+      pc.dim("A lifetime-stable anonymous UUID is generated on first run. To opt out,"),
+      pc.dim("run \`argent telemetry disable\` or set \`DO_NOT_TRACK=1\` /"),
+      pc.dim("\`ARGENT_TELEMETRY=0\`. To audit what is sent,"),
+      pc.dim("set \`ARGENT_TELEMETRY_DEBUG=1\` and inspect \`~/.argent/telemetry-debug.log\`."),
+    ].join("\n")
+  );
+}
+
+function sanitizeEditorName(raw: string): string {
+  // Shape display names to the sanitizer's kebab-case adapter format.
+  return raw
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
 }
 
 export function printBanner(): void {
@@ -590,7 +739,7 @@ export function printBanner(): void {
   console.log();
 }
 
-function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
+export function runNpxSkills(args: string[], interactive: boolean, cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const npxCmd = process.platform === "win32" ? "npx.cmd" : "npx";
     const child = spawn(npxCmd, args, {

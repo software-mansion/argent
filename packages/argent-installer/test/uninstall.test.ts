@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -13,9 +13,48 @@ import {
   getBundledSkillNames,
   removeBundledContent,
   removeBundledSkillInstalls,
+  uninstall,
 } from "../src/uninstall.js";
 
+const telemetryMock = vi.hoisted(() => ({
+  init: vi.fn(),
+  trackImmediate: vi.fn().mockResolvedValue(undefined),
+  forget: vi.fn().mockResolvedValue({
+    localIdRemoved: true,
+    consentDisabled: false,
+  }),
+  shutdown: vi.fn().mockResolvedValue(undefined),
+}));
+
+const childProcessMock = vi.hoisted(() => ({
+  execFileSync: vi.fn(),
+}));
+
+const toolsClientMock = vi.hoisted(() => ({
+  killToolServer: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@argent/telemetry", () => telemetryMock);
+vi.mock("node:child_process", () => childProcessMock);
+vi.mock("@argent/tools-client", () => toolsClientMock);
+vi.mock("@clack/prompts", () => ({
+  intro: vi.fn(),
+  outro: vi.fn(),
+  cancel: vi.fn(),
+  confirm: vi.fn(),
+  isCancel: vi.fn(() => false),
+  log: {
+    error: vi.fn(),
+    info: vi.fn(),
+    message: vi.fn(),
+    step: vi.fn(),
+    success: vi.fn(),
+  },
+  note: vi.fn(),
+}));
+
 let tmpDir: string;
+let originalCwd: string;
 
 function writeFile(filePath: string, contents = "test"): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -24,10 +63,23 @@ function writeFile(filePath: string, contents = "test"): void {
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
+  originalCwd = process.cwd();
+  vi.clearAllMocks();
 });
 
 afterEach(() => {
+  process.chdir(originalCwd);
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe("uninstall — telemetry consent preservation", () => {
+  it("resets uninstall telemetry identity without persisting a consent opt-out", async () => {
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(telemetryMock.forget).toHaveBeenCalledWith({ disableConsent: false });
+  });
 });
 
 // ── MCP entry removal across all adapters ─────────────────────────────────────

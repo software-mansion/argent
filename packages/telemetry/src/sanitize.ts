@@ -1,0 +1,175 @@
+import type { EventName } from "./events.js";
+
+// Per-event property allowlist and validators. Unknown keys and invalid values
+// are dropped before anything reaches PostHog.
+
+export type Validator = (v: unknown) => unknown | undefined;
+
+const oneOf =
+  <T extends string>(opts: readonly T[]): Validator =>
+  (v) =>
+    typeof v === "string" && (opts as readonly string[]).includes(v) ? v : undefined;
+
+const matches =
+  (re: RegExp, max = 80): Validator =>
+  (v) =>
+    typeof v === "string" && v.length <= max && re.test(v) ? v : undefined;
+
+const finiteNonNeg =
+  (max = 2 ** 31): Validator =>
+  (v) =>
+    typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max ? v : undefined;
+
+const bool: Validator = (v) => (typeof v === "boolean" ? v : undefined);
+
+const arrayOf =
+  (elem: Validator, maxLen = 16): Validator =>
+  (v) => {
+    if (!Array.isArray(v)) return undefined;
+    if (v.length > maxLen) return undefined;
+    const out: unknown[] = [];
+    for (const e of v) {
+      const cleaned = elem(e);
+      if (cleaned === undefined) return undefined;
+      out.push(cleaned);
+    }
+    return out;
+  };
+
+// Shared validators
+
+const TOOL_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
+const PLATFORM = oneOf(["ios", "android"] as const);
+const ID_HASH = matches(/^[0-9a-f]{12}$/, 12);
+const UUID = matches(
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  36
+);
+const PACKAGE_MANAGER = oneOf(["npm", "yarn", "pnpm", "bun", "unknown"] as const);
+const PACKAGE_ACTION_TRIGGER = oneOf(["init", "update", "mcp_update"] as const);
+const PACKAGE_ACTION = oneOf([
+  "fresh_install",
+  "already_installed",
+  "init_triggered_update",
+  "no_update",
+  "update_skipped",
+  "update_failed",
+  "standalone_update",
+  "standalone_install",
+  "mcp_update",
+] as const);
+const TELEMETRY_SUBCOMMAND = oneOf(["status", "enable", "disable", "help", "unknown"] as const);
+const ADAPTER_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
+const COUNT = finiteNonNeg();
+const DURATION_MS = finiteNonNeg();
+const MAJOR_VERSION = finiteNonNeg(9999);
+
+// Per-event validators
+
+export const ALLOWED: Record<EventName, Record<string, Validator>> = {
+  "installation:cli_init_start": {
+    package_manager: PACKAGE_MANAGER,
+    is_non_interactive: bool,
+  },
+  "installation:cli_init_complete": {
+    duration_ms: DURATION_MS,
+    is_success: bool,
+    editors_configured_count: COUNT,
+  },
+  "installation:cli_init_cancel": {
+    step: oneOf(["global_install", "editors", "scope", "skills", "allowlist"] as const),
+  },
+  "installation:global_install_decision": {
+    // `from_tar` is intentionally absent; the installer skips that dev path.
+    decision: oneOf(["install", "cancel", "already_installed"] as const),
+  },
+  "installation:update_decision": {
+    from_major: MAJOR_VERSION,
+    to_major: MAJOR_VERSION,
+    decision: oneOf(["update", "skip", "no_update"] as const),
+  },
+  "installation:editors_select": {
+    editors: arrayOf(ADAPTER_NAME),
+    detected_editor_count: COUNT,
+    scope: oneOf(["local", "global", "custom"] as const),
+  },
+  "installation:allowlist_decision": {
+    is_enabled: bool,
+    applicable_adapter_count: COUNT,
+  },
+  "installation:skill_install": {
+    method: oneOf(["default", "interactive", "manual"] as const),
+    is_online: bool,
+    has_offline_cache: bool,
+  },
+  "installation:skill_install_result": {
+    is_success: bool,
+  },
+  "installation:rules_agents_copy": {
+    copied_count: COUNT,
+  },
+  "installation:package_action": {
+    trigger: PACKAGE_ACTION_TRIGGER,
+    action: PACKAGE_ACTION,
+    is_success: bool,
+    duration_ms: DURATION_MS,
+  },
+  "installation:cli_update_start": {},
+  "installation:cli_update_complete": {
+    duration_ms: DURATION_MS,
+  },
+  "installation:cli_update_fail": {
+    duration_ms: DURATION_MS,
+  },
+  "installation:cli_uninstall_start": {},
+  "installation:cli_uninstall_complete": {
+    has_pruned_content: bool,
+    has_uninstalled_package: bool,
+  },
+  "tool:invoke": {
+    tool: TOOL_NAME,
+    tool_invocation_id: UUID,
+    platform: PLATFORM,
+    device_id_hash: ID_HASH,
+  },
+  "tool:complete": {
+    tool: TOOL_NAME,
+    tool_invocation_id: UUID,
+    platform: PLATFORM,
+    duration_ms: DURATION_MS,
+  },
+  "tool:fail": {
+    tool: TOOL_NAME,
+    tool_invocation_id: UUID,
+    platform: PLATFORM,
+    duration_ms: DURATION_MS,
+  },
+  "toolserver:start": {},
+  "toolserver:stop": {
+    reason: oneOf(["idle", "signal", "crash"] as const),
+    uptime_ms: DURATION_MS,
+    total_tool_calls: COUNT,
+  },
+  "telemetry:opt_out": {},
+  "telemetry:command_complete": {
+    subcommand: TELEMETRY_SUBCOMMAND,
+    duration_ms: DURATION_MS,
+  },
+};
+
+/** Strip keys and values that are not allowed for this event. */
+export function sanitize(event: string, raw: Record<string, unknown>): Record<string, unknown> {
+  const validators = (ALLOWED as Record<string, Record<string, Validator>>)[event];
+  if (!validators) return {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const validate = validators[k];
+    if (!validate) continue;
+    const cleaned = validate(v);
+    if (cleaned !== undefined) out[k] = cleaned;
+  }
+  return out;
+}
+
+/** Re-export of the validator combinators for unit tests. */
+export const _testValidators = { oneOf, matches, finiteNonNeg, bool, arrayOf };

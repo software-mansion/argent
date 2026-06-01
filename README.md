@@ -111,6 +111,7 @@ argent init
 | `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
 | `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
 | `argent flags`     | List available feature flags and their state                           |
+| `argent telemetry` | Manage anonymous telemetry: `status` / `enable` / `disable`            |
 
 ## Supported Editors
 

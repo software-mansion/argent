@@ -1,4 +1,11 @@
 import { attachRegistryLogger } from "@argent/registry";
+import {
+  init as telemetryInit,
+  attachRegistryTelemetry,
+  track as telemetryTrack,
+  trackImmediate as telemetryTrackImmediate,
+  shutdown as telemetryShutdown,
+} from "@argent/telemetry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
@@ -58,6 +65,7 @@ export function start(): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     if (shuttingDown) return; // avoid re-entrant shutdown
     shuttingDown = true;
+    shutdownReason = "crash";
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -88,6 +96,13 @@ export function start(): void {
   // ── Bootstrap ─────────────────────────────────────────────────────
   const registry = createRegistry();
   attachRegistryLogger(registry);
+
+  // Tool events use the queued client; shutdown gets a bounded final flush.
+  telemetryInit("tool_server");
+  const telemetryHandle = attachRegistryTelemetry(registry);
+  const serverStartedAt = Date.now();
+  let shutdownReason: "idle" | "signal" | "crash" = "signal";
+
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
@@ -161,6 +176,20 @@ export function start(): void {
     updateChecker.dispose();
     stopWatcher();
     httpHandle.dispose();
+
+    // Emit toolserver:stop before tearing the registry down.
+    try {
+      await telemetryTrackImmediate("toolserver:stop", {
+        reason: shutdownReason,
+        uptime_ms: Date.now() - serverStartedAt,
+        total_tool_calls: telemetryHandle.getTotalToolCalls(),
+      });
+      telemetryHandle.detach();
+      await telemetryShutdown(1500);
+    } catch {
+      // Telemetry must never block process exit.
+    }
+
     await registry.dispose();
     if (server) {
       const forceExit = setTimeout(() => process.exit(exitCode), PROCESS_TIMEOUT_MS);
@@ -172,9 +201,13 @@ export function start(): void {
 
   const httpHandle = createHttpApp(registry, {
     idleTimeoutMs,
-    onIdle: shutdown,
+    onIdle: () => {
+      shutdownReason = "idle";
+      shutdown?.();
+    },
     onShutdown: shutdown,
     bindHost: HOST,
+    recordInvocation: telemetryHandle.recordInvocation,
   });
 
   // Block advertising readiness until the first watcher poll completes — this
@@ -191,6 +224,12 @@ export function start(): void {
         process.stderr.write(`  POST ${origin}/tools/:name\n`);
         if (idleTimeoutMs > 0) {
           process.stderr.write(`  Idle timeout: ${idleMinutes}min\n`);
+        }
+        // Report start only after the HTTP listener actually binds.
+        try {
+          telemetryTrack("toolserver:start", {});
+        } catch {
+          /* swallow */
         }
       });
       // Surface bind failures (EADDRINUSE / EACCES on privileged ports) as a
