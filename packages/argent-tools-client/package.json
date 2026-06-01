@@ -12,7 +12,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
-    "@types/node": "^25.9.0",
+    "@types/node": "^25.9.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"
   }
