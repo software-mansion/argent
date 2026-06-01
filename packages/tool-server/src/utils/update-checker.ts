@@ -11,23 +11,18 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const DISABLE_ENV = "ARGENT_DISABLE_UPDATE_NOTIFICATIONS";
 
 export interface UpdateState {
-  /** Whether a newer stable version exists on npm (latest tag vs. current). */
+  /** A newer stable version exists on npm (latest tag vs. current). */
   updateAvailable: boolean;
   /**
-   * Whether there is a newer version that is actually installable *now* — i.e.
-   * a newer stable release that has also aged past the machine's
-   * minimum-release-age policy. The update reminder is gated on this, not on
-   * `updateAvailable`, so users with a package-age security policy are not
-   * nagged about a version they cannot yet install. Equals `updateAvailable`
-   * when no policy is in effect.
+   * A newer version is installable now — newer AND aged past the
+   * minimum-release-age policy. The reminder gates on this, not
+   * `updateAvailable`. Equals `updateAvailable` when no policy is in effect.
    */
   updateInstallable: boolean;
   /**
-   * The version the reminder advertises: the newest stable release that is
-   * newer than current AND clears the policy — i.e. what the package manager
-   * would resolve to. This is NOT necessarily `latestVersion`: under a policy
-   * the latest publish may be held back while an older-but-eligible version is
-   * installable. `null` when nothing is installable.
+   * The version the reminder advertises — the newest stable release the
+   * resolver would install under the policy. Not necessarily `latestVersion`:
+   * the latest publish may be held back while an older version is eligible.
    */
   installableVersion: string | null;
   /** The latest version on npm (the `latest` dist-tag), or `null` if unknown. */
@@ -83,13 +78,8 @@ function isNewerVersion(latest: string, current: string): boolean {
   return semver.gt(latest, current);
 }
 
-/**
- * Whether `publishedAt` is far enough in the past to clear a `minReleaseAgeMs`
- * policy. With no policy (`<= 0`) everything passes. When a policy is in effect
- * but the publish time is unknown/unparseable, we conservatively report `false`
- * — better to delay the reminder than to nag about a version the policy may
- * still be holding back.
- */
+// No policy → everything passes. Under a policy, an unknown/unparseable
+// publish time conservatively returns false (delay rather than nag).
 function isOldEnough(publishedAt: string | null, minReleaseAgeMs: number): boolean {
   if (minReleaseAgeMs <= 0) return true;
   if (!publishedAt) return false;
@@ -100,19 +90,14 @@ function isOldEnough(publishedAt: string | null, minReleaseAgeMs: number): boole
 
 interface VersionAt {
   version: string;
-  /** ISO 8601 publish time, or `null` if the registry omitted it. */
   publishedAt: string | null;
 }
 
 /**
- * Pick the version the user could install *right now* — mirroring how a package
- * manager resolves under a minimum-release-age policy: the newest stable
- * release that is newer than `current` AND has aged past the gate.
- *
- * With no policy this is simply the latest tag (if newer). Under a policy we
- * scan every published version, because the latest publish may be held back
- * while an older-but-eligible version (e.g. the previous minor) is installable.
- * Returns `null` when nothing newer is installable.
+ * The newest stable version newer than `current` that the resolver could
+ * install now — i.e. that also clears the policy. With no policy this is just
+ * the latest tag; under one we scan all versions, since the latest publish may
+ * be held while an older version is eligible. `null` when nothing is installable.
  */
 function pickInstallableTarget(
   latest: VersionAt,
@@ -120,16 +105,13 @@ function pickInstallableTarget(
   current: string,
   minReleaseAgeMs: number
 ): VersionAt | null {
-  // No policy → the resolver installs the latest tag directly; publish times
-  // are irrelevant (and may be absent), so don't require them.
   if (minReleaseAgeMs <= 0) {
     return isNewerVersion(latest.version, current) ? latest : null;
   }
 
   let best: VersionAt | null = null;
   for (const [version, publishedAt] of Object.entries(times)) {
-    // `times` also carries non-version keys ("created"/"modified") — invalid
-    // semver, so they fall out here along with prereleases.
+    // `times` also carries non-version keys ("created"/"modified") — filtered as invalid semver.
     if (!semver.valid(version) || semver.prerelease(version)) continue;
     if (!semver.gt(version, current)) continue;
     if (!isOldEnough(publishedAt, minReleaseAgeMs)) continue;
@@ -141,20 +123,13 @@ function pickInstallableTarget(
 }
 
 interface RegistryInfo {
-  /** The `latest` dist-tag and its publish time. */
   latest: VersionAt;
-  /** Map of version → ISO 8601 publish time (also includes created/modified). */
+  /** version → ISO 8601 publish time (also includes created/modified). */
   times: Record<string, string>;
 }
 
-/**
- * Fetches the package's registry document from npm.
- *
- * We request the full packument (not the `/latest` manifest) because only the
- * packument carries the `time` map of version → publish timestamp, which the
- * minimum-release-age gate needs to find the newest *installable* version.
- * Returns `null` on any failure — update checks must never crash the server.
- */
+// Fetch the full packument (not /latest) — only it carries the `time` map the
+// release-age gate needs. Returns null on any failure (never crashes the server).
 async function fetchRegistryInfo(): Promise<RegistryInfo | null> {
   return new Promise((resolve) => {
     let resolved = false;
@@ -232,9 +207,8 @@ async function check(): Promise<void> {
   if (target !== null) {
     process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
   } else if (updateAvailable && minReleaseAgeMs > 0) {
-    // A newer version exists but none is installable yet under the machine's
-    // package-age policy — log once so the silence is explainable, but do not
-    // surface a reminder to the agent.
+    // Newer version exists but none is installable yet under the policy — log
+    // once to explain the silence; no reminder is surfaced to the agent.
     process.stderr.write(
       `[argent] Update ${currentVersion} -> ${info.latest.version} is held by a minimum-release-age policy; ` +
         `reminder deferred until an eligible version ages past the gate.\n`
@@ -243,12 +217,8 @@ async function check(): Promise<void> {
 }
 
 /**
- * Start the update checker: runs an immediate check, then rechecks every 24h.
- * Safe to call once at startup. Returns a dispose function to clear the timer.
- *
- * When reminders are disabled via {@link areUpdateNotificationsDisabled}, this
- * is a no-op — no network request is made and the state stays at its default
- * (`updateInstallable: false`), so no note is ever attached.
+ * Run an immediate check, then recheck every 24h. Returns a dispose fn for the
+ * timer. No-op when reminders are disabled (no request, state stays default).
  */
 export function startUpdateChecker(): { dispose(): void } {
   if (areUpdateNotificationsDisabled()) {
