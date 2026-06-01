@@ -169,9 +169,9 @@ jobs:
         # download the linux binary is missing and the boot succeeds but
         # every downstream tool call fails.
         #
-        # TODO: switch back to the default (radon-main) once
-        # `simulator-server-argent-linux` ships there. It currently only
-        # exists as an asset in the `radon-daily` pre-release.
+        # Pinned to `radon-daily` because `simulator-server-argent-linux`
+        # only ships there until radon#118 lands a release into the default
+        # channel (`radon-main`). Drop the `radon-daily` arg once that lands.
         run: bash scripts/download-simulator-server.sh radon-daily
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
