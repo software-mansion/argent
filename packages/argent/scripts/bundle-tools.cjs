@@ -8,6 +8,7 @@ const path = require("path");
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
+const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-ios/src/index.ts"
@@ -37,6 +38,25 @@ const ALIASES = {
   "@argent/installer": INSTALLER_ENTRY,
   "@argent/mcp": MCP_ENTRY,
   "@argent/cli": CLI_ENTRY,
+  "@argent/telemetry": TELEMETRY_ENTRY,
+};
+
+// Build-time constants for @argent/telemetry. The PostHog project token is a
+// checked-in public write-only key; only version metadata needs esbuild defines.
+const TELEMETRY_CLI_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    return String(pkg.version ?? "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+})();
+const TELEMETRY_CLI_VERSION_MAJOR_MINOR = TELEMETRY_CLI_VERSION.split(".").slice(0, 2).join(".");
+const TELEMETRY_CLI_MAJOR_VERSION = TELEMETRY_CLI_VERSION.split(".")[0] ?? "0";
+
+const TELEMETRY_DEFINE = {
+  ARGENT_CLI_VERSION_MAJOR_MINOR: JSON.stringify(TELEMETRY_CLI_VERSION_MAJOR_MINOR),
+  ARGENT_CLI_MAJOR_VERSION: JSON.stringify(TELEMETRY_CLI_MAJOR_VERSION),
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which
@@ -109,7 +129,7 @@ if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
-// Bundle the tools server
+// Bundle the tools server.
 esbuild.buildSync({
   entryPoints: [TOOLS_ENTRY],
   bundle: true,
@@ -119,6 +139,7 @@ esbuild.buildSync({
   outfile: OUT_FILE,
   alias: ALIASES,
   mainFields: MAIN_FIELDS,
+  define: TELEMETRY_DEFINE,
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
@@ -137,6 +158,7 @@ esbuild.buildSync({
   banner: ESM_REQUIRE_BANNER,
   external: ["node:*"],
   mainFields: MAIN_FIELDS,
+  define: TELEMETRY_DEFINE,
 });
 
 console.log(`✓ Bundled installer → ${path.relative(process.cwd(), INSTALLER_OUT_FILE)}`);
@@ -154,6 +176,7 @@ esbuild.buildSync({
   banner: ESM_REQUIRE_BANNER,
   external: ["node:*"],
   mainFields: MAIN_FIELDS,
+  define: TELEMETRY_DEFINE,
 });
 
 console.log(`✓ Bundled MCP server → ${path.relative(process.cwd(), MCP_OUT_FILE)}`);
@@ -170,6 +193,7 @@ esbuild.buildSync({
   banner: ESM_REQUIRE_BANNER,
   external: ["node:*"],
   mainFields: MAIN_FIELDS,
+  define: TELEMETRY_DEFINE,
 });
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);

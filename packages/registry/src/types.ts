@@ -182,7 +182,12 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string) => void;
-  toolCompleted: (toolId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, error: Error) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string) => void;
+  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
+  toolFailed: (
+    toolId: string,
+    toolInvocationId: string,
+    error: Error,
+    durationMs?: number
+  ) => void;
 };

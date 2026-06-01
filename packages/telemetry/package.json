@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "name": "@argent/telemetry",
+  "version": "0.8.1",
+  "description": "Anonymous opt-out telemetry client for Argent CLI / installer / tool-server",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "ci-info": "^4.4.0",
+    "posthog-node": "5.35.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}

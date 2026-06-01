@@ -4,6 +4,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
+  init as telemetryInit,
+  trackImmediate,
+  forget as telemetryForget,
+  shutdown as telemetryShutdown,
+} from "@argent/telemetry";
+import {
   ALL_ADAPTERS,
   getManagedContentTargets,
   removeCodexRules,
@@ -285,6 +291,20 @@ function cleanupBundledTargets(
 export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
 
+  telemetryInit("installer");
+  await trackImmediate("installation:cli_uninstall_start", {});
+
+  const finalizeUninstallTelemetry = async (
+    hasPrunedContent: boolean,
+    hasUninstalledPackage: boolean
+  ): Promise<void> => {
+    await trackImmediate("installation:cli_uninstall_complete", {
+      has_pruned_content: hasPrunedContent,
+      has_uninstalled_package: hasUninstalledPackage,
+    });
+    await telemetryShutdown();
+  };
+
   p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
   if (!nonInteractive) {
@@ -296,6 +316,7 @@ export async function uninstall(args: string[]): Promise<void> {
     });
 
     if (p.isCancel(proceed) || !proceed) {
+      await finalizeUninstallTelemetry(false, false);
       p.cancel("Uninstall cancelled.");
       process.exit(0);
     }
@@ -456,6 +477,7 @@ export async function uninstall(args: string[]): Promise<void> {
     }
   }
 
+  let hasUninstalledPackage = false;
   if (shouldUninstallPackage) {
     const pm = detectPackageManager();
     const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
@@ -466,10 +488,23 @@ export async function uninstall(args: string[]): Promise<void> {
     try {
       execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
       p.log.success("Package uninstalled.");
+      hasUninstalledPackage = true;
     } catch (err) {
       p.log.error(`Uninstall failed: ${err}`);
     }
   }
+
+  await trackImmediate("installation:cli_uninstall_complete", {
+    has_pruned_content: shouldPrune,
+    has_uninstalled_package: hasUninstalledPackage,
+  });
+
+  try {
+    await telemetryForget({ disableConsent: false });
+  } catch {
+    /* swallow — uninstall must succeed even if forget fails */
+  }
+  await telemetryShutdown();
 
   p.outro(pc.green("argent has been removed."));
 }

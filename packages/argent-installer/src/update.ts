@@ -10,6 +10,11 @@ import {
   type McpConfigAdapter,
 } from "./mcp-configs.js";
 import {
+  init as telemetryInit,
+  trackImmediate,
+  shutdown as telemetryShutdown,
+} from "@argent/telemetry";
+import {
   getGloballyInstalledVersion,
   isGloballyInstalled,
   isNewerVersion,
@@ -38,9 +43,48 @@ function getRequestedVersion(args: string[]): string | null {
   return null;
 }
 
+type UpdateTrigger = "update" | "mcp_update";
+type UpdatePackageAction = "standalone_update" | "standalone_install" | "mcp_update";
+
+export function getUpdateTriggerFromEnv(env: NodeJS.ProcessEnv = process.env): UpdateTrigger {
+  return env.ARGENT_UPDATE_TRIGGER === "mcp_update" ? "mcp_update" : "update";
+}
+
+export function resolveUpdatePackageAction(
+  trigger: UpdateTrigger,
+  installed: string | null
+): UpdatePackageAction {
+  if (trigger === "mcp_update") return "mcp_update";
+  return installed ? "standalone_update" : "standalone_install";
+}
+
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
   const requestedVersion = getRequestedVersion(args);
+  const trigger = getUpdateTriggerFromEnv();
+  telemetryInit("installer");
+  const updateStartTime = performance.now();
+  await trackImmediate("installation:cli_update_start", {});
+
+  const trackPackageAction = async (
+    action: UpdatePackageAction | "no_update" | "update_skipped" | "update_failed",
+    startedAt: number,
+    isSuccess: boolean
+  ): Promise<void> => {
+    await trackImmediate("installation:package_action", {
+      trigger,
+      action,
+      is_success: isSuccess,
+      duration_ms: performance.now() - startedAt,
+    });
+  };
+
+  const failUpdateTelemetry = async (): Promise<void> => {
+    await trackImmediate("installation:cli_update_fail", {
+      duration_ms: performance.now() - updateStartTime,
+    });
+    await telemetryShutdown();
+  };
 
   p.intro(pc.bgCyan(pc.black(" argent update ")));
 
@@ -55,6 +99,8 @@ export async function update(args: string[]): Promise<void> {
   const installed = globallyInstalled ? getGloballyInstalledVersion() : null;
 
   if (globallyInstalled && !installed) {
+    await trackPackageAction("update_failed", updateStartTime, false);
+    await failUpdateTelemetry();
     p.log.error("Could not determine installed version.");
     process.exit(1);
   }
@@ -70,6 +116,8 @@ export async function update(args: string[]): Promise<void> {
   if (requestedVersion !== null) {
     if (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion)) {
       spinner.stop(pc.red("Invalid update target."));
+      await trackPackageAction("update_failed", updateStartTime, false);
+      await failUpdateTelemetry();
       p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
       process.exit(1);
     }
@@ -80,12 +128,16 @@ export async function update(args: string[]): Promise<void> {
       resolved = await resolveInstallableUpdateTarget(pm, installed);
     } catch (err) {
       spinner.stop(pc.red("Could not reach registry."));
+      await trackPackageAction("update_failed", updateStartTime, false);
+      await failUpdateTelemetry();
       p.log.error(`Failed to check registry: ${err}`);
       process.exit(1);
     }
 
     if (resolved === null) {
       spinner.stop(pc.red("Could not reach registry."));
+      await trackPackageAction("update_failed", updateStartTime, false);
+      await failUpdateTelemetry();
       p.log.error("Failed to determine the latest Argent release from the registry.");
       process.exit(1);
     }
@@ -133,6 +185,11 @@ export async function update(args: string[]): Promise<void> {
       });
 
       if (p.isCancel(proceed) || !proceed) {
+        await trackPackageAction("update_skipped", updateStartTime, true);
+        await trackImmediate("installation:cli_update_complete", {
+          duration_ms: performance.now() - updateStartTime,
+        });
+        await telemetryShutdown();
         p.cancel(installed ? "Update cancelled." : "Install cancelled.");
         process.exit(0);
       }
@@ -140,18 +197,31 @@ export async function update(args: string[]): Promise<void> {
 
     p.log.info(`Running: ${pc.dim(cmdStr)}`);
 
-    await killToolServer();
+    try {
+      await killToolServer();
+    } catch (err) {
+      await trackPackageAction("update_failed", updateStartTime, false);
+      await failUpdateTelemetry();
+      p.log.error(`Could not stop the running tool server: ${err}`);
+      process.exit(1);
+    }
 
+    const packageAction = resolveUpdatePackageAction(trigger, installed);
+    const packageActionStartedAt = performance.now();
     try {
       execFileSync(cmd.bin, cmd.args, {
         stdio: "inherit",
         env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
       });
     } catch (err) {
+      await trackPackageAction(packageAction, packageActionStartedAt, false);
+      await failUpdateTelemetry();
       p.log.error(`${installed ? "Update" : "Install"} failed: ${err}`);
       process.exit(1);
     }
+    await trackPackageAction(packageAction, packageActionStartedAt, true);
   } else {
+    await trackPackageAction("no_update", updateStartTime, true);
     if (latest && target === null && latestIsNewer && minReleaseAgeMs > 0) {
       p.log.warn(
         `Latest version ${pc.cyan(`v${latest}`)} is still held by your minimum-release-age policy.`
@@ -226,6 +296,11 @@ export async function update(args: string[]): Promise<void> {
   if (skillSummary) {
     p.note(skillSummary, "Skills Updated");
   }
+
+  await trackImmediate("installation:cli_update_complete", {
+    duration_ms: performance.now() - updateStartTime,
+  });
+  await telemetryShutdown();
 
   p.outro(pc.green("Update complete."));
 }
