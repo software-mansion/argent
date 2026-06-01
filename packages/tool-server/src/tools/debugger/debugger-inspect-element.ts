@@ -224,6 +224,12 @@ Use when you need the source file and line for a component at a tap coordinate. 
             if (resolved) {
               source = resolved;
               code = await api.sourceResolver.readSourceFragment(resolved, params.contextLines);
+            } else {
+              source = {
+                file: item.frame.file,
+                line: item.frame.line,
+                column: item.frame.col,
+              };
             }
           } else {
             source = {
