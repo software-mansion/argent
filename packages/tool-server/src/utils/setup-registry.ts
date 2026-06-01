@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
+import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
@@ -77,6 +78,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
+  registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
   registry.registerTool(listDevicesTool);

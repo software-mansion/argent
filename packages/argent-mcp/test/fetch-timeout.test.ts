@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import http from "node:http";
-import { fetchWithReconnect } from "../src/mcp-server";
+import { fetchWithReconnect } from "../src/mcp-server.js";
 
 async function mockSuccessfulReconnect() {
   return new Promise<void>((res) => res());
@@ -58,8 +58,8 @@ describe("fetch timeout in fetchWithReconnect", () => {
     try {
       await fetchWithReconnect(() => `${url}/tools/hang`, mockSuccessfulReconnect, {
         init: { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
-        expBackoffBase: 5,
-        fetchTimeoutMs: 100,
+        expBackoffBase: 1,
+        fetchTimeoutMs: 20,
       });
     } catch {
       threw = true;
@@ -69,8 +69,9 @@ describe("fetch timeout in fetchWithReconnect", () => {
     await fake.close();
 
     expect(threw).toBe(true);
-    // 5 attempts × 100ms timeout + ~75ms backoff ≈ 575ms.
-    // Must finish well under 5s (the old infinite-hang behavior).
+    // Same behavior as production (5 attempts × per-attempt abort + backoff),
+    // just with tiny knobs: 5 × 20ms + ~15ms backoff ≈ 115ms. The point is
+    // that it terminates fast — well under 5s (the old infinite-hang bug).
     expect(elapsed).toBeLessThan(5_000);
   }, 10_000);
 
@@ -95,10 +96,12 @@ describe("fetch timeout in fetchWithReconnect", () => {
 
   it("disables the per-attempt timeout when fetchTimeoutMs is null", async () => {
     const server = http.createServer((_req, res) => {
+      // A small server-side delay is enough to prove the request is NOT
+      // aborted when the per-attempt timeout is disabled.
       setTimeout(() => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
-      }, 200);
+      }, 30);
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const addr = server.address();

@@ -2,10 +2,11 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 
 // When bundled by esbuild, __dirname points into dist/.
-// ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR lets the launcher override the bin
-// directory, matching the same pattern used by ARGENT_SIMULATOR_SERVER_DIR.
+// ARGENT_NATIVE_DEVTOOLS_ANDROID_BIN_DIR lets the launcher override the bin
+// directory (where trace_processor_shell lives), matching the same pattern
+// used by ARGENT_SIMULATOR_SERVER_DIR.
 const BIN_DIR =
-  process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR ?? path.join(__dirname, "..", "bin");
+  process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_BIN_DIR ?? path.join(__dirname, "..", "bin");
 
 // Queries live next to bin/ at the package root in dev mode, and next to
 // dist/ in the packaged argent bundle (copied there by argent's build script).
@@ -17,6 +18,12 @@ const QUERIES_DIR =
 const TRACE_CONFIG_PATH =
   process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_TRACECFG ??
   path.join(__dirname, "..", "argent.tracecfg.pbtxt");
+
+// Helper-APK distribution dir. ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR lets a
+// launcher override the dist directory (e.g. when ts-node runs from src/).
+// Mirror of @argent/native-devtools-ios's index.ts.
+const DIST_DIR =
+  process.env.ARGENT_NATIVE_DEVTOOLS_ANDROID_DIR ?? path.join(__dirname, "..", "dist");
 
 /**
  * Path to the Perfetto `trace_processor_shell` binary. Lazy — throws only when
@@ -60,4 +67,33 @@ export function traceProcessorQueriesDir(): string {
  */
 export function traceConfigPath(): string {
   return TRACE_CONFIG_PATH;
+}
+
+interface HelperManifest {
+  packageName: string;
+  instrumentationRunner: string;
+  versionName: string;
+  versionCode: number;
+  installFlags: string[];
+}
+
+let cachedManifest: HelperManifest | null = null;
+
+export function helperManifest(): HelperManifest {
+  if (cachedManifest) return cachedManifest;
+  const manifestPath = path.join(__dirname, "..", "manifest.json");
+  cachedManifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as HelperManifest;
+  return cachedManifest;
+}
+
+export function bundledHelperApkPath(): string {
+  const manifest = helperManifest();
+  const apk = path.join(DIST_DIR, `argent-android-devtools-${manifest.versionName}.apk`);
+  if (!fs.existsSync(apk)) {
+    throw new Error(
+      `Bundled Android devtools helper APK not found at ${apk}. ` +
+        `Run \`bash packages/native-devtools-android/scripts/build.sh\` to build it.`
+    );
+  }
+  return apk;
 }

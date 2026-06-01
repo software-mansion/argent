@@ -1,17 +1,18 @@
 {
   "private": true,
   "name": "@argent/registry",
-  "version": "0.7.1",
+  "version": "0.8.1",
   "description": "Dependency-aware service lifecycle manager with stateless tool invocation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "zod": "^3.23.0"
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
