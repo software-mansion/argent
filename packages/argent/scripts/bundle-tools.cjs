@@ -23,10 +23,12 @@ const TOOLS_CLIENT_ENTRY = path.resolve(
 const INSTALLER_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-installer/src/index.ts");
 const MCP_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-mcp/src/index.ts");
 const CLI_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-cli/src/index.ts");
+const PREVIEW_WINDOW_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/preview-window/src/main.ts");
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
+const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
 // Shared aliases so each bundle resolves workspace deps from source.
 const ALIASES = {
@@ -173,6 +175,29 @@ esbuild.buildSync({
 });
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
+
+// Bundle the Electron preview-window main entrypoint. CJS, with `electron`
+// externalised — the dependency is declared on @swmansion/argent so npm
+// installs it alongside, and the spawn helper in tool-server's
+// preview-window.ts resolves the executable via `require("electron")`.
+// The bundled main.cjs lives next to the tool-server bundle so the same
+// helper can find it via `path.join(__dirname, "preview-window", "main.cjs")`
+// without needing @argent/preview-window to be a published sibling pkg.
+fs.mkdirSync(path.dirname(PREVIEW_WINDOW_OUT_FILE), { recursive: true });
+esbuild.buildSync({
+  entryPoints: [PREVIEW_WINDOW_ENTRY],
+  bundle: true,
+  platform: "node",
+  target: "node22",
+  format: "cjs",
+  outfile: PREVIEW_WINDOW_OUT_FILE,
+  external: ["electron", "node:*"],
+  mainFields: MAIN_FIELDS,
+});
+
+console.log(
+  `✓ Bundled preview-window main → ${path.relative(process.cwd(), PREVIEW_WINDOW_OUT_FILE)}`
+);
 
 // Copy simulator-server for every supported host platform that's present in
 // the staging area. Require the darwin binary only when bundling ON darwin

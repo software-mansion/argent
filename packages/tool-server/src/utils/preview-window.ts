@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 /**
  * Tool-server side of the Electron preview window. A single Electron child
@@ -58,8 +60,16 @@ export function createPreviewWindowManager(
 
   const resolveMainScript = (): string => {
     if (opts.mainScript) return opts.mainScript;
-    // Resolved at runtime, not bundled — keeps Electron's require graph out
-    // of the tool-server's TypeScript build.
+    // Two layouts to support:
+    //   1) Published @swmansion/argent bundle. The bundler drops the
+    //      preview-window's compiled main next to the tool-server bundle
+    //      at <install>/dist/preview-window/main.cjs. The workspace pkg
+    //      `@argent/preview-window` isn't a sibling install at that
+    //      point, so require.resolve would fail.
+    //   2) Workspace dev (ts-node from packages/tool-server/src). The
+    //      sibling package IS resolvable; fall through to that.
+    const bundled = path.join(__dirname, "preview-window", "main.cjs");
+    if (fs.existsSync(bundled)) return bundled;
     return require.resolve("@argent/preview-window/dist/main.js");
   };
 

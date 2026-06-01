@@ -1,8 +1,8 @@
 {
   "private": true,
   "name": "@argent/cli",
-  "version": "0.9.0",
-  "description": "Shell CLI commands for argent: tools, run, server, enable, disable, flags",
+"version": "0.9.1",
+  "description": "Shell CLI commands for argent: tools, run, server",: bundle preview-window into @swmansion/argent)
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
