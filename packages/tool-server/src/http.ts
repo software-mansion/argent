@@ -87,10 +87,7 @@ export interface HttpAppOptions {
    */
   bindHost?: string;
   /** Optional telemetry hook for per-invocation platform/device metadata. */
-  recordInvocation?: (
-    toolId: string,
-    meta: InvocationMeta
-  ) => () => void;
+  recordInvocation?: (toolId: string, meta: InvocationMeta) => () => void;
 }
 
 export interface HttpAppHandle {

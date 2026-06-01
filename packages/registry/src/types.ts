@@ -184,10 +184,5 @@ export type RegistryEvents = {
   toolRegistered: (toolId: string) => void;
   toolInvoked: (toolId: string, toolInvocationId: string) => void;
   toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
-  toolFailed: (
-    toolId: string,
-    toolInvocationId: string,
-    error: Error,
-    durationMs?: number
-  ) => void;
+  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
 };

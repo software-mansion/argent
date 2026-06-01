@@ -94,9 +94,7 @@ describe("telemetry public surface", () => {
     expect(posthogMock.instances).toHaveLength(1);
     expect(client.capture).toHaveBeenCalledTimes(2);
     expect(client.flush).toHaveBeenCalledTimes(1);
-    expect(client.opts).toEqual(
-      expect.objectContaining({ flushAt: 20, flushInterval: 10_000 })
-    );
+    expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
 
   it("captures events in CI and annotates payloads with is_ci", () => {
