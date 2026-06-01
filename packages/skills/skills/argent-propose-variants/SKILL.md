@@ -7,7 +7,7 @@ description: Propose multiple visual design variants for on-screen elements and 
 
 You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant`. Each proposed element shows up as a floating card next to the live simulator stream in the Argent preview UI, connected by a thin line to the real element. The human picks per element, optionally pins free-form comments to elements, and presses **Complete selection**. `await_user_selection` is the single blocking call that returns their decision.
 
-**The golden rule: one variant = one real screenshot.** A proposal is only useful if its `previewImage` shows the variant actually rendered on the device. Never propose a variant you have not built and seen on screen. Plan → build → navigate → screenshot → propose, repeated for every variant of every element, then await once.
+**The golden rule: one variant = one real, _distinct_ screenshot.** A proposal is only useful if its `previewImage` shows the variant actually rendered on the device, captured AFTER that specific variant was applied. Never propose a variant you have not built and seen on screen, and never point two variants at the same file path — if two captures end up byte-identical you have not actually changed anything and the choice UI degenerates to identical thumbnails. Plan → build → navigate → screenshot → propose, repeated for every variant of every element, then await once.
 
 ## 2. Tools
 
@@ -43,7 +43,7 @@ Loop over every variant of every element:
 1. **Build the variant.** Implement that one variant in code.
 2. **Apply it on the device.** Reload the RN bundle (`debugger-reload-metro`) or rebuild as needed so the running app shows this variant.
 3. **Navigate to it.** Drive the app (`argent-device-interact`) to the screen where the element is visible — a screenshot is only meaningful if the element is actually on screen.
-4. **Screenshot.** Call `screenshot`; keep the returned file path. The preview UI auto-crops the image to the element's box using `match`, so capture the whole screen — do not hand-crop.
+4. **Screenshot.** Call `screenshot`; keep the returned file path. The preview UI auto-crops the image to the element's box using `match`, so capture the whole screen — do not hand-crop. The path you got back must be a NEW file; if you suspect the device froze or the variant didn't apply (you see no visible change vs. the previous capture), diff with the previous path (`shasum -a 256`) before proposing — byte-identical captures mean the variant is not on screen yet. Fix that before proposing, never propose anyway.
 5. **Propose.** Call `propose_variant` with `element`, `match`, and `variant.previewImage` set to that screenshot path. Add `summary` (what changed and why) and `code`/`filePath` when useful.
 6. **Revert.** Roll the variant change back before building the next one — only one variant can be on screen at a time. Keep going; `propose_variant` does not block.
 
@@ -64,6 +64,7 @@ Implement the chosen variant for every selected element, address every annotatio
 ## 4. Rules
 
 - **Build before you propose.** Every `previewImage` must be a screenshot of that variant actually running on the device. No mockups, no guesses, no proposing un-built ideas.
+- **Distinct screenshot per variant.** Reusing a `previewImage` path across two variants — or capturing two paths whose bytes turn out identical — defeats the whole point of the choice UI. If you can't produce visibly different captures (e.g. the app is read-only, accessibility is broken so you can't navigate, the bundle won't hot-reload), STOP and tell the user instead of staging duplicates.
 - **One blocking call.** `propose_variant` never blocks — stage freely. `await_user_selection` is the only call that waits, and you call it once, last.
 - **Anchor accurately.** Pull matchers from `describe`; a wrong `match` makes the card point at the wrong element or float unanchored.
 - **One variant on screen at a time.** Apply → screenshot → revert before the next variant so screenshots never bleed together.
