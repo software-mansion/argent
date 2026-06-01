@@ -426,6 +426,15 @@
         border-bottom: var(--border-hairline) solid var(--color-border);
         cursor: grab;
         user-select: none;
+        /* Padding/gap/font/color animate together when a sibling gets
+           staged (the :has() rule below collapses non-picked variants to
+           a one-line summary). Without this transition the rows jumped
+           into the tight layout instantly. */
+        transition:
+          padding var(--dur-card-move) var(--ease-out),
+          gap var(--dur-card-move) var(--ease-out),
+          font-size var(--dur-card-move) var(--ease-out),
+          color var(--dur-card-move) var(--ease-out);
       }
       .vrow:last-child {
         border-bottom: 0;
@@ -445,9 +454,10 @@
       /* Once a variant is staged on a card, the other variants collapse to
          a name-only line so they stop dominating the screen — they stay
          clickable so the user can switch picks, and re-clicking the staged
-         row unstages and brings everyone back. */
+         row unstages and brings everyone back. The non-thumb properties
+         transition via the .vrow rule above; the thumb's own
+         width/height/opacity/border animate via the .thumb rule below. */
       .vcard:has(.vrow.staged) .vrow:not(.staged) {
-        flex-direction: row;
         align-items: center;
         padding: 4px 10px;
         gap: var(--gap-inline);
@@ -455,7 +465,13 @@
         color: var(--color-muted);
       }
       .vcard:has(.vrow.staged) .vrow:not(.staged) .thumb {
-        display: none;
+        /* Discrete `display: none` would skip the animation. Shrink to
+           zero with no border/opacity instead — same visual end state,
+           but animatable. */
+        width: 0;
+        height: 0;
+        border-width: 0;
+        opacity: 0;
       }
       .vcard:has(.vrow.staged) .vrow:not(.staged):hover {
         color: var(--color-fg);
@@ -477,6 +493,11 @@
         border: var(--border-hairline) solid var(--color-border);
         overflow: hidden;
         background: var(--color-thumb-bg);
+        transition:
+          width var(--dur-card-move) var(--ease-out),
+          height var(--dur-card-move) var(--ease-out),
+          border-width var(--dur-card-move) var(--ease-out),
+          opacity var(--dur-fade) ease;
       }
       .vrow .thumb-img {
         position: absolute;
