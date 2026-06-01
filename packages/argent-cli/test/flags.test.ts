@@ -518,3 +518,71 @@ describe("FLAG_REGISTRY / getFlagDefinition", () => {
     }
   });
 });
+
+describe("deprecating a flag (removed from FLAG_REGISTRY)", () => {
+  // A flag that was enabled before being deprecated still lives in flags.json
+  // but is absent from the registry. Loading/reading it must never throw.
+
+  it("reading a deprecated stored flag never throws and returns its value", () => {
+    setFlag("deprecated-flag", true, "global");
+    setFlag("deprecated-false", false, "project");
+    // Neither name is in any registry — these are pure storage reads.
+    expect(readFlags("global")).toEqual({ "deprecated-flag": true });
+    expect(isFlagEnabled("deprecated-flag")).toBe(true);
+    expect(isFlagEnabled("deprecated-false")).toBe(false);
+  });
+
+  it("`argent flags` lists a deprecated stored flag under 'unrecognized' (no throw)", () => {
+    setFlag("deprecated-flag", true, "global");
+    let out!: CapturedConsole;
+    expect(() => {
+      out = captureConsole(() => flagsCmd([], TEST_REGISTRY));
+    }).not.toThrow();
+    expect(out.stdout).toContain("Stored but no longer recognized");
+    expect(out.stdout).toMatch(/deprecated-flag\s+enabled\s+\(global\)/);
+  });
+
+  it("--json surfaces it under `unrecognized` and keeps it out of the registry view", () => {
+    setFlag("deprecated-flag", true, "global");
+    const out = captureConsole(() => flagsCmd(["--json"], TEST_REGISTRY));
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed.unrecognized).toEqual([
+      { name: "deprecated-flag", enabled: true, scope: "global" },
+    ]);
+    expect(parsed.global).toEqual({ "deprecated-flag": true });
+    expect(
+      parsed.flags.find((f: { name: string }) => f.name === "deprecated-flag")
+    ).toBeUndefined();
+  });
+
+  it("an empty registry with stored flags still loads cleanly (nothing crashes or is hidden)", () => {
+    setFlag("legacy-a", true, "global");
+    setFlag("legacy-b", false, "project");
+    const out = captureConsole(() => flagsCmd([], []));
+    expect(out.stdout).toContain("No feature flags are defined.");
+    expect(out.stdout).toContain("Stored but no longer recognized");
+    expect(out.stdout).toMatch(/legacy-a\s+enabled\s+\(global\)/);
+    expect(out.stdout).toMatch(/legacy-b\s+disabled\s+\(project\)/);
+  });
+
+  it("disable cleans up a deprecated flag and it leaves the listing", () => {
+    setFlag("deprecated-flag", true, "global");
+    captureConsole(() => disable(["deprecated-flag"])); // lenient — no registry needed
+    expect(readFlags("global")).toEqual({});
+    const out = captureConsole(() => flagsCmd([], TEST_REGISTRY));
+    expect(out.stdout).not.toContain("deprecated-flag");
+  });
+
+  it("a deprecated flag with a prototype-style name still loads without error", () => {
+    setFlag("toString", true, "global"); // valid per FLAG_NAME_RE, also on Object.prototype
+    expect(() => captureConsole(() => flagsCmd([], TEST_REGISTRY))).not.toThrow();
+    expect(isFlagEnabled("toString")).toBe(true);
+    const out = captureConsole(() => flagsCmd(["--json"], TEST_REGISTRY));
+    const parsed = JSON.parse(out.stdout);
+    expect(parsed.unrecognized).toContainEqual({
+      name: "toString",
+      enabled: true,
+      scope: "global",
+    });
+  });
+});

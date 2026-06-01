@@ -16,6 +16,13 @@
 // can still be cleared from storage), and `isFlagEnabled` only reads storage —
 // it never consults the registry, keeping runtime callers decoupled from CLI
 // validation.
+//
+// Deprecating a flag is safe: only the *write* path (`enable`) consults the
+// registry. Every read path (readFlags / isFlagEnabled / `argent flags`) loads
+// whatever booleans are stored regardless of the registry, so removing an entry
+// from FLAG_REGISTRY never errors on a flags.json that still contains it.
+// `argent flags` lists such leftovers under an "unrecognized" section so they
+// can be cleaned up.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -353,11 +360,21 @@ Options:
     };
   });
 
+  // Flags still in storage but no longer in the registry (e.g. deprecated and
+  // removed). Reading them never errors — they are surfaced here so they stay
+  // visible and can be cleared with `argent disable <name>`.
+  const known = new Set(registry.map((def) => def.name));
+  const unrecognized = Object.keys(effective)
+    .filter((name) => !known.has(name))
+    .sort()
+    .map((name) => ({ name, enabled: effective[name]!.value, scope: effective[name]!.scope }));
+
   if (json) {
     console.log(
       JSON.stringify(
         {
           flags: registryView,
+          unrecognized,
           global: globalFlags,
           project: projectFlags,
           effective,
@@ -385,6 +402,16 @@ Options:
       console.log(`  ${" ".repeat(maxName)}  ${f.description}`);
     }
   }
+
+  if (unrecognized.length > 0) {
+    console.log("\nStored but no longer recognized (safe to `argent disable`):");
+    const maxName = unrecognized.reduce((m, f) => Math.max(m, f.name.length), 0);
+    for (const f of unrecognized) {
+      const stateLabel = f.enabled ? "enabled" : "disabled";
+      console.log(`  ${f.name.padEnd(maxName, " ")}  ${stateLabel.padEnd(8)} (${f.scope})`);
+    }
+  }
+
   console.log(`\n  Global:  ${getFlagsPath("global")}`);
   console.log(`  Project: ${getFlagsPath("project")}`);
 }
