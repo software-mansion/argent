@@ -32,6 +32,13 @@ for entry in "${TARGETS[@]}"; do
   ASSET_NAME="${entry%%:*}"
   PLATFORM="${entry##*:}"
   PLATFORM_DIR="${DEST_DIR}/${PLATFORM}"
+
+  # Purge then recreate the platform dir before each download so a previous
+  # run's stale binary can't ship if THIS run's download fails. Without this,
+  # the failure branch below would print a warning and continue, leaving the
+  # stale binary in place — and the publish workflow would silently package
+  # an outdated artifact.
+  rm -rf "${PLATFORM_DIR}"
   mkdir -p "${PLATFORM_DIR}"
 
   echo "Downloading ${ASSET_NAME} → ${PLATFORM_DIR}/simulator-server"
@@ -50,6 +57,8 @@ for entry in "${TARGETS[@]}"; do
     rm -f "${GH_STDERR}"
     echo "  ⚠ ${ASSET_NAME} not downloaded — skipping (binary won't be available on ${PLATFORM} hosts)"
     [[ -n "${GH_MSG}" ]] && printf '    gh: %s\n' "${GH_MSG//$'\n'/$'\n    gh: '}"
+    # PLATFORM_DIR is empty because we purged it above, so this rmdir
+    # succeeds and the dir disappears — keeping the inventory clean.
     rmdir "${PLATFORM_DIR}" 2>/dev/null || true
     continue
   fi
