@@ -14,6 +14,7 @@ import {
   SKILLS_DIR,
   RULES_DIR,
   AGENTS_DIR,
+  buildArgentSkillsSource,
   getInstalledVersion,
   getLatestVersion,
   isGloballyInstalled,
@@ -460,6 +461,10 @@ export async function init(args: string[]): Promise<void> {
     skillsMethod = choice as SkillsMethod;
   }
 
+  // Prefer the GitHub-pinned source. SKILLS_DIR as a fallback.
+  const useGitHubSource = online && !fromTar && version !== "unknown";
+  const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
+
   if (skillsMethod === "manual") {
     p.note(
       [
@@ -475,12 +480,12 @@ export async function init(args: string[]): Promise<void> {
         `  cp -r ${SKILLS_DIR}/* ${scope === "global" ? "~/.cursor/skills/" : `${scope === "custom" ? customRoot! : "."}/.cursor/skills/`}`,
         ``,
         `  ${pc.dim("# Or use npx skills directly:")}`,
-        `  npx skills add ${SKILLS_DIR}`,
+        `  npx skills add ${skillsSource}`,
       ].join("\n"),
       "Manual Skills Installation"
     );
   } else {
-    const skillsArgs = ["skills", "add", SKILLS_DIR];
+    const skillsArgs = ["skills", "add", skillsSource];
 
     if (scope === "global") {
       skillsArgs.push("-g");

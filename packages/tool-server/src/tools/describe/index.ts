@@ -1,9 +1,25 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import type { DescribeResult } from "./contract";
+import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
 import { iosRequires, describeIos } from "./platforms/ios";
+import { formatDescribeTree } from "./format-tree";
+
+// In-between layer between the per-platform adapters (which still own all
+// pruning — the Android v2 trimmer in uiautomator-parser stays untouched) and
+// the public DescribeResult. The internal `tree` is converted to a token-
+// efficient text rendering here and then dropped, so the caller (LLM) never
+// pays for the JSON tree.
+function withDescription(data: DescribeTreeData): DescribeResult {
+  const out: DescribeResult = {
+    description: formatDescribeTree(data.tree, { source: data.source }),
+    source: data.source,
+  };
+  if (data.should_restart) out.should_restart = data.should_restart;
+  if (data.hint) out.hint = data.hint;
+  return out;
+}
 
 const zodSchema = z.object({
   udid: z
@@ -42,11 +58,14 @@ system dialogs, permission prompts, and any foreground app content. On Android, 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
 
-Returns a JSON tree of UI elements with roles, labels, values, and frame coordinates in normalized
-[0,1] space (fractions of the screen, not pixels) — the same coordinate space as tap/swipe/gesture
-and simulator-server touch input.
+Returns \`{ description, source }\` where \`description\` is a text rendering of the UI tree — one
+line per element with its role, label/value/id, interactivity flags, and frame. Frame coordinates
+are normalized [0,1] fractions of the screen width/height (not pixels) — the same space as
+gesture-tap / gesture-swipe / gesture-pinch.
 
-Use frame.x + frame.width/2 as the tap X coordinate, frame.y + frame.height/2 as tap Y.
+To tap an element use the centre of its frame: \`tap_x = frame.x + frame.width / 2\`,
+\`tap_y = frame.y + frame.height / 2\`. The same formula appears in the response header so it
+can be applied to a line in isolation.
 
 For app-scoped inspection with full UIKit properties (accessibilityIdentifier, viewClassName),
 use native-describe-screen with an explicit bundleId instead (iOS only).
@@ -66,11 +85,13 @@ For React Native apps, debugger-component-tree returns React component names wit
       capability,
       ios: {
         requires: iosRequires,
-        handler: (_services, params, device) => describeIos(registry, device, params),
+        handler: async (_services, params, device) =>
+          withDescription(await describeIos(registry, device, params)),
       },
       android: {
         requires: androidRequires,
-        handler: (_services, params) => describeAndroid(params.udid, params.bundleId),
+        handler: async (_services, params) =>
+          withDescription(await describeAndroid(registry, params.udid, params.bundleId)),
       },
     }),
   };

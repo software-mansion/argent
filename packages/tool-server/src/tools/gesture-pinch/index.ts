@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-import { sleep, sendTouchEvent } from "../../utils/gesture-utils";
+import { sendTouchEvent } from "../../utils/gesture-utils";
+import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),

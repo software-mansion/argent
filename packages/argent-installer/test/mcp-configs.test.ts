@@ -80,11 +80,14 @@ afterEach(() => {
 // ── getMcpEntry ───────────────────────────────────────────────────────────────
 
 describe("getMcpEntry", () => {
-  it("returns an entry with argent as command", () => {
+  it("returns an entry with argent as command and no env vars", () => {
     const entry = getMcpEntry();
     expect(entry.command).toBe("argent");
     expect(entry.args).toEqual(["mcp"]);
-    expect(entry.env).toHaveProperty("ARGENT_MCP_LOG");
+    // Generated configs are committed and shared, so they must not bake a
+    // per-user log path into ARGENT_MCP_LOG (issue #238). The MCP server
+    // falls back to ${homedir()}/.argent/mcp-calls.log at runtime.
+    expect(entry.env).toBeUndefined();
   });
 });
 
@@ -354,14 +357,14 @@ describe("Zed adapter", () => {
 `
     );
 
-    adapter.addAllowlist(tmpDir, "local");
+    adapter.addAllowlist!(tmpDir, "local");
     let after = fs.readFileSync(configPath, "utf8");
     expect(after).toContain("// user note");
     expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
       default: "allow",
     });
 
-    adapter.removeAllowlist(tmpDir, "local");
+    adapter.removeAllowlist!(tmpDir, "local");
     after = fs.readFileSync(configPath, "utf8");
     expect(after).toContain("// user note");
     expect((readJsoncFile(configPath).agent as Record<string, unknown>).tool_permissions).toEqual({
@@ -621,7 +624,8 @@ describe("Hermes adapter", () => {
     const argent = servers.argent as Record<string, unknown>;
     expect(argent.command).toBe("argent");
     expect(argent.args).toEqual(["mcp"]);
-    expect(argent.env).toHaveProperty("ARGENT_MCP_LOG");
+    // No env field unless the entry explicitly carries env vars (issue #238).
+    expect(argent).not.toHaveProperty("env");
   });
 
   it("removes argent entry and drops empty mcp_servers", () => {
@@ -850,7 +854,9 @@ describe("opencode adapter", () => {
     expect(argent.type).toBe("local");
     expect(argent.command).toEqual(["argent", "mcp"]);
     expect(argent.enabled).toBe(true);
-    expect(argent.environment).toHaveProperty("ARGENT_MCP_LOG");
+    // No environment field unless the entry explicitly carries env vars
+    // (issue #238).
+    expect(argent).not.toHaveProperty("environment");
   });
 
   it("removes argent entry and returns true", () => {
@@ -1304,5 +1310,59 @@ describe("injectCodexRules / removeCodexRules", () => {
   it("returns null when rulesDir does not exist", () => {
     const configPath = path.join(tmpDir, "config.toml");
     expect(injectCodexRules(configPath, path.join(tmpDir, "nonexistent"))).toBeNull();
+  });
+});
+
+// ── Portability: generated configs must not embed absolute home paths ───────
+// Regression coverage for issue #238 — every adapter must produce a config
+// that can be checked into git and shared with collaborators on different
+// machines.
+
+describe("generated configs are portable across machines (issue #238)", () => {
+  function readTextFile(filePath: string): string {
+    return fs.readFileSync(filePath, "utf8");
+  }
+
+  // Pin homedir to a fake user path so we can scan written configs for the
+  // literal `/Users/...` segment without false positives from the test
+  // runner's real homedir.
+  const fakeHome = "/Users/pretend-user";
+
+  beforeEach(() => {
+    homedirOverride = fakeHome;
+  });
+
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  it("no adapter writes an absolute home path into the config", () => {
+    for (const adapter of ALL_ADAPTERS) {
+      // Use each adapter's own project path so we exercise its real write
+      // logic (file extension, key layout) without faking paths.
+      const configPath =
+        adapter.projectPath(tmpDir) ??
+        // Windsurf / Hermes are global-only; route the write into tmp.
+        path.join(tmpDir, adapter.name.replace(/\s+/g, "-"), "config");
+
+      adapter.write(configPath, getMcpEntry());
+      const written = readTextFile(configPath);
+      expect(written, `${adapter.name} embedded a home path: ${written}`).not.toContain(fakeHome);
+      expect(written).not.toContain("ARGENT_MCP_LOG");
+    }
+  });
+
+  it("each adapter still honors env vars when the entry carries them", () => {
+    const customEntry = { ...getMcpEntry(), env: { FOO: "bar" } };
+
+    for (const adapter of ALL_ADAPTERS) {
+      const configPath =
+        adapter.projectPath(tmpDir) ??
+        path.join(tmpDir, adapter.name.replace(/\s+/g, "-"), "config");
+      adapter.write(configPath, customEntry);
+      const written = readTextFile(configPath);
+      expect(written, `${adapter.name} dropped a supplied env var`).toContain("FOO");
+      expect(written).toContain("bar");
+    }
   });
 });

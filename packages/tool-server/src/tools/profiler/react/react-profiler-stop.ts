@@ -31,6 +31,12 @@ const zodSchema = z.object({
 interface StopReadResult {
   live: ProfilingDataBackend | null;
   displayNameById: Record<string, string | null>;
+  // False when every renderer interface lacked both getDisplayNameForElementID
+  // and getDisplayNameForFiberID — typically a react-devtools-core version we
+  // don't recognize. When false, every fiber is dropped as unattributed even
+  // though commits were captured; surfaced in the response so the operator
+  // doesn't mistake it for a transient-unmount race.
+  displayNameApiAvailable?: boolean;
 }
 
 interface FiberMetaEntry {
@@ -346,6 +352,14 @@ Fails if no active profiling session exists or the CDP connection was lost durin
           response["unattributed_ms"] = Math.round(totalMs * 100) / 100;
           response["unattributed_fiber_count"] = totalFibers;
           response["unattributed_commit_count"] = unattributedByCommit.length;
+          // Distinguish "API missing" from "transient-unmount race". When the
+          // backend never exposed a display-name accessor, every fiber is
+          // unattributed by construction — telling the operator to look for
+          // race conditions in their component lifecycle would be wrong.
+          if (stopRead.displayNameApiAvailable === false) {
+            response["unattributed_reason"] =
+              "react-devtools backend in this app does not expose a recognized display-name accessor (neither getDisplayNameForElementID nor getDisplayNameForFiberID). The component breakdown is unavailable for this profiling session; commit-level timing data remains correct.";
+          }
         }
       }
 

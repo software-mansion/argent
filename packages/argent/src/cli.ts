@@ -29,6 +29,7 @@ import type * as Installer from "@argent/installer";
 import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
+import { installFatalHandlers } from "./fatal-handlers.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
 
@@ -47,16 +48,7 @@ function getInstalledVersion(): string | null {
 const [, , command, ...rest] = process.argv;
 const isMcpServer = command === "mcp";
 
-process.on("uncaughtException", (err) => {
-  process.stderr.write(`[argent] Uncaught exception: ${err.stack ?? err}\n`);
-  if (!isMcpServer) process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  process.stderr.write(
-    `[argent] Unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : reason}\n`
-  );
-  if (!isMcpServer) process.exit(1);
-});
+installFatalHandlers({ isMcpServer });
 
 function printHelp(): void {
   const version = getInstalledVersion() ?? "unknown";

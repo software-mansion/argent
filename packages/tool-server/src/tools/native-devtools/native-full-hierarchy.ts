@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef, type NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import {
+  nativeDevtoolsRef,
+  precheckNativeDevtools,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
@@ -46,6 +51,7 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 type Result =
+  | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string }
   | { status: "ok"; windows: unknown[] };
 
@@ -66,14 +72,8 @@ Fails if native devtools are not connected or the app is not running.`,
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    if (await api.requiresAppRestart(params.bundleId)) {
-      return {
-        status: "restart_required",
-        message:
-          "Native devtools are not injected into the running app. " +
-          "Call restart-app then retry.",
-      };
-    }
+    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+    if (blocked) return blocked;
 
     const rpcParams: Record<string, unknown> = {};
     if (params.fields !== undefined) rpcParams.fields = params.fields;

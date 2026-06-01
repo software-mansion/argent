@@ -2,8 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
 
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
@@ -31,12 +30,14 @@ const zodSchema = z.object({
             "Tool name — one of: gesture-tap, gesture-swipe, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
           ),
         args: z
-          .record(z.unknown())
+          .record(z.string(), z.unknown())
           .describe("Tool arguments (excluding udid, which is injected automatically)"),
         delayMs: z
           .number()
           .optional()
-          .describe("Wait time in ms after this step before the next (default 100)"),
+          .describe(
+            `Wait time in ms after this step before the next (default ${DEFAULT_INTER_STEP_DELAY_MS})`
+          ),
       })
     )
     .min(1)
@@ -104,6 +105,7 @@ Example — type text and submit:
 
 Stops on the first error and returns partial results.`,
     alwaysLoad: true,
+    longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     capability,
@@ -135,7 +137,7 @@ Stops on the first error and returns partial results.`,
           break;
         }
 
-        const delay = step.delayMs ?? 100;
+        const delay = step.delayMs ?? DEFAULT_INTER_STEP_DELAY_MS;
         if (delay > 0) await sleep(delay);
       }
 

@@ -8,18 +8,44 @@ export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// Fetch image bytes and confirm they actually start with a PNG signature.
+// Without this check, a 404 (file missing), an HTML error page, or any other
+// non-PNG response would be base64'd and labelled `image/png`, which the
+// model API rejects with "Image could not be processed" (issue #255).
+async function fetchPngBytes(url: string): Promise<Buffer | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < PNG_SIGNATURE.length) return null;
+    if (!buf.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return null;
+    return buf;
+  } catch {
+    return null;
+  }
+}
+
 export async function toMcpContent(result: unknown, outputHint?: string): Promise<ContentBlock[]> {
   if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
-    const imgRes = await fetch((result as { url: string }).url);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    const filePath = (result as { path?: string }).path ?? "";
+    const r = result as { url: string; path?: string };
+    const buf = await fetchPngBytes(r.url);
+    if (buf) {
+      return [
+        {
+          type: "image" as const,
+          data: buf.toString("base64"),
+          mimeType: "image/png" as const,
+        },
+        { type: "text" as const, text: `Saved: ${r.path ?? ""}` },
+      ];
+    }
     return [
       {
-        type: "image" as const,
-        data: buf.toString("base64"),
-        mimeType: "image/png" as const,
+        type: "text" as const,
+        text: `(Screenshot unavailable: no valid PNG at ${r.url}. Take a new screenshot.)`,
       },
-      { type: "text" as const, text: `Saved: ${filePath}` },
     ];
   }
 

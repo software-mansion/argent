@@ -11,10 +11,85 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { bootstrapDylibPath } from "@argent/native-devtools-ios";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 const execFileAsync = promisify(execFile);
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
+
+// Max consecutive init failures per service instance before it stops retrying.
+export const MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS = 3;
+
+export interface NativeDevtoolsInitFailure {
+  attempts: number;
+  lastError: string;
+  givenUp: boolean;
+}
+
+export interface NativeDevtoolsInitFailedResult {
+  status: "init_failed";
+  message: string;
+  attempts: number;
+}
+
+export function buildInitFailedResult(
+  udid: string,
+  failure: NativeDevtoolsInitFailure
+): NativeDevtoolsInitFailedResult {
+  return {
+    status: "init_failed",
+    message:
+      `Native devtools failed to initialize for ${udid} after ${failure.attempts} attempts. ` +
+      `Last error: ${failure.lastError}. ` +
+      `Try shutting down and re-booting the simulator, or restart CoreSimulatorService.`,
+    attempts: failure.attempts,
+  };
+}
+
+// Overloads for proper return-type inference.
+export type NativeDevtoolsPrecheckBlock =
+  | NativeDevtoolsInitFailedResult
+  | { status: "restart_required"; message: string };
+
+export async function precheckNativeDevtools(
+  api: NativeDevtoolsApi,
+  udid: string
+): Promise<NativeDevtoolsInitFailedResult | null>;
+export async function precheckNativeDevtools(
+  api: NativeDevtoolsApi,
+  udid: string,
+  bundleId: string
+): Promise<NativeDevtoolsPrecheckBlock | null>;
+export async function precheckNativeDevtools(
+  api: NativeDevtoolsApi,
+  udid: string,
+  bundleId?: string
+): Promise<NativeDevtoolsPrecheckBlock | null> {
+  const existing = api.getInitFailure();
+  if (existing?.givenUp) return buildInitFailedResult(udid, existing);
+
+  try {
+    await api.ensureEnvReady();
+  } catch {
+    const failure = api.getInitFailure();
+    if (failure) return buildInitFailedResult(udid, failure);
+    return buildInitFailedResult(udid, {
+      attempts: 1,
+      lastError: "ensureEnvReady threw without recording state",
+      givenUp: false,
+    });
+  }
+
+  if (bundleId !== undefined && (await api.requiresAppRestart(bundleId))) {
+    return {
+      status: "restart_required",
+      message:
+        "Native devtools are not injected into the running app. " + "Call restart-app then retry.",
+    };
+  }
+
+  return null;
+}
 
 type NativeDevtoolsFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
@@ -60,6 +135,7 @@ export interface NativeDevtoolsApi {
   isEnvSetup(): boolean;
   readonly socketPath: string;
   ensureEnvReady(): Promise<void>;
+  getInitFailure(): NativeDevtoolsInitFailure | null;
 
   // App-level — all keyed by bundleId
   isConnected(bundleId: string): boolean;
@@ -150,17 +226,21 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   const flags = ["AccessibilityEnabled", "ApplicationAccessibilityEnabled"];
   await Promise.all(
     flags.map((flag) =>
-      execFileAsync("xcrun", [
-        "simctl",
-        "spawn",
-        udid,
-        "defaults",
-        "write",
-        "com.apple.Accessibility",
-        flag,
-        "-bool",
-        "true",
-      ])
+      execFileAsync(
+        "xcrun",
+        [
+          "simctl",
+          "spawn",
+          udid,
+          "defaults",
+          "write",
+          "com.apple.Accessibility",
+          flag,
+          "-bool",
+          "true",
+        ],
+        { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+      )
     )
   );
 }
@@ -175,35 +255,27 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
   const result = await execFileAsync(
     "xcrun",
     ["simctl", "spawn", udid, "launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
-    { encoding: "utf8" }
+    { encoding: "utf8", timeout: SIMCTL_SPAWN_TIMEOUT_MS }
   ).catch((e) => ({ stdout: (e as NodeJS.ErrnoException & { stdout?: string }).stdout ?? "" }));
 
   const existing = (result.stdout ?? "").trim();
   const updated = buildDyldInsertLibraries(existing, bootstrapPath);
 
   if (updated !== existing) {
-    await execFileAsync("xcrun", [
-      "simctl",
-      "spawn",
-      udid,
-      "launchctl",
-      "setenv",
-      "DYLD_INSERT_LIBRARIES",
-      updated,
-    ]);
+    await execFileAsync(
+      "xcrun",
+      ["simctl", "spawn", udid, "launchctl", "setenv", "DYLD_INSERT_LIBRARIES", updated],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    );
   }
 
   // Always re-set the socket path — deterministic value, cheap no-op if already correct,
   // ensures correctness after tool-server restarts.
-  await execFileAsync("xcrun", [
-    "simctl",
-    "spawn",
-    udid,
-    "launchctl",
-    "setenv",
-    "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
-    socketPath,
-  ]);
+  await execFileAsync(
+    "xcrun",
+    ["simctl", "spawn", udid, "launchctl", "setenv", "NATIVE_DEVTOOLS_IOS_CDP_SOCKET", socketPath],
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+  );
 
   // Ensure the accessibility runtime is enabled so that describeScreen works on iOS 26+.
   await ensureAccessibilityEnabled(udid);
@@ -257,13 +329,47 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     >();
     let nextRpcId = 1;
     let envSetup = false;
+    let initFailure: NativeDevtoolsInitFailure | null = null;
+    let inFlight: Promise<void> | null = null;
 
     const activatedBundleIds = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
-    const ensureEnvReady = async (): Promise<void> => {
-      await ensureEnv(udid, socketPath);
-      envSetup = true;
+    // Concurrency guard: a single ensureEnv attempt
+    // can exceed the watcher's 10s poll interval. Without
+    // collapsing overlapping callers onto one in-flight promise, each poll
+    // would spawn its own attempt and inflate `attempts`.
+    const noteInitFailure = (err: unknown): void => {
+      const lastError = err instanceof Error ? err.message : String(err);
+      const attempts = (initFailure?.attempts ?? 0) + 1;
+      const givenUp = attempts >= MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS;
+      initFailure = { attempts, lastError, givenUp };
+
+      const message = givenUp
+        ? `[native-devtools] giving up on ${udid} after ${attempts} attempts: ${lastError}\n`
+        : `[native-devtools] init attempt ${attempts}/${MAX_NATIVE_DEVTOOLS_INIT_ATTEMPTS} failed for ${udid}: ${lastError}\n`;
+      process.stderr.write(message);
+    };
+
+    const ensureEnvReady = (): Promise<void> => {
+      if (envSetup || initFailure?.givenUp) return Promise.resolve();
+      if (inFlight) return inFlight;
+
+      inFlight = Promise.resolve()
+        .then(() => ensureEnv(udid, socketPath))
+        .then(() => {
+          envSetup = true;
+          initFailure = null;
+        })
+        .catch((err) => {
+          noteInitFailure(err);
+          throw err;
+        })
+        .finally(() => {
+          inFlight = null;
+        });
+
+      return inFlight;
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
@@ -391,14 +497,17 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     server.listen(socketPath);
 
-    // ── ensureEnv — runs once at factory init ─────────────────────────────────
-    await ensureEnvReady();
+    // Tolerate ensureEnv failure: throwing here would leak `server` — the
+    // registry's `_teardown` skips dispose when `node.instance` is never set.
+    // The watcher retries on subsequent polls.
+    await ensureEnvReady().catch(() => {});
 
     // ── Public API ────────────────────────────────────────────────────────────
     const api: NativeDevtoolsApi = {
       isEnvSetup: () => envSetup,
       socketPath,
       ensureEnvReady,
+      getInitFailure: () => initFailure,
 
       isConnected: (bundleId) => connections.has(bundleId),
       isAppRunning,

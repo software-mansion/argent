@@ -1,5 +1,8 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
+import * as fsAsync from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
@@ -10,6 +13,7 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { axServiceBinaryPath } from "@argent/native-devtools-ios";
+import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +52,8 @@ export interface AXDescribeResponse {
 }
 
 export interface AXServiceApi {
+  /** True when AX prefs were written but SB hasn't picked them up yet (sim booted outside argent). */
+  degraded: boolean;
   describe(): Promise<AXDescribeResponse>;
   alertCheck(): Promise<boolean>;
   ping(): Promise<boolean>;
@@ -107,17 +113,100 @@ async function pingDaemon(socketPath: string): Promise<boolean> {
 }
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
-  await execFileAsync("xcrun", [
-    "simctl",
-    "spawn",
+  await execFileAsync(
+    "xcrun",
+    [
+      "simctl",
+      "spawn",
+      udid,
+      "defaults",
+      "write",
+      "com.apple.Accessibility",
+      "AutomationEnabled",
+      "-bool",
+      "true",
+    ],
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+  );
+}
+
+/**
+ * Check whether `IgnoreAXServerEntitlements` is active on this sim.
+ *
+ * iOS 26.5+: SB's AX server rejects unentitled MIG clients with
+ * kAXError -25215. The pref disables the check, but SB caches it at
+ * init — writing it post-boot has no effect until the next restart.
+ * The only effective path is the pre-boot plist write in boot-device.
+ *
+ * This read-only probe tells the caller whether the pre-boot write
+ * happened so describe can surface a degraded-quality hint when it didn't.
+ */
+export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
+  return execFileAsync(
+    "xcrun",
+    [
+      "simctl",
+      "spawn",
+      udid,
+      "defaults",
+      "read",
+      "com.apple.Accessibility",
+      "IgnoreAXServerEntitlements",
+    ],
+    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+  )
+    .then(({ stdout }) => stdout.trim() === "1")
+    .catch(() => false);
+}
+
+/**
+ * Host-side `com.apple.Accessibility` plist inside the sim's data container.
+ * Writeable while Shutdown; in-sim cfprefsd overwrites it once Booted.
+ */
+function accessibilityPlistPath(udid: string): string {
+  return path.join(
+    os.homedir(),
+    "Library/Developer/CoreSimulator/Devices",
     udid,
-    "defaults",
-    "write",
-    "com.apple.Accessibility",
+    "data/Library/Preferences/com.apple.Accessibility.plist"
+  );
+}
+
+/**
+ * Write the four AX prefs to the sim's host plist BEFORE `simctl boot` so SB
+ * caches them at AX-server init and never needs the disruptive kickstart
+ * (which kills the foreground app and dismisses in-flight system alerts).
+ *
+ * All four are required on a freshly-erased sim:
+ * - `IgnoreAXServerEntitlements` bypasses the iOS 26.5+ kAXErrorNotEntitled check.
+ * - `AutomationEnabled` opts the simctl-spawned ax-service in as an AX client.
+ * - `AccessibilityEnabled` + `ApplicationAccessibilityEnabled` gate the AT
+ *   subsystem bootstrap. Without them SB never spawns `AccessibilityUIServer`
+ *   and describe returns an empty ROOT even though the entitlement check passes
+ *   (reproduced on a wiped iPhone 17e: AccessibilityUIServer active count = 0
+ *   without these two; auto-spawns at boot with them).
+ *
+ * Caller must ensure the sim is Shutdown — in-sim cfprefsd would otherwise
+ * overwrite this file on flush.
+ */
+export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
+  const plistPath = accessibilityPlistPath(udid);
+  await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
+  const exists = await fsAsync
+    .access(plistPath)
+    .then(() => true)
+    .catch(() => false);
+  if (!exists) {
+    await execFileAsync("plutil", ["-create", "binary1", plistPath]);
+  }
+  for (const key of [
     "AutomationEnabled",
-    "-bool",
-    "true",
-  ]);
+    "IgnoreAXServerEntitlements",
+    "AccessibilityEnabled",
+    "ApplicationAccessibilityEnabled",
+  ]) {
+    await execFileAsync("plutil", ["-replace", key, "-bool", "true", plistPath]);
+  }
 }
 
 async function killExistingDaemon(socketPath: string): Promise<void> {
@@ -240,6 +329,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const events = new TypedEventEmitter<ServiceEvents>();
 
     await ensureAutomationEnabled(udid);
+    const entitlementBypassActive = await isEntitlementBypassActive(udid);
     await killExistingDaemon(socketPath);
 
     const proc = await spawnDaemon(udid, socketPath);
@@ -262,6 +352,8 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const api: AXServiceApi = {
+      degraded: !entitlementBypassActive,
+
       async describe(): Promise<AXDescribeResponse> {
         const result = (await query("describe")) as AXDescribeResponse & {
           error?: string;
