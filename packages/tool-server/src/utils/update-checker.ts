@@ -1,4 +1,7 @@
+import fs from "node:fs";
 import https from "node:https";
+import os from "node:os";
+import path from "node:path";
 import semver from "semver";
 import { version as currentVersion } from "../../package.json";
 import { detectMinReleaseAgeMs } from "./min-release-age";
@@ -9,6 +12,28 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 /** Set truthy to silence the update reminder entirely (no check, no note). */
 const DISABLE_ENV = "ARGENT_DISABLE_UPDATE_NOTIFICATIONS";
+
+function getSuppressionFilePath(): string {
+  return path.join(os.homedir(), ".argent", "update-suppression.json");
+}
+
+function loadSuppressUntil(): number {
+  try {
+    const raw = fs.readFileSync(getSuppressionFilePath(), "utf8");
+    const parsed = JSON.parse(raw) as { suppressUntil?: unknown };
+    const value = parsed.suppressUntil;
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  } catch {
+    // Missing file, parse error, or read error — treat as "no suppression".
+    return 0;
+  }
+}
+
+function persistSuppressUntil(value: number): void {
+  const filePath = getSuppressionFilePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ suppressUntil: value }));
+}
 
 export interface UpdateState {
   /** A newer stable version exists on npm (latest tag vs. current). */
@@ -46,7 +71,7 @@ let state: UpdateState = {
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
-let suppressUntil = 0;
+let suppressUntil = loadSuppressUntil();
 
 /** True when update reminders are disabled via the environment. */
 export function areUpdateNotificationsDisabled(): boolean {
@@ -64,9 +89,15 @@ export function isUpdateNoteSuppressed(): boolean {
   return Date.now() < suppressUntil;
 }
 
-/** Suppress update notifications for the given duration (milliseconds). */
+/**
+ * Suppress update notifications for the given duration (milliseconds).
+ * Persists across tool-server restarts. Throws if the suppression file
+ * cannot be written.
+ */
 export function suppressUpdateNote(durationMs: number): void {
-  suppressUntil = Date.now() + durationMs;
+  const next = Date.now() + durationMs;
+  persistSuppressUntil(next);
+  suppressUntil = next;
 }
 
 function isNewerVersion(latest: string, current: string): boolean {

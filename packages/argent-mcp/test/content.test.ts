@@ -1,5 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "../src/content.js";
+import {
+  toMcpContent,
+  screenshotDiffToMcpContent,
+  isScreenshotDiffResult,
+  flowRunToMcpContent,
+  type FlowExecuteResult,
+} from "../src/content.js";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -39,6 +48,69 @@ describe("toMcpContent", () => {
       data: Buffer.from(pngBytes).toString("base64"),
       mimeType: "image/png",
     });
+    expect(result[1]).toEqual({ type: "text", text: "Saved: /tmp/img.png" });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("returns text only and does not fetch when args.includeImageInContext is false", async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await toMcpContent(
+      {
+        url: "http://localhost/img.png",
+        path: "/tmp/img.png",
+      },
+      "image",
+      { udid: "ABC", includeImageInContext: false }
+    );
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(result).toEqual([{ type: "text", text: "Saved: /tmp/img.png" }]);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches the image when args.includeImageInContext is undefined or true", async () => {
+    const pngBytes = new Uint8Array(PNG_SIGNATURE);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => pngBytes.buffer,
+      })
+    );
+
+    const result = await toMcpContent(
+      { url: "http://localhost/img.png", path: "/tmp/img.png" },
+      "image",
+      { udid: "ABC" }
+    );
+
+    expect(result[0]?.type).toBe("image");
+    expect(result[1]).toEqual({ type: "text", text: "Saved: /tmp/img.png" });
+
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches the image when args.includeImageInContext is undefined or true", async () => {
+    const pngBytes = new Uint8Array(PNG_SIGNATURE);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => pngBytes.buffer,
+      })
+    );
+
+    const result = await toMcpContent(
+      { url: "http://localhost/img.png", path: "/tmp/img.png" },
+      "image",
+      { udid: "ABC" }
+    );
+
+    expect(result[0]?.type).toBe("image");
     expect(result[1]).toEqual({ type: "text", text: "Saved: /tmp/img.png" });
 
     vi.unstubAllGlobals();
@@ -91,6 +163,68 @@ describe("toMcpContent", () => {
     expect(result[0]?.type).toBe("text");
     expect(result.find((b) => b.type === "image")).toBeUndefined();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("screenshotDiffToMcpContent", () => {
+  it("returns a context image followed by the summary text", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-mcp-content-"));
+    const contextDiffPath = path.join(dir, "context.diff.png");
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    await fs.writeFile(contextDiffPath, pngBytes);
+
+    const summary = [
+      "Screenshot diff summary",
+      "",
+      "Overall:",
+      "- status: unchanged",
+      "- pixel_mismatch: 0% - no pixel change",
+    ].join("\n");
+
+    const content = await screenshotDiffToMcpContent({
+      summary,
+      diffPath: path.join(dir, "full.diff.png"),
+      contextDiffPath,
+    });
+
+    expect(content).toEqual([
+      {
+        type: "image",
+        data: pngBytes.toString("base64"),
+        mimeType: "image/png",
+      },
+      { type: "text", text: summary },
+    ]);
+  });
+
+  it("returns only the summary text when no context image is present", async () => {
+    const summary = [
+      "Screenshot diff summary",
+      "",
+      "Overall:",
+      "- status: dimension_mismatch",
+      "- dimension_mismatch: expected=2x1 actual=1x2",
+    ].join("\n");
+
+    const content = await screenshotDiffToMcpContent({ summary });
+
+    expect(content).toEqual([{ type: "text", text: summary }]);
+  });
+});
+
+// ── isScreenshotDiffResult ───────────────────────────────────────────
+
+describe("isScreenshotDiffResult", () => {
+  it("returns true for values carrying a string summary", () => {
+    expect(isScreenshotDiffResult({ summary: "hello" })).toBe(true);
+    expect(isScreenshotDiffResult({ summary: "hello", contextDiffPath: "/tmp/x.png" })).toBe(true);
+  });
+
+  it("returns false for non-object values or missing summary", () => {
+    expect(isScreenshotDiffResult(null)).toBe(false);
+    expect(isScreenshotDiffResult("string")).toBe(false);
+    expect(isScreenshotDiffResult({})).toBe(false);
+    expect(isScreenshotDiffResult({ summary: 123 })).toBe(false);
   });
 });
 
@@ -209,6 +343,32 @@ describe("flowRunToMcpContent", () => {
     expect(blocks[1]).toEqual({ type: "text", text: "[1] screenshot" });
     expect(blocks[2]?.type).toBe("text");
     expect(blocks.find((b) => b.type === "image")).toBeUndefined();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("suppresses image attach when step.args.includeImageInContext is false", async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+
+    const input: FlowExecuteResult = {
+      flow: "f",
+      steps: [
+        {
+          kind: "tool",
+          tool: "screenshot",
+          result: { url: "http://localhost/img.png", path: "/tmp/s.png" },
+          outputHint: "image",
+          args: { udid: "ABC", includeImageInContext: false, scale: 1.0 },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    // [0] header, [1] "screenshot", [2] "Saved: ...", [3] footer
+    expect(blocks[1]).toEqual({ type: "text", text: "[1] screenshot" });
+    expect(blocks[2]).toEqual({ type: "text", text: "Saved: /tmp/s.png" });
 
     vi.unstubAllGlobals();
   });

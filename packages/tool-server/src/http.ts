@@ -190,7 +190,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
         const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
-          suppressUpdateNote(AUTO_SUPPRESS_MS);
+          // Best-effort: a persistence failure here must not fail the user's tool call.
+          // Worst case: the note appears again on the next request.
+          try {
+            suppressUpdateNote(AUTO_SUPPRESS_MS);
+          } catch {
+            // ignore
+          }
         }
         res.json({
           data,

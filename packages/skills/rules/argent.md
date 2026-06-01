@@ -13,6 +13,8 @@ Use cases:
 - User mentions iOS simulator, Android emulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in a simulator/emulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
+- Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
+- Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS or Android)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
   </description>
@@ -92,7 +94,11 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change.
+
+SCREENSHOT DIFF & VISUAL REGRESSION
+Skill: `argent-screenshot-diff`
+When: Explicit visual regression, screenshot diff, compare screenshots, before/after visual comparison requests, or visible UI changes where stable pixel comparison would add useful evidence.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
@@ -116,7 +122,7 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 
 END-TO-END UI TESTING
 Skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, or validating visible UI changes or visual behavior after implementation.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`

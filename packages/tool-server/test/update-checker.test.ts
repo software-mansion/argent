@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import https from "node:https";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 
 // We need to mock https before importing the module under test.
@@ -355,5 +358,101 @@ describe("update-checker", () => {
 
     handle1.dispose();
     handle2.dispose();
+  });
+});
+
+describe("update-checker — suppression persistence", () => {
+  let tmpHome: string;
+  let originalHome: string | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    originalHome = process.env.HOME;
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "argent-suppress-test-"));
+    process.env.HOME = tmpHome;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const suppressionFile = () => path.join(tmpHome, ".argent", "update-suppression.json");
+
+  it("loads no suppression when the file is missing", async () => {
+    const { isUpdateNoteSuppressed } = await import("../src/utils/update-checker");
+    expect(isUpdateNoteSuppressed()).toBe(false);
+  });
+
+  it("loads no suppression when the file is malformed", async () => {
+    fs.mkdirSync(path.dirname(suppressionFile()), { recursive: true });
+    fs.writeFileSync(suppressionFile(), "not json");
+    const { isUpdateNoteSuppressed } = await import("../src/utils/update-checker");
+    expect(isUpdateNoteSuppressed()).toBe(false);
+  });
+
+  it("loads no suppression when suppressUntil is not a number", async () => {
+    fs.mkdirSync(path.dirname(suppressionFile()), { recursive: true });
+    fs.writeFileSync(suppressionFile(), JSON.stringify({ suppressUntil: "soon" }));
+    const { isUpdateNoteSuppressed } = await import("../src/utils/update-checker");
+    expect(isUpdateNoteSuppressed()).toBe(false);
+  });
+
+  it("honors a future suppressUntil read from disk", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    fs.mkdirSync(path.dirname(suppressionFile()), { recursive: true });
+    fs.writeFileSync(
+      suppressionFile(),
+      JSON.stringify({ suppressUntil: Date.now() + 60 * 60 * 1000 })
+    );
+    const { isUpdateNoteSuppressed } = await import("../src/utils/update-checker");
+    expect(isUpdateNoteSuppressed()).toBe(true);
+  });
+
+  it("treats a past suppressUntil as not suppressed", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    fs.mkdirSync(path.dirname(suppressionFile()), { recursive: true });
+    fs.writeFileSync(suppressionFile(), JSON.stringify({ suppressUntil: Date.now() - 1000 }));
+    const { isUpdateNoteSuppressed } = await import("../src/utils/update-checker");
+    expect(isUpdateNoteSuppressed()).toBe(false);
+  });
+
+  it("writes the suppression timestamp to disk on suppressUpdateNote", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const { suppressUpdateNote } = await import("../src/utils/update-checker");
+    suppressUpdateNote(60 * 60 * 1000);
+    const raw = fs.readFileSync(suppressionFile(), "utf8");
+    expect(JSON.parse(raw)).toEqual({ suppressUntil: Date.now() + 60 * 60 * 1000 });
+  });
+
+  it("creates the .argent directory if it does not exist", async () => {
+    expect(fs.existsSync(path.join(tmpHome, ".argent"))).toBe(false);
+    const { suppressUpdateNote } = await import("../src/utils/update-checker");
+    suppressUpdateNote(1000);
+    expect(fs.existsSync(suppressionFile())).toBe(true);
+  });
+
+  it("survives a module reload (simulates tool-server process restart)", async () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const first = await import("../src/utils/update-checker");
+    first.suppressUpdateNote(60 * 60 * 1000);
+    expect(first.isUpdateNoteSuppressed()).toBe(true);
+
+    // Simulate restart: clear the module cache and re-import. The new module
+    // must read the suppression back from disk.
+    vi.resetModules();
+    const second = await import("../src/utils/update-checker");
+    expect(second.isUpdateNoteSuppressed()).toBe(true);
+  });
+
+  it("throws when the suppression file cannot be written", async () => {
+    // Replace the .argent path with a regular file so mkdir/write fails.
+    fs.writeFileSync(path.join(tmpHome, ".argent"), "");
+    const { suppressUpdateNote } = await import("../src/utils/update-checker");
+    expect(() => suppressUpdateNote(1000)).toThrow();
   });
 });
