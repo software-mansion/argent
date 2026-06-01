@@ -1,3 +1,6 @@
+import { promises as fs } from "fs";
+import * as path from "path";
+import { traceProcessorQueriesDir } from "@argent/native-devtools-android";
 import { runTpInline } from "./run-tp";
 import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
 
@@ -64,64 +67,15 @@ export async function runBatchedHangFolds(
     valuesTuples.push(`(${hang.hangIndex},${hang.startNs},${hang.endNs})`);
   }
 
-  const sql = `
-DROP TABLE IF EXISTS argent_hang_windows;
-CREATE PERFETTO TABLE argent_hang_windows AS
-SELECT
-  column1 AS hang_index,
-  column2 AS start_ns,
-  column3 AS end_ns
-FROM (VALUES
-  ${valuesTuples.join(",\n  ")}
-);
-
-DROP VIEW IF EXISTS argent_hang_state;
-CREATE PERFETTO VIEW argent_hang_state AS
-SELECT
-  hw.hang_index                     AS hang_index,
-  'state'                           AS row_kind,
-  ts.state                          AS state_v,
-  ts.blocked_function               AS blocked_function_v,
-  CAST(SUM(ts.dur) AS TEXT)         AS total_dur_ns_v,
-  CAST(COUNT(*)    AS TEXT)         AS occurrences_v,
-  NULL                              AS gc_reason_v,
-  NULL                              AS gc_ts_ns_v,
-  NULL                              AS gc_dur_ns_v
-FROM argent_hang_windows hw
-JOIN thread_state ts ON ts.ts BETWEEN hw.start_ns AND hw.end_ns
-JOIN thread t USING (utid)
-JOIN process p USING (upid)
-WHERE p.name = '${opts.target}'
-  AND t.is_main_thread
-GROUP BY hw.hang_index, ts.state, ts.blocked_function;
-
-DROP VIEW IF EXISTS argent_hang_gc;
-CREATE PERFETTO VIEW argent_hang_gc AS
-SELECT
-  hw.hang_index                     AS hang_index,
-  'gc'                              AS row_kind,
-  NULL                              AS state_v,
-  NULL                              AS blocked_function_v,
-  NULL                              AS total_dur_ns_v,
-  NULL                              AS occurrences_v,
-  s.name                            AS gc_reason_v,
-  CAST(s.ts  AS TEXT)               AS gc_ts_ns_v,
-  CAST(s.dur AS TEXT)               AS gc_dur_ns_v
-FROM argent_hang_windows hw
-JOIN slice s
-  ON s.ts < hw.end_ns AND s.ts + s.dur > hw.start_ns
-JOIN thread_track tt ON s.track_id = tt.id
-JOIN thread t USING (utid)
-JOIN process p USING (upid)
-WHERE p.name = '${opts.target}'
-  AND t.is_main_thread
-  AND s.name GLOB 'GC*';
-
-SELECT * FROM argent_hang_state
-UNION ALL
-SELECT * FROM argent_hang_gc
-ORDER BY hang_index, row_kind;
-`;
+  // The SQL template is the single source of truth in queries/. We only build
+  // the validated VALUES tuples + the (already-validated) target here and
+  // substitute them into the loaded template — no SQL string literals live in
+  // this file. Tuples are bare digits/parens; target is identifier-shaped.
+  const templatePath = path.join(traceProcessorQueriesDir(), "hang-folds-batched.sql");
+  const template = await fs.readFile(templatePath, "utf8");
+  const sql = template
+    .replaceAll("HANG_WINDOWS_VALUES", valuesTuples.join(",\n  "))
+    .replaceAll("TARGET_PROCESS", opts.target);
 
   interface BatchRow {
     hang_index: number;

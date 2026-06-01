@@ -13,10 +13,12 @@ const BURST_GAP_MS = 500;
  * are grouped here.
  *
  * Android path: PerfettoSQL already returns one row per (thread_name,
- * leaf_function) with sample_count + ts_array. The Android pipeline expands
- * one SQL row into one AggregatorInputRow whose weightNs is
- * sample_count × sampling_period_ns and whose timestampsNs is the parsed
- * GROUP_CONCAT(ts) array.
+ * leaf_function) with sample_count + SQL-computed burst windows. The Android
+ * pipeline expands one SQL row into one AggregatorInputRow whose weightNs is
+ * sample_count × sampling_period_ns and whose burst/first/last/count are
+ * precomputed (so it passes an empty `timestampsNs` and the optional
+ * `precomputed*` fields below). When those are present the aggregator skips
+ * the timestamp-derived burst/first/last/count block entirely.
  */
 export interface AggregatorInputRow {
   /** Pre-picked dominant function. Caller is responsible for selecting it. */
@@ -29,6 +31,18 @@ export interface AggregatorInputRow {
   timestampsNs: number[];
   /** App-level call chains observed in this group, with sample counts. */
   callChains: { chain: string[]; count: number }[];
+  /**
+   * Precomputed burst windows (Android, SQL-side). When set, the aggregator
+   * uses these instead of deriving bursts from `timestampsNs`. Trace-relative
+   * ms — the caller has already applied traceStartMs.
+   */
+  precomputedBursts?: { startMs: number; endMs: number; sampleCount: number }[];
+  /** Precomputed first-sample time (trace-relative ms). Pairs with precomputedBursts. */
+  firstMs?: number;
+  /** Precomputed last-sample time (trace-relative ms). Pairs with precomputedBursts. */
+  lastMs?: number;
+  /** Precomputed sample count. Pairs with precomputedBursts. */
+  sampleCount?: number;
 }
 
 export interface AggregatorOptions {
@@ -56,6 +70,11 @@ export function aggregateCpuHotspots(
     timestamps: number[];
     chainCounts: Map<string, { chain: string[]; count: number }>;
     thread: string;
+    /** True once any contributing row carried precomputed bursts (Android). */
+    precomputed: boolean;
+    precomputedBursts: { startMs: number; endMs: number; sampleCount: number }[];
+    firstMs: number;
+    lastMs: number;
   }
 
   const groups = new Map<string, Acc>();
@@ -63,11 +82,20 @@ export function aggregateCpuHotspots(
 
   for (const row of rows) {
     const key = `${row.dominantFunction}|||${row.thread}`;
+    const isPre = row.precomputedBursts !== undefined;
     const existing = groups.get(key);
     if (existing) {
-      existing.sampleCount += row.timestampsNs.length;
       existing.totalWeightNs += row.weightNs;
-      existing.timestamps.push(...row.timestampsNs);
+      if (isPre) {
+        existing.precomputed = true;
+        existing.sampleCount += row.sampleCount ?? 0;
+        existing.precomputedBursts.push(...(row.precomputedBursts ?? []));
+        if (row.firstMs !== undefined) existing.firstMs = Math.min(existing.firstMs, row.firstMs);
+        if (row.lastMs !== undefined) existing.lastMs = Math.max(existing.lastMs, row.lastMs);
+      } else {
+        existing.sampleCount += row.timestampsNs.length;
+        existing.timestamps.push(...row.timestampsNs);
+      }
       for (const { chain, count } of row.callChains) {
         const chainKey = chain.join(" > ");
         const cc = existing.chainCounts.get(chainKey);
@@ -83,11 +111,15 @@ export function aggregateCpuHotspots(
         chainCounts.set(chain.join(" > "), { chain, count });
       }
       groups.set(key, {
-        sampleCount: row.timestampsNs.length,
+        sampleCount: isPre ? (row.sampleCount ?? 0) : row.timestampsNs.length,
         totalWeightNs: row.weightNs,
-        timestamps: [...row.timestampsNs],
+        timestamps: isPre ? [] : [...row.timestampsNs],
         chainCounts,
         thread: row.thread,
+        precomputed: isPre,
+        precomputedBursts: isPre ? [...(row.precomputedBursts ?? [])] : [],
+        firstMs: isPre ? (row.firstMs ?? 0) : 0,
+        lastMs: isPre ? (row.lastMs ?? 0) : 0,
       });
     }
     totalWeightNs += row.weightNs;
@@ -111,36 +143,49 @@ export function aggregateCpuHotspots(
     const duringHang =
       hangSampleTimestamps.size > 0 && acc.timestamps.some((ts) => hangSampleTimestamps.has(ts));
 
-    const sortedTs = [...acc.timestamps].sort((a, b) => a - b);
-    const firstMs = sortedTs.length > 0 ? Math.round(sortedTs[0]! / 1_000_000) : 0;
-    const lastMs = sortedTs.length > 0 ? Math.round(sortedTs[sortedTs.length - 1]! / 1_000_000) : 0;
+    let firstMs: number;
+    let lastMs: number;
+    let burstWindows: { startMs: number; endMs: number; sampleCount: number }[];
 
-    const burstWindows: { startMs: number; endMs: number; sampleCount: number }[] = [];
-    if (sortedTs.length > 0) {
-      let burstStartNs = sortedTs[0]!;
-      let burstEndNs = sortedTs[0]!;
-      let burstCount = 1;
-      for (let i = 1; i < sortedTs.length; i++) {
-        const gapMs = (sortedTs[i]! - burstEndNs) / 1_000_000;
-        if (gapMs > BURST_GAP_MS) {
-          burstWindows.push({
-            startMs: Math.round(burstStartNs / 1_000_000),
-            endMs: Math.round(burstEndNs / 1_000_000),
-            sampleCount: burstCount,
-          });
-          burstStartNs = sortedTs[i]!;
-          burstEndNs = sortedTs[i]!;
-          burstCount = 1;
-        } else {
-          burstEndNs = sortedTs[i]!;
-          burstCount++;
+    if (acc.precomputed) {
+      // Android: bursts/first/last were computed SQL-side. Sort by start so
+      // the display order matches the timestamp-derived path.
+      firstMs = acc.firstMs;
+      lastMs = acc.lastMs;
+      burstWindows = [...acc.precomputedBursts].sort((a, b) => a.startMs - b.startMs);
+    } else {
+      // iOS: derive bursts from the raw sample timestamps.
+      const sortedTs = [...acc.timestamps].sort((a, b) => a - b);
+      firstMs = sortedTs.length > 0 ? Math.round(sortedTs[0]! / 1_000_000) : 0;
+      lastMs = sortedTs.length > 0 ? Math.round(sortedTs[sortedTs.length - 1]! / 1_000_000) : 0;
+
+      burstWindows = [];
+      if (sortedTs.length > 0) {
+        let burstStartNs = sortedTs[0]!;
+        let burstEndNs = sortedTs[0]!;
+        let burstCount = 1;
+        for (let i = 1; i < sortedTs.length; i++) {
+          const gapMs = (sortedTs[i]! - burstEndNs) / 1_000_000;
+          if (gapMs > BURST_GAP_MS) {
+            burstWindows.push({
+              startMs: Math.round(burstStartNs / 1_000_000),
+              endMs: Math.round(burstEndNs / 1_000_000),
+              sampleCount: burstCount,
+            });
+            burstStartNs = sortedTs[i]!;
+            burstEndNs = sortedTs[i]!;
+            burstCount = 1;
+          } else {
+            burstEndNs = sortedTs[i]!;
+            burstCount++;
+          }
         }
+        burstWindows.push({
+          startMs: Math.round(burstStartNs / 1_000_000),
+          endMs: Math.round(burstEndNs / 1_000_000),
+          sampleCount: burstCount,
+        });
       }
-      burstWindows.push({
-        startMs: Math.round(burstStartNs / 1_000_000),
-        endMs: Math.round(burstEndNs / 1_000_000),
-        sampleCount: burstCount,
-      });
     }
 
     results.push({

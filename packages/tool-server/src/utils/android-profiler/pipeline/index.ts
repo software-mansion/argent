@@ -386,18 +386,27 @@ function cpuRowsToAggregatorRows(
   rows: AndroidCpuHotspotRow[],
   traceStartNs: number
 ): AggregatorInputRow[] {
+  // Burst start/end ms arrive in the trace's NATIVE (monotonic) domain; the
+  // rest of the pipeline is 0-anchored, so subtract the trace start (in ms).
+  const traceStartMs = Math.round(traceStartNs / 1_000_000);
   const out: AggregatorInputRow[] = [];
   for (const row of rows) {
     const dominant = row.leaf_function;
     if (!dominant) continue;
     const thread = normaliseAndroidThread(row.thread_name, row.is_main_thread === 1);
-    const timestamps = parseTimestampArray(row.ts_array).map((ts) => ts - traceStartNs);
     out.push({
       dominantFunction: dominant,
       thread,
       weightNs: row.sample_count * SAMPLE_PERIOD_NS,
-      timestampsNs: timestamps,
+      // Android ships SQL-precomputed bursts; no raw timestamps cross the wire.
+      // The empty array keeps the aggregator's `duringHang` check false (the
+      // Android path never passes hangSampleTimestamps anyway).
+      timestampsNs: [],
       callChains: [{ chain: [dominant], count: row.sample_count }],
+      precomputedBursts: parseBurstWindows(row.burst_windows, traceStartMs),
+      firstMs: Math.round((row.first_ts_ns - traceStartNs) / 1_000_000),
+      lastMs: Math.round((row.last_ts_ns - traceStartNs) / 1_000_000),
+      sampleCount: row.sample_count,
     });
   }
   return out;
@@ -448,12 +457,28 @@ function normaliseAndroidThread(threadName: string | null, isMainThread: boolean
   return threadName;
 }
 
-function parseTimestampArray(s: string | null): number[] {
+/**
+ * Parse the SQL-side `burst_windows` column — comma-separated
+ * `start_ms:end_ms:count` triples in NATIVE (monotonic) ms — into
+ * trace-relative burst windows (subtracting traceStartMs). Malformed triples
+ * are skipped defensively.
+ */
+function parseBurstWindows(
+  s: string | null,
+  traceStartMs: number
+): { startMs: number; endMs: number; sampleCount: number }[] {
   if (!s) return [];
-  const out: number[] = [];
+  const out: { startMs: number; endMs: number; sampleCount: number }[] = [];
   for (const part of s.split(",")) {
-    const n = parseInt(part.trim(), 10);
-    if (Number.isFinite(n)) out.push(n);
+    const fields = part.split(":");
+    if (fields.length !== 3) continue;
+    const startMs = Number(fields[0]);
+    const endMs = Number(fields[1]);
+    const sampleCount = Number(fields[2]);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || !Number.isFinite(sampleCount)) {
+      continue;
+    }
+    out.push({ startMs: startMs - traceStartMs, endMs: endMs - traceStartMs, sampleCount });
   }
   return out;
 }

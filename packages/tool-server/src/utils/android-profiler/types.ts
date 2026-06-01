@@ -10,12 +10,16 @@ export interface AndroidCpuHotspotRow {
   thread_name: string;
   is_main_thread: 0 | 1 | null;
   leaf_function: string | null;
-  leaf_mapping: string | null;
   sample_count: number;
   first_ts_ns: number;
   last_ts_ns: number;
-  /** GROUP_CONCAT'd timestamps in nanoseconds. */
-  ts_array: string;
+  /**
+   * Burst windows computed SQL-side: comma-separated `start_ms:end_ms:count`
+   * triples, where start_ms/end_ms are NATIVE (CLOCK_MONOTONIC) ms. The
+   * pipeline subtracts traceStartMs to make them trace-relative. Replaces the
+   * old per-sample `ts_array`.
+   */
+  burst_windows: string | null;
   total_samples: number;
 }
 

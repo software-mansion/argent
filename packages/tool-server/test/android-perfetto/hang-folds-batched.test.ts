@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@argent/native-devtools-android", () => ({
-  traceProcessorShellPath: () => "/fake/tp",
-  traceProcessorShellAvailable: () => true,
-}));
+vi.mock("@argent/native-devtools-android", () => {
+  const path = require("node:path");
+  return {
+    traceProcessorShellPath: () => "/fake/tp",
+    traceProcessorShellAvailable: () => true,
+    // Real queries dir — the batched module now loads the SQL from
+    // queries/hang-folds-batched.sql and substitutes tokens into it, rather
+    // than holding a SQL string literal. We assert against the rendered output.
+    traceProcessorQueriesDir: () =>
+      path.resolve(__dirname, "../../../native-devtools-android/queries"),
+  };
+});
 
 // Capture every SQL string the batched module passes to runTpInline so we
 // can assert on the script's shape without standing up a real subprocess.
@@ -61,6 +69,17 @@ describe("runBatchedHangFolds", () => {
     // Two VIEWs feed the final UNION ALL — state breakdown + GC overlap
     expect(sql).toContain("CREATE PERFETTO VIEW argent_hang_state");
     expect(sql).toContain("CREATE PERFETTO VIEW argent_hang_gc");
+    // TARGET_PROCESS token was substituted with the validated target.
+    expect(sql).toContain("p.name = 'com.example.app'");
+    // The HANG_WINDOWS_VALUES placeholder must be fully replaced.
+    expect(sql).not.toContain("HANG_WINDOWS_VALUES");
+    expect(sql).not.toContain("TARGET_PROCESS");
+    // Point 4: state durations are clipped to the hang window (overlap test +
+    // MIN(end,end)-MAX(start,start)), not a raw SUM(ts.dur) over BETWEEN.
+    expect(sql).toContain(
+      "SUM(MIN(ts.ts + ts.dur, hw.end_ns) - MAX(ts.ts, hw.start_ns))"
+    );
+    expect(sql).toContain("ts.ts < hw.end_ns AND ts.ts + ts.dur > hw.start_ns");
   });
 
   it("scales the SQL linearly with hang count but stays in one invocation (regression for the 1013-hang case)", async () => {

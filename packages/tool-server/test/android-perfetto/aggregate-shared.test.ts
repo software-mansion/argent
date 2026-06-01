@@ -100,6 +100,39 @@ describe("aggregateCpuHotspots (shared)", () => {
     expect(out[0]!.burstWindows[1]!.sampleCount).toBe(2);
   });
 
+  it("uses SQL-precomputed bursts/first/last/count when present (Android path)", () => {
+    const rows: AggregatorInputRow[] = [
+      {
+        dominantFunction: "doFrame",
+        thread: "Main Thread",
+        weightNs: 100_000_000,
+        // Android passes an EMPTY timestamp array — the burst/first/last/count
+        // are precomputed SQL-side and must be used verbatim (not re-derived).
+        timestampsNs: [],
+        callChains: [{ chain: ["doFrame"], count: 10 }],
+        precomputedBursts: [
+          // Deliberately out of order — the aggregator must sort by start.
+          { startMs: 900, endMs: 1100, sampleCount: 2 },
+          { startMs: 0, endMs: 200, sampleCount: 8 },
+        ],
+        firstMs: 0,
+        lastMs: 1100,
+        sampleCount: 10,
+      },
+    ];
+    const out = aggregateCpuHotspots(rows, { platform: "android" });
+    expect(out).toHaveLength(1);
+    const hot = out[0]!;
+    expect(hot.sampleCount).toBe(10);
+    expect(hot.timeRangeMs).toEqual({ first: 0, last: 1100 });
+    expect(hot.burstWindows).toEqual([
+      { startMs: 0, endMs: 200, sampleCount: 8 },
+      { startMs: 900, endMs: 1100, sampleCount: 2 },
+    ]);
+    // No timestamps + empty hang set → never flagged as during-hang.
+    expect(hot.duringHang).toBe(false);
+  });
+
   it("flags duringHang when any sample timestamp matches the hang set", () => {
     const rows: AggregatorInputRow[] = [
       {

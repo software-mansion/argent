@@ -10,10 +10,17 @@ const queryResponses: Array<{ name: string; rows: unknown[] }> = [];
 const inlineCalls: Array<{ sql: string }> = [];
 let inlineResponse: unknown[] = [];
 
-vi.mock("@argent/native-devtools-android", () => ({
-  traceProcessorShellPath: () => "/fake/tp",
-  traceProcessorShellAvailable: () => true,
-}));
+vi.mock("@argent/native-devtools-android", () => {
+  const path = require("node:path");
+  return {
+    traceProcessorShellPath: () => "/fake/tp",
+    traceProcessorShellAvailable: () => true,
+    // Real queries dir — runBatchedHangFolds loads hang-folds-batched.sql from
+    // here and substitutes the windows/target before calling runTpInline.
+    traceProcessorQueriesDir: () =>
+      path.resolve(__dirname, "../../../native-devtools-android/queries"),
+  };
+});
 vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({
   runTpQuery: vi.fn(async (opts: { query: string; substitutions: Record<string, string> }) => {
     const next = queryResponses.shift();
