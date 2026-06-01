@@ -11,17 +11,26 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const DISABLE_ENV = "ARGENT_DISABLE_UPDATE_NOTIFICATIONS";
 
 export interface UpdateState {
-  /** Whether a newer stable version exists on npm (pure version comparison). */
+  /** Whether a newer stable version exists on npm (latest tag vs. current). */
   updateAvailable: boolean;
   /**
-   * Whether that newer version is actually installable *now* — i.e. it is newer
-   * AND it has aged past the machine's minimum-release-age policy. The update
-   * reminder is gated on this, not on `updateAvailable`, so users with a
-   * package-age security policy are not nagged about a version they cannot yet
-   * install. Equals `updateAvailable` when no policy is in effect.
+   * Whether there is a newer version that is actually installable *now* — i.e.
+   * a newer stable release that has also aged past the machine's
+   * minimum-release-age policy. The update reminder is gated on this, not on
+   * `updateAvailable`, so users with a package-age security policy are not
+   * nagged about a version they cannot yet install. Equals `updateAvailable`
+   * when no policy is in effect.
    */
   updateInstallable: boolean;
-  /** The latest version on npm, or `null` if not yet checked / check failed. */
+  /**
+   * The version the reminder advertises: the newest stable release that is
+   * newer than current AND clears the policy — i.e. what the package manager
+   * would resolve to. This is NOT necessarily `latestVersion`: under a policy
+   * the latest publish may be held back while an older-but-eligible version is
+   * installable. `null` when nothing is installable.
+   */
+  installableVersion: string | null;
+  /** The latest version on npm (the `latest` dist-tag), or `null` if unknown. */
   latestVersion: string | null;
   /** ISO 8601 publish time of `latestVersion`, or `null` if unknown. */
   latestPublishedAt: string | null;
@@ -34,6 +43,7 @@ export interface UpdateState {
 let state: UpdateState = {
   updateAvailable: false,
   updateInstallable: false,
+  installableVersion: null,
   latestVersion: null,
   latestPublishedAt: null,
   minReleaseAgeMs: 0,
@@ -88,24 +98,67 @@ function isOldEnough(publishedAt: string | null, minReleaseAgeMs: number): boole
   return Date.now() - published >= minReleaseAgeMs;
 }
 
-interface LatestRelease {
+interface VersionAt {
   version: string;
   /** ISO 8601 publish time, or `null` if the registry omitted it. */
   publishedAt: string | null;
 }
 
 /**
- * Fetches the latest release of the package from the npm registry.
+ * Pick the version the user could install *right now* — mirroring how a package
+ * manager resolves under a minimum-release-age policy: the newest stable
+ * release that is newer than `current` AND has aged past the gate.
+ *
+ * With no policy this is simply the latest tag (if newer). Under a policy we
+ * scan every published version, because the latest publish may be held back
+ * while an older-but-eligible version (e.g. the previous minor) is installable.
+ * Returns `null` when nothing newer is installable.
+ */
+function pickInstallableTarget(
+  latest: VersionAt,
+  times: Record<string, string>,
+  current: string,
+  minReleaseAgeMs: number
+): VersionAt | null {
+  // No policy → the resolver installs the latest tag directly; publish times
+  // are irrelevant (and may be absent), so don't require them.
+  if (minReleaseAgeMs <= 0) {
+    return isNewerVersion(latest.version, current) ? latest : null;
+  }
+
+  let best: VersionAt | null = null;
+  for (const [version, publishedAt] of Object.entries(times)) {
+    // `times` also carries non-version keys ("created"/"modified") — invalid
+    // semver, so they fall out here along with prereleases.
+    if (!semver.valid(version) || semver.prerelease(version)) continue;
+    if (!semver.gt(version, current)) continue;
+    if (!isOldEnough(publishedAt, minReleaseAgeMs)) continue;
+    if (best === null || semver.gt(version, best.version)) {
+      best = { version, publishedAt };
+    }
+  }
+  return best;
+}
+
+interface RegistryInfo {
+  /** The `latest` dist-tag and its publish time. */
+  latest: VersionAt;
+  /** Map of version → ISO 8601 publish time (also includes created/modified). */
+  times: Record<string, string>;
+}
+
+/**
+ * Fetches the package's registry document from npm.
  *
  * We request the full packument (not the `/latest` manifest) because only the
  * packument carries the `time` map of version → publish timestamp, which the
- * minimum-release-age gate needs. Returns `null` on any failure — update checks
- * must never crash the server.
+ * minimum-release-age gate needs to find the newest *installable* version.
+ * Returns `null` on any failure — update checks must never crash the server.
  */
-async function fetchLatestRelease(): Promise<LatestRelease | null> {
+async function fetchRegistryInfo(): Promise<RegistryInfo | null> {
   return new Promise((resolve) => {
     let resolved = false;
-    const safeResolve = (value: LatestRelease | null) => {
+    const safeResolve = (value: RegistryInfo | null) => {
       if (!resolved) {
         resolved = true;
         resolve(value);
@@ -132,12 +185,16 @@ async function fetchLatestRelease(): Promise<LatestRelease | null> {
             "dist-tags"?: { latest?: string };
             "time"?: Record<string, string>;
           };
-          const latest = json["dist-tags"]?.latest;
-          if (!latest) {
+          const latestVersion = json["dist-tags"]?.latest;
+          if (!latestVersion) {
             safeResolve(null);
             return;
           }
-          safeResolve({ version: latest, publishedAt: json.time?.[latest] ?? null });
+          const times = json.time ?? {};
+          safeResolve({
+            latest: { version: latestVersion, publishedAt: times[latestVersion] ?? null },
+            times,
+          });
         } catch {
           safeResolve(null);
         }
@@ -155,30 +212,32 @@ async function fetchLatestRelease(): Promise<LatestRelease | null> {
 
 /** Run a single check and update the runtime state. */
 async function check(): Promise<void> {
-  const release = await fetchLatestRelease();
-  if (release === null) return; // network issue — keep previous state
+  const info = await fetchRegistryInfo();
+  if (info === null) return; // network issue — keep previous state
 
   const minReleaseAgeMs = await detectMinReleaseAgeMs();
-  const updateAvailable = isNewerVersion(release.version, currentVersion);
-  const updateInstallable = updateAvailable && isOldEnough(release.publishedAt, minReleaseAgeMs);
+  const updateAvailable = isNewerVersion(info.latest.version, currentVersion);
+  const target = pickInstallableTarget(info.latest, info.times, currentVersion, minReleaseAgeMs);
 
   state = {
     updateAvailable,
-    updateInstallable,
-    latestVersion: release.version,
-    latestPublishedAt: release.publishedAt,
+    updateInstallable: target !== null,
+    installableVersion: target?.version ?? null,
+    latestVersion: info.latest.version,
+    latestPublishedAt: info.latest.publishedAt,
     minReleaseAgeMs,
     currentVersion,
   };
 
-  if (updateInstallable) {
-    process.stderr.write(`[argent] Update available: ${currentVersion} -> ${release.version}\n`);
+  if (target !== null) {
+    process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
   } else if (updateAvailable && minReleaseAgeMs > 0) {
-    // Available but held back by the machine's package-age policy — log once so
-    // the silence is explainable, but do not surface a reminder to the agent.
+    // A newer version exists but none is installable yet under the machine's
+    // package-age policy — log once so the silence is explainable, but do not
+    // surface a reminder to the agent.
     process.stderr.write(
-      `[argent] Update ${currentVersion} -> ${release.version} is held by a minimum-release-age policy; ` +
-        `reminder deferred until it ages past the gate.\n`
+      `[argent] Update ${currentVersion} -> ${info.latest.version} is held by a minimum-release-age policy; ` +
+        `reminder deferred until an eligible version ages past the gate.\n`
     );
   }
 }

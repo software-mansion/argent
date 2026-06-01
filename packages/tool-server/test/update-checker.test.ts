@@ -28,6 +28,11 @@ function packument(version: string, publishedAt?: string): string {
   return JSON.stringify({ "dist-tags": { latest: version }, time });
 }
 
+/** Build a packument with an explicit `latest` tag and a version → publish-time map. */
+function packumentMulti(latest: string, times: Record<string, string>): string {
+  return JSON.stringify({ "dist-tags": { latest }, "time": times });
+}
+
 function createMockResponse(statusCode: number, body: string) {
   const res = new EventEmitter() as EventEmitter & {
     statusCode: number;
@@ -93,6 +98,7 @@ describe("update-checker", () => {
     const state = getUpdateState();
     expect(state.updateAvailable).toBe(true);
     expect(state.updateInstallable).toBe(true);
+    expect(state.installableVersion).toBe("99.0.0");
     expect(state.latestVersion).toBe("99.0.0");
     expect(state.latestPublishedAt).toBe("2020-01-01T00:00:00Z");
 
@@ -216,6 +222,7 @@ describe("update-checker", () => {
     const state = getUpdateState();
     expect(state.updateAvailable).toBe(true);
     expect(state.updateInstallable).toBe(false);
+    expect(state.installableVersion).toBeNull();
     expect(state.minReleaseAgeMs).toBe(7 * DAY_MS);
 
     handle.dispose();
@@ -233,6 +240,27 @@ describe("update-checker", () => {
     const state = getUpdateState();
     expect(state.updateAvailable).toBe(true);
     expect(state.updateInstallable).toBe(true);
+    expect(state.installableVersion).toBe("99.0.0");
+
+    handle.dispose();
+  });
+
+  it("recommends the newest version that clears the policy when the latest publish is held", async () => {
+    mockDetectMinReleaseAgeMs.mockResolvedValue(7 * DAY_MS); // 7-day policy
+    const oneDayAgo = new Date(NOW.getTime() - 1 * DAY_MS).toISOString();
+    const tenDaysAgo = new Date(NOW.getTime() - 10 * DAY_MS).toISOString();
+    // latest tag 99.0.0 is too new (held); 98.0.0 has aged past the gate. The
+    // resolver would install 98.0.0, so that is what we should advertise.
+    mockResponseBody(200, packumentMulti("99.0.0", { "98.0.0": tenDaysAgo, "99.0.0": oneDayAgo }));
+
+    const handle = startUpdateChecker();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const state = getUpdateState();
+    expect(state.updateAvailable).toBe(true); // 99.0.0 > current exists
+    expect(state.latestVersion).toBe("99.0.0");
+    expect(state.updateInstallable).toBe(true);
+    expect(state.installableVersion).toBe("98.0.0"); // newest eligible, not the latest tag
 
     handle.dispose();
   });
@@ -247,6 +275,7 @@ describe("update-checker", () => {
     const state = getUpdateState();
     expect(state.updateAvailable).toBe(true);
     expect(state.updateInstallable).toBe(false);
+    expect(state.installableVersion).toBeNull();
     expect(state.latestPublishedAt).toBeNull();
 
     handle.dispose();

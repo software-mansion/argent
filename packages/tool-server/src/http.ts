@@ -185,10 +185,12 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
-        const { updateInstallable, currentVersion, latestVersion } = getUpdateState();
+        const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
         // Gate on `updateInstallable`, not `updateAvailable`: a newer version
         // that is still held back by the machine's minimum-release-age policy
-        // cannot be installed yet, so reminding about it is pure noise.
+        // cannot be installed yet, so reminding about it is pure noise. The note
+        // advertises `installableVersion` (what the resolver would install),
+        // which under a policy may be older than the latest publish.
         const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
           suppressUpdateNote(AUTO_SUPPRESS_MS);
@@ -196,7 +198,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         res.json({
           data,
           ...(shouldNotify
-            ? { note: buildUpdateNote(currentVersion, latestVersion ?? "unknown") }
+            ? { note: buildUpdateNote(currentVersion, installableVersion ?? "unknown") }
             : {}),
         });
       } catch (err: unknown) {

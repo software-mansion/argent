@@ -23,6 +23,7 @@ function stateWithUpdate(latestVersion = "99.0.0") {
   return {
     updateAvailable: true,
     updateInstallable: true,
+    installableVersion: latestVersion,
     currentVersion: "1.0.0",
     latestVersion,
     latestPublishedAt: null,
@@ -34,6 +35,7 @@ function stateUpToDate() {
   return {
     updateAvailable: false,
     updateInstallable: false,
+    installableVersion: null,
     currentVersion: "1.0.0",
     latestVersion: "1.0.0",
     latestPublishedAt: null,
