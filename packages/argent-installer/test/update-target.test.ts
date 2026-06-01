@@ -1,125 +1,73 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import https from "node:https";
-import { EventEmitter } from "node:events";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("node:https");
+// update-target is a thin wrapper over @argent/update-core (whose registry
+// fetch, release-age probe, and target picking are unit-tested in that package).
+// Here we only assert the wiring: the right packument URL, the right PM probe,
+// and the field mapping into ResolvedUpdateTarget.
+const { mockFetchRegistryInfo, mockDetectMinReleaseAgeMsForPm, mockPickInstallableTarget } =
+  vi.hoisted(() => ({
+    mockFetchRegistryInfo: vi.fn(),
+    mockDetectMinReleaseAgeMsForPm: vi.fn(),
+    mockPickInstallableTarget: vi.fn(),
+  }));
 
-const { mockExec } = vi.hoisted(() => ({ mockExec: vi.fn() }));
-vi.mock("node:child_process", () => ({ exec: mockExec }));
+vi.mock("@argent/update-core", () => ({
+  fetchRegistryInfo: mockFetchRegistryInfo,
+  detectMinReleaseAgeMsForPm: mockDetectMinReleaseAgeMsForPm,
+  pickInstallableTarget: mockPickInstallableTarget,
+}));
 
-import {
-  detectMinReleaseAgeMs,
-  parseBeforeAgeMs,
-  parseYarnAgeGateMs,
-  pickInstallableTarget,
-  resolveInstallableUpdateTarget,
-} from "../src/update-target.js";
+import { resolveInstallableUpdateTarget } from "../src/update-target.js";
+import { NPM_REGISTRY, PACKAGE_NAME } from "../src/constants.js";
 
-const NOW = new Date("2026-06-01T00:00:00Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function createMockResponse(statusCode: number, body: string) {
-  const res = new EventEmitter() as EventEmitter & {
-    statusCode: number;
-    setEncoding: ReturnType<typeof vi.fn>;
-    resume: ReturnType<typeof vi.fn>;
-  };
-  res.statusCode = statusCode;
-  res.setEncoding = vi.fn();
-  res.resume = vi.fn();
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
-  process.nextTick(() => {
-    res.emit("data", body);
-    res.emit("end");
-  });
+describe("resolveInstallableUpdateTarget", () => {
+  it("fetches the packument URL, applies the PM policy, and maps the result", async () => {
+    mockFetchRegistryInfo.mockResolvedValue({
+      latest: { version: "99.0.0", publishedAt: "2026-05-31T00:00:00Z" },
+      times: { "98.0.0": "2026-05-20T00:00:00Z", "99.0.0": "2026-05-31T00:00:00Z" },
+    });
+    mockDetectMinReleaseAgeMsForPm.mockResolvedValue(7 * DAY_MS);
+    mockPickInstallableTarget.mockReturnValue({
+      version: "98.0.0",
+      publishedAt: "2026-05-20T00:00:00Z",
+    });
 
-  return res;
-}
+    const result = await resolveInstallableUpdateTarget("npm", "1.0.0");
 
-function mockResponseBody(statusCode: number, body: string) {
-  const mockGet = vi.mocked(https.get);
-  mockGet.mockImplementation((_url: unknown, _opts: unknown, cb: unknown) => {
-    const callback = cb as (res: ReturnType<typeof createMockResponse>) => void;
-    callback(createMockResponse(statusCode, body));
-    return new EventEmitter() as ReturnType<typeof https.get>;
-  });
-  return mockGet;
-}
-
-function packumentMulti(latest: string, times: Record<string, string>): string {
-  return JSON.stringify({ "dist-tags": { latest }, "time": times });
-}
-
-function stubExec(byCommand: Record<string, string>) {
-  mockExec.mockImplementation((cmd: string, _opts: unknown, cb: unknown) => {
-    const callback = cb as (err: Error | null, stdout: string, stderr: string) => void;
-    if (cmd in byCommand) {
-      callback(null, byCommand[cmd]!, "");
-    } else {
-      callback(new Error("command not found"), "", "");
-    }
-  });
-}
-
-describe("update-target helpers", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(NOW);
-    vi.clearAllMocks();
-    mockExec.mockReset();
-    delete process.env.ARGENT_MIN_RELEASE_AGE_DAYS;
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    delete process.env.ARGENT_MIN_RELEASE_AGE_DAYS;
-  });
-
-  it("parses npm's effective `before` cutoff into an equivalent age", () => {
-    const twoDaysAgo = new Date(NOW.getTime() - 2 * DAY_MS).toISOString();
-    expect(parseBeforeAgeMs(twoDaysAgo, NOW.getTime())).toBe(2 * DAY_MS);
-  });
-
-  it("parses Yarn's quoted duration syntax", () => {
-    expect(parseYarnAgeGateMs('"1d"')).toBe(DAY_MS);
-    expect(parseYarnAgeGateMs("90")).toBe(90 * 60 * 1000);
-  });
-
-  it("detects npm's gate from the effective `before` config", async () => {
-    const sevenDaysAgo = new Date(NOW.getTime() - 7 * DAY_MS).toISOString();
-    stubExec({ "npm config get before": sevenDaysAgo });
-    expect(await detectMinReleaseAgeMs("npm")).toBe(7 * DAY_MS);
-  });
-
-  it("picks the newest eligible version when the latest publish is still held", () => {
-    const oneDayAgo = new Date(NOW.getTime() - DAY_MS).toISOString();
-    const tenDaysAgo = new Date(NOW.getTime() - 10 * DAY_MS).toISOString();
-    const target = pickInstallableTarget(
-      { version: "99.0.0", publishedAt: oneDayAgo },
-      { "98.0.0": tenDaysAgo, "99.0.0": oneDayAgo },
-      "1.0.0",
-      7 * DAY_MS
-    );
-    expect(target?.version).toBe("98.0.0");
-  });
-
-  it("resolves the newest installable target for the selected package manager", async () => {
-    const oneDayAgo = new Date(NOW.getTime() - DAY_MS).toISOString();
-    const tenDaysAgo = new Date(NOW.getTime() - 10 * DAY_MS).toISOString();
-    stubExec({ "npm config get before": new Date(NOW.getTime() - 7 * DAY_MS).toISOString() });
-    mockResponseBody(
-      200,
-      packumentMulti("99.0.0", {
-        "98.0.0": tenDaysAgo,
-        "99.0.0": oneDayAgo,
-      })
-    );
-
-    await expect(resolveInstallableUpdateTarget("npm", "1.0.0")).resolves.toMatchObject({
+    expect(mockFetchRegistryInfo).toHaveBeenCalledWith(`${NPM_REGISTRY}/${PACKAGE_NAME}`);
+    expect(mockDetectMinReleaseAgeMsForPm).toHaveBeenCalledWith("npm");
+    expect(result).toEqual({
       latestVersion: "99.0.0",
+      latestPublishedAt: "2026-05-31T00:00:00Z",
       targetVersion: "98.0.0",
       minReleaseAgeMs: 7 * DAY_MS,
     });
+  });
+
+  it("maps a held-back latest (no installable target) to targetVersion null", async () => {
+    mockFetchRegistryInfo.mockResolvedValue({
+      latest: { version: "99.0.0", publishedAt: "2026-05-31T00:00:00Z" },
+      times: { "99.0.0": "2026-05-31T00:00:00Z" },
+    });
+    mockDetectMinReleaseAgeMsForPm.mockResolvedValue(7 * DAY_MS);
+    mockPickInstallableTarget.mockReturnValue(null);
+
+    const result = await resolveInstallableUpdateTarget("npm", "1.0.0");
+
+    expect(result?.latestVersion).toBe("99.0.0");
+    expect(result?.targetVersion).toBeNull();
+  });
+
+  it("returns null without probing when the registry is unreachable", async () => {
+    mockFetchRegistryInfo.mockResolvedValue(null);
+
+    await expect(resolveInstallableUpdateTarget("npm", "1.0.0")).resolves.toBeNull();
+    expect(mockDetectMinReleaseAgeMsForPm).not.toHaveBeenCalled();
   });
 });
