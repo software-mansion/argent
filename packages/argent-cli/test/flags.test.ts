@@ -6,13 +6,29 @@ import {
   disable,
   enable,
   flags as flagsCmd,
+  FLAG_REGISTRY,
+  getFlagDefinition,
   getFlagsPath,
   isFlagEnabled,
   readFlags,
   resolveProjectRoot,
   setFlag,
   unsetFlag,
+  type FlagDefinition,
 } from "../src/flags.js";
+
+// Hermetic registry for the CLI tests so they never depend on which flags ship
+// in the production FLAG_REGISTRY. enable()/flags() take an injectable registry
+// for exactly this reason.
+const TEST_REGISTRY: readonly FlagDefinition[] = [
+  { name: "my-feature-flag", description: "Primary test flag." },
+  { name: "proj-flag", description: "Project-scoped test flag." },
+  { name: "g", description: "Global explicit-scope test flag." },
+  { name: "after-dashdash", description: "Enabled after the -- separator." },
+  { name: "x", description: "Round-trip test flag." },
+  { name: "a", description: "Listing flag A." },
+  { name: "b", description: "Listing flag B." },
+];
 
 // All tests redirect global+project storage into tmp dirs by mutating
 // process.env.HOME (consumed by os.homedir()) and process.cwd().
@@ -318,7 +334,7 @@ function expectExit(code: number, fn: () => void): CapturedConsole {
 
 describe("enable / disable CLI", () => {
   it("enable writes flag=true globally by default", () => {
-    const out = captureConsole(() => enable(["my-feature-flag"]));
+    const out = captureConsole(() => enable(["my-feature-flag"], TEST_REGISTRY));
     expect(out.stdout).toContain('Enabled flag "my-feature-flag" (global)');
     expect(readFlags("global")).toEqual({ "my-feature-flag": true });
     expect(readFlags("project")).toEqual({});
@@ -338,23 +354,23 @@ describe("enable / disable CLI", () => {
   });
 
   it("--scope project targets project storage", () => {
-    captureConsole(() => enable(["proj-flag", "--scope", "project"]));
+    captureConsole(() => enable(["proj-flag", "--scope", "project"], TEST_REGISTRY));
     expect(readFlags("project")).toEqual({ "proj-flag": true });
     expect(readFlags("global")).toEqual({});
   });
 
   it("supports --scope=project syntax", () => {
-    captureConsole(() => enable(["proj-flag", "--scope=project"]));
+    captureConsole(() => enable(["proj-flag", "--scope=project"], TEST_REGISTRY));
     expect(readFlags("project")).toEqual({ "proj-flag": true });
   });
 
   it("supports --scope=global syntax (explicit)", () => {
-    captureConsole(() => enable(["g", "--scope=global"]));
+    captureConsole(() => enable(["g", "--scope=global"], TEST_REGISTRY));
     expect(readFlags("global")).toEqual({ g: true });
   });
 
   it("-- ends flag parsing and treats the next token as the flag name", () => {
-    captureConsole(() => enable(["--", "after-dashdash"]));
+    captureConsole(() => enable(["--", "after-dashdash"], TEST_REGISTRY));
     expect(readFlags("global")).toEqual({ "after-dashdash": true });
   });
 
@@ -395,50 +411,110 @@ describe("enable / disable CLI", () => {
   });
 
   it("enable → disable round trip leaves a clean tree (no stub entry)", () => {
-    captureConsole(() => enable(["x"]));
+    captureConsole(() => enable(["x"], TEST_REGISTRY));
     captureConsole(() => disable(["x"]));
     expect(readFlags("global")).toEqual({});
     expect(fs.existsSync(getFlagsPath("global"))).toBe(false);
     expect(isFlagEnabled("x")).toBe(false);
   });
+
+  it("rejects enabling a flag that is not in the registry", () => {
+    const out = expectExit(2, () => enable(["not-registered"], TEST_REGISTRY));
+    expect(out.stderr).toContain('Unknown feature flag "not-registered"');
+    expect(out.stderr).toContain("argent flags");
+    expect(readFlags("global")).toEqual({});
+  });
+
+  it("rejects every enable when the (default) registry is empty", () => {
+    // No registry argument → production FLAG_REGISTRY, which ships empty.
+    const out = expectExit(2, () => enable(["anything"]));
+    expect(out.stderr).toContain("Unknown feature flag");
+    expect(readFlags("global")).toEqual({});
+  });
+
+  it("disable stays lenient — clears a stored flag that is not in the registry", () => {
+    // Simulates a flag that was enabled once and later removed from the registry.
+    setFlag("legacy", true, "global");
+    const out = captureConsole(() => disable(["legacy"]));
+    expect(out.stdout).toContain('Disabled flag "legacy" (global)');
+    expect(readFlags("global")).toEqual({});
+  });
 });
 
 describe("flags (list) CLI", () => {
-  it("prints a friendly empty message when nothing is set", () => {
+  it("prints a friendly message when the registry is empty", () => {
+    // Default (production) registry ships empty.
     const out = captureConsole(() => flagsCmd([]));
-    expect(out.stdout).toContain("No flags set.");
+    expect(out.stdout).toContain("No feature flags are defined.");
     expect(out.stdout).toContain(getFlagsPath("global"));
     expect(out.stdout).toContain(getFlagsPath("project"));
   });
 
-  it("lists effective values with the winning scope", () => {
+  it("lists every registry flag with its description and effective scope", () => {
     setFlag("a", true, "global");
     setFlag("b", true, "global");
     setFlag("b", false, "project");
-    const out = captureConsole(() => flagsCmd([]));
-    expect(out.stdout).toContain("Effective flags");
+    const out = captureConsole(() => flagsCmd([], TEST_REGISTRY));
+    expect(out.stdout).toContain("Feature flags");
+    // value + winning scope
     expect(out.stdout).toMatch(/a\s+enabled\s+\(global\)/);
     expect(out.stdout).toMatch(/b\s+disabled\s+\(project\)/);
+    // descriptions are shown
+    expect(out.stdout).toContain("Listing flag A.");
+    expect(out.stdout).toContain("Listing flag B.");
   });
 
-  it("--json emits structured data with both scopes", () => {
+  it("shows unset registry flags as disabled (with no scope)", () => {
+    // Nothing stored; every registry flag should still be listed as disabled.
+    const out = captureConsole(() => flagsCmd([], TEST_REGISTRY));
+    expect(out.stdout).toMatch(/my-feature-flag\s+disabled/);
+    expect(out.stdout).toContain("Primary test flag.");
+    expect(out.stdout).not.toContain("(global)");
+    expect(out.stdout).not.toContain("(project)");
+  });
+
+  it("--json emits the raw scopes plus the registry view with descriptions", () => {
     setFlag("a", true, "global");
     setFlag("a", false, "project");
-    setFlag("c", true, "project");
-    const out = captureConsole(() => flagsCmd(["--json"]));
+    const out = captureConsole(() => flagsCmd(["--json"], TEST_REGISTRY));
     const parsed = JSON.parse(out.stdout);
+    // raw scope maps preserved for back-compat
     expect(parsed.global).toEqual({ a: true });
-    expect(parsed.project).toEqual({ a: false, c: true });
-    expect(parsed.effective).toEqual({
-      a: { value: false, scope: "project" },
-      c: { value: true, scope: "project" },
-    });
+    expect(parsed.project).toEqual({ a: false });
+    expect(parsed.effective).toEqual({ a: { value: false, scope: "project" } });
     expect(parsed.paths.global).toBe(getFlagsPath("global"));
     expect(parsed.paths.project).toBe(getFlagsPath("project"));
+    // registry view carries description + resolved state
+    const a = parsed.flags.find((f: { name: string }) => f.name === "a");
+    expect(a).toEqual({
+      name: "a",
+      description: "Listing flag A.",
+      enabled: false,
+      scope: "project",
+    });
+    const unset = parsed.flags.find((f: { name: string }) => f.name === "my-feature-flag");
+    expect(unset).toMatchObject({ enabled: false, scope: null });
   });
 
   it("--help prints usage", () => {
     const out = captureConsole(() => flagsCmd(["--help"]));
     expect(out.stdout).toContain("Usage: argent flags");
+  });
+});
+
+describe("FLAG_REGISTRY / getFlagDefinition", () => {
+  it("getFlagDefinition returns the entry or undefined", () => {
+    expect(getFlagDefinition("my-feature-flag", TEST_REGISTRY)?.description).toBe(
+      "Primary test flag."
+    );
+    expect(getFlagDefinition("nope", TEST_REGISTRY)).toBeUndefined();
+  });
+
+  it("every shipped registry entry has a non-empty name and description", () => {
+    // Guards against a half-filled entry being added to the production registry.
+    for (const def of FLAG_REGISTRY) {
+      expect(def.name).toMatch(/^[a-zA-Z][a-zA-Z0-9._-]*$/);
+      expect(def.description.trim().length).toBeGreaterThan(0);
+    }
   });
 });

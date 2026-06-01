@@ -9,6 +9,13 @@
 // shadows the same key at the global scope. To opt a single project out of
 // a globally-enabled flag, hand-edit `<project>/.argent/flags.json` to
 // `{"flags":{"name":false}}` — there is no CLI for an explicit override.
+//
+// FLAG_REGISTRY below is the single source of truth for which flags exist:
+// `enable` only accepts a name listed there, and `argent flags` documents
+// every entry. `disable` stays lenient (so a flag removed from the registry
+// can still be cleared from storage), and `isFlagEnabled` only reads storage —
+// it never consults the registry, keeping runtime callers decoupled from CLI
+// validation.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -18,6 +25,32 @@ export type FlagScope = "global" | "project";
 
 interface FlagsFile {
   flags?: Record<string, boolean>;
+}
+
+// A recognized feature flag. `name` is what users pass to enable/disable and
+// what `isFlagEnabled` reads; `description` is shown by `argent flags`.
+export interface FlagDefinition {
+  readonly name: string;
+  readonly description: string;
+}
+
+// The flags argent recognizes. Adding one entry here is the only change needed
+// to make `argent enable <name>` accept it and `argent flags` document it.
+// An empty registry means no flags are available yet.
+export const FLAG_REGISTRY: readonly FlagDefinition[] = [
+  // {
+  //   name: "example-flag",
+  //   description: "One-line summary shown by `argent flags`.",
+  // },
+];
+
+// Look up a flag's definition — exported for consumers that want the
+// description alongside isFlagEnabled(). Defaults to the built-in registry.
+export function getFlagDefinition(
+  name: string,
+  registry: readonly FlagDefinition[] = FLAG_REGISTRY
+): FlagDefinition | undefined {
+  return registry.find((def) => def.name === name);
 }
 
 // Markers used to find the project root for --scope project. Trimmed to the
@@ -214,7 +247,7 @@ function parseScope(raw: string): FlagScope {
 function printToggleHelp(command: "enable" | "disable"): void {
   const summary =
     command === "enable"
-      ? "Enable a feature flag at the chosen scope."
+      ? "Enable a predefined feature flag (see `argent flags`) at the chosen scope."
       : "Remove a feature flag entry at the chosen scope. Falls back to the global value if set; otherwise the flag is treated as off.";
 
   console.log(`Usage: argent ${command} <flag-name> [--scope project|global]
@@ -231,7 +264,11 @@ Options:
 `);
 }
 
-function runToggle(argv: string[], command: "enable" | "disable"): void {
+function runToggle(
+  argv: string[],
+  command: "enable" | "disable",
+  registry: readonly FlagDefinition[]
+): void {
   if (argv.includes("--help") || argv.includes("-h")) {
     printToggleHelp(command);
     return;
@@ -242,6 +279,15 @@ function runToggle(argv: string[], command: "enable" | "disable"): void {
     parsed = parseToggleArgs(argv, command);
   } catch (err) {
     console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(2);
+  }
+
+  // Only registry-listed flags can be enabled. `disable` stays lenient so a
+  // flag that was removed from the registry can still be cleared from storage.
+  if (command === "enable" && getFlagDefinition(parsed.name, registry) === undefined) {
+    console.error(
+      `Error: Unknown feature flag "${parsed.name}". Run \`argent flags\` to see available flags.`
+    );
     process.exit(2);
   }
 
@@ -264,22 +310,22 @@ function runToggle(argv: string[], command: "enable" | "disable"): void {
   }
 }
 
-export function enable(argv: string[]): void {
-  runToggle(argv, "enable");
+export function enable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
+  runToggle(argv, "enable", registry);
 }
 
-export function disable(argv: string[]): void {
-  runToggle(argv, "disable");
+export function disable(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
+  runToggle(argv, "disable", registry);
 }
 
-// `argent flags` — show what is currently set, grouped by scope, with the
-// effective (project-wins) view.
-export function flags(argv: string[]): void {
+// `argent flags` — list every registry flag with its description and effective
+// state (project overrides global; unset flags read as disabled).
+export function flags(argv: string[], registry: readonly FlagDefinition[] = FLAG_REGISTRY): void {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(`Usage: argent flags [--json]
 
-Show the current state of feature flags. Project-scoped flags override
-global ones.
+List the available feature flags and their current state. Flags are
+predefined; project-scoped values override global ones.
 
 Options:
   --json   Print machine-readable JSON
@@ -295,10 +341,23 @@ Options:
   for (const [k, v] of Object.entries(globalFlags)) effective[k] = { value: v, scope: "global" };
   for (const [k, v] of Object.entries(projectFlags)) effective[k] = { value: v, scope: "project" };
 
+  // Registry-driven view: every known flag, whether or not it is stored.
+  // hasOwn guards against prototype-named flags resolving to Object.prototype.
+  const registryView = registry.map((def) => {
+    const eff = Object.hasOwn(effective, def.name) ? effective[def.name]! : undefined;
+    return {
+      name: def.name,
+      description: def.description,
+      enabled: eff?.value ?? false,
+      scope: eff?.scope ?? null,
+    };
+  });
+
   if (json) {
     console.log(
       JSON.stringify(
         {
+          flags: registryView,
           global: globalFlags,
           project: projectFlags,
           effective,
@@ -314,20 +373,17 @@ Options:
     return;
   }
 
-  const allNames = Object.keys(effective).sort();
-  if (allNames.length === 0) {
-    console.log("No flags set.");
-    console.log(`  Global:  ${getFlagsPath("global")}`);
-    console.log(`  Project: ${getFlagsPath("project")}`);
-    return;
-  }
-
-  console.log("Effective flags (project overrides global):");
-  const maxName = allNames.reduce((m, n) => Math.max(m, n.length), 0);
-  for (const name of allNames) {
-    const { value, scope } = effective[name]!;
-    const stateLabel = value ? "enabled" : "disabled";
-    console.log(`  ${name.padEnd(maxName, " ")}  ${stateLabel.padEnd(8)} (${scope})`);
+  if (registryView.length === 0) {
+    console.log("No feature flags are defined.");
+  } else {
+    console.log("Feature flags (project overrides global):");
+    const maxName = registryView.reduce((m, f) => Math.max(m, f.name.length), 0);
+    for (const f of registryView) {
+      const stateLabel = f.enabled ? "enabled" : "disabled";
+      const scopeLabel = f.scope ? ` (${f.scope})` : "";
+      console.log(`  ${f.name.padEnd(maxName, " ")}  ${stateLabel.padEnd(8)}${scopeLabel}`);
+      console.log(`  ${" ".repeat(maxName)}  ${f.description}`);
+    }
   }
   console.log(`\n  Global:  ${getFlagsPath("global")}`);
   console.log(`  Project: ${getFlagsPath("project")}`);
