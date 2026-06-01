@@ -29,7 +29,9 @@ const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" });
 // Ctrl+C in a TTY already broadcasts to the whole process group so the child
 // receives it too — these handlers cover the non-TTY case where the parent
 // would otherwise exit alone and leave the binary reparented to init.
-for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+/** @type {NodeJS.Signals[]} */
+const FORWARDED_SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"];
+for (const sig of FORWARDED_SIGNALS) {
   process.on(sig, () => {
     if (!child.killed) {
       try {
