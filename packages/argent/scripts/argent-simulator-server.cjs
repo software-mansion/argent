@@ -23,6 +23,24 @@ if (!fs.existsSync(binary)) {
 }
 
 const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" });
+
+// Forward termination signals so a supervisor that signals only the dispatcher
+// PID (systemd, `kill -TERM <pid>`, container stop) doesn't orphan the child.
+// Ctrl+C in a TTY already broadcasts to the whole process group so the child
+// receives it too — these handlers cover the non-TTY case where the parent
+// would otherwise exit alone and leave the binary reparented to init.
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
+  process.on(sig, () => {
+    if (!child.killed) {
+      try {
+        child.kill(sig);
+      } catch {
+        // Already exited between the signal arriving and us forwarding it.
+      }
+    }
+  });
+}
+
 child.on("exit", (code, signal) => {
   if (signal) {
     process.kill(process.pid, signal);
