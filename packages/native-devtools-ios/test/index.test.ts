@@ -2,17 +2,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-// Static import primes vite's module graph for the dynamic re-import below.
-// We re-import via the SAME path string after `vi.resetModules()` so the
-// resolver re-reads ARGENT_NATIVE_DEVTOOLS_DIR / ARGENT_SIMULATOR_SERVER_DIR
-// per-test instead of using whatever was set at first load.
-import type * as ResolverModule from "../../native-devtools-ios/src/index";
+// Static import primes vite's module graph so the dynamic re-import below
+// resolves to the same node; we re-import via the SAME specifier after
+// vi.resetModules() to reset captured env per-test.
+import type * as ResolverModule from "../src/index";
 
-// Unit tests for the @argent/native-devtools-ios resolver. The resolver is
-// what gates iOS-only binaries from being looked up on Linux callers, and
-// what joins `process.platform` into the simulator-server bin path. Both
-// behaviors only execute on resolver invocation, so we test the exported
-// functions directly. We override ARGENT_NATIVE_DEVTOOLS_DIR /
+// Unit tests for the resolver in this package. The resolver is what gates
+// iOS-only binaries from being looked up on Linux callers, and what joins
+// `process.platform` into the simulator-server bin path. Both behaviors
+// only execute on resolver invocation, so we test the exported functions
+// directly. We override ARGENT_NATIVE_DEVTOOLS_DIR /
 // ARGENT_SIMULATOR_SERVER_DIR per-test so the resolver looks at a tmpdir we
 // control rather than the real packages/native-devtools-ios layout.
 
@@ -52,7 +51,7 @@ afterEach(() => {
  */
 async function loadResolver(): Promise<typeof ResolverModule> {
   vi.resetModules();
-  return await import("../../native-devtools-ios/src/index");
+  return await import("../src/index");
 }
 
 describe("requireDarwin gating", () => {

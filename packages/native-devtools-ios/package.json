@@ -7,10 +7,14 @@
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:native": "bash scripts/build.sh",
-    "build:native:dev": "bash scripts/build.sh dev"
+    "build:native:dev": "bash scripts/build.sh dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   }
 }
