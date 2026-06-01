@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  POSTHOG_HOST,
-  resetClient,
-  resolveConfig,
-  getClient,
-} from "../src/posthog.js";
+import { POSTHOG_HOST, resetClient, resolveConfig, getClient } from "../src/posthog.js";
 
 vi.mock("posthog-node", () => {
   return {
@@ -59,7 +54,6 @@ describe("posthog host invariance", () => {
     (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "phc_disabled";
     resetClient();
     expect(getClient()).toBeNull();
-
   });
 
   it("does construct a client when a real key is configured", () => {
@@ -79,8 +73,6 @@ describe("posthog host invariance", () => {
     } | null;
 
     expect(client).not.toBeNull();
-    expect(client!.opts).toEqual(
-      expect.objectContaining({ flushAt: 20, flushInterval: 10_000 })
-    );
+    expect(client!.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
 });
