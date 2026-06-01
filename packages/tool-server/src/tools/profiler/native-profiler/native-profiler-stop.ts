@@ -8,20 +8,43 @@ import { resolveDevice } from "../../../utils/device-info";
 import { exportIosTraceData } from "../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../utils/ios-profiler/lifecycle";
+import { getArtifactRegistry, type ArtifactHandle } from "../../../artifacts";
 
 const STOP_GRACE_MS = 30_000;
 const STOP_TERM_MS = 5_000;
 const STOP_KILL_MS = 5_000;
+
+// The raw `.trace` is an Instruments bundle (a directory), not a single file,
+// so it isn't streamable through the artifact layer yet (archiving is a
+// follow-up). The exported XML files are what's useful to inspect, and they
+// ARE materialized to the client. This note explains the absence.
+const TRACE_FILE_NOTE =
+  "The raw .trace bundle remains on the profiling host (it's a directory; " +
+  "archiving for download is a follow-up). The exported XML files below are " +
+  "materialized locally.";
 
 const zodSchema = z.object({
   device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
 });
 
 interface StopResult {
-  traceFile: string;
-  exportedFiles: Record<string, string | null>;
+  /** Exported XML data as artifact handles the MCP client materializes locally. */
+  exportedFiles: Record<string, ArtifactHandle | null>;
+  traceFileNote: string;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
+}
+
+/** Register each non-null exported file path as a downloadable artifact. */
+async function exportedFilesToArtifacts(
+  files: Record<string, string | null>
+): Promise<Record<string, ArtifactHandle | null>> {
+  const registry = getArtifactRegistry();
+  const out: Record<string, ArtifactHandle | null> = {};
+  for (const [key, filePath] of Object.entries(files)) {
+    out[key] = filePath ? await registry.register(filePath) : null;
+  }
+  return out;
 }
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
@@ -31,7 +54,7 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   description: `Stop native profiling and export trace data to XML files.
 iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks data. Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.
-Returns { traceFile, exportedFiles, exportDiagnostics } with paths to the exported XML data.
+Returns { exportedFiles, traceFileNote, exportDiagnostics }; exportedFiles are downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
   services: (params) => ({
@@ -54,6 +77,8 @@ Fails if no active native-profiler-start session exists for the given device_id.
       const { files: exportedFiles, diagnostics } = exportIosTraceData(traceFile);
       api.exportedFiles = exportedFiles;
 
+      const exportedArtifacts = await exportedFilesToArtifacts(exportedFiles);
+
       const warning = wasTimeout
         ? "Recording timed out at 10 min cap; exported the partial trace. " +
           "Call native-profiler-start again for a fresh recording."
@@ -63,7 +88,12 @@ Fails if no active native-profiler-start session exists for the given device_id.
           "Call native-profiler-start again for a fresh recording.";
       process.stderr.write(`[native-profiler] ${warning}\n`);
 
-      return { traceFile, exportedFiles, exportDiagnostics: diagnostics, warning };
+      return {
+        exportedFiles: exportedArtifacts,
+        traceFileNote: TRACE_FILE_NOTE,
+        exportDiagnostics: diagnostics,
+        warning,
+      };
     }
 
     if (!api.profilingActive || !api.xctraceProcess || !api.traceFile) {
@@ -101,8 +131,8 @@ Fails if no active native-profiler-start session exists for the given device_id.
     api.exportedFiles = exportedFiles;
 
     const stopResult: StopResult = {
-      traceFile: api.traceFile,
-      exportedFiles,
+      exportedFiles: await exportedFilesToArtifacts(exportedFiles),
+      traceFileNote: TRACE_FILE_NOTE,
       exportDiagnostics: diagnostics,
     };
     if (warning) stopResult.warning = warning;

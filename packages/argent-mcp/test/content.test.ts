@@ -1,5 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
 import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "../src/content.js";
+import { ARTIFACT_MARKER, type ArtifactHandle } from "../src/artifacts.js";
+
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+function artifactHandle(id: string, filename: string, mimeType: string): ArtifactHandle {
+  return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size: 0 };
+}
+
+function fetchReturning(bytes: number[]): typeof fetch {
+  return (async () => ({
+    ok: true,
+    arrayBuffer: async () => new Uint8Array(bytes).buffer,
+  })) as unknown as typeof fetch;
+}
 
 // ── toMcpContent ─────────────────────────────────────────────────────
 
@@ -61,6 +78,50 @@ describe("toMcpContent", () => {
   it("falls back to text when outputHint is image but no url", async () => {
     const result = await toMcpContent({ foo: 1 }, "image");
     expect(result).toEqual([{ type: "text", text: JSON.stringify({ foo: 1 }, null, 2) }]);
+  });
+});
+
+// ── toMcpContent with artifact context (remote-aware path) ───────────
+
+describe("toMcpContent with artifact ctx", () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "content-artifacts-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
+  });
+
+  afterEach(async () => {
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("materializes an image artifact and renders image + local Saved path", async () => {
+    const pngBytes = [...PNG_SIGNATURE, 0x42];
+    const result = await toMcpContent(
+      { image: artifactHandle("img1", "shot.png", "image/png") },
+      "image",
+      { toolsUrl: "http://remote:3001", deviceId: "DEV-1", fetchImpl: fetchReturning(pngBytes) }
+    );
+
+    expect(result[0]).toEqual({
+      type: "image",
+      data: Buffer.from(pngBytes).toString("base64"),
+      mimeType: "image/png",
+    });
+    expect(result[1]?.type).toBe("text");
+    expect((result[1] as { text: string }).text).toMatch(/^Saved: .*shot\.png$/);
+  });
+
+  it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
+    const result = await toMcpContent(
+      { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
+      undefined,
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([1, 2, 3]) }
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.type).toBe("text");
+    expect((result[0] as { text: string }).text).toContain("cpu.xml");
   });
 });
 

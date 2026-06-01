@@ -117,8 +117,13 @@ describe("native-profiler-stop recovery branch", () => {
     });
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
-    expect(result.traceFile).toBe(FAKE_TRACE);
-    expect(result.exportedFiles).toEqual(FAKE_EXPORT_RESULT.files);
+    // exportedFiles are now artifact handles (materialized client-side), not raw paths.
+    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true, filename: "cpu.xml" });
+    expect(result.exportedFiles.hangs).toMatchObject({
+      __argentArtifact: true,
+      filename: "hangs.xml",
+    });
+    expect(result.traceFileNote).toContain("profiling host");
     expect(result.exportDiagnostics).toEqual(FAKE_EXPORT_RESULT.diagnostics);
     expect(result.warning).toBeDefined();
     expect(api.recordingExitedUnexpectedly).toBe(false);
@@ -199,7 +204,7 @@ describe("native-profiler-stop recovery branch", () => {
     const result = await promise;
 
     expect(result.warning).toBeUndefined();
-    expect(result.traceFile).toBe(FAKE_TRACE);
+    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true });
     expect(api.profilingActive).toBe(false);
     expect(api.xctraceProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(false);

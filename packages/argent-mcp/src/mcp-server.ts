@@ -11,13 +11,19 @@ import {
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
-import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "./content.js";
+import {
+  toMcpContent,
+  flowRunToMcpContent,
+  type ContentContext,
+  type FlowExecuteResult,
+} from "./content.js";
 import {
   autoScreenshotEnabled,
   getUdidFromArgs,
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
+import { getDeviceIdFromArgs } from "./artifacts.js";
 import { toMcpTool } from "./tool-mapping.js";
 
 const MAX_RETRIES = 4;
@@ -201,14 +207,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         result,
       });
 
+      const ctx: ContentContext = {
+        toolsUrl: TOOLS_URL,
+        deviceId: getDeviceIdFromArgs(params.arguments),
+      };
+
       let content =
         params.name === "flow-execute" &&
         result &&
         typeof result === "object" &&
         "flow" in result &&
         "steps" in result
-          ? await flowRunToMcpContent(result as FlowExecuteResult)
-          : await toMcpContent(result, outputHint);
+          ? await flowRunToMcpContent(result as FlowExecuteResult, ctx)
+          : await toMcpContent(result, outputHint, ctx);
 
       const udid = getUdidFromArgs(params.arguments);
       if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
@@ -217,7 +228,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(screenshotResult.result, "image");
+          const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
+            toolsUrl: TOOLS_URL,
+            deviceId: udid,
+          });
           content = [
             ...content,
             {
