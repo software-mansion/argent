@@ -119,6 +119,10 @@ esbuild.buildSync({
   outfile: OUT_FILE,
   alias: ALIASES,
   mainFields: MAIN_FIELDS,
+  // tree-sitter / tree-sitter-typescript are native addons (.node) that esbuild
+  // cannot inline; keep them external so the bundle `require()`s them at runtime
+  // from the published package's own dependencies (see package.json).
+  external: ["tree-sitter", "tree-sitter-typescript"],
 });
 
 console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
