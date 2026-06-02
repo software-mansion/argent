@@ -18,7 +18,7 @@ import {
 
 const telemetryMock = vi.hoisted(() => ({
   init: vi.fn(),
-  trackImmediate: vi.fn().mockResolvedValue(undefined),
+  track: vi.fn(),
   forget: vi.fn().mockResolvedValue({
     localIdRemoved: true,
     consentDisabled: false,
@@ -27,6 +27,7 @@ const telemetryMock = vi.hoisted(() => ({
 }));
 
 const childProcessMock = vi.hoisted(() => ({
+  execSync: vi.fn(() => "/usr/local/bin/argent\n"),
   execFileSync: vi.fn(),
 }));
 
@@ -65,6 +66,8 @@ beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-uninstall-test-"));
   originalCwd = process.cwd();
   vi.clearAllMocks();
+  childProcessMock.execSync.mockImplementation(() => "/usr/local/bin/argent\n");
+  childProcessMock.execFileSync.mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -73,12 +76,81 @@ afterEach(() => {
 });
 
 describe("uninstall — telemetry consent preservation", () => {
-  it("resets uninstall telemetry identity without persisting a consent opt-out", async () => {
+  it("does not reset uninstall telemetry identity when no global package was uninstalled", async () => {
+    childProcessMock.execSync.mockImplementationOnce(() => {
+      throw new Error("not found");
+    });
     process.chdir(tmpDir);
 
     await uninstall(["--yes"]);
 
+    expect(childProcessMock.execFileSync).not.toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g"])
+    );
+    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
+      has_pruned_content: true,
+      has_uninstalled_package: false,
+    });
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("resets uninstall telemetry identity without persisting a consent opt-out after global package uninstall", async () => {
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(childProcessMock.execFileSync).toHaveBeenCalledWith(
+      "npm",
+      expect.arrayContaining(["uninstall", "-g", "@swmansion/argent"]),
+      expect.any(Object)
+    );
     expect(telemetryMock.forget).toHaveBeenCalledWith({ disableConsent: false });
+  });
+
+  it("drains queued uninstall telemetry before deleting the local telemetry id", async () => {
+    process.chdir(tmpDir);
+
+    await uninstall(["--yes"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
+      has_pruned_content: true,
+      has_uninstalled_package: true,
+    });
+
+    const shutdownOrder = telemetryMock.shutdown.mock.invocationCallOrder[0]!;
+    const forgetOrder = telemetryMock.forget.mock.invocationCallOrder[0]!;
+    expect(shutdownOrder).toBeLessThan(forgetOrder);
+  });
+
+  it("does not delete the local telemetry id when global package uninstall fails", async () => {
+    process.chdir(tmpDir);
+    childProcessMock.execFileSync.mockImplementation((bin: string) => {
+      if (bin === "npm") throw new Error("npm failed");
+      return undefined;
+    });
+
+    await uninstall(["--yes"]);
+
+    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
+      has_pruned_content: true,
+      has_uninstalled_package: false,
+    });
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("drains uninstall telemetry when package shutdown throws before uninstalling", async () => {
+    process.chdir(tmpDir);
+    toolsClientMock.killToolServer.mockRejectedValueOnce(new Error("tool server busy"));
+
+    await expect(uninstall(["--yes"])).rejects.toThrow("tool server busy");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
+      has_pruned_content: true,
+      has_uninstalled_package: false,
+    });
+    expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
   });
 });
 

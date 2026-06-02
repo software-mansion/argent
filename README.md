@@ -130,12 +130,18 @@ argent init
 
 ## Privacy
 
-Argent does not collect or transmit any user data.
-No telemetry, no analytics, no crash reporting.
+Argent includes anonymous, opt-out usage telemetry for installation and tool
+health signals. It does not collect raw tool arguments, file paths, app data,
+error messages, or device identifiers.
 
 - Argent integrates with your agent locally over MCP stdio.
 - Its internal tools are not reachable from outside your machine.
-- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
+- Telemetry can be disabled with `argent telemetry disable`, `DO_NOT_TRACK=1`,
+  or `ARGENT_TELEMETRY=0`.
+- Telemetry events are sent to PostHog EU with a public write-only project key.
+  Dashboards and exports must treat client-side event properties as untrusted.
+- The version check against our public npm package sends no user data and fails
+  gracefully if blocked.
 
 ## License
 

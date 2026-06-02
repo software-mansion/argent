@@ -104,7 +104,7 @@ export class Registry {
     }
 
     const startTime = performance.now();
-    const toolInvocationId = randomUUID();
+    const toolInvocationId = options?.toolInvocationId ?? randomUUID();
     this.events.emit("toolInvoked", id, toolInvocationId);
 
     try {

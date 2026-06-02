@@ -11,7 +11,6 @@ import {
   status,
   shutdown,
   track,
-  trackImmediate,
 } from "../src/index.js";
 import { resetClient } from "../src/posthog.js";
 import { scopeHome, snapshotEnv } from "./helpers.js";
@@ -60,16 +59,16 @@ describe("telemetry public surface", () => {
     vi.restoreAllMocks();
   });
 
-  it("markDisabled sends opt-out, persists disabled state, and flushes prior events", async () => {
+  it("markDisabled queues opt-out, persists disabled state, and drains prior events", async () => {
     track("toolserver:start", {});
+    const client = posthogMock.instances[0]!;
 
-    posthogMock.flushImpl = async () => {
+    client.shutdown.mockImplementation(async () => {
       expect(isEnabled()).toBe(false);
-    };
+    });
 
     await markDisabled();
 
-    const client = posthogMock.instances[0]!;
     expect(posthogMock.instances).toHaveLength(1);
     expect(client.capture).toHaveBeenCalledWith(
       expect.objectContaining({ event: "toolserver:start" })
@@ -77,13 +76,14 @@ describe("telemetry public surface", () => {
     expect(client.capture).toHaveBeenCalledWith(
       expect.objectContaining({ event: "telemetry:opt_out" })
     );
-    expect(client.flush).toHaveBeenCalledTimes(1);
+    expect(client.flush).not.toHaveBeenCalled();
+    expect(client.shutdown).toHaveBeenCalledTimes(1);
     expect(isEnabled()).toBe(false);
   });
 
-  it("uses one client and flushes only for trackImmediate", async () => {
+  it("track queues without flushing so command shutdown drains later", async () => {
     track("toolserver:start", {});
-    await trackImmediate("toolserver:stop", {
+    track("toolserver:stop", {
       reason: "signal",
       uptime_ms: 1,
       total_tool_calls: 0,
@@ -93,7 +93,11 @@ describe("telemetry public surface", () => {
 
     expect(posthogMock.instances).toHaveLength(1);
     expect(client.capture).toHaveBeenCalledTimes(2);
-    expect(client.flush).toHaveBeenCalledTimes(1);
+    expect(client.capture).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "toolserver:stop" })
+    );
+    expect(client.flush).not.toHaveBeenCalled();
+    expect(client.shutdown).not.toHaveBeenCalled();
     expect(client.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
 
@@ -118,7 +122,7 @@ describe("telemetry public surface", () => {
 
   it("shutdown drains the constructed client", async () => {
     track("toolserver:start", {});
-    await trackImmediate("toolserver:stop", {
+    track("toolserver:stop", {
       reason: "signal",
       uptime_ms: 1,
       total_tool_calls: 0,

@@ -62,11 +62,9 @@ const TELEMETRY_CLI_VERSION = (() => {
     return "0.0.0";
   }
 })();
-const TELEMETRY_CLI_MAJOR_VERSION = TELEMETRY_CLI_VERSION.split(".")[0] ?? "0";
 
 const TELEMETRY_DEFINE = {
   ARGENT_CLI_VERSION: JSON.stringify(TELEMETRY_CLI_VERSION),
-  ARGENT_CLI_MAJOR_VERSION: JSON.stringify(TELEMETRY_CLI_MAJOR_VERSION),
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which

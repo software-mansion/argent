@@ -23,7 +23,7 @@ function readNodeVersionMajor(): string {
   return m ? m[1]! : "unknown";
 }
 
-export type Runtime = "installer" | "tool_server" | "cli" | "mcp";
+export type Runtime = "installer" | "tool_server" | "cli";
 
 export interface BaseProps {
   cli_version: string;

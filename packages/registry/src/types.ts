@@ -69,6 +69,8 @@ export interface InvokeToolOptions {
    * "legacy caller — behave exactly as before the file boundary existed".
    */
   fileInputs?: Record<string, ResolvedFileInput>;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
 }
 
 /**

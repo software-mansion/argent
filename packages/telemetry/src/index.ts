@@ -23,7 +23,6 @@ export type { Runtime } from "./base-props.js";
 export type { ForgetOptions, ForgetResult } from "./erasure.js";
 export type { ConsentState, ConsentSource } from "./consent.js";
 export { attachRegistryTelemetry } from "./registry-listener.js";
-export { hashId } from "./hash.js";
 export { POSTHOG_HOST, resolveConfig } from "./posthog.js";
 export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
@@ -74,7 +73,17 @@ function buildPayload(
   return { distinctId, properties };
 }
 
-export function track<E extends EventName>(event: E, props: EventPropertyMap[E]): void {
+/**
+ * Enqueue a telemetry event on the shared PostHog client.
+ *
+ * This does not force a network send. Short-lived commands must call
+ * shutdown() before process exit; shutdown() waits for PostHog's async capture
+ * preparation and drains the queue with a bounded timeout.
+ */
+export function track<E extends EventName>(
+  event: E,
+  props: EventPropertyMap[E]
+): void {
   try {
     if (!consentIsEnabled()) return;
     const built = buildPayload(event, props as Record<string, unknown>);
@@ -105,47 +114,13 @@ export function track<E extends EventName>(event: E, props: EventPropertyMap[E])
   }
 }
 
-export async function trackImmediate<E extends EventName>(
-  event: E,
-  props: EventPropertyMap[E]
-): Promise<void> {
-  try {
-    if (!consentIsEnabled()) return;
-    const built = buildPayload(event, props as Record<string, unknown>);
-    if (!built) return;
-
-    if (isDebugEnabled()) {
-      emitDebugPayload({
-        event,
-        distinctId: built.distinctId,
-        properties: built.properties,
-        ts: new Date().toISOString(),
-      });
-    }
-
-    const client = getClient();
-    if (!client) return;
-    const send = (async () => {
-      try {
-        client.capture({
-          distinctId: built.distinctId,
-          event,
-          properties: built.properties,
-        });
-        await client.flush();
-      } catch (err) {
-        emitDebugError(`trackImmediate: capture/flush(${event}) failed`, err);
-      }
-    })();
-    await Promise.race([
-      send,
-      new Promise<void>((resolve) => setTimeout(resolve, SHORT_FLUSH_TIMEOUT_MS).unref()),
-    ]);
-  } catch (err) {
-    emitDebugError(`trackImmediate: outer wrapper caught ${event}`, err);
-  }
-}
-
+/**
+ * Drain queued telemetry and reset the shared client.
+ *
+ * PostHog capture() performs async event preparation before queueing. Use
+ * shutdown(), not flush(), at command boundaries so pending capture work is
+ * joined before the queue is flushed.
+ */
 export async function shutdown(timeoutMs = SHORT_FLUSH_TIMEOUT_MS): Promise<void> {
   const client = getConstructedClient();
   if (!client) {
@@ -174,11 +149,11 @@ export function markEnabled(): void {
   writeConsentFlag(true);
 }
 
-// Disable records one final opt-out event, persists the flag, then flushes.
+// Disable records one final opt-out event, persists the flag, then drains.
 export async function markDisabled(): Promise<void> {
   try {
     const wasEnabled = consentIsEnabled();
-    let client = wasEnabled ? getConstructedClient() : null;
+    let client = getConstructedClient();
     if (wasEnabled) {
       const built = buildPayload("telemetry:opt_out", {});
       if (built && isDebugEnabled()) {
@@ -206,7 +181,7 @@ export async function markDisabled(): Promise<void> {
     if (client) {
       try {
         await Promise.race([
-          client.flush(),
+          client.shutdown(SHORT_FLUSH_TIMEOUT_MS),
           new Promise<void>((resolve) => setTimeout(resolve, SHORT_FLUSH_TIMEOUT_MS).unref()),
         ]);
       } catch {

@@ -98,8 +98,6 @@ export interface ToolInvokeProps {
   tool: string;
   tool_invocation_id: string;
   platform?: "ios" | "android";
-  /** sha256(udid).slice(0, 12), salted with cli major version. */
-  device_id_hash?: string;
 }
 
 export interface ToolCompleteProps {
@@ -130,11 +128,6 @@ export interface ToolserverStopProps {
 
 export interface TelemetryOptOutProps {}
 
-export interface TelemetryCommandCompleteProps {
-  subcommand: "status" | "enable" | "disable" | "help" | "unknown";
-  duration_ms: number;
-}
-
 // Discriminated union for typed-track()
 
 export interface EventPropertyMap {
@@ -160,7 +153,6 @@ export interface EventPropertyMap {
   "toolserver:start": ToolserverStartProps;
   "toolserver:stop": ToolserverStopProps;
   "telemetry:opt_out": TelemetryOptOutProps;
-  "telemetry:command_complete": TelemetryCommandCompleteProps;
 }
 
 export type EventName = keyof EventPropertyMap;
@@ -189,5 +181,4 @@ export const EVENT_NAMES: readonly EventName[] = [
   "toolserver:start",
   "toolserver:stop",
   "telemetry:opt_out",
-  "telemetry:command_complete",
 ];
