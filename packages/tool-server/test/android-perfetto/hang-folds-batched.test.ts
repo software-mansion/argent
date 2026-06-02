@@ -4,7 +4,6 @@ vi.mock("@argent/native-devtools-android", () => {
   const path = require("node:path");
   return {
     traceProcessorShellPath: () => "/fake/tp",
-    traceProcessorShellAvailable: () => true,
     // Real queries dir — the batched module now loads the SQL from
     // queries/hang-folds-batched.sql and substitutes tokens into it, rather
     // than holding a SQL string literal. We assert against the rendered output.

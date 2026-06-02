@@ -17,6 +17,7 @@ import {
 } from "../../../utils/profiler-shared/time-align";
 import type { HotCommitSummary } from "../../../utils/react-profiler/types/output";
 import type { UiHang, MemoryLeak } from "../../../utils/profiler-shared/types";
+import { formatBytes } from "../../../utils/profiler-shared/format";
 import { loadAndroidCombinedData } from "../../../utils/android-profiler/pipeline/index";
 import { buildHotCommitSummaries } from "../../../utils/react-profiler/pipeline/00-hot-commits";
 import { preprocess } from "../../../utils/react-profiler/pipeline/00-preprocess";
@@ -329,9 +330,3 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     return lines.join("\n");
   },
 };
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}

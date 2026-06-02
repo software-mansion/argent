@@ -37,14 +37,6 @@ export function traceProcessorShellPath(): string {
   return p;
 }
 
-export function traceProcessorShellAvailable(): boolean {
-  return fs.existsSync(path.join(BIN_DIR, "trace_processor_shell"));
-}
-
-export function traceProcessorShellDir(): string {
-  return BIN_DIR;
-}
-
 /**
  * Directory containing the PerfettoSQL query files (`*.sql`) used by
  * `runTpQuery`. Source-of-truth lives here in the native-devtools-android

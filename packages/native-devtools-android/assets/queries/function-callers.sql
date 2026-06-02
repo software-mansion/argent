@@ -17,7 +17,6 @@ SELECT
   '{{FUNCTION_NAME}}'  AS function_name;
 
 SELECT
-  ps.callsite_id AS callsite_id,
   (
     SELECT GROUP_CONCAT(inner_spf.name, ' <- ' ORDER BY eac.depth DESC)
     FROM experimental_annotated_callstack(ps.callsite_id) eac

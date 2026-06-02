@@ -12,6 +12,7 @@ import {
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
 import { runBatchedHangFolds, type HangWindowInput } from "./hang-folds-batched";
+import { sanitizeProcessName, sanitizeIdentifier } from "./sql-safety";
 import type {
   AndroidCpuHotspotRow,
   AndroidJankRow,
@@ -492,31 +493,6 @@ function classifyAndroidHangSeverity(row: AndroidJankRow): "RED" | "YELLOW" {
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
-}
-
-/**
- * Reject any process name that isn't package-shaped before SQL substitution —
- * the value is interpolated, not parameterised, so the alphabet is the guard. See regex.
- */
-function sanitizeProcessName(name: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9._-]*$/.test(name)) {
-    throw new Error(
-      `Refusing to substitute non-identifier-shaped process name into SQL: "${name}"`
-    );
-  }
-  return name;
-}
-
-/**
- * Restrict thread/function identifiers to a safe alphabet before SQL
- * substitution — see the regex (allows `-`, `<>`, space for C++
- * templates/demangled names; rejects quotes/semicolons).
- */
-function sanitizeIdentifier(name: string): string {
-  if (!/^[A-Za-z0-9_.:+\/\-<> ]+$/.test(name)) {
-    throw new Error(`Refusing to substitute identifier with unsafe characters: "${name}"`);
-  }
-  return name;
 }
 
 function unwrapOr<T>(

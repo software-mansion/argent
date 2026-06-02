@@ -4,6 +4,7 @@ import {
   aggregateCpuHotspots as aggregateCpuHotspotsShared,
   type AggregatorInputRow,
 } from "../../profiler-shared/aggregate";
+import { normalizeThreadName } from "../../profiler-shared/thread";
 
 /**
  * Find the dominant (most actionable) function in a stack: walk from the leaf,
@@ -47,15 +48,6 @@ export function extractAppCallChain(stack: StackFrame[]): string[] {
   return stack.filter((f) => !f.isSystemLibrary && !isHexAddress(f.name)).map((f) => f.name);
 }
 
-function normalizeThread(threadFmt: string): string {
-  if (/main\s*thread/i.test(threadFmt)) return "Main Thread";
-  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt)) return "JS/Hermes";
-  // Strip hex thread id and pid info: "AppName 0x1e4715 (AppName, pid: 55746)" -> "AppName"
-  const shortMatch = threadFmt.match(/^(.+?)\s+0x/);
-  if (shortMatch) return shortMatch[1];
-  return threadFmt;
-}
-
 /**
  * iOS CPU hotspot aggregation: pre-pass raw CpuSample[] into the shared
  * AggregatorInputRow[] shape (one row per sample, dominant function picked,
@@ -71,7 +63,7 @@ export function aggregateCpuHotspots(
   for (const sample of samples) {
     const dominant = findDominantFunction(sample.stack);
     if (!dominant) continue;
-    const thread = normalizeThread(sample.threadFmt);
+    const thread = normalizeThreadName(sample.threadFmt);
     const chain = extractAppCallChain(sample.stack);
     rows.push({
       dominantFunction: dominant,

@@ -47,8 +47,6 @@ export interface AndroidRssRow {
   start_rss_mb: number;
   peak_rss_mb: number;
   growth_mb: number;
-  peak_anon_rss_mb: number | null;
-  peak_swap_mb: number | null;
 }
 
 export interface AndroidThreadRow {
@@ -59,13 +57,11 @@ export interface AndroidThreadRow {
 }
 
 export interface AndroidFunctionCallersRow {
-  callsite_id: number;
   callstack_text: string;
   occurrences: number;
 }
 
 export interface AndroidHangMainThreadSampleRow {
   ts_ns: number;
-  leaf_function: string | null;
   callstack_text: string | null;
 }

@@ -17,7 +17,6 @@ SELECT
 
 SELECT
   ps.ts AS ts_ns,
-  spf.name AS leaf_function,
   (
     SELECT GROUP_CONCAT(inner_spf.name, ' <- ' ORDER BY eac.depth DESC)
     FROM experimental_annotated_callstack(ps.callsite_id) eac
@@ -26,8 +25,6 @@ SELECT
 FROM perf_sample ps
 JOIN thread t USING (utid)
 JOIN process p USING (upid)
-LEFT JOIN stack_profile_callsite spc ON ps.callsite_id = spc.id
-LEFT JOIN stack_profile_frame    spf ON spc.frame_id   = spf.id
 WHERE p.name = (SELECT target_process FROM _argent_args)
   AND t.is_main_thread
   AND ps.ts BETWEEN (SELECT hang_start_ns FROM _argent_args)

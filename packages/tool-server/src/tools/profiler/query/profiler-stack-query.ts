@@ -14,6 +14,8 @@ import {
   runAndroidStackQuery,
   type AndroidStackQueryMode,
 } from "../../../utils/android-profiler/pipeline/index";
+import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
+import { formatBytes } from "../../../utils/profiler-shared/format";
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator UDID or Android serial."),
@@ -283,20 +285,6 @@ function renderLeakStacksIos(
   }
 
   return lines.join("\n");
-}
-
-function normalizeThreadName(threadFmt: string): string {
-  if (/main\s*thread/i.test(threadFmt)) return "Main Thread";
-  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt)) return "JS/Hermes";
-  const shortMatch = threadFmt.match(/^(.+?)\s+0x/);
-  if (shortMatch) return shortMatch[1];
-  return threadFmt;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof zodSchema>) {

@@ -23,26 +23,6 @@ export function reactTimeToWallClock(reactMs: number, reactAnchor: TimeAnchor): 
 }
 
 /**
- * Convert a wall clock ms to iOS Instruments trace-relative nanoseconds.
- */
-export function wallClockToInstrumentsNs(wallMs: number, iosAnchor: TimeAnchor): number {
-  const elapsed = wallMs - iosAnchor.wallClockMs;
-  return (iosAnchor.monotonicStartMs + elapsed) * 1_000_000;
-}
-
-/**
- * Convert a React profiler timestamp directly to iOS Instruments nanoseconds.
- */
-export function reactTimeToInstrumentsNs(
-  reactMs: number,
-  reactAnchor: TimeAnchor,
-  iosAnchor: TimeAnchor
-): number {
-  const wallMs = reactTimeToWallClock(reactMs, reactAnchor);
-  return wallClockToInstrumentsNs(wallMs, iosAnchor);
-}
-
-/**
  * Convert iOS Instruments nanoseconds to wall clock ms.
  */
 export function instrumentsNsToWallClock(instrumentsNs: number, iosAnchor: TimeAnchor): number {

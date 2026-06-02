@@ -12,6 +12,7 @@ import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
+import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/constants";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
 // (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
@@ -33,7 +34,6 @@ function resolveDefaultTemplatePath(): string {
 const STARTUP_TIMEOUT_MS = 10_000;
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
-const RECORDING_CAP_MS = 10 * 60 * 1000;
 const MAX_START_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 1_200;
 const COLD_START_SIGNATURE = "Cannot find process matching name:";

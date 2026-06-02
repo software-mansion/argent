@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { traceProcessorQueriesDir } from "@argent/native-devtools-android";
 import { runTpInline, renderSqlTemplate } from "./run-tp";
+import { sanitizeProcessName } from "./sql-safety";
 import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
 
 /**
@@ -50,7 +51,7 @@ export async function runBatchedHangFolds(
   const empty: HangFoldsBatched = { state: new Map(), gc: new Map() };
   if (opts.hangs.length === 0) return empty;
 
-  validateTarget(opts.target);
+  opts.target = sanitizeProcessName(opts.target);
   const valuesTuples: string[] = [];
   for (const hang of opts.hangs) {
     assertSafeWindow(hang);
@@ -117,14 +118,6 @@ function assertSafeWindow(hang: HangWindowInput): void {
   ) {
     throw new Error(
       `runBatchedHangFolds: refusing to inline non-integer/negative hang window: ${JSON.stringify(hang)}`
-    );
-  }
-}
-
-function validateTarget(target: string): void {
-  if (!/^[A-Za-z_][A-Za-z0-9._-]*$/.test(target)) {
-    throw new Error(
-      `runBatchedHangFolds: refusing to substitute non-identifier-shaped process name into SQL: "${target}"`
     );
   }
 }

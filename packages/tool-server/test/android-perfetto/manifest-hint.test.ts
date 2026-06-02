@@ -6,7 +6,6 @@ vi.mock("@argent/native-devtools-android", () => {
   const path = require("node:path");
   return {
     traceProcessorShellPath: () => "/fake/tp",
-    traceProcessorShellAvailable: () => true,
     // Real queries dir so the batched-fold path can load hang-folds-batched.sql.
     traceProcessorQueriesDir: () =>
       path.resolve(__dirname, "../../../native-devtools-android/assets/queries"),

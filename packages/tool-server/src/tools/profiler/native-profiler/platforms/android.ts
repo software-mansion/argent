@@ -6,8 +6,7 @@ import { detectAndroidRunningApp } from "../../../../utils/android-profiler/dete
 import { runAndroidProfilerPipeline } from "../../../../utils/android-profiler/pipeline/index";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
-
-const RECORDING_CAP_MS = 10 * 60 * 1000;
+import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/constants";
 
 export interface AndroidStartParams {
   device_id: string;

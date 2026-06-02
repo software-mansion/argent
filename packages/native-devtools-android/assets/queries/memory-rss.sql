@@ -19,9 +19,7 @@ SELECT
   process_name,
   MIN(anon_rss + file_rss) / 1048576.0 AS start_rss_mb,
   MAX(anon_rss + file_rss) / 1048576.0 AS peak_rss_mb,
-  (MAX(anon_rss + file_rss) - MIN(anon_rss + file_rss)) / 1048576.0 AS growth_mb,
-  MAX(anon_rss) / 1048576.0 AS peak_anon_rss_mb,
-  MAX(swap) / 1048576.0 AS peak_swap_mb
+  (MAX(anon_rss + file_rss) - MIN(anon_rss + file_rss)) / 1048576.0 AS growth_mb
 FROM memory_oom_score_with_rss_and_swap_per_process
 WHERE process_name = (SELECT target_process FROM _argent_args)
 GROUP BY process_name;
