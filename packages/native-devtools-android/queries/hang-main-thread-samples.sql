@@ -4,11 +4,9 @@
 -- perf_sample on the main thread inside the hang window, with the full
 -- callstack text unwound via experimental_slice_callstack.
 --
--- Parameters are injected once into the _argent_args view (by run-tp.ts) and
--- referenced by name in the body, instead of as bare tokens:
---   target_process — package / cmdline
---   hang_start_ns  — hang window start, ns
---   hang_end_ns    — hang window end, ns
+-- Placeholders (declared in the _argent_args view below): target_process —
+-- package / cmdline; hang_start_ns / hang_end_ns — hang window bounds, native ns.
+-- See README.md for the shared _argent_args / template-token conventions.
 
 DROP VIEW IF EXISTS _argent_args;
 CREATE PERFETTO VIEW _argent_args AS

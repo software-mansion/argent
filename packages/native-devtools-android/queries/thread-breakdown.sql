@@ -3,8 +3,9 @@
 -- Powers profiler-stack-query mode=thread_breakdown for Android sessions.
 -- Returns sample_count + share of total per thread.
 --
--- The target process is injected once into the _argent_args view (by
--- run-tp.ts) and referenced by name below, instead of as a bare token.
+-- Placeholder (declared in the _argent_args view below): target_process —
+-- package / cmdline.
+-- See README.md for the shared _argent_args / template-token conventions.
 
 DROP VIEW IF EXISTS _argent_args;
 CREATE PERFETTO VIEW _argent_args AS

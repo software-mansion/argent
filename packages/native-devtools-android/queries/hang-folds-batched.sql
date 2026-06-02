@@ -1,29 +1,25 @@
 -- Argent — batched per-hang annotation (state breakdown + GC overlap).
 --
--- Computes the main-thread state breakdown AND the ART GC overlap for EVERY
--- hang window in a single trace_processor_shell invocation, rather than
--- looping one invocation per hang (which paid the ~1.3 s trace-load cost N
--- times). The per-hang work moves into a JOIN over a runtime-built
--- `argent_hang_windows` table.
+-- Computes the main-thread state breakdown AND ART GC overlap for EVERY hang
+-- window in ONE trace_processor_shell invocation, via a JOIN over the
+-- runtime-built `argent_hang_windows` table instead of looping one invocation
+-- per hang. See README.md, "One trace-load per shell invocation → batch".
 --
--- This is the single source of truth for the batched analyze path. The
--- `argent_hang_state` view below mirrors the standalone, single-window
--- `hang-state-breakdown.sql` (used by the drill-down path) — KEEP THE TWO
--- STATE QUERIES CONSISTENT: the window-clipping math (point 4 of the
--- SQL-hardening plan) is duplicated in both and the sql-smoke test exercises
--- each. There is no standalone GC query any more; the GC overlap logic lives
--- here only (drill-down never surfaced GC).
+-- Single source of truth for the batched analyze path. The `argent_hang_state`
+-- view below mirrors the standalone, single-window `hang-state-breakdown.sql`
+-- (drill-down) — keep the two consistent (README.md, "Two copies of the hang
+-- state breakdown"). There is no standalone GC query; GC overlap lives here
+-- only (drill-down never surfaced GC).
 --
--- Substituted by pipeline/hang-folds-batched.ts before running (this template
--- is loaded via traceProcessorQueriesDir(), NOT through runTpQuery's generic
--- substitution map). The TS replaces:
---   * the single-quoted target-process token in the _argent_args view below
---     with the validated package name; the two views reference it by name as
---     (SELECT target_process FROM _argent_args);
---   * the bare placeholder inside `FROM (VALUES ...)` below with
---     `(hang_index, start_ns, end_ns)` tuples built from the hang list.
--- The windows placeholder must NOT appear anywhere else (e.g. in this header),
--- because its replacement spans multiple lines and would break a comment.
+-- Loaded directly by pipeline/hang-folds-batched.ts, not the generic runTpQuery
+-- path.
+--
+-- Placeholders: target_process (declared in the _argent_args view below); and a
+-- hang-windows token in the `FROM (VALUES ...)` below, which the TS replaces
+-- with one `(hang_index, start_ns, end_ns)` tuple per hang. That windows token
+-- must NOT appear anywhere else (e.g. this header): its replacement spans
+-- multiple lines and would break a comment, so it is referenced only obliquely.
+-- See README.md for the shared _argent_args / template-token conventions.
 
 DROP VIEW IF EXISTS _argent_args;
 CREATE PERFETTO VIEW _argent_args AS
@@ -46,10 +42,10 @@ SELECT
   'state'                           AS row_kind,
   ts.state                          AS state_v,
   ts.blocked_function               AS blocked_function_v,
-  -- Clip each thread_state slice to the hang window so a state that starts
-  -- before the window or runs past its end contributes only the overlapping
-  -- duration. Without this, SUM(ts.dur) over states whose START falls in the
-  -- window can exceed the window length (SmartPerfetto time-interval JOIN).
+  -- Clip each thread_state slice to the hang window so a state that begins
+  -- before the window or extends past its end contributes only the overlapping
+  -- duration. Plain SUM(dur) over states whose START falls in the window can
+  -- otherwise exceed the window length (SmartPerfetto time-interval JOIN).
   CAST(SUM(MIN(ts.ts + ts.dur, hw.end_ns) - MAX(ts.ts, hw.start_ns)) AS TEXT) AS total_dur_ns_v,
   CAST(COUNT(*)    AS TEXT)         AS occurrences_v,
   NULL                              AS gc_reason_v,

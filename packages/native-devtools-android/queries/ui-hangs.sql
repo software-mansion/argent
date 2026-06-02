@@ -1,4 +1,4 @@
--- Argent — UI hangs
+-- Argent — UI hangs.
 --
 -- Merges two signals:
 --   1. ANRs (5s+ input dispatch stalls) via the android.anrs stdlib module.
@@ -20,8 +20,9 @@
 -- we GROUP BY the frame timestamp to emit one hang per frame, keeping the
 -- longest slice duration and a representative jank_type / layer_name.
 --
--- The target process is injected once into the _argent_args view (by
--- run-tp.ts) and referenced by name below, instead of as a bare token.
+-- Placeholder (declared in the _argent_args view below): target_process —
+-- package / cmdline.
+-- See README.md for the shared _argent_args / template-token conventions.
 
 INCLUDE PERFETTO MODULE android.anrs;
 

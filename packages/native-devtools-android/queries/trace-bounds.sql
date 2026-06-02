@@ -1,8 +1,6 @@
 -- Argent — trace timestamp anchor.
 --
--- Perfetto perf_sample / actual_frame_timeline_slice / thread_state etc. ts
--- columns are CLOCK_MONOTONIC nanoseconds since device boot — NOT
--- trace-relative. trace_bounds gives us the trace's earliest ts so we can
--- normalise to trace-relative ns in JS before storing into the Bottleneck
--- shape (which the cross-tool combined-report expects to be 0-anchored).
+-- Returns the trace's earliest ts so the JS side can normalise Perfetto's
+-- CLOCK_MONOTONIC timestamps to trace-relative ns.
+-- See README.md ("Timestamps are CLOCK_MONOTONIC nanoseconds").
 SELECT start_ts FROM trace_bounds;

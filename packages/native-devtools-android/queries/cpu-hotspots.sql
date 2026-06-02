@@ -1,4 +1,4 @@
--- Argent — CPU hotspots
+-- Argent — CPU hotspots.
 --
 -- One output row per (thread_name, leaf_function) — the leaf frame name IS the
 -- dominant function, so one SQL row maps 1:1 to one aggregateCpuHotspots group
@@ -10,19 +10,16 @@
 -- JS re-parsed). A "burst" is a run of samples for the same (thread, function)
 -- with no gap larger than the burst threshold. LAG() finds the gaps, a running
 -- SUM() assigns burst ids, and we emit one `start_ms:end_ms:count` triple per
--- burst. start_ms/end_ms are NATIVE (CLOCK_MONOTONIC) ms; the JS side subtracts
--- traceStartMs to make them trace-relative.
+-- burst. start_ms/end_ms are native ms (README.md, "Timestamps"); the JS side
+-- subtracts traceStartMs to make them trace-relative.
 --
--- Runtime parameters are injected once into the _argent_args view below and
--- referenced by name in the body, so no bare substitution tokens are scattered
--- through the query. run-tp.ts fills them in:
---   target_process — package / cmdline.
---   burst_gap_ns   — burst gap threshold in ns (BURST_GAP_MS × 1e6 from
---                    aggregate.ts), so the SQL and iOS-JS burst paths share one
---                    constant.
+-- The total_samples column is repeated on every output row so the JS side can
+-- compute weight % without a second round-trip.
 --
--- The total_samples column is repeated on every output row so the JS side
--- can compute weight % without a second round-trip.
+-- Placeholders (declared in the _argent_args view below): target_process —
+-- package / cmdline; burst_gap_ns — burst gap threshold in ns (BURST_GAP_MS ×
+-- 1e6 from aggregate.ts, so the SQL and iOS-JS burst paths share one constant).
+-- See README.md for the shared _argent_args / template-token conventions.
 
 DROP VIEW IF EXISTS _argent_args;
 CREATE PERFETTO VIEW _argent_args AS

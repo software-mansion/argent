@@ -5,8 +5,9 @@
 -- own "RSS Growth — Weak Signal" header with a "manual confirmation needed"
 -- caveat (see render.ts).
 --
--- The target process is injected once into the _argent_args view (by
--- run-tp.ts) and referenced by name below, instead of as a bare token.
+-- Placeholder (declared in the _argent_args view below): target_process —
+-- package / cmdline.
+-- See README.md for the shared _argent_args / template-token conventions.
 
 INCLUDE PERFETTO MODULE android.memory.process;
 
