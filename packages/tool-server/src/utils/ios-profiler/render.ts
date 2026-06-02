@@ -25,13 +25,10 @@ interface InlineCap {
 }
 
 /**
- * Render a native profiler analysis report. Works on both iOS and Android
- * payloads — bottleneck rows are platform-agnostic, with branches on
- * `b.platform` / `b.type` for Android-specific row text (jank reason,
- * state breakdown, RSS-growth weak signal).
- *
- * Old export name `renderIosProfilerReport` is retained as an alias for
- * source compatibility with iOS callers.
+ * Render a native profiler analysis report for iOS or Android payloads —
+ * bottleneck rows are platform-agnostic, branching on `b.platform`/`b.type`
+ * for Android-specific row text (jank reason, state breakdown, RSS growth).
+ * `renderIosProfilerReport` is kept below as a source-compat alias.
  */
 export async function renderNativeProfilerReport(
   input: RenderInput

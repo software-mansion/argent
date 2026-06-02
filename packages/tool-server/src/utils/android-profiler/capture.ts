@@ -10,10 +10,9 @@ const STOP_POLL_INTERVAL_MS = 200;
 const STOP_TOTAL_TIMEOUT_MS = 30_000;
 
 /**
- * Substitute the TARGET_*_PLACEHOLDER tokens in the bundled tracecfg with the
- * resolved app package. `target_cmdline` and the `atrace_apps` entry both
- * take the package name (the process cmdline for an Android app is its
- * package, unless the manifest overrides `android:process=...`).
+ * Fill the TARGET_*_PLACEHOLDER tokens in the bundled tracecfg with the app
+ * package — the process cmdline is the package unless the manifest sets
+ * `android:process=...`.
  */
 export async function buildTraceConfig(
   appPackage: string,
@@ -42,14 +41,12 @@ export interface StartPerfettoResult {
 /**
  * Start a perfetto recording on the target device.
  *
- * Live-tested constraints (see plan §"Live-emulator findings"):
- *   - /data/misc/perfetto-traces/ is `drwxrwx-wx` but SELinux denies
- *     `shell:s0` writes, so we cannot push the config file there via
- *     `cat > /data/misc/...`. Pipe the config to perfetto on stdin instead
- *     (`perfetto --txt -c -`). `traced` (privileged) writes the .pftrace.
- *   - `--background-wait` blocks until all data sources are started AND
- *     prints the PID on stdout. The PID is the only line we need; tolerate
- *     warnings preceding it by taking the last non-empty stdout line.
+ * Two live-tested constraints drive the shape here: SELinux denies `shell:s0`
+ * writes to /data/misc/perfetto-traces/, so the config is piped to perfetto on
+ * stdin (`--txt -c -`) rather than pushed as a file; and `--background-wait`
+ * prints the daemon PID on stdout once data sources start, so we take the last
+ * non-empty stdout line (warnings may precede it).
+ * rationale: utils/android-profiler/ANDROID_PROFILER_REFERENCE.md "2. Capture"
  */
 export async function startPerfetto(
   opts: StartPerfettoOptions
@@ -65,10 +62,8 @@ export async function startPerfetto(
   const cfgText = await buildTraceConfig(opts.appPackage);
   const onDeviceTracePath = `${ON_DEVICE_TRACE_DIR}/argent-${opts.timestamp}.pftrace`;
 
-  // `perfetto --txt -c - --background-wait -o <path>` reads the textproto config
-  // from stdin and prints the on-device daemon's PID on stdout once data sources
-  // are running. The host-side adb shell exits when stdin closes after the
-  // --background-wait return; the daemon keeps running on the device.
+  // Config on stdin, PID on stdout (see JSDoc). The host adb shell exits when
+  // stdin closes; the on-device daemon keeps running.
   const args = [
     "-s",
     opts.serial,
@@ -160,12 +155,9 @@ export interface StopPerfettoResult {
 
 /**
  * Stop a running perfetto recording, pull the .pftrace to the host, and clean
- * up the on-device file. SIGTERM → poll /proc/$pid → adb pull → rm.
- *
- * If /proc/$pid is already gone on the first poll (perfetto exited early —
- * the device-side daemon was killed, the trace_processor crashed, etc.) we
- * still attempt the pull and surface a partial-trace warning, mirroring the
- * iOS recordingExitedUnexpectedly path.
+ * up the on-device file (SIGTERM → poll /proc/$pid → adb pull → rm). If the
+ * daemon is already gone on the first poll, still pull and surface a
+ * partial-trace warning (mirrors the iOS recordingExitedUnexpectedly path).
  */
 export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfettoResult> {
   // First-poll check: if the daemon is already gone, skip the SIGTERM and pull

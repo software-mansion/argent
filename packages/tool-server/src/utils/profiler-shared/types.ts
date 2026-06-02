@@ -1,12 +1,10 @@
 /**
- * Cross-platform native profiler types.
+ * Cross-platform native profiler types — the home of the iOS/Android symmetry.
  *
- * Originally lived in utils/ios-profiler/types.ts; hoisted here so the Android
- * pipeline can produce the same `Bottleneck` shape without forking the render
- * path. `platform: "ios" | "android"` lets render branches choose row text
- * (e.g. jank reason / state breakdown for Android) without splitting the union.
- *
- * iOS source-compat re-exports remain in utils/ios-profiler/types.ts.
+ * Hoisted from utils/ios-profiler/types.ts so the Android pipeline produces the
+ * same `Bottleneck` shape without forking the render path. `platform` lets
+ * render branches choose row text (jank reason / state breakdown for Android)
+ * without splitting the union. iOS source-compat re-exports stay in ios-profiler/types.ts.
  */
 
 export interface CpuHotspot {
@@ -104,9 +102,8 @@ export interface NativeProfilerAnalyzeResult {
    */
   status: "ok" | "analysis_failed";
   /**
-   * Per-exporter error messages keyed by exporter name (Android: "cpu",
-   * "hangs", "rss"; iOS: "cpu", "hangs", "leaks"). Empty object when
-   * `status === "ok"`.
+   * Per-exporter error messages keyed by exporter name (Android: cpu/hangs/rss;
+   * iOS: cpu/hangs/leaks). Empty object when `status === "ok"`.
    */
   exportErrors: Record<string, string>;
 }

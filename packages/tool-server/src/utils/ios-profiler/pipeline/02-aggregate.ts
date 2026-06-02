@@ -6,13 +6,9 @@ import {
 } from "../../profiler-shared/aggregate";
 
 /**
- * Find the dominant (most actionable) function in a stack.
- * Walks the stack from top (leaf) looking for user/third-party frames first,
- * then RN framework internals, skipping system library frames entirely.
- *
- * iOS-only: this 3-tier picker reads StackFrame.isSystemLibrary, which the
- * xctrace XML parser populates. The Android SQL already returns the leaf
- * function pre-picked at the SQL level, so this is iOS pre-pass code.
+ * Find the dominant (most actionable) function in a stack: walk from the leaf,
+ * preferring user/third-party frames, then RN framework internals, skipping
+ * system libraries. iOS-only pre-pass — Android SQL returns the leaf pre-picked.
  */
 export function findDominantFunction(stack: StackFrame[]): string | null {
   if (!stack || stack.length === 0) return null;
@@ -61,12 +57,9 @@ function normalizeThread(threadFmt: string): string {
 }
 
 /**
- * iOS CPU hotspot aggregation. Pre-passes the raw CpuSample[] into the shared
- * AggregatorInputRow[] shape (one row per sample with the dominant function
- * picked and thread normalised), then delegates to the shared aggregator.
- *
- * Re-exports findDominantFunction / extractAppCallChain for the iOS correlator,
- * which uses them to pick per-hang suspected functions and chains.
+ * iOS CPU hotspot aggregation: pre-pass raw CpuSample[] into the shared
+ * AggregatorInputRow[] shape (one row per sample, dominant function picked,
+ * thread normalised), then delegate to the shared aggregator.
  */
 export function aggregateCpuHotspots(
   samples: CpuSample[],

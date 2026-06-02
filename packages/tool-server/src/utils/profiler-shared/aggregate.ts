@@ -2,30 +2,25 @@ import type { CpuHotspot } from "./types";
 
 const MIN_WEIGHT_PERCENTAGE = 3;
 /**
- * Gap (ms) that separates two activity bursts of the same (thread, function).
- * Single source of truth for BOTH burst paths: the iOS path consumes it here
- * (timestamp-derived bursts below); the Android path injects `BURST_GAP_MS ×
- * 1e6` into cpu-hotspots.sql as the `BURST_GAP_NS` token (see pipeline/index.ts)
- * so the SQL-side and JS-side thresholds can never drift.
+ * Gap (ms) separating two activity bursts of the same (thread, function).
+ * Single source of truth for both paths: iOS consumes it here (timestamp-derived
+ * bursts below); Android injects `BURST_GAP_MS × 1e6` into cpu-hotspots.sql as
+ * the `BURST_GAP_NS` token (pipeline/index.ts) so the two can't drift.
  */
 export const BURST_GAP_MS = 500;
 
 /**
  * Generic aggregator input — one row per (thread, leaf-function) cluster.
  *
- * iOS path: a pre-pass over CpuSample[] picks `dominantFunction` via the
- * 3-tier picker in findDominantFunction(), normalises the thread name, and
- * emits one AggregatorInputRow per sample (weightNs = the sample's own
- * weight). Multiple rows can share the same (dominantFunction, thread) and
- * are grouped here.
+ * iOS path: a pre-pass over CpuSample[] picks `dominantFunction`, normalises the
+ * thread, and emits one row per sample (weightNs = the sample's weight); rows
+ * sharing (dominantFunction, thread) are grouped here.
  *
- * Android path: PerfettoSQL already returns one row per (thread_name,
- * leaf_function) with sample_count + SQL-computed burst windows. The Android
- * pipeline expands one SQL row into one AggregatorInputRow whose weightNs is
- * sample_count × sampling_period_ns and whose burst/first/last/count are
- * precomputed (so it passes an empty `timestampsNs` and the optional
- * `precomputed*` fields below). When those are present the aggregator skips
- * the timestamp-derived burst/first/last/count block entirely.
+ * Android path: PerfettoSQL returns one row per (thread, leaf_function) with
+ * sample_count + SQL-computed bursts, expanded into one row with precomputed
+ * burst/first/last/count and an empty `timestampsNs`. When the `precomputed*`
+ * fields are set the aggregator skips the timestamp-derived block entirely.
+ * rationale: utils/android-profiler/PIPELINE_DESIGN.md "2. The shared aggregator hoist"
  */
 export interface AggregatorInputRow {
   /** Pre-picked dominant function. Caller is responsible for selecting it. */
@@ -39,9 +34,8 @@ export interface AggregatorInputRow {
   /** App-level call chains observed in this group, with sample counts. */
   callChains: { chain: string[]; count: number }[];
   /**
-   * Precomputed burst windows (Android, SQL-side). When set, the aggregator
-   * uses these instead of deriving bursts from `timestampsNs`. Trace-relative
-   * ms — the caller has already applied traceStartMs.
+   * Precomputed burst windows (Android, SQL-side), trace-relative ms. When set,
+   * the aggregator uses these instead of deriving bursts from `timestampsNs`.
    */
   precomputedBursts?: { startMs: number; endMs: number; sampleCount: number }[];
   /** Precomputed first-sample time (trace-relative ms). Pairs with precomputedBursts. */

@@ -1,11 +1,7 @@
 /**
- * iOS-specific profiler types and re-exports of the shared `Bottleneck` family.
- *
- * The cross-platform Bottleneck/CpuHotspot/UiHang/MemoryLeak/MemoryRssGrowth
- * types live in utils/profiler-shared/types.ts so the Android pipeline can
- * produce the same shape without forking the render path. This file keeps the
- * iOS-only raw row types (`StackFrame`, `CpuSample`, `RawHang`, `RawLeak`)
- * and re-exports the shared union for existing callers.
+ * iOS-specific raw row types (`StackFrame`, `CpuSample`, `RawHang`, `RawLeak`)
+ * plus re-exports of the shared `Bottleneck` family. The cross-platform types
+ * live in profiler-shared/types.ts (the iOS/Android symmetry home).
  */
 
 export type {

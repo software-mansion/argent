@@ -18,17 +18,9 @@ export interface RunTpQueryOptions {
   /** Filename in queries/ (e.g. "cpu-hotspots.sql"). */
   query: string;
   /**
-   * Placeholder → replacement substitutions applied before running. Each query
-   * declares its placeholders once in a small `_argent_args` PERFETTO VIEW
-   * header (e.g. `'{{TARGET_PROCESS}}' AS target_process`) and references them
-   * by name in the body, so the substitution lands at a single, self-documenting
-   * site per value rather than scattered through the SQL. Placeholders use the
-   * `{{NAME}}` sigil and are resolved by `renderSqlTemplate`, which throws on a
-   * forgotten/mistyped token instead of leaking it into a SQLite error. Keys
-   * are the bare names (e.g. `TARGET_PROCESS`, `HANG_START_NS`). Values are NOT
-   * shell-escaped — they're interpolated into SQL via a tempfile, not a shell
-   * command. Callers are expected to validate values (numeric for ns;
-   * identifier-shaped for thread/function/process names).
+   * `{{NAME}}` → replacement map for `renderSqlTemplate`. Values are interpolated
+   * into SQL (not parameterised), so callers must validate them first.
+   * rationale: queries/README.md "`{{NAME}}` template tokens"
    */
   substitutions: Record<string, string>;
 }
@@ -41,12 +33,10 @@ export interface RunTpInlineOptions {
 }
 
 /**
- * Run a SQL query against a .pftrace using trace_processor_shell, returning
- * the parsed rows. trace_processor_shell's `-q <file>` emits CSV on stdout
- * by default (header + one row per result, strings quoted, numbers bare,
- * NULL as `[NULL]`). All log noise goes to stderr, which `execFileAsync`
- * does not capture. For multi-statement scripts only the final SELECT's
- * rows reach stdout, so the parser does not need to demultiplex blocks.
+ * Run a SQL query file against a .pftrace via trace_processor_shell, returning
+ * parsed rows. `-q <file>` emits CSV on stdout (strings quoted, numbers bare,
+ * NULL as `[NULL]`); for multi-statement scripts only the final SELECT reaches
+ * stdout, so the parser needn't demultiplex blocks.
  */
 export async function runTpQuery<Row = Record<string, unknown>>(
   opts: RunTpQueryOptions
@@ -59,18 +49,13 @@ export async function runTpQuery<Row = Record<string, unknown>>(
 
 /**
  * Resolve `{{NAME}}` placeholders in a SQL template against a substitution map.
- *
- * The sigil makes substitution sites unambiguous (a `{{TARGET_PROCESS}}` can
- * never be confused with a real column/keyword) and lets us validate both
- * directions in one pass:
- *   • a placeholder with no matching substitution throws here, with the token
- *     name — far clearer than the downstream `no such column: {{TARGET_PROCESS}}`
- *     SQLite error a forgotten substitution would otherwise produce;
- *   • a substitution that the template never references also throws, catching
- *     a renamed/stale token before it silently does nothing.
+ * Validates both directions: a placeholder with no substitution throws (with the
+ * token name, clearer than the downstream SQLite error), and a substitution the
+ * template never references also throws (catching a stale/renamed token).
  *
  * Values are inserted via a function replacer, so `$`-sequences in a value are
  * NOT treated as `String.replace` special patterns.
+ * rationale: queries/README.md "`{{NAME}}` template tokens"
  */
 export function renderSqlTemplate(
   template: string,
@@ -97,14 +82,9 @@ export function renderSqlTemplate(
 }
 
 /**
- * Run a fully-rendered SQL string against a .pftrace. Used by the batched
- * hang-fold path, which composes SQL in-memory from a runtime hang list
- * rather than from a static `queries/*.sql` template.
- *
- * Each invocation still pays the trace_processor_shell trace-load cost
- * (~1.3 s for a 76 MB trace) — callers that need to run many queries should
- * fold them into a single SQL script using CREATE PERFETTO VIEW + a
- * terminal UNION SELECT, not loop this function.
+ * Run a fully-rendered SQL string against a .pftrace. Each invocation pays the
+ * trace-load cost once, so batch many queries into one script rather than looping.
+ * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  */
 export async function runTpInline<Row = Record<string, unknown>>(
   opts: RunTpInlineOptions

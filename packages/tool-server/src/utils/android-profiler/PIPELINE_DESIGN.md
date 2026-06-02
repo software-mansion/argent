@@ -84,9 +84,8 @@ collapsed into a single batched SQL invocation (see §4).
 If the drill-down path ever needs to fire many queries per second, the
 right move is to stand up `trace_processor_shell` in HTTP RPC mode
 (`-D --http-port <p>`) and POST `QueryArgs` protobufs over a persistent
-connection — see `research/perfetto-rpc-options.md`. That is a real
-architectural change; do not undertake it for the current single-query
-interactive drill-down volume.
+connection. That is a real architectural change; do not undertake it for
+the current single-query interactive drill-down volume.
 
 If profile traces grow to the point where the analyze-stage fold queries
 themselves slow down, the next move is to cache the per-hang fold rows
@@ -129,7 +128,4 @@ Two reasons the SQL has the exact shape it does:
   FROM (VALUES ...)`, leaning on SQLite's implicit `columnN` naming.
 
 End-to-end against a 76 MB trace with 1013 jank rows: **6.3 s** total
-(was: ~47 minutes projected, never completed). See
-`research/perfetto-n-plus-1-fix/README.md` for the full diagnosis,
-benchmark table, and rationale for choosing the batched-SQL approach
-over the HTTP-RPC alternative.
+(was: ~47 minutes projected, never completed).

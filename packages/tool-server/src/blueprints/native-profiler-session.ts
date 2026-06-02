@@ -9,12 +9,9 @@ import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 
-// The tools that consume this session are cross-platform: `native-profiler-*`.
-// iOS uses an xctrace child process; Android uses an `adb shell perfetto`
-// child whose PID is the on-device perfetto daemon (the host-side adb shell
-// exits after `--background-wait` returns). The blueprint stores both shapes
-// behind platform-agnostic field names (`capturePid`, `captureProcess`) so
-// the start/stop tools branch only inside platform-specific helpers.
+// Cross-platform session for the `native-profiler-*` tools: iOS uses an xctrace
+// child, Android an `adb shell perfetto` child. Both sit behind platform-agnostic
+// fields (`capturePid`, `captureProcess`) so start/stop branch only in helpers.
 export const NATIVE_PROFILER_SESSION_NAMESPACE = "NativeProfilerSession";
 
 type NativeProfilerSessionFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
@@ -38,7 +35,7 @@ export interface NativeProfilerSessionApi {
   deviceId: string;
   platform: "ios" | "android";
   appProcess: string | null;
-  /** iOS: xctrace PID. Android: on-device perfetto daemon PID. */
+  /** iOS: xctrace PID. Android: on-device perfetto daemon PID — NOT the adb-shell PID (which exits after `--background-wait`). */
   capturePid: number | null;
   /** iOS: the xctrace ChildProcess. Android: the `adb shell perfetto` ChildProcess (detaches after --background-wait). */
   captureProcess: ChildProcess | null;
@@ -55,10 +52,9 @@ export interface NativeProfilerSessionApi {
   androidOnDeviceTracePath: string | null;
 }
 
-// Discard semantics on dispose: registry teardown only fires from process
-// shutdown, where any in-flight recording is being abandoned. Skip the
-// SIGINT finalise grace (that is the explicit `native-profiler-stop` contract)
-// and SIGKILL straight away so shutdown is not held up.
+// Dispose only fires on process shutdown, where an in-flight recording is being
+// abandoned: skip the SIGINT finalise grace (that's the native-profiler-stop
+// contract) and SIGKILL straight away so shutdown isn't held up.
 const DISPOSE_REAP_MS = 1_000;
 
 export const nativeProfilerSessionBlueprint: ServiceBlueprint<
@@ -119,16 +115,11 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
           } catch {
             // already dead
           }
-          // NOTE: on Android, `captureProcess` is the host-side `adb shell
-          // perfetto` ChildProcess, which has typically already exited (stdin
-          // closed once --background-wait returned). The kill above is a
-          // no-op against an already-dead handle; the on-device perfetto
-          // daemon keeps running and is owned by `traced`. A future cleanup
-          // pass should optionally `adb -s <serial> shell kill -KILL
-          // <capturePid>` here to reap the daemon — outside v1 scope because
-          // dispose only fires on process shutdown and orphaned recordings
-          // self-terminate at the configured duration_ms (currently none) or
-          // when the device reboots.
+          // NOTE (Android): `captureProcess` is the host-side `adb shell perfetto`,
+          // usually already exited (stdin closed when --background-wait returned),
+          // so the kill above is a no-op on a dead handle. The on-device daemon
+          // keeps running, owned by `traced`; a future cleanup pass should
+          // `adb -s <serial> shell kill -KILL <capturePid>` here to reap it.
           await waitForChildExit(child, DISPOSE_REAP_MS);
           state.profilingActive = false;
           state.capturePid = null;

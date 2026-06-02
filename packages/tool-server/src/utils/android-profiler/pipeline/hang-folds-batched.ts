@@ -5,9 +5,8 @@ import { runTpInline, renderSqlTemplate } from "./run-tp";
 import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
 
 /**
- * Per-hang annotation data, indexed by the caller-assigned hang index.
- * Hangs with no thread_state rows in their window get an empty `state`
- * array; hangs with no GC overlap get an empty `gc` array.
+ * Per-hang annotation data, keyed by the caller-assigned hang index. Hangs with
+ * no thread_state rows get an empty `state`; no GC overlap → empty `gc`.
  */
 export interface HangFoldsBatched {
   state: Map<number, AndroidHangStateRow[]>;
@@ -31,28 +30,19 @@ export interface RunBatchedHangFoldsOptions {
 }
 
 /**
- * Compute main-thread state breakdown + GC overlap for ALL hang windows in
- * a single trace_processor_shell invocation.
- *
- * Replaces the legacy per-hang `runTpQuery` loop, which paid the
- * trace_processor_shell trace-load cost (~1.3 s) on every iteration. With
- * 1013 hangs × 2 queries that was ~47 minutes serial; this collapses it to
- * a single invocation, ~1.7 s end-to-end on a 76 MB trace regardless of
- * hang count (the per-hang work moves into a JOIN over a runtime-built
- * `argent_hang_windows` table).
+ * Compute main-thread state breakdown + GC overlap for ALL hang windows in one
+ * trace_processor_shell invocation, replacing the legacy per-hang loop (the
+ * per-hang work moves into a JOIN over a runtime-built `argent_hang_windows`
+ * table). On failure the promise rejects and the pipeline degrades every hang
+ * to empty folds.
+ * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  *
  * Schema invariants:
- *   • Each hang's `startNs`/`endNs` must be a finite non-negative integer.
- *     The values are inlined into SQL as bare digits — not quoted — so any
- *     non-numeric input would produce a SQL syntax error rather than an
- *     injection. We assert this for defence-in-depth.
- *   • `target` must already have been validated against the package-name
- *     alphabet by the caller. It's wrapped in single quotes with literal
- *     `'` characters disallowed.
- *
- * Failure semantics: a single rejected promise. The pipeline treats this
- * the same way it treats any per-stage failure — every hang gets empty
- * state/gc folds and the error message lands in `exportErrors`.
+ *   • Each hang's `startNs`/`endNs` is inlined into SQL as bare digits — not
+ *     quoted — so any non-numeric input produces a SQL syntax error rather than
+ *     an injection. We assert finite non-negative integers for defence-in-depth.
+ *   • `target` must already be validated against the package alphabet; it's
+ *     wrapped in single quotes with literal `'` disallowed.
  */
 export async function runBatchedHangFolds(
   opts: RunBatchedHangFoldsOptions
@@ -67,11 +57,8 @@ export async function runBatchedHangFolds(
     valuesTuples.push(`(${hang.hangIndex},${hang.startNs},${hang.endNs})`);
   }
 
-  // The SQL template is the single source of truth in queries/. We only build
-  // the validated VALUES tuples + the (already-validated) target here and
-  // resolve the template's `{{...}}` placeholders via the shared renderer — no
-  // SQL string literals live in this file. Tuples are bare digits/parens;
-  // target is identifier-shaped.
+  // SQL lives in queries/hang-folds-batched.sql; we only build the validated
+  // VALUES tuples (bare digits) + already-validated target and fill the template.
   const templatePath = path.join(traceProcessorQueriesDir(), "hang-folds-batched.sql");
   const template = await fs.readFile(templatePath, "utf8");
   const sql = renderSqlTemplate(template, {

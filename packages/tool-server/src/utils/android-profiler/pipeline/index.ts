@@ -27,17 +27,16 @@ import type {
 // ~10ms of CPU time on the sampled thread. weightNs is sample_count × this.
 const SAMPLE_PERIOD_NS = 10_000_000;
 
-// Burst-gap threshold for cpu-hotspots.sql, injected as the BURST_GAP_NS token.
-// Derived from BURST_GAP_MS so the SQL-side (Android) and JS-side (iOS) burst
-// thresholds share one source of truth.
+// Burst-gap threshold injected into cpu-hotspots.sql as BURST_GAP_NS. Derived
+// from BURST_GAP_MS so SQL-side (Android) and JS-side (iOS) bursts can't drift.
 const BURST_GAP_NS = String(BURST_GAP_MS * 1_000_000);
 
 /**
- * Query the trace's monotonic-since-boot start time so we can normalise
- * every other ts column to trace-relative ns. Perfetto's `ts` is always in
- * the CLOCK_MONOTONIC domain — for any device with non-zero uptime, a raw
- * ts is in the tens-of-billions ns range, which would alias as a wall-clock
- * date years in the future inside `instrumentsNsToWallClock`.
+ * Query the trace's CLOCK_MONOTONIC start so every other `ts` can be normalised
+ * to trace-relative ns: raw monotonic ts is tens-of-billions of ns on a booted
+ * device and would otherwise alias as a wall-clock date years in the future in
+ * `instrumentsNsToWallClock`.
+ * rationale: queries/README.md "Timestamps are CLOCK_MONOTONIC nanoseconds"
  */
 async function getTraceStartNs(tracePath: string): Promise<number> {
   try {
@@ -67,17 +66,10 @@ export interface AndroidPipelineResult {
 
 /**
  * Drive trace_processor_shell against an Android .pftrace and produce the
- * platform-agnostic Bottleneck[] the render layer consumes.
- *
- * Three top-level queries (cpu + hangs + rss) run in parallel via
- * `Promise.allSettled` — each is its own trace_processor_shell invocation,
- * paying the trace-load cost once. The per-hang state-breakdown + GC-overlap
- * work used to loop one trace_processor_shell invocation per hang per query,
- * which scaled linearly with hang count: ~1.4 s × 2 queries × N hangs. On
- * traces with hundreds of janky frames that exceeded the tool-call deadline
- * before completing. All per-hang folds are now batched into a single
- * additional invocation in `runBatchedHangFolds`, so the worst case is now
- * fixed-cost (~4 invocations end-to-end).
+ * platform-agnostic Bottleneck[] the render layer consumes. CPU + hangs + RSS
+ * run as parallel top-level queries; all per-hang folds are batched into one
+ * more invocation, so the worst case is fixed-cost (~4 invocations end-to-end).
+ * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  */
 export async function runAndroidProfilerPipeline(
   tracePath: string,
@@ -86,11 +78,8 @@ export async function runAndroidProfilerPipeline(
   const target = sanitizeProcessName(appPackage);
   const exportErrors: Record<string, string> = {};
 
-  // Per-hang queries need their bounds in the trace's NATIVE (monotonic) ns
-  // domain, so we keep `hang.ts_ns` in native ns when we hand it to
-  // `runBatchedHangFolds` — then we subtract traceStartNs from the values we
-  // store on UiHang so the cross-tool combined-report can apply
-  // trace-relative time-align math.
+  // Per-hang fold queries need NATIVE (monotonic) ns bounds, so re-add
+  // traceStartNs below; UiHang values stay trace-relative. See getTraceStartNs.
   const traceStartNs = await getTraceStartNs(tracePath);
 
   const [cpuRowsResult, hangRowsResult, rssRowsResult] = await Promise.allSettled([
@@ -138,10 +127,8 @@ export async function runAndroidProfilerPipeline(
 
   const uiHangsBase = hangRowsToBottlenecks(hangRows, traceStartNs);
 
-  // Single batched call replaces the legacy 2N per-hang loop. A failure here
-  // degrades to "every hang gets an empty fold" without aborting the rest of
-  // the pipeline — same shape as a failure in any of the top-level queries
-  // above.
+  // Single batched call replaces the legacy 2N per-hang loop. On failure,
+  // degrade to empty folds rather than aborting the pipeline (same as the top-level queries).
   const hangFolds = await runBatchedHangFolds({
     tracePath,
     target,
@@ -174,9 +161,9 @@ export async function runAndroidProfilerPipeline(
 }
 
 /**
- * Light-weight variant for profiler-combined-report: only fetches the data
- * the cross-tool correlation needs (UI hangs with start/end ns). Skips the
- * CPU hotspot + RSS queries and the per-hang state/GC folds.
+ * Light-weight variant for profiler-combined-report: fetches only the UI hangs
+ * (with start/end ns) the cross-tool correlation needs — skips CPU/RSS queries
+ * and the per-hang folds.
  */
 export async function loadAndroidCombinedData(
   tracePath: string,
@@ -214,9 +201,9 @@ export interface AndroidStackQueryOptions {
 
 /**
  * Drill-down entry point for the Android branch of profiler-stack-query.
- * Re-queries the .pftrace per call rather than holding parsed data in memory —
- * trace_processor_shell is fast enough (~30 ms per query against a multi-MB
- * trace) that this is preferable to the iOS in-memory caching path.
+ * Re-queries the .pftrace per call instead of caching parsed data in memory —
+ * trace_processor_shell is fast enough (~30 ms/query) that caching isn't worth it.
+ * rationale: utils/android-profiler/PIPELINE_DESIGN.md "3. Drill-down: re-query, don't cache"
  */
 export async function runAndroidStackQuery(opts: AndroidStackQueryOptions): Promise<string> {
   const target = sanitizeProcessName(opts.appPackage);
@@ -392,8 +379,7 @@ function cpuRowsToAggregatorRows(
   rows: AndroidCpuHotspotRow[],
   traceStartNs: number
 ): AggregatorInputRow[] {
-  // Burst start/end ms arrive in the trace's NATIVE (monotonic) domain; the
-  // rest of the pipeline is 0-anchored, so subtract the trace start (in ms).
+  // Bursts arrive in NATIVE (monotonic) ms; pipeline is 0-anchored, so subtract trace start.
   const traceStartMs = Math.round(traceStartNs / 1_000_000);
   const out: AggregatorInputRow[] = [];
   for (const row of rows) {
@@ -404,9 +390,8 @@ function cpuRowsToAggregatorRows(
       dominantFunction: dominant,
       thread,
       weightNs: row.sample_count * SAMPLE_PERIOD_NS,
-      // Android ships SQL-precomputed bursts; no raw timestamps cross the wire.
-      // The empty array keeps the aggregator's `duringHang` check false (the
-      // Android path never passes hangSampleTimestamps anyway).
+      // Android ships SQL-precomputed bursts, no raw timestamps. Empty array
+      // keeps the aggregator's duringHang check false (Android never passes hangSampleTimestamps).
       timestampsNs: [],
       callChains: [{ chain: [dominant], count: row.sample_count }],
       precomputedBursts: parseBurstWindows(row.burst_windows, traceStartMs),
@@ -464,10 +449,8 @@ function normaliseAndroidThread(threadName: string | null, isMainThread: boolean
 }
 
 /**
- * Parse the SQL-side `burst_windows` column — comma-separated
- * `start_ms:end_ms:count` triples in NATIVE (monotonic) ms — into
- * trace-relative burst windows (subtracting traceStartMs). Malformed triples
- * are skipped defensively.
+ * Parse the SQL-side `burst_windows` column (`start_ms:end_ms:count` triples,
+ * NATIVE ms) into trace-relative windows. Malformed triples are skipped.
  */
 function parseBurstWindows(
   s: string | null,
@@ -512,8 +495,8 @@ function round1(n: number): number {
 }
 
 /**
- * Restrict TARGET_PROCESS to the Android package alphabet so the substitution
- * cannot inject SQL. Packages match `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`.
+ * Reject any process name that isn't package-shaped before SQL substitution —
+ * the value is interpolated, not parameterised, so the alphabet is the guard. See regex.
  */
 function sanitizeProcessName(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9._-]*$/.test(name)) {
@@ -526,8 +509,8 @@ function sanitizeProcessName(name: string): string {
 
 /**
  * Restrict thread/function identifiers to a safe alphabet before SQL
- * substitution. Allows letters, digits, underscore, dot, plus, colon, slash —
- * enough for typical C++/Hermes/Java symbols while rejecting quotes/semis.
+ * substitution — see the regex (allows `-`, `<>`, space for C++
+ * templates/demangled names; rejects quotes/semicolons).
  */
 function sanitizeIdentifier(name: string): string {
   if (!/^[A-Za-z0-9_.:+\/\-<> ]+$/.test(name)) {

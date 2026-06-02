@@ -48,16 +48,9 @@ Two live constraints to remember:
 
 ## 3. Queries
 
-| File                            | Purpose                                                                                                            |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `cpu-hotspots.sql`              | One row per (thread, leaf_function) with sample count + ts array. Aggregator picks dominant, normalises thread.    |
-| `ui-hangs.sql`                  | `android_anrs` ∪ `actual_frame_timeline_slice` (jank). `reason` is `jank_type` for jank rows.                       |
-| `hang-state-breakdown.sql`      | Per-hang main-thread state durations + `blocked_function`. Parameterised on `HANG_START_NS` / `HANG_END_NS`.        |
-| `hang-gc-overlap.sql`           | ART GC slices overlapping the hang window. Folded into the hang row's prose, not its own report section.            |
-| `memory-rss.sql`                | RSS growth across the recording. Weak signal — never reported as a leak, always YELLOW.                              |
-| `thread-breakdown.sql`          | Per-thread sample count + % of app. Powers `profiler-stack-query` mode=thread_breakdown.                             |
-| `function-callers.sql`          | Callstacks containing a given leaf function on a given thread. Powers `profiler-stack-query` mode=function_callers.  |
-| `hang-main-thread-samples.sql`  | Main-thread perf_sample rows during a hang window, with unwound callstack text.                                      |
+Per-query docs and the shared SQL conventions (`_argent_args` parameters,
+`{{NAME}}` tokens, CLOCK_MONOTONIC timestamps, the batched-fold pattern) are the
+source of truth in `queries/README.md`. Don't re-list them here.
 
 PerfettoSQL stdlib column-name drift is the main risk: when `trace_processor_shell` changes versions, column names in `android_anrs` / `actual_frame_timeline_slice` / `memory_oom_score_with_rss_and_swap_per_process` can rename. Pin the binary version in `scripts/download-native-binaries.sh` and add a fixture test on bumps.
 
@@ -65,17 +58,11 @@ PerfettoSQL stdlib column-name drift is the main risk: when `trace_processor_she
 
 ## 4. The two-file pipeline (not iOS's four-file)
 
-iOS has `pipeline/{xml-parser, 01-correlate, 02-aggregate, index}.ts` because:
-
-1. XML parsing is bulky and benefits from isolation.
-2. Correlation and aggregation are CPU-bound loops that pay off being tested independently.
-
-Android collapses (1) entirely (PerfettoSQL parses for us) and partially collapses (2) (the SQL `GROUP BY` does the heavy lifting). The right Android shape is:
-
-- `queries/*.sql` — declarative; what we want to know.
-- `pipeline/index.ts` + `pipeline/hang-fold.ts` — imperative; row-to-Bottleneck transform + per-hang fold.
-
-A reader who tries to mirror iOS's 4-file shape is making a mistake. Don't fork the shared aggregator — `utils/profiler-shared/aggregate.ts` is the single source of truth for the dominant-function / thread-normalisation / severity / burst-windowing logic.
+PerfettoSQL parses and aggregates for us, so the Android branch needs only
+`pipeline/index.ts` (row → `Bottleneck` transform) and `pipeline/hang-fold.ts`
+(per-hang fold) — not iOS's four files. Don't mirror iOS's shape, and don't fork
+the shared aggregator (`utils/profiler-shared/aggregate.ts`). See
+`PIPELINE_DESIGN.md` for the full rationale.
 
 ---
 

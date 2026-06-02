@@ -1,9 +1,7 @@
 /**
- * Android-specific raw row shapes returned by `trace_processor_shell` JSON.
- *
- * These mirror the columns the queries in `queries/*.sql` emit. The Android
- * pipeline maps them into the platform-agnostic Bottleneck shape defined in
- * utils/profiler-shared/types.ts.
+ * Android-specific raw row shapes emitted by the `queries/*.sql` files and
+ * parsed out of trace_processor_shell's CSV output. The Android pipeline maps
+ * them into the platform-agnostic Bottleneck shape in profiler-shared/types.ts.
  */
 
 export interface AndroidCpuHotspotRow {
@@ -14,10 +12,9 @@ export interface AndroidCpuHotspotRow {
   first_ts_ns: number;
   last_ts_ns: number;
   /**
-   * Burst windows computed SQL-side: comma-separated `start_ms:end_ms:count`
-   * triples, where start_ms/end_ms are NATIVE (CLOCK_MONOTONIC) ms. The
-   * pipeline subtracts traceStartMs to make them trace-relative. Replaces the
-   * old per-sample `ts_array`.
+   * SQL-side burst windows: comma-separated `start_ms:end_ms:count` triples in
+   * NATIVE (monotonic) ms (pipeline subtracts traceStartMs). Replaces the old
+   * per-sample `ts_array`.
    */
   burst_windows: string | null;
   total_samples: number;
