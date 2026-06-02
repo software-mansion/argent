@@ -15,7 +15,7 @@ describe("base-props", () => {
           "$process_person_profile",
           "$session_id",
           "arch",
-          "cli_version_major_minor",
+          "cli_version",
           "is_ci",
           "is_tty",
           "node_version_major",
@@ -24,6 +24,7 @@ describe("base-props", () => {
         ].sort()
       );
       expect(props.$process_person_profile).toBe(false);
+      expect(props.cli_version).toBe("0.0.0");
       expect(typeof props.is_tty).toBe("boolean");
       expect(props.is_ci).toBe(false);
       expect(typeof props.node_version_major).toBe("string");
@@ -49,9 +50,10 @@ describe("base-props", () => {
     }
   });
 
-  it("still does NOT carry full cli_version / full node_version", () => {
+  it("does not carry legacy cli_version_major_minor / full node_version", () => {
     const props = getBaseProps("tool_server") as unknown as Record<string, unknown>;
-    expect(props).not.toHaveProperty("cli_version");
+    expect(props).toHaveProperty("cli_version");
+    expect(props).not.toHaveProperty("cli_version_major_minor");
     expect(props).not.toHaveProperty("node_version");
   });
 
