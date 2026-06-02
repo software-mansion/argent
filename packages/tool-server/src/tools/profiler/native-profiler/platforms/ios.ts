@@ -12,7 +12,7 @@ import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
-import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/constants";
+import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
 // (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
