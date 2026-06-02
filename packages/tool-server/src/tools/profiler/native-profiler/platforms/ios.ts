@@ -1,5 +1,6 @@
 import { spawn, execSync, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
+import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
@@ -12,7 +13,23 @@ import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 
-const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "..", "Argent.tracetemplate");
+// Two candidates because __dirname differs by runtime: bundled it's argent/dist/
+// (template in argent/assets/); in dev it's tool-server/dist/tools/profiler/
+// native-profiler/platforms/, four levels above dist/utils/ios-profiler/. Throw
+// if neither exists so a wrong depth can't silently break recording.
+function resolveDefaultTemplatePath(): string {
+  const candidates = [
+    path.resolve(__dirname, "..", "assets", "Argent.tracetemplate"),
+    path.resolve(__dirname, "..", "..", "..", "..", "utils", "ios-profiler", "Argent.tracetemplate"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `Argent.tracetemplate not found. Looked in:\n${candidates.map((c) => `  - ${c}`).join("\n")}\n` +
+      `Pass template_path explicitly, or rebuild so the template is copied into place.`
+  );
+}
 const STARTUP_TIMEOUT_MS = 10_000;
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
@@ -171,7 +188,7 @@ export async function startNativeProfilerIos(
     throw new Error(`A native profiling session is already running (PID: ${api.capturePid}).`);
   }
 
-  const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
+  const templatePath = params.template_path ?? resolveDefaultTemplatePath();
   const appProcess = params.app_process ?? detectRunningApp(params.device_id);
 
   const debugDir = await getDebugDir();

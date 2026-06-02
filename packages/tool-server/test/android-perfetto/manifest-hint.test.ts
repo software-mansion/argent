@@ -9,7 +9,7 @@ vi.mock("@argent/native-devtools-android", () => {
     traceProcessorShellAvailable: () => true,
     // Real queries dir so the batched-fold path can load hang-folds-batched.sql.
     traceProcessorQueriesDir: () =>
-      path.resolve(__dirname, "../../../native-devtools-android/queries"),
+      path.resolve(__dirname, "../../../native-devtools-android/assets/queries"),
   };
 });
 vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({

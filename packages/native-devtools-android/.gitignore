@@ -1,4 +1,4 @@
-bin/trace_processor_shell
+bin/
 dist/
 node_modules/
 tsconfig.tsbuildinfo

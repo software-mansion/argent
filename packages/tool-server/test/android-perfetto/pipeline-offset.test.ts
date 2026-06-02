@@ -18,7 +18,7 @@ vi.mock("@argent/native-devtools-android", () => {
     // Real queries dir — runBatchedHangFolds loads hang-folds-batched.sql from
     // here and substitutes the windows/target before calling runTpInline.
     traceProcessorQueriesDir: () =>
-      path.resolve(__dirname, "../../../native-devtools-android/queries"),
+      path.resolve(__dirname, "../../../native-devtools-android/assets/queries"),
   };
 });
 vi.mock("../../src/utils/android-profiler/pipeline/run-tp", async (importActual) => ({

@@ -9,7 +9,7 @@ vi.mock("@argent/native-devtools-android", () => {
     // queries/hang-folds-batched.sql and substitutes tokens into it, rather
     // than holding a SQL string literal. We assert against the rendered output.
     traceProcessorQueriesDir: () =>
-      path.resolve(__dirname, "../../../native-devtools-android/queries"),
+      path.resolve(__dirname, "../../../native-devtools-android/assets/queries"),
   };
 });
 

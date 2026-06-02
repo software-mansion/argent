@@ -6,8 +6,8 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist/",
-    "bin/trace_processor_shell",
-    "manifest.json"
+    "bin/",
+    "assets/"
   ],
   "scripts": {
     "build": "rm -rf dist/index.* tsconfig.tsbuildinfo && tsc",

@@ -37,9 +37,7 @@
     "skills/",
     "agents/",
     "rules/",
-    "queries/",
-    "argent.tracecfg.pbtxt",
-    "manifest.json",
+    "assets/",
     "scripts/postinstall.cjs"
   ],
   "dependencies": {

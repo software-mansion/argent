@@ -76,25 +76,27 @@ const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
 const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
 const AGENTS_DEST = path.resolve(__dirname, "../agents");
-const QUERIES_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android/queries");
-const QUERIES_DEST = path.resolve(__dirname, "../queries");
+const QUERIES_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/assets/queries"
+);
+const QUERIES_DEST = path.resolve(__dirname, "../assets/queries");
 const ANDROID_PKG_DIR = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android");
-const ANDROID_MANIFEST_SRC = path.join(ANDROID_PKG_DIR, "manifest.json");
-const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../manifest.json");
-const ANDROID_APK_DIST_SRC = path.join(ANDROID_PKG_DIR, "dist");
-const ANDROID_APK_DEST_DIR = path.resolve(__dirname, "../dist");
+const ANDROID_MANIFEST_SRC = path.join(ANDROID_PKG_DIR, "assets/manifest.json");
+const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../assets/manifest.json");
+const ANDROID_APK_SRC_DIR = path.join(ANDROID_PKG_DIR, "bin");
 const UI_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/index.html");
 const UI_DEST = path.resolve(__dirname, "../dist/preview-ui/index.html");
 const TRACE_TEMPLATE_SRC = path.resolve(
   WORKSPACE_ROOT,
   "packages/tool-server/src/utils/ios-profiler/Argent.tracetemplate"
 );
-const TRACE_TEMPLATE_DEST = path.resolve(__dirname, "../dist/Argent.tracetemplate");
+const TRACE_TEMPLATE_DEST = path.resolve(__dirname, "../assets/Argent.tracetemplate");
 const TRACECFG_SRC = path.resolve(
   WORKSPACE_ROOT,
-  "packages/native-devtools-android/argent.tracecfg.pbtxt"
+  "packages/native-devtools-android/assets/argent.tracecfg.pbtxt"
 );
-const TRACECFG_DEST = path.resolve(__dirname, "../argent.tracecfg.pbtxt");
+const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
 
 // ── Asset table ─────────────────────────────────────────────────────────────
 // Declarative copy plan. Each entry is copied (or its absence reported) by
@@ -203,9 +205,10 @@ const ASSETS = [
   },
   // argent.tracecfg.pbtxt so the Android profiler capture step can find it at
   // runtime. capture.ts resolves the path via @argent/native-devtools-android's
-  // `traceConfigPath()`, which does `path.join(__dirname, "..", "argent.tracecfg.pbtxt")`
-  // — in the bundled tool-server.cjs that is `<pkg>/argent.tracecfg.pbtxt`,
-  // i.e. this exact destination (sibling of dist/, not inside it).
+  // `traceConfigPath()`, which does
+  // `path.join(__dirname, "..", "assets", "argent.tracecfg.pbtxt")` — in the
+  // bundled tool-server.cjs that is `<pkg>/assets/argent.tracecfg.pbtxt`,
+  // i.e. this exact destination.
   {
     kind: "file",
     src: TRACECFG_SRC,
@@ -216,8 +219,8 @@ const ASSETS = [
     hint: "This file is required for Android native profiling.",
   },
   // Android profiler SQL queries. run-tp.ts resolves QUERY_DIR via
-  // `path.resolve(__dirname, "..", "queries")` — in the bundled tool-server.cjs
-  // that is `<pkg>/queries/`, i.e. this exact destination.
+  // `path.join(__dirname, "..", "assets", "queries")` — in the bundled
+  // tool-server.cjs that is `<pkg>/assets/queries/`, i.e. this exact destination.
   {
     kind: "dir",
     src: QUERIES_SRC,
@@ -365,17 +368,18 @@ for (const a of ASSETS) {
   copyAsset(a);
 }
 
-// Copy the Android helper APK. Its filename is version-stamped from manifest.json's
-// versionName (see bundledHelperApkPath()); manifest.json was copied as a required
-// asset above, so its source is guaranteed present here. The APK is likewise
-// required at runtime, so a missing APK throws (matching the sibling Android assets).
+// Copy the Android helper APK into bin/ (alongside trace_processor_shell — both
+// are downloaded native artifacts). Runs after the copy loop, so dropping into
+// the already-purged-and-repopulated BIN_DIR is safe. Its filename is
+// version-stamped from manifest.json's versionName (see bundledHelperApkPath());
+// the APK is required at runtime, so a missing one throws.
 const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
 const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
-const apkSrc = path.join(ANDROID_APK_DIST_SRC, apkName);
+const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
 if (fs.existsSync(apkSrc)) {
-  fs.copyFileSync(apkSrc, path.join(ANDROID_APK_DEST_DIR, apkName));
+  fs.copyFileSync(apkSrc, path.join(BIN_DIR, apkName));
   console.log(
-    `✓ Copied Android helper APK → ${path.relative(process.cwd(), ANDROID_APK_DEST_DIR)}/${apkName}`
+    `✓ Copied Android helper APK → ${path.relative(process.cwd(), BIN_DIR)}/${apkName}`
   );
 } else {
   throw new Error(

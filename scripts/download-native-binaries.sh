@@ -27,8 +27,7 @@ fi
 DYLIBS_DIR="packages/native-devtools-ios/dylibs"
 BIN_DIR="packages/native-devtools-ios/bin"
 ANDROID_BIN_DIR="packages/native-devtools-android/bin"
-ANDROID_DIST_DIR="packages/native-devtools-android/dist"
-ANDROID_MANIFEST_FILE="packages/native-devtools-android/manifest.json"
+ANDROID_MANIFEST_FILE="packages/native-devtools-android/assets/manifest.json"
 
 # Map `uname -s -m` to the platform suffix used by argent-private's
 # build-native-binaries.yml workflow. Keep this case-switch in sync with the
@@ -49,7 +48,7 @@ esac
 
 echo "Downloading native binaries from ${REPO} (tag: ${TAG}, host: ${HOST_PLATFORM})..."
 
-mkdir -p "${DYLIBS_DIR}" "${BIN_DIR}" "${ANDROID_BIN_DIR}" "${ANDROID_DIST_DIR}"
+mkdir -p "${DYLIBS_DIR}" "${BIN_DIR}" "${ANDROID_BIN_DIR}"
 
 for DYLIB in libNativeDevtoolsIos.dylib libKeyboardPatch.dylib libArgentInjectionBootstrap.dylib; do
   echo "  Downloading ${DYLIB}..."
@@ -97,11 +96,11 @@ gh release download "${TAG}" \
 # Read the versionName from the local manifest so the filename matches
 # bundledHelperApkPath()'s expectation.
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
-ANDROID_TARGET="${ANDROID_DIST_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
+ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
 trap - EXIT
 
-echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${BIN_DIR}/, ${ANDROID_BIN_DIR}/, and ${ANDROID_DIST_DIR}/"
+echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
 if command -v codesign &>/dev/null; then
   for f in "${DYLIBS_DIR}"/*.dylib "${BIN_DIR}/ax-service"; do
