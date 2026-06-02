@@ -3,16 +3,27 @@ import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
-import { DescribeResult } from "../../contract";
+import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
 import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
+
+const DEGRADED_HINT =
+  "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
+
+function emptyTree(): DescribeNode {
+  return parseDescribeResult({
+    role: "AXGroup",
+    frame: { x: 0, y: 0, width: 1, height: 1 },
+    children: [],
+  });
+}
 
 export interface DescribeIosParams {
   bundleId?: string;
 }
 
 // describe on iOS resolves the ax-service via Registry; the blueprint factory
-// shells out to `xcrun simctl spawn` (ensureAutomationEnabled + spawnDaemon).
+// shells out to `xcrun simctl spawn` (spawnDaemon).
 // Without xcrun on PATH the spawn ENOENTs deep inside the factory and the
 // HTTP layer returns a 500 with a raw "spawn xcrun ENOENT" message — declare
 // the dep here so the preflight emits a 424 with the install hint instead,
@@ -23,17 +34,28 @@ export async function describeIos(
   registry: Registry,
   device: DeviceInfo,
   params: DescribeIosParams
-): Promise<DescribeResult> {
-  const axRef = axServiceRef(device);
-  const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
-  const response = await axApi.describe();
-  const tree = adaptAXDescribeToDescribeResult(response);
+): Promise<DescribeTreeData> {
+  let tree: DescribeNode;
+  let hint: string | undefined;
 
-  if (tree.children.length > 0) {
-    return { tree, source: "ax-service" };
+  try {
+    const axRef = axServiceRef(device);
+    const axApi = await registry.resolveService<AXServiceApi>(axRef.urn, axRef.options);
+    const response = await axApi.describe();
+    tree = adaptAXDescribeToDescribeResult(response);
+    hint = axApi.degraded ? DEGRADED_HINT : undefined;
+  } catch {
+    // ax-service failed to start or timed out — treat as degraded with an
+    // empty tree so we still attempt the native-devtools fallback below.
+    tree = emptyTree();
+    hint = DEGRADED_HINT;
   }
 
-  // AX returned zero elements — attempt native-devtools fallback
+  if (tree.children.length > 0) {
+    return { tree, source: "ax-service", hint };
+  }
+
+  // AX returned zero elements (or failed entirely) — attempt native-devtools fallback
   try {
     const ndRef = nativeDevtoolsRef(device);
     const nativeApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
@@ -41,7 +63,7 @@ export async function describeIos(
     const target = await resolveNativeTargetApp(nativeApi, params.bundleId);
 
     if (await nativeApi.requiresAppRestart(target.bundleId)) {
-      return { tree, source: "ax-service", should_restart: true };
+      return { tree, source: "ax-service", should_restart: true, hint };
     }
 
     const rawResult = (await nativeApi.queryViewHierarchy(
@@ -50,14 +72,14 @@ export async function describeIos(
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (rawResult.error) {
-      return { tree, source: "ax-service" };
+      return { tree, source: "ax-service", hint };
     }
 
     const parsed = parseNativeDescribeScreenResult(rawResult);
     const nativeTree = adaptNativeDescribeToDescribeResult(parsed);
-    return { tree: nativeTree, source: "native-devtools" };
+    return { tree: nativeTree, source: "native-devtools", hint };
   } catch {
     // Native devtools unavailable or no connected app — return the empty AX result
-    return { tree, source: "ax-service" };
+    return { tree, source: "ax-service", hint };
   }
 }

@@ -1,6 +1,6 @@
 ---
 name: argent-create-flow
-description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of simulator actions.
+description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of device actions.
 ---
 
 ## 1. Overview
@@ -99,7 +99,7 @@ flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp", prereq
 Flow files use YAML. The top-level is an object with `executionPrerequisite` (describes required state) and `steps` (array of actions):
 
 - `- echo: <message>` — a label
-- `- tool: <name>` with optional `args:` — a tool call
+- `- tool: <name>` with optional `args:` — a tool call. Add `delayMs: <ms>` to sleep that long before the step runs (use sparingly — only when the app needs a fixed wait between actions).
 
 Example `.yaml` file:
 

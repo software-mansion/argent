@@ -1,6 +1,7 @@
 import { Registry } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
+import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
@@ -67,6 +68,7 @@ import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite"
 import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
+import { screenshotDiffTool } from "../tools/screenshot-diff";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -77,6 +79,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(reactProfilerSessionBlueprint);
   registry.registerBlueprint(nativeProfilerSessionBlueprint);
   registry.registerBlueprint(nativeDevtoolsBlueprint);
+  registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
   registry.registerTool(listDevicesTool);
@@ -86,6 +89,7 @@ export function createRegistry(): Registry {
   registry.registerTool(reinstallAppTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(screenshotTool);
+  registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureCustomTool);

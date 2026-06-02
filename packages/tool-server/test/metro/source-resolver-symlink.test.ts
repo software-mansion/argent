@@ -38,25 +38,25 @@ describe("source-resolver containment (PR #194 Issues 4 & 5)", () => {
 
   it("control: a real in-project .js source is readable", async () => {
     const r = createSourceResolver(8081, root);
-    const out = await r.readSourceFragment({ file: "real.js", line: 1 });
+    const out = await r.readSourceFragment({ file: "real.js", line: 1, column: 0 });
     expect(out).toContain("OK_PR194");
   });
 
   it("Issue 4: must NOT read an outside file via an in-project .js symlink", async () => {
     const r = createSourceResolver(8081, root);
-    const out = await r.readSourceFragment({ file: "evil.js", line: 1 });
+    const out = await r.readSourceFragment({ file: "evil.js", line: 1, column: 0 });
     expect(out).toBeNull();
   });
 
   it("Issue 4: must NOT read /etc/passwd via an in-project .js symlink", async () => {
     const r = createSourceResolver(8081, root);
-    const out = await r.readSourceFragment({ file: "passwd.js", line: 1 });
+    const out = await r.readSourceFragment({ file: "passwd.js", line: 1, column: 0 });
     expect(out).toBeNull();
   });
 
   it("Issue 5: must NOT read an in-project secrets .json", async () => {
     const r = createSourceResolver(8081, root);
-    const out = await r.readSourceFragment({ file: "secrets.json", line: 1 });
+    const out = await r.readSourceFragment({ file: "secrets.json", line: 1, column: 0 });
     expect(out).toBeNull();
   });
 });

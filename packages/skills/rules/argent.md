@@ -13,6 +13,8 @@ Use cases:
 - User mentions iOS simulator, Android emulator, device, or app interaction
 - The app user is working with is a mobile application which can be run in a simulator/emulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
+- Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
+- Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS or Android)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
   </description>
@@ -36,6 +38,16 @@ If `describe` fails, **read the exact error before reacting**, follow the recove
 Before starting to interact with the app, read the `argent-device-interact` skill first.
 </tapping_rule>
 
+<device_selection_rule>
+Before booting, running, or interacting with any app, call `list-devices` first - prefer running devices.
+
+Decision order:
+
+1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`.
+3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
+   </device_selection_rule>
+
 <skill_reading_rule>
 <important>Always read relevant skills for guidance before executing argent-mcp tool - read skill_routing reference</important>
 </skill_reading_rule>
@@ -48,10 +60,10 @@ Before starting to interact with the app, read the `argent-device-interact` skil
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
+- Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
@@ -69,6 +81,9 @@ When `is_react_native` is true: load `argent-react-native-app-workflow` skill. U
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
 
+PLATFORM DETECTION
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS.
+
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
 When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
@@ -79,7 +94,11 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change.
+
+SCREENSHOT DIFF & VISUAL REGRESSION
+Skill: `argent-screenshot-diff`
+When: Explicit visual regression, screenshot diff, compare screenshots, before/after visual comparison requests, or visible UI changes where stable pixel comparison would add useful evidence.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
@@ -103,7 +122,7 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 
 END-TO-END UI TESTING
 Skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, or validating visible UI changes or visual behavior after implementation.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`

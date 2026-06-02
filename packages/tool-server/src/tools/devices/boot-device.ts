@@ -2,7 +2,17 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
+import {
+  buildInitFailedResult,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
+import {
+  ensureAutomationEnabled,
+  isEntitlementBypassActive,
+  setAccessibilityPrefsPreBoot,
+} from "../../blueprints/ax-service";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -14,6 +24,7 @@ import {
   waitForBootCompleted,
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
+import { listIosSimulators } from "../../utils/ios-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,13 +57,52 @@ const zodSchema = z.object({
     .describe(
       "Android-only: overall budget for the full boot sequence. Defaults to 480000 (8 min). Clamped to [30s, 15min]. Ignored on iOS."
     ),
+  force: z
+    .boolean()
+    .optional()
+    .describe("Shut down and re-boot the device even if already running."),
 });
 
 type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
-  | { platform: "android"; serial: string; avdName: string; booted: true };
+  | { platform: "android"; serial: string; avdName: string; booted: true }
+  | NativeDevtoolsInitFailedResult;
+
+// Flags every boot-device launch should always pass. Two purposes:
+//
+//   - Performance: `-noaudio` skips guest pulseaudio init (one thread, ~50 MB
+//     RSS); `-no-boot-anim` skips the Pixel boot animation, which is a major
+//     CPU spike on software-rendered GPU modes; `-netfast` disables network
+//     shaping (latency/speed simulation), pure overhead for MCP use cases.
+//     Measured on a 4-core Skylake host with a 4096 MB / 228 MB-heap AVD:
+//     warm-cache cold boot drops 66 s → 49 s (~25%), qemu RSS at +20 s drops
+//     ~190 MB. android-emulator-runner (the canonical CI launcher) passes the
+//     same three by default for the same reasons.
+//
+//   - Dialog suppression: `-crash-report-mode never` keeps emulator crashes
+//     from popping a Qt consent dialog that blocks the next boot until a
+//     human dismisses it; `-no-metrics` suppresses the metrics-collection
+//     consent dialog with the same blocking behavior. Crash dumps are still
+//     written to /tmp/android-unknown/emu-crash-*.db so the data isn't lost
+//     — only the modal popup is. `-no-metrics` is Google's anonymous
+//     emulator-usage telemetry and is unrelated to any argent profiler tool
+//     (those run guest-side via Perfetto/simpleperf or Metro CDP).
+//
+// All five are flag-only with no host detection, so they apply uniformly to
+// macOS and Linux. `-noaudio` and `-netfast` change qemu device topology,
+// which means they must be passed identically to the snapshot probe, hot
+// boot, and cold boot — a mismatch would silently invalidate the snapshot
+// the previous cold boot saved.
+const LAUNCH_HARDENING_ARGS = [
+  "-noaudio",
+  "-no-boot-anim",
+  "-netfast",
+  "-crash-report-mode",
+  "never",
+  "-no-metrics",
+] as const;
 
 // Each stage has its own sub-budget so a hang in one stage cannot consume the
 // entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
@@ -60,6 +110,18 @@ const STAGE_BUDGET = {
   adbRegister: 60_000, // adb devices sees the serial for this AVD
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
+} as const;
+
+// Poll cadences for the boot state machine. These intervals only pace how
+// often we re-probe adb between attempts — they bound latency, not
+// correctness. Values are deliberately conservative: a hung adb on the
+// default 30s timeout must not be re-spawned every few ms. Timing-sensitive
+// tests drive these with vitest fake timers rather than mutating production
+// state, so this stays an immutable constant.
+const BOOT_POLL_INTERVALS_MS = {
+  serialByAvd: 1_500, // findSerialByAvdName: re-scan when >1 new emulator appeared
+  adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
+  earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
 } as const;
 
 async function killEmulatorQuietly(
@@ -160,7 +222,7 @@ async function findSerialByAvdName(avdName: string, deadline: number): Promise<s
     const devices = await listAndroidDevices().catch(() => []);
     const match = devices.find((d) => d.isEmulator && d.avdName === avdName);
     if (match) return match.serial;
-    await new Promise((r) => setTimeout(r, 1_500));
+    await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.serialByAvd));
   }
   return null;
 }
@@ -183,20 +245,51 @@ async function listNewEmulatorSerials(before: Set<string>): Promise<string[]> {
 
 async function bootIos(
   udid: string,
-  registry: Registry
-): Promise<{ platform: "ios"; udid: string; booted: true }> {
+  registry: Registry,
+  force?: boolean
+): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
   await ensureDep("xcrun");
+
+  const simState = await listIosSimulators()
+    .then((sims) => sims.find((s) => s.udid === udid)?.state)
+    .catch(() => undefined);
+
+  // force=true on a running sim: shut it down so we can pre-write AX prefs.
+  if (force && simState === "Booted") {
+    await execFileAsync("xcrun", ["simctl", "shutdown", udid]);
+  }
+
+  const needsPreBoot = simState === "Shutdown" || (force && simState === "Booted");
+  if (needsPreBoot) {
+    await setAccessibilityPrefsPreBoot(udid).catch((err: unknown) => {
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] pre-boot AX pref write failed (${
+          err instanceof Error ? err.message : String(err)
+        }); ensureAutomationEnabled will write prefs post-boot but SB won't pick them up until next restart.\n`
+      );
+    });
+  }
+
   await execFileAsync("xcrun", ["simctl", "boot", udid]).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : String(err);
-    // `simctl boot` errors when the device is already booted — treat as success.
     if (!message.includes("Unable to boot device in current state: Booted")) {
       throw err;
     }
   });
-  // `bootstatus -b` blocks until the simulator is fully ready for env setup.
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+
+  // Best-effort fallback: no-op on the happy path (pref already cached from
+  // pre-boot write). When the sim was already Booted without force, writes
+  // prefs via `defaults write` — SB won't pick them up until next restart,
+  // but describe surfaces a hint about it.
+  await ensureAutomationEnabled(udid).catch(() => undefined);
+
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
-  await registry.resolveService(ndRef.urn, ndRef.options);
+  const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  const initFailure = ndApi.getInitFailure();
+  if (initFailure?.givenUp) {
+    return buildInitFailedResult(udid, initFailure);
+  }
   await execFileAsync("defaults", [
     "write",
     "com.apple.iphonesimulator",
@@ -291,7 +384,7 @@ async function attemptBoot(params: {
           break;
         }
       }
-      await new Promise((r) => setTimeout(r, 1_000));
+      await new Promise((r) => setTimeout(r, BOOT_POLL_INTERVALS_MS.adbRegister));
     }
   } catch (err) {
     killDetachedEmulator(child);
@@ -394,7 +487,11 @@ export function __resetInFlightBootsForTesting(): void {
   inFlightBoots.clear();
 }
 
-async function bootAndroid(params: { avdName: string; bootTimeoutMs: number }): Promise<{
+async function bootAndroid(params: {
+  avdName: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<{
   platform: "android";
   serial: string;
   avdName: string;
@@ -409,7 +506,11 @@ async function bootAndroid(params: { avdName: string; bootTimeoutMs: number }): 
   return promise;
 }
 
-async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number }): Promise<{
+async function bootAndroidImpl(params: {
+  avdName: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<{
   platform: "android";
   serial: string;
   avdName: string;
@@ -467,34 +568,40 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
     (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
   );
   if (alreadyRunning) {
-    // BUG GUARD — wedged-framebuffer detection on the reuse path.
-    // A long-running emulator can drift into the same sticky-blank
-    // SurfaceFlinger state that `assertScreencapAlive` defends against on a
-    // hot-boot restore (see its docstring): every Android-side readiness
-    // probe still passes, but `screencap` only returns null bytes — meaning
-    // the caller would silently get a serial whose screenshots are all
-    // black. Without this probe the fast-path returns that wedged serial
-    // forever and there is no way back, since `coldBoot` was removed.
-    // On failure the helper kills the wedged emulator; we then fall through
-    // to the snapshot/probe pipeline so the caller still gets a usable boot.
-    try {
-      await assertScreencapAlive(alreadyRunning.serial);
-      return {
-        platform: "android",
-        serial: alreadyRunning.serial,
-        avdName: params.avdName,
-        booted: true,
-      };
-    } catch (err) {
-      hotBootFailureReason = `running AVD framebuffer was wedged (${
-        err instanceof Error ? err.message : String(err)
-      }), respawning`;
-      // assertScreencapAlive already killed the emulator; refresh the
-      // existing-devices snapshot so the killed serial is included in
-      // serialsBefore (matching the hot-boot catch refresh below) and the
-      // upcoming spawn's "new serial" diff stays correct.
+    if (params.force) {
+      await killEmulatorQuietly(alreadyRunning.serial);
       const refreshed = await listAndroidDevices().catch(() => existingDevices);
       existingDevices.splice(0, existingDevices.length, ...refreshed);
+    } else {
+      // BUG GUARD — wedged-framebuffer detection on the reuse path.
+      // A long-running emulator can drift into the same sticky-blank
+      // SurfaceFlinger state that `assertScreencapAlive` defends against on a
+      // hot-boot restore (see its docstring): every Android-side readiness
+      // probe still passes, but `screencap` only returns null bytes — meaning
+      // the caller would silently get a serial whose screenshots are all
+      // black. Without this probe the fast-path returns that wedged serial
+      // forever and there is no way back, since `coldBoot` was removed.
+      // On failure the helper kills the wedged emulator; we then fall through
+      // to the snapshot/probe pipeline so the caller still gets a usable boot.
+      try {
+        await assertScreencapAlive(alreadyRunning.serial);
+        return {
+          platform: "android",
+          serial: alreadyRunning.serial,
+          avdName: params.avdName,
+          booted: true,
+        };
+      } catch (err) {
+        hotBootFailureReason = `running AVD framebuffer was wedged (${
+          err instanceof Error ? err.message : String(err)
+        }), respawning`;
+        // assertScreencapAlive already killed the emulator; refresh the
+        // existing-devices snapshot so the killed serial is included in
+        // serialsBefore (matching the hot-boot catch refresh below) and the
+        // upcoming spawn's "new serial" diff stays correct.
+        const refreshed = await listAndroidDevices().catch(() => existingDevices);
+        existingDevices.splice(0, existingDevices.length, ...refreshed);
+      }
     }
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
@@ -508,7 +615,16 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   if (!hasSnapshot) {
     hotBootFailureReason = "no default_boot snapshot exists";
   } else {
-    const probe = await checkSnapshotLoadable(params.avdName, "default_boot");
+    // `-gpu auto` overrides `hw.gpu.enabled=no` (avdmanager's default) so the
+    // emulator picks up a hardware Vulkan ICD when available instead of
+    // falling back to lavapipe/swangle. Probe and boot must share the same
+    // renderer-affecting argv — otherwise the probe resolves a different
+    // renderer than the boot and rejects every valid snapshot with "different
+    // renderer configured". RENDERER_ARGS keeps the two in lockstep.
+    const RENDERER_ARGS = ["-gpu", "auto"] as const;
+    const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
+      extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
+    });
     if (!probe.loadable) {
       hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
     } else {
@@ -518,7 +634,14 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
       // rather than hanging for the full overall budget. `-no-snapshot-save`
       // avoids overwriting a working snapshot with state captured after we
       // later force-kill the child from a failure path.
-      const hotArgs = ["-avd", params.avdName, "-force-snapshot-load", "-no-snapshot-save"];
+      const hotArgs = [
+        "-avd",
+        params.avdName,
+        "-force-snapshot-load",
+        "-no-snapshot-save",
+        ...RENDERER_ARGS,
+        ...LAUNCH_HARDENING_ARGS,
+      ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
         const result = await attemptBoot({
@@ -557,7 +680,19 @@ async function bootAndroidImpl(params: { avdName: string; bootTimeoutMs: number 
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load"];
+  // `-gpu auto` mirrors the hot-boot path so the snapshot this cold boot
+  // saves matches the renderer the next launch's probe will resolve.
+  // LAUNCH_HARDENING_ARGS likewise — `-noaudio` and `-netfast` change device
+  // topology, so a mismatch between cold-save and hot-load would invalidate
+  // the saved snapshot.
+  const coldArgs = [
+    "-avd",
+    params.avdName,
+    "-no-snapshot-load",
+    "-gpu",
+    "auto",
+    ...LAUNCH_HARDENING_ARGS,
+  ];
   let coldResult: { serial: string };
   try {
     coldResult = await attemptBoot({
@@ -613,9 +748,9 @@ function createEarlyExitRacer(getExit: () => Error | null): {
         reject(err);
         return;
       }
-      timer = setTimeout(tick, 500);
+      timer = setTimeout(tick, BOOT_POLL_INTERVALS_MS.earlyExit);
     };
-    timer = setTimeout(tick, 500);
+    timer = setTimeout(tick, BOOT_POLL_INTERVALS_MS.earlyExit);
   });
   return {
     promise,
@@ -660,11 +795,12 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         throw new Error("Provide exactly one of `udid` (iOS) or `avdName` (Android).");
       }
       if (hasUdid) {
-        return bootIos(params.udid!, registry);
+        return bootIos(params.udid!, registry, params.force);
       }
       return bootAndroid({
         avdName: params.avdName!,
         bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
+        force: params.force,
       });
     },
   };

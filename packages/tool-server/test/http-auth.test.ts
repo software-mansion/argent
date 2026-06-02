@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import supertest from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import type { Registry } from "@argent/registry";
 
@@ -24,11 +25,11 @@ const TOKEN = "abc123def456";
 
 describe("Authorization gate", () => {
   let handle: HttpAppHandle;
-  let request: typeof import("supertest").default;
+  let request: typeof supertest;
   let originalToken: string | undefined;
 
   beforeEach(async () => {
-    request = await import("supertest").then((m) => m.default);
+    request = supertest;
     originalToken = process.env.ARGENT_AUTH_TOKEN;
     process.env.ARGENT_AUTH_TOKEN = TOKEN;
     handle = createHttpApp(stubRegistry());
@@ -103,11 +104,11 @@ describe("Authorization gate", () => {
 
 describe("Authorization gate (token unset / dev mode)", () => {
   let handle: HttpAppHandle;
-  let request: typeof import("supertest").default;
+  let request: typeof supertest;
   let originalToken: string | undefined;
 
   beforeEach(async () => {
-    request = await import("supertest").then((m) => m.default);
+    request = supertest;
     originalToken = process.env.ARGENT_AUTH_TOKEN;
     delete process.env.ARGENT_AUTH_TOKEN;
     handle = createHttpApp(stubRegistry());
@@ -127,11 +128,11 @@ describe("Authorization gate (token unset / dev mode)", () => {
 
 describe("CORS removal", () => {
   let handle: HttpAppHandle;
-  let request: typeof import("supertest").default;
+  let request: typeof supertest;
   let originalToken: string | undefined;
 
   beforeEach(async () => {
-    request = await import("supertest").then((m) => m.default);
+    request = supertest;
     originalToken = process.env.ARGENT_AUTH_TOKEN;
     delete process.env.ARGENT_AUTH_TOKEN;
     handle = createHttpApp(stubRegistry());

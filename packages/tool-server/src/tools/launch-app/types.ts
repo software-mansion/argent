@@ -1,4 +1,7 @@
-import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
+import type {
+  NativeDevtoolsApi,
+  NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
 
 export interface LaunchAppParams {
   udid: string;
@@ -7,10 +10,9 @@ export interface LaunchAppParams {
   activity?: string;
 }
 
-export interface LaunchAppResult {
-  launched: boolean;
-  bundleId: string;
-}
+export type LaunchAppResult =
+  | { launched: boolean; bundleId: string }
+  | NativeDevtoolsInitFailedResult;
 
 // iOS gets the native-devtools service so launch-app can warm DYLD env before
 // the app starts. Android's `services()` returns `{}` so its handler typechecks

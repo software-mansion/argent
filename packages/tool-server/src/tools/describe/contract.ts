@@ -51,15 +51,33 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
     .passthrough()
 );
 
-export interface DescribeResult {
+// Where the tree came from. "ax-service" / "native-devtools" come from iOS;
+// "uiautomator" / "android-devtools" come from Android. Agents that branch on
+// `source` (e.g. to decide whether to also call `native-find-views` for a
+// richer tree) need to distinguish the Android cases from an iOS native-
+// devtools fallback — which a shared label would hide.
+export type DescribeSource = "ax-service" | "native-devtools" | "uiautomator" | "android-devtools";
+
+// Internal shape produced by the per-platform adapters. The `tree` is consumed
+// by the formatter in `format-tree.ts` and then dropped before the tool replies
+// — callers see `DescribeResult` below, which surfaces only the rendered text.
+export interface DescribeTreeData {
   tree: DescribeNode;
-  // "ax-service" / "native-devtools" come from iOS; "uiautomator" is the
-  // Android branch's underlying provider. Agents that branch on `source`
-  // (e.g. to decide whether to also call `native-find-views` for a richer
-  // tree) need to distinguish the Android case from an iOS native-devtools
-  // fallback — which the previous shared label hid.
-  source: "ax-service" | "native-devtools" | "uiautomator";
+  source: DescribeSource;
   should_restart?: boolean;
+  hint?: string;
+}
+
+// Public describe-tool response. The full JSON `tree` (the previous payload's
+// biggest cost — ~6× the byte size of the formatted rendering on a typical iOS
+// screen) is no longer surfaced; `description` is a text rendering produced by
+// `format-tree.ts` that preserves every label, role, and frame the agent needs
+// for taps.
+export interface DescribeResult {
+  description: string;
+  source: DescribeSource;
+  should_restart?: boolean;
+  hint?: string;
 }
 
 export function parseDescribeResult(input: unknown): DescribeNode {
