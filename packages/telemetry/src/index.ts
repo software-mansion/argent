@@ -80,10 +80,7 @@ function buildPayload(
  * shutdown() before process exit; shutdown() waits for PostHog's async capture
  * preparation and drains the queue with a bounded timeout.
  */
-export function track<E extends EventName>(
-  event: E,
-  props: EventPropertyMap[E]
-): void {
+export function track<E extends EventName>(event: E, props: EventPropertyMap[E]): void {
   try {
     if (!consentIsEnabled()) return;
     const built = buildPayload(event, props as Record<string, unknown>);
