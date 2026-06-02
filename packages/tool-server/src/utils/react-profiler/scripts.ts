@@ -47,7 +47,25 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
   if (!h.rendererInterfaces || typeof h.rendererInterfaces.forEach !== 'function') return;
 
   h.rendererInterfaces.forEach(function (ri) {
-    if (!ri || ri.__argent_startWrapped__) return;
+    if (!ri) return;
+
+    // Resolve the display-name accessor once per ri and stash it. The API
+    // was renamed in react-devtools-core 6.x: older bundles (RN ≤0.75-ish)
+    // expose getDisplayNameForFiberID; newer bundles expose
+    // getDisplayNameForElementID. Resolving here means every call site
+    // can do a single function lookup instead of branching, and the bug
+    // where calling the absent name silently throws and drops every fiber
+    // into the "unattributed" bucket goes away. Re-run on every setup
+    // invocation (idempotent — same function ref each time) so the stash
+    // is also populated for ris that weren't wrapped yet, e.g. ones that
+    // appeared only after BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT attached.
+    if (typeof ri.getDisplayNameForElementID === 'function') {
+      ri.__argent_getDisplayName__ = ri.getDisplayNameForElementID.bind(ri);
+    } else if (typeof ri.getDisplayNameForFiberID === 'function') {
+      ri.__argent_getDisplayName__ = ri.getDisplayNameForFiberID.bind(ri);
+    }
+
+    if (ri.__argent_startWrapped__) return;
     ri.__argent_startWrapped__ = true;
     if (typeof ri.__argent_isProfiling__ !== 'boolean') {
       ri.__argent_isProfiling__ = false;
@@ -95,6 +113,172 @@ export const REACT_NATIVE_PROFILER_SETUP_SCRIPT = `
     };
   });
 })();
+`;
+
+/**
+ * Self-bootstraps the React DevTools backend when no external DevTools client
+ * (Fusebox React tab, `npx react-devtools`) is connected.
+ *
+ * Why this exists: argent's profiler delegates React commit capture to the
+ * in-app DevTools backend via `ri.startProfiling`. The backend's `attach()`
+ * is what populates `hook.rendererInterfaces[id]`; React itself only fills in
+ * `hook.renderers[id]` via `hook.inject()`. In a bridgeless RN dev build with
+ * no DevTools client connected, `setUpReactDevTools.js` ran but its WebSocket
+ * to localhost:8097 never opened, so `initBackend` was never called and the
+ * profiler can't find a renderer interface to drive.
+ *
+ * Strategy: look up `react-devtools-core` in the Metro module registry and
+ * call its `connectWithCustomMessagingProtocol` API (5.1+) with no-op message
+ * handlers. The function internally constructs a Bridge + Agent and runs
+ * `initBackend(hook, agent, window)`, which iterates `hook.renderers` and
+ * populates `hook.rendererInterfaces` via `attach()`. The fake wall discards
+ * every outbound message, which is fine — argent talks to the renderer
+ * interface directly and never reads from the bridge.
+ *
+ * Idempotent — early-returns `already-attached` when interfaces are populated,
+ * so retries within a session don't leak `hook.sub('renderer', ...)` listeners
+ * via repeated `initBackend` calls.
+ *
+ * Returns a JSON string `{ ok, reason, renderersCount, rendererInterfacesCount, message? }`.
+ * Distinct failure reasons let the caller emit an actionable error:
+ *   - 'no-hook'              : __REACT_DEVTOOLS_GLOBAL_HOOK__ missing (production build).
+ *   - 'no-renderers'         : React hasn't injected any renderer yet — legitimate wait.
+ *   - 'no-metro-modules'     : __r/__r.getModules unavailable; bundle isn't Metro-style.
+ *   - 'no-rdt-module'        : react-devtools-core not in the bundle (production build).
+ *   - 'unsupported-rdt-version' : module found but lacks connectWithCustomMessagingProtocol
+ *                                 (react-devtools-core <5.1, e.g. RN <0.74). User can still
+ *                                 run `npx react-devtools` + reload to attach externally.
+ *   - 'metro-scan-error' / 'bootstrap-threw' / 'bootstrap-no-effect' : unexpected.
+ */
+export const BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT = `
+(function __argent_bootstrapDevtoolsBackend() {
+  var h = globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__;
+  if (!h) return JSON.stringify({ ok: false, reason: 'no-hook' });
+
+  function sizeOf(m) {
+    if (!m || typeof m.forEach !== 'function') return 0;
+    var n = 0;
+    m.forEach(function () { n++; });
+    return n;
+  }
+
+  var renderersCount = sizeOf(h.renderers);
+  var rendererInterfacesCount = sizeOf(h.rendererInterfaces);
+
+  if (rendererInterfacesCount > 0) {
+    return JSON.stringify({
+      ok: true,
+      reason: 'already-attached',
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  if (renderersCount === 0) {
+    return JSON.stringify({
+      ok: false,
+      reason: 'no-renderers',
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  if (typeof globalThis.__r !== 'function' || typeof globalThis.__r.getModules !== 'function') {
+    return JSON.stringify({
+      ok: false,
+      reason: 'no-metro-modules',
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  var found = null;
+  var moduleSeenButUnsupported = false;
+  try {
+    var mods = globalThis.__r.getModules();
+    var inspect = function (id, meta) {
+      if (found) return;
+      var name = meta && meta.verboseName;
+      if (typeof name !== 'string') return;
+      if (name.indexOf('react-devtools-core/dist/backend') < 0) return;
+      try {
+        var m = globalThis.__r(id);
+        if (!m) return;
+        if (typeof m.connectWithCustomMessagingProtocol === 'function') {
+          found = m;
+        } else {
+          // Module exists but exposes only legacy WebSocket-based connectToDevTools
+          // (rdt-core <5.1). We can't bootstrap without a real ws endpoint, so the
+          // user has to attach an external backend (\`npx react-devtools\` + reload).
+          moduleSeenButUnsupported = true;
+        }
+      } catch (_e) {
+        // require failure on this id — keep searching.
+      }
+    };
+    // Metro's getModules() returns a Map<id, meta> in modern versions.
+    // Map#forEach calls back as (value, key); array-like fallback handled below.
+    if (typeof mods.forEach === 'function' && typeof mods.size === 'number') {
+      mods.forEach(function (meta, id) { inspect(id, meta); });
+    } else if (typeof mods.length === 'number') {
+      for (var i = 0; i < mods.length; i++) {
+        if (mods[i]) inspect(i, mods[i]);
+      }
+    } else if (typeof mods.forEach === 'function') {
+      mods.forEach(function (meta, id) { inspect(id, meta); });
+    }
+  } catch (err) {
+    return JSON.stringify({
+      ok: false,
+      reason: 'metro-scan-error',
+      message: String((err && err.message) || err),
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  if (!found) {
+    return JSON.stringify({
+      ok: false,
+      reason: moduleSeenButUnsupported ? 'unsupported-rdt-version' : 'no-rdt-module',
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  try {
+    found.connectWithCustomMessagingProtocol({
+      onSubscribe: function () {},
+      onUnsubscribe: function () {},
+      onMessage: function () {},
+    });
+  } catch (err) {
+    return JSON.stringify({
+      ok: false,
+      reason: 'bootstrap-threw',
+      message: String((err && err.message) || err),
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  var afterCount = sizeOf(h.rendererInterfaces);
+  if (afterCount === 0) {
+    return JSON.stringify({
+      ok: false,
+      reason: 'bootstrap-no-effect',
+      renderersCount: renderersCount,
+      rendererInterfacesCount: rendererInterfacesCount,
+    });
+  }
+
+  return JSON.stringify({
+    ok: true,
+    reason: 'bootstrapped',
+    renderersCount: renderersCount,
+    rendererInterfacesCount: afterCount,
+  });
+})()
 `;
 
 // #endregion
@@ -254,13 +438,20 @@ export const STOP_FOR_TAKEOVER_SCRIPT = `
  * This is the only reliable way to recover names for transient components
  * (modals, popovers, navigation screens) that unmount between the profiled
  * interaction and `STOP_AND_READ_SCRIPT`: once a fiber is unmounted the
- * DevTools backend drops it from `idToDevToolsInstanceMap`, so
- * `getDisplayNameForElementID` returns null at stop time. Reading the name
- * right after React's own `handleCommitFiberRoot` runs (synchronous inside
+ * DevTools backend drops it from `idToDevToolsInstanceMap`, so the
+ * display-name accessor returns null at stop time. Reading the name right
+ * after React's own `handleCommitFiberRoot` runs (synchronous inside
  * `orig.call`) guarantees the fiber is still present. Fiber IDs are
  * monotonically increasing and never reused within a renderer; keying the
  * cache by `ri` identity isolates each renderer's IDs from collisions across
  * the multi-renderer (Fabric + Paper) topology.
+ *
+ * Uses `ri.__argent_getDisplayName__` (resolved by the setup wrapper) so the
+ * tracker works against both `getDisplayNameForElementID` (modern
+ * react-devtools-core) and `getDisplayNameForFiberID` (older versions
+ * bundled with RN ≤0.75-ish). Falls back to a direct lookup of either name
+ * if setup hasn't stashed the accessor yet — defensive against injection
+ * ordering.
  */
 export const FIBER_ROOT_TRACKER_SCRIPT = `
 (function() {
@@ -290,6 +481,15 @@ export const FIBER_ROOT_TRACKER_SCRIPT = `
       var pd = ri.getProfilingData ? ri.getProfilingData() : null;
       if (!pd || !pd.dataForRoots) return;
 
+      var getName = (typeof ri.__argent_getDisplayName__ === 'function')
+        ? ri.__argent_getDisplayName__
+        : (typeof ri.getDisplayNameForElementID === 'function')
+          ? ri.getDisplayNameForElementID.bind(ri)
+          : (typeof ri.getDisplayNameForFiberID === 'function')
+            ? ri.getDisplayNameForFiberID.bind(ri)
+            : null;
+      if (!getName) return;
+
       var cacheRoot = globalThis.__argent_fiberNames__;
       var bucket = cacheRoot.get(ri);
       if (!bucket) {
@@ -307,7 +507,7 @@ export const FIBER_ROOT_TRACKER_SCRIPT = `
           var fiberID = entry[0];
           if (bucket[fiberID] !== undefined) continue;
           try {
-            var name = ri.getDisplayNameForElementID(fiberID);
+            var name = getName(fiberID);
             if (typeof name === 'string' && name.length > 0) {
               bucket[fiberID] = name;
             }
@@ -351,15 +551,23 @@ export const STOP_AND_READ_SCRIPT = `
   var allRoots = [];
   var displayNameById = {};
   var anySaw = false;
+  // Set to true if at least one ri exposed a usable display-name accessor.
+  // Stays false when every ri lacks both API names — useful diagnostic
+  // surfaced by the stop tool to distinguish "API missing" from
+  // "transient-unmount race" failures.
+  var anyNameApi = false;
 
-  function resolveName(ri, id, out, bucket) {
+  function resolveName(getName, id, out, bucket) {
     if (out[id] !== undefined) return;
-    try {
-      var n = ri.getDisplayNameForElementID(Number(id));
-      if (typeof n === 'string' && n.length > 0) { out[id] = n; return; }
-    } catch (_e) {}
-    // Live resolution failed — fiber was likely unmounted before stop
-    // (transient component). Fall back to the per-ri commit-time cache.
+    if (getName) {
+      try {
+        var n = getName(Number(id));
+        if (typeof n === 'string' && n.length > 0) { out[id] = n; return; }
+      } catch (_e) {}
+    }
+    // Live resolution failed or unavailable — fiber was likely unmounted
+    // before stop (transient component) or the renderer never exposed an
+    // accessor. Fall back to the per-ri commit-time cache.
     var cached = bucket ? bucket[id] : undefined;
     out[id] = (typeof cached === 'string' && cached.length > 0) ? cached : null;
   }
@@ -375,6 +583,17 @@ export const STOP_AND_READ_SCRIPT = `
       ? (nameCache.get(ri) || null)
       : null;
 
+    // Resolve the display-name accessor lazily — setup may not have run
+    // for this ri (e.g. an external caller invoked stop without start).
+    var getName = (typeof ri.__argent_getDisplayName__ === 'function')
+      ? ri.__argent_getDisplayName__
+      : (typeof ri.getDisplayNameForElementID === 'function')
+        ? ri.getDisplayNameForElementID.bind(ri)
+        : (typeof ri.getDisplayNameForFiberID === 'function')
+          ? ri.getDisplayNameForFiberID.bind(ri)
+          : null;
+    if (getName) anyNameApi = true;
+
     for (var i = 0; i < pd.dataForRoots.length; i++) {
       var root = pd.dataForRoots[i];
       allRoots.push(root);
@@ -383,11 +602,11 @@ export const STOP_AND_READ_SCRIPT = `
       for (var j = 0; j < cd.length; j++) {
         var fa = cd[j].fiberActualDurations || [];
         for (var k = 0; k < fa.length; k++) if (fa[k]) {
-          resolveName(ri, fa[k][0], displayNameById, bucket);
+          resolveName(getName, fa[k][0], displayNameById, bucket);
         }
         var cds = cd[j].changeDescriptions || [];
         for (var k2 = 0; k2 < cds.length; k2++) if (cds[k2]) {
-          resolveName(ri, cds[k2][0], displayNameById, bucket);
+          resolveName(getName, cds[k2][0], displayNameById, bucket);
         }
       }
     }
@@ -396,7 +615,11 @@ export const STOP_AND_READ_SCRIPT = `
   if (!anySaw) {
     return JSON.stringify({ live: null, displayNameById: {} });
   }
-  return JSON.stringify({ live: { dataForRoots: allRoots }, displayNameById: displayNameById });
+  return JSON.stringify({
+    live: { dataForRoots: allRoots },
+    displayNameById: displayNameById,
+    displayNameApiAvailable: anyNameApi,
+  });
 })()
 `;
 

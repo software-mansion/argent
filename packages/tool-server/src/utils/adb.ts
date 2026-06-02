@@ -364,15 +364,10 @@ export async function listAvds(): Promise<AvdInfo[]> {
 
 /**
  * Result of probing a named snapshot with `emulator -check-snapshot-loadable`.
- *
- * `loadable === true` is necessary but NOT sufficient for a successful hot
- * boot: the probe validates metadata (snapshot.pb, compatible.pb, hardware.ini)
- * and renderer compatibility, but not the integrity of ram.bin. A `ram.bin`
- * corrupted by a partial save or a host OOM still returns `Loadable` here and
- * later crashes the QEMU child with `std::bad_alloc`. Pair this probe with
- * `-force-snapshot-load` in the boot spawn and a tight deadline to catch the
- * residual failure cases loudly instead of letting them silently fall back to
- * a full cold boot.
+ * `loadable === true` is necessary but not sufficient — the probe validates
+ * metadata + renderer but not `ram.bin` integrity (a partial save still says
+ * "Loadable" then crashes QEMU with `std::bad_alloc`). Pair with
+ * `-force-snapshot-load` in the boot spawn so ram.bin corruption fails loudly.
  */
 export interface SnapshotProbeResult {
   loadable: boolean;
@@ -382,24 +377,30 @@ export interface SnapshotProbeResult {
 export async function checkSnapshotLoadable(
   avdName: string,
   snapshotName = "default_boot",
-  options: { timeoutMs?: number } = {}
+  options: { timeoutMs?: number; extraArgs?: readonly string[] } = {}
 ): Promise<SnapshotProbeResult> {
   try {
     const emulatorPath = await resolveEmulatorOrThrow();
-    const { stdout } = await execFileAsync(
-      emulatorPath,
-      ["-avd", avdName, "-check-snapshot-loadable", snapshotName],
-      { timeout: options.timeoutMs ?? 10_000, maxBuffer: 4 * 1024 * 1024 }
-    );
+    // Renderer-affecting flags (`-gpu auto` etc.) MUST match the boot spawn's
+    // argv, or the probe resolves a different renderer and rejects valid
+    // snapshots with "different renderer configured". See
+    // boot-device.ts:RENDERER_ARGS — caller threads the same flags through.
+    const args = [
+      "-avd",
+      avdName,
+      ...(options.extraArgs ?? []),
+      "-check-snapshot-loadable",
+      snapshotName,
+    ];
+    const { stdout } = await execFileAsync(emulatorPath, args, {
+      timeout: options.timeoutMs ?? 10_000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
     const tail = stdout.split("\n").slice(-6).join("\n");
-    // The emulator emits an informational "WARNING | change of renderer
-    // detected." whenever `hardware.ini` and `emu-launch-params.txt` disagree
-    // (e.g. `hw.gpu.mode=auto` in config.ini vs the resolved `swangle_indirect`
-    // recorded on save). It is noise, not a failure signal — actual
-    // incompatibility surfaces as a populated `Reason:` with no `Loadable`
-    // line (e.g. "snapshot was created with gfxstream=1, but this emulator has
-    // gfxstream=0"). The final `Loadable` line is the emulator's authoritative
-    // verdict; trust it.
+    // "WARNING | change of renderer detected" is noise, not a failure signal.
+    // Actual incompatibility surfaces as a `Reason:` line with no `Loadable`
+    // (e.g. gfxstream mismatch). Trust the final `Loadable` line — it's the
+    // emulator's authoritative verdict.
     if (/(^|\n)\s*Loadable\s*(\n|$)/.test(tail)) return { loadable: true, reason: null };
     const reasonMatch = tail.match(/Reason:\s*(.+)/);
     return { loadable: false, reason: reasonMatch?.[1]?.trim() ?? "unknown" };
@@ -412,40 +413,81 @@ export async function checkSnapshotLoadable(
 }
 
 /**
- * True iff a `default_boot` snapshot directory exists on disk for this AVD.
- * Cheap filesystem check — the emulator's own `-snapshot-list` requires
- * spawning the emulator once, which is precisely the hang we are trying to
- * avoid up-front.
+ * Candidate AVD-root directories, in the priority order the emulator binary
+ * itself uses (`external/qemu/.../avd/util.cpp`). Mirroring its order is what
+ * lets argent find AVDs on Linux Studio setups that default to `ANDROID_USER_HOME`
+ * or `XDG_CONFIG_HOME` instead of `$HOME`.
+ *
+ *   1. `$ANDROID_USER_HOME/avd`         — current Studio convention (≥ 4.2)
+ *   2. `$ANDROID_AVD_HOME`              — explicit override (files live here)
+ *   3. `$XDG_CONFIG_HOME/Android/avd`   — Linux XDG
+ *   4. `$ANDROID_SDK_HOME/.android/avd` — legacy
+ *   5. `$HOME/.android/avd`             — default
+ */
+function avdRootCandidates(): string[] {
+  const home = process.env.HOME ?? "";
+  const candidates: Array<string | null | undefined> = [
+    process.env.ANDROID_USER_HOME ? `${process.env.ANDROID_USER_HOME}/avd` : null,
+    process.env.ANDROID_AVD_HOME,
+    process.env.XDG_CONFIG_HOME ? `${process.env.XDG_CONFIG_HOME}/Android/avd` : null,
+    process.env.ANDROID_SDK_HOME ? `${process.env.ANDROID_SDK_HOME}/.android/avd` : null,
+    home ? `${home}/.android/avd` : null,
+  ];
+  return candidates.filter((p): p is string => Boolean(p && p.startsWith("/")));
+}
+
+/**
+ * Resolve an AVD's `.avd` folder by reading `path=` from `<root>/<name>.ini`.
+ * The `.avd` can live outside the convention root (Studio relocations,
+ * snap-installed Studio puts them under `~/snap/...`), so the `.ini` is
+ * the authoritative source. Returns null if no `<name>.ini` is found.
+ */
+export async function resolveAvdPath(avdName: string): Promise<string | null> {
+  const { readFile } = await import("node:fs/promises");
+  for (const root of avdRootCandidates()) {
+    try {
+      const ini = await readFile(`${root}/${avdName}.ini`, "utf-8");
+      const match = ini.match(/^path\s*=\s*(.+?)\s*$/m);
+      if (!match || !match[1]) continue;
+      // `(.+?)` must match ≥1 char, so `path=   ` captures a single space —
+      // trim it, then reject anything non-absolute (the emulator always
+      // writes an absolute path; relative would resolve against cwd).
+      const trimmed = match[1].trim();
+      if (!trimmed.startsWith("/")) continue;
+      return trimmed;
+    } catch {
+      // .ini missing or unreadable in this root; try the next one
+    }
+  }
+  return null;
+}
+
+/**
+ * True iff a usable `default_boot` snapshot exists on disk for this AVD.
+ * Cheap pre-filter — `-snapshot-list` would spawn the emulator, the very
+ * hang we're trying to avoid.
+ *
+ * Intentionally lenient: just `snapshot.pb` exists and `ram.bin` is non-empty.
+ * `-check-snapshot-loadable` validates metadata + renderer next, and
+ * `-force-snapshot-load` in the boot spawn surfaces ram.bin corruption as a
+ * loud early-exit. Don't gate on mtime-skew: the emulator touches `snapshot.pb`
+ * on every load (even with `-no-snapshot-save`), so a few hot-boots drift it
+ * days ahead of `ram.bin` and the skew check rejects every valid snapshot.
  */
 export async function hasDefaultBootSnapshot(avdName: string): Promise<boolean> {
   const { stat } = await import("node:fs/promises");
-  const home = process.env.HOME ?? "";
-  const candidates = [
-    `${home}/.android/avd/${avdName}.avd/snapshots/default_boot`,
-    `${process.env.ANDROID_AVD_HOME ?? ""}/${avdName}.avd/snapshots/default_boot`,
-  ].filter((p) => p && p.startsWith("/"));
-  for (const path of candidates) {
-    try {
-      // `snapshot.pb` alone is not enough to call the snapshot "present":
-      // an OOM-killed emulator can leave the tiny metadata file on disk while
-      // `ram.bin` is missing, zero-length, or truncated. The -check-snapshot-
-      // loadable probe reads only metadata and happily reports "Loadable" in
-      // that state, so the hot-boot attempt spawns, then hangs or crashes on
-      // a bad RAM restore. Verifying ram.bin is present and non-empty, and
-      // that its mtime is within a minute of snapshot.pb's (a save writes
-      // both in one batch), cheaply filters the partial-save class before we
-      // ever spawn the emulator.
-      const [metaStat, ramStat] = await Promise.all([
-        stat(`${path}/snapshot.pb`),
-        stat(`${path}/ram.bin`),
-      ]);
-      if (ramStat.size === 0) continue;
-      const mtimeSkewMs = Math.abs(metaStat.mtimeMs - ramStat.mtimeMs);
-      if (mtimeSkewMs > 60_000) continue;
-      return true;
-    } catch {
-      // keep looking
-    }
+  const avdPath = await resolveAvdPath(avdName);
+  if (!avdPath) return false;
+  const snapshotPath = `${avdPath}/snapshots/default_boot`;
+  try {
+    const [metaStat, ramStat] = await Promise.all([
+      stat(`${snapshotPath}/snapshot.pb`),
+      stat(`${snapshotPath}/ram.bin`),
+    ]);
+    if (!metaStat.isFile()) return false;
+    if (!ramStat.isFile() || ramStat.size === 0) return false;
+    return true;
+  } catch {
+    return false;
   }
-  return false;
 }

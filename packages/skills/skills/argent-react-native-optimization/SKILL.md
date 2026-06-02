@@ -13,9 +13,9 @@ description: Optimizes a React Native app by profiling first to find real bottle
 - **Fix** — apply one fix. Validate with `debugger-evaluate` before committing.
 - **Re-measure** — report whether the target metric improved, regressed, or stayed flat. Check for regressions in other areas. If no net benefit or unacceptable tradeoffs, revert.
 - **Profile for discovery, not only verification.** Use the profiler to find issues static analysis missed, not only to confirm fixes.
-- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped — re-profile once after the batch. When the measurement involves simulator interaction, record it as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps.
+- **One fix per cycle for architectural changes.** Mechanical batch fixes (inline styles, index keys) can be grouped — re-profile once after the batch. When the measurement involves device interaction, record it as a flow (`argent-create-flow` skill) before the first run so all subsequent cycles replay identical steps.
 - **React Compiler**: if `react-profiler-analyze` reports `reactCompilerEnabled: true`, do NOT propose `useCallback`/`useMemo`/`React.memo` unless you confirmed compiler bail-out via `react-profiler-fiber-tree` (absent `useMemoCache`).
-- **Sub-agents**: Phases 1–2 dispatch sub-agents — one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the simulator - all profiling and E2E verification must happen in the main agent.
+- **Sub-agents**: Phases 1–2 dispatch sub-agents — one per file for lint results, one per checklist item for semantic. Sub-agents CANNOT touch the device - all profiling and E2E verification must happen in the main agent.
 
 ## Pipeline
 

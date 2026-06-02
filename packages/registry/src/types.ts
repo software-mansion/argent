@@ -144,6 +144,13 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * via `_meta["anthropic/searchHint"]`.
    */
   searchHint?: string;
+  /**
+   * When true, signals that an invocation may legitimately run for a long time
+   * (e.g. orchestrators that replay many sub-tools). The MCP adapter disables
+   * its per-request fetch timeout for these so long invocations don't get
+   * aborted mid-flight.
+   */
+  longRunning?: boolean;
   /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**

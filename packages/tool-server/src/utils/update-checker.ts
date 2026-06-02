@@ -1,28 +1,77 @@
-import https from "node:https";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import semver from "semver";
 import { version as currentVersion } from "../../package.json";
+import {
+  detectMinReleaseAgeMs,
+  fetchRegistryInfo,
+  pickInstallableTarget,
+} from "@argent/update-core";
 
 const PACKAGE_NAME = "@swmansion/argent";
+const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000 * 24; // 24 hour
-const REQUEST_TIMEOUT_MS = 10_000;
+
+function getSuppressionFilePath(): string {
+  return path.join(os.homedir(), ".argent", "update-suppression.json");
+}
+
+function loadSuppressUntil(): number {
+  try {
+    const raw = fs.readFileSync(getSuppressionFilePath(), "utf8");
+    const parsed = JSON.parse(raw) as { suppressUntil?: unknown };
+    const value = parsed.suppressUntil;
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  } catch {
+    // Missing file, parse error, or read error — treat as "no suppression".
+    return 0;
+  }
+}
+
+function persistSuppressUntil(value: number): void {
+  const filePath = getSuppressionFilePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify({ suppressUntil: value }));
+}
 
 export interface UpdateState {
-  /** Whether a newer version is available on npm. */
+  /** A newer stable version exists on npm (latest tag vs. current). */
   updateAvailable: boolean;
-  /** The latest version on npm, or `null` if not yet checked / check failed. */
+  /**
+   * A newer version is installable now — newer AND aged past the
+   * minimum-release-age policy. The reminder gates on this, not
+   * `updateAvailable`. Equals `updateAvailable` when no policy is in effect.
+   */
+  updateInstallable: boolean;
+  /**
+   * The version the reminder advertises — the newest stable release the
+   * resolver would install under the policy. Not necessarily `latestVersion`:
+   * the latest publish may be held back while an older version is eligible.
+   */
+  installableVersion: string | null;
+  /** The latest version on npm (the `latest` dist-tag), or `null` if unknown. */
   latestVersion: string | null;
+  /** ISO 8601 publish time of `latestVersion`, or `null` if unknown. */
+  latestPublishedAt: string | null;
+  /** Effective minimum-release-age policy in ms (`0` = no policy). */
+  minReleaseAgeMs: number;
   /** The currently running version. */
   currentVersion: string;
 }
 
 let state: UpdateState = {
   updateAvailable: false,
+  updateInstallable: false,
+  installableVersion: null,
   latestVersion: null,
+  latestPublishedAt: null,
+  minReleaseAgeMs: 0,
   currentVersion,
 };
 
 let interval: ReturnType<typeof setInterval> | null = null;
-let suppressUntil = 0;
+let suppressUntil = loadSuppressUntil();
 
 /** Returns the current update state (read-only snapshot). */
 export function getUpdateState(): Readonly<UpdateState> {
@@ -34,9 +83,15 @@ export function isUpdateNoteSuppressed(): boolean {
   return Date.now() < suppressUntil;
 }
 
-/** Suppress update notifications for the given duration (milliseconds). */
+/**
+ * Suppress update notifications for the given duration (milliseconds).
+ * Persists across tool-server restarts. Throws if the suppression file
+ * cannot be written.
+ */
 export function suppressUpdateNote(durationMs: number): void {
-  suppressUntil = Date.now() + durationMs;
+  const next = Date.now() + durationMs;
+  persistSuppressUntil(next);
+  suppressUntil = next;
 }
 
 function isNewerVersion(latest: string, current: string): boolean {
@@ -48,72 +103,40 @@ function isNewerVersion(latest: string, current: string): boolean {
   return semver.gt(latest, current);
 }
 
-/**
- * Fetches the latest version of the package from the npm registry.
- * Returns `null` on any failure — update checks must never crash the server.
- */
-async function fetchLatestVersion(): Promise<string | null> {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const safeResolve = (value: string | null) => {
-      if (!resolved) {
-        resolved = true;
-        resolve(value);
-      }
-    };
-
-    const url = `https://registry.npmjs.org/${PACKAGE_NAME}/latest`;
-
-    const req = https.get(url, { timeout: REQUEST_TIMEOUT_MS }, (res) => {
-      if (res.statusCode !== 200) {
-        res.resume();
-        safeResolve(null);
-        return;
-      }
-
-      let body = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      res.on("end", () => {
-        try {
-          const json = JSON.parse(body) as { version?: string };
-          safeResolve(json.version ?? null);
-        } catch {
-          safeResolve(null);
-        }
-      });
-      res.on("error", () => safeResolve(null));
-    });
-
-    req.on("error", () => safeResolve(null));
-    req.on("timeout", () => {
-      req.destroy();
-      safeResolve(null);
-    });
-  });
-}
-
 /** Run a single check and update the runtime state. */
 async function check(): Promise<void> {
-  const latest = await fetchLatestVersion();
-  if (latest === null) return; // network issue — keep previous state
+  const info = await fetchRegistryInfo(REGISTRY_URL);
+  if (info === null) return; // network issue — keep previous state
+
+  const minReleaseAgeMs = await detectMinReleaseAgeMs();
+  const updateAvailable = isNewerVersion(info.latest.version, currentVersion);
+  const target = pickInstallableTarget(info.latest, info.times, currentVersion, minReleaseAgeMs);
 
   state = {
-    updateAvailable: isNewerVersion(latest, currentVersion),
-    latestVersion: latest,
+    updateAvailable,
+    updateInstallable: target !== null,
+    installableVersion: target?.version ?? null,
+    latestVersion: info.latest.version,
+    latestPublishedAt: info.latest.publishedAt,
+    minReleaseAgeMs,
     currentVersion,
   };
 
-  if (state.updateAvailable) {
-    process.stderr.write(`[argent] Update available: ${currentVersion} -> ${latest}\n`);
+  if (target !== null) {
+    process.stderr.write(`[argent] Update available: ${currentVersion} -> ${target.version}\n`);
+  } else if (updateAvailable && minReleaseAgeMs > 0) {
+    // Newer version exists but none is installable yet under the policy — log
+    // once to explain the silence; no reminder is surfaced to the agent.
+    process.stderr.write(
+      `[argent] Update ${currentVersion} -> ${info.latest.version} is held by a minimum-release-age policy; ` +
+        `reminder deferred until an eligible version ages past the gate.\n`
+    );
   }
 }
 
 /**
- * Start the update checker: runs an immediate check, then rechecks every hour.
- * Safe to call once at startup. Returns a dispose function to clear the timer.
+ * Run an immediate check, then recheck every 24h. Returns a dispose fn for the
+ * timer.
  */
 export function startUpdateChecker(): { dispose(): void } {
   // Clear any leaked interval from a prior call.
