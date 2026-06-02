@@ -186,6 +186,7 @@ Check the `argent-environment-inspector` result for test commands. For interacti
 
 - **Unit tests**: Look for Jest in `package.json` (`"test": "jest"`, `jest` config). Run: `npm test` or `yarn test`.
 - **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
+- **Visible UI changes**: Use `argent-test-ui-flow` for manual QA. For `screenshot-diff` rules and parameters, follow the `argent-screenshot-diff` skill. Use it when stable before/after screenshots add meaningful pixel-visible evidence.
 - **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `argent-test-ui-flow` skill.
 
 ### 5.2 Running Tests (Typical)
@@ -219,6 +220,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
 | Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
+| Compare visible UI changes   | `screenshot-diff` tool; follow the `argent-screenshot-diff` skill for baseline/current capture choices                                   |
 | Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
 | Read JS console logs         | `debugger-log-registry` tool                                                                                                             |
 | Reload JS bundle             | `debugger-reload-metro` tool                                                                                                             |

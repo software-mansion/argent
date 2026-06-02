@@ -12,6 +12,10 @@ const NATIVE_DEVTOOLS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-ios/src/index.ts"
 );
+const NATIVE_DEVTOOLS_ANDROID_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/src/index.ts"
+);
 const TOOLS_CLIENT_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/argent-tools-client/src/index.ts"
@@ -28,6 +32,7 @@ const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
 const ALIASES = {
   "@argent/registry": REGISTRY_ENTRY,
   "@argent/native-devtools-ios": NATIVE_DEVTOOLS_ENTRY,
+  "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,
   "@argent/tools-client": TOOLS_CLIENT_ENTRY,
   "@argent/installer": INSTALLER_ENTRY,
   "@argent/mcp": MCP_ENTRY,
@@ -70,6 +75,20 @@ const ANDROID_APK_DEST_DIR = path.resolve(__dirname, "../dist");
 for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
+}
+
+// The Android helper artifacts live alongside the bundles (manifest at the
+// package root, APK inside the shared dist/ folder) so they aren't covered
+// by the per-directory purge above. Removing them explicitly keeps a
+// missing-APK rebuild from leaving a stale manifest behind that would later
+// fool helperManifest() into pointing at an APK that's no longer present.
+fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
+if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
+  for (const entry of fs.readdirSync(ANDROID_APK_DEST_DIR)) {
+    if (/^argent-android-devtools-.*\.apk$/.test(entry)) {
+      fs.rmSync(path.join(ANDROID_APK_DEST_DIR, entry), { force: true });
+    }
+  }
 }
 
 // Ensure dist/ exists

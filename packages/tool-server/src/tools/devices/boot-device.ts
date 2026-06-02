@@ -79,6 +79,40 @@ type BootDeviceResult =
   | { platform: "android"; serial: string; avdName: string; booted: true }
   | NativeDevtoolsInitFailedResult;
 
+// Flags every boot-device launch should always pass. Two purposes:
+//
+//   - Performance: `-noaudio` skips guest pulseaudio init (one thread, ~50 MB
+//     RSS); `-no-boot-anim` skips the Pixel boot animation, which is a major
+//     CPU spike on software-rendered GPU modes; `-netfast` disables network
+//     shaping (latency/speed simulation), pure overhead for MCP use cases.
+//     Measured on a 4-core Skylake host with a 4096 MB / 228 MB-heap AVD:
+//     warm-cache cold boot drops 66 s → 49 s (~25%), qemu RSS at +20 s drops
+//     ~190 MB. android-emulator-runner (the canonical CI launcher) passes the
+//     same three by default for the same reasons.
+//
+//   - Dialog suppression: `-crash-report-mode never` keeps emulator crashes
+//     from popping a Qt consent dialog that blocks the next boot until a
+//     human dismisses it; `-no-metrics` suppresses the metrics-collection
+//     consent dialog with the same blocking behavior. Crash dumps are still
+//     written to /tmp/android-unknown/emu-crash-*.db so the data isn't lost
+//     — only the modal popup is. `-no-metrics` is Google's anonymous
+//     emulator-usage telemetry and is unrelated to any argent profiler tool
+//     (those run guest-side via Perfetto/simpleperf or Metro CDP).
+//
+// All five are flag-only with no host detection, so they apply uniformly to
+// macOS and Linux. `-noaudio` and `-netfast` change qemu device topology,
+// which means they must be passed identically to the snapshot probe, hot
+// boot, and cold boot — a mismatch would silently invalidate the snapshot
+// the previous cold boot saved.
+const LAUNCH_HARDENING_ARGS = [
+  "-noaudio",
+  "-no-boot-anim",
+  "-netfast",
+  "-crash-report-mode",
+  "never",
+  "-no-metrics",
+] as const;
+
 // Each stage has its own sub-budget so a hang in one stage cannot consume the
 // entire overall budget and a bootTimeoutMs bump doesn't quietly mask a regression.
 const STAGE_BUDGET = {
@@ -658,7 +692,7 @@ async function bootAndroidImpl(params: {
     // renderer configured". RENDERER_ARGS keeps the two in lockstep.
     const RENDERER_ARGS = ["-gpu", "auto"] as const;
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
-      extraArgs: RENDERER_ARGS,
+      extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
     });
     if (!probe.loadable) {
       hotBootFailureReason = `-check-snapshot-loadable: ${probe.reason ?? "unknown"}`;
@@ -675,6 +709,7 @@ async function bootAndroidImpl(params: {
         "-force-snapshot-load",
         "-no-snapshot-save",
         ...RENDERER_ARGS,
+        ...LAUNCH_HARDENING_ARGS,
       ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
@@ -716,7 +751,17 @@ async function bootAndroidImpl(params: {
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
   // `-gpu auto` mirrors the hot-boot path so the snapshot this cold boot
   // saves matches the renderer the next launch's probe will resolve.
-  const coldArgs = ["-avd", params.avdName, "-no-snapshot-load", "-gpu", "auto"];
+  // LAUNCH_HARDENING_ARGS likewise — `-noaudio` and `-netfast` change device
+  // topology, so a mismatch between cold-save and hot-load would invalidate
+  // the saved snapshot.
+  const coldArgs = [
+    "-avd",
+    params.avdName,
+    "-no-snapshot-load",
+    "-gpu",
+    "auto",
+    ...LAUNCH_HARDENING_ARGS,
+  ];
   let coldResult: { serial: string };
   try {
     coldResult = await attemptBoot({

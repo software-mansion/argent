@@ -4,6 +4,8 @@
  * Extracted so it can be tested independently of the MCP server wiring.
  */
 
+import { readFile } from "node:fs/promises";
+
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
@@ -38,9 +40,17 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
   }
 }
 
-export async function toMcpContent(result: unknown, outputHint?: string): Promise<ContentBlock[]> {
+export async function toMcpContent(
+  result: unknown,
+  outputHint?: string,
+  args?: unknown
+): Promise<ContentBlock[]> {
   if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
     const r = result as { url: string; path?: string };
+    if (isRecord(args) && args.includeImageInContext === false) {
+      return [{ type: "text" as const, text: `Saved: ${r.path}` }];
+    }
+
     const buf = await fetchPngBytes(r.url);
     if (buf) {
       return [
@@ -63,6 +73,44 @@ export async function toMcpContent(result: unknown, outputHint?: string): Promis
   return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+// ── screenshot-diff adapter ──────────────────────────────────────────
+
+export interface ScreenshotDiffResult {
+  summary: string;
+  diffPath?: string;
+  contextDiffPath?: string;
+}
+
+export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffResult {
+  if (!isRecord(value)) return false;
+  return typeof value.summary === "string";
+}
+
+// Render a screenshot-diff tool result as MCP content blocks.
+export async function screenshotDiffToMcpContent(
+  result: ScreenshotDiffResult
+): Promise<ContentBlock[]> {
+  const blocks: ContentBlock[] = [];
+
+  if (typeof result.contextDiffPath === "string") {
+    const buf = await readFile(result.contextDiffPath);
+    blocks.push({
+      type: "image" as const,
+      data: buf.toString("base64"),
+      mimeType: "image/png" as const,
+    });
+  }
+
+  blocks.push({ type: "text" as const, text: result.summary });
+  return blocks;
+}
+
+// ── flow-execute adapter ─────────────────────────────────────────────
+
 export type FlowExecuteResult = {
   flow: string;
   executionPrerequisite?: string;
@@ -72,6 +120,7 @@ export type FlowExecuteResult = {
     message?: string;
     result?: unknown;
     outputHint?: string;
+    args?: unknown;
     error?: string;
   }[];
 };
@@ -108,7 +157,7 @@ export async function flowRunToMcpContent(result: FlowExecuteResult): Promise<Co
       });
     } else {
       blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint);
+      const stepContent = await toMcpContent(step.result, step.outputHint, step.args);
       blocks.push(...stepContent);
     }
   }

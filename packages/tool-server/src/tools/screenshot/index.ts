@@ -16,7 +16,14 @@ const zodSchema = z.object({
     .max(1.0)
     .optional()
     .describe(
-      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset. Use 1.0 for full resolution."
+      "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset. Use 1.0 only when saving full-resolution PNG artifacts."
+    ),
+  includeImageInContext: z
+    .boolean()
+    .optional()
+    .default(true)
+    .describe(
+      "Default true. Set false only when capturing a full-resolution PNG (scale: 1.0) to save as a baseline/current for screenshot-diff — the file is still written, but the image bytes are not attached to the agent context."
     ),
 });
 
@@ -35,7 +42,7 @@ const capability: ToolCapability = {
 
 export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
-  description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path } and the MCP adapter renders it as a visible image.
+  description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
