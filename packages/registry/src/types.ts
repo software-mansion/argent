@@ -58,6 +58,8 @@ export type ServiceRef = string | { urn: string; options?: Record<string, unknow
 /** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
   signal?: AbortSignal;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
 }
 
 // ── Device + Capability Types ──

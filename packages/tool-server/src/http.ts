@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
 import type { Registry } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
@@ -55,14 +56,14 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: "ios" | "android"; deviceId?: string };
+type InvocationMeta = { platform?: "ios" | "android" };
 
 function extractInvocationMeta(hasCapability: boolean, data: unknown): InvocationMeta | null {
   if (!hasCapability || !data || typeof data !== "object") return null;
   const record = data as Record<string, unknown>;
   const deviceArg = extractDeviceArg(record);
   if (deviceArg) {
-    return { platform: resolveDevice(deviceArg).platform, deviceId: deviceArg };
+    return { platform: resolveDevice(deviceArg).platform };
   }
   if (typeof record.avdName === "string") {
     return { platform: "android" };
@@ -87,7 +88,7 @@ export interface HttpAppOptions {
    */
   bindHost?: string;
   /** Optional telemetry hook for per-invocation platform/device metadata. */
-  recordInvocation?: (toolId: string, meta: InvocationMeta) => () => void;
+  recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
 }
 
 export interface HttpAppHandle {
@@ -331,18 +332,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
-      // Hashing happens in the telemetry listener, not in the HTTP layer.
+      // The HTTP layer owns the invocation id so request metadata can be
+      // correlated without relying on same-tool FIFO ordering.
+      const toolInvocationId = randomUUID();
       let releaseInvocationMeta: (() => void) | undefined;
       if (options?.recordInvocation) {
         const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData);
         if (invocationMeta) {
-          releaseInvocationMeta = options.recordInvocation(name, invocationMeta);
+          releaseInvocationMeta = options.recordInvocation(toolInvocationId, invocationMeta);
         }
       }
 
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
+          toolInvocationId,
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.

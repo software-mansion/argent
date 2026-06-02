@@ -111,12 +111,13 @@ describe("GET /tools progressive-loading metadata", () => {
   it("does not pass bundleId into telemetry invocation metadata", async () => {
     const release = vi.fn();
     let seenMeta: Record<string, unknown> | undefined;
-    const recordInvocation = vi.fn((_toolId: string, meta: Record<string, unknown>) => {
+    const recordInvocation = vi.fn((_toolInvocationId: string, meta: Record<string, unknown>) => {
       seenMeta = meta;
       return release;
     });
+    const registry = stubRegistry();
     handle.dispose();
-    handle = createHttpApp(stubRegistry(), { recordInvocation });
+    handle = createHttpApp(registry, { recordInvocation });
 
     await request(handle.app)
       .post("/tools/device-tool")
@@ -126,12 +127,17 @@ describe("GET /tools progressive-loading metadata", () => {
       })
       .expect(200);
 
-    expect(recordInvocation).toHaveBeenCalledWith("device-tool", {
+    expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), {
       platform: "ios",
-      deviceId: "11111111-1111-1111-1111-111111111111",
     });
     expect(seenMeta).not.toHaveProperty("bundleId");
+    expect(seenMeta).not.toHaveProperty("deviceId");
     expect(release).toHaveBeenCalledOnce();
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "device-tool",
+      expect.any(Object),
+      expect.objectContaining({ toolInvocationId: recordInvocation.mock.calls[0]![0] })
+    );
   });
 
   it("does not record platform metadata for non-device tools", async () => {
@@ -151,7 +157,7 @@ describe("GET /tools progressive-loading metadata", () => {
   });
 
   it("records Android platform for avdName device-management calls without a device hash", async () => {
-    const recordInvocation = vi.fn((_toolId: string, meta: Record<string, unknown>) => {
+    const recordInvocation = vi.fn((_toolInvocationId: string, meta: Record<string, unknown>) => {
       expect(meta).toEqual({ platform: "android" });
       return vi.fn();
     });
@@ -160,6 +166,6 @@ describe("GET /tools progressive-loading metadata", () => {
 
     await request(handle.app).post("/tools/boot-tool").send({ avdName: "Pixel_9" }).expect(200);
 
-    expect(recordInvocation).toHaveBeenCalledWith("boot-tool", { platform: "android" });
+    expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), { platform: "android" });
   });
 });

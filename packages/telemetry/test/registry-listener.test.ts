@@ -26,10 +26,7 @@ describe("attachRegistryTelemetry", () => {
     const registry = new Registry();
 
     const handle = attachRegistryTelemetry(registry);
-    handle.recordInvocation("gesture-tap", {
-      platform: "ios",
-      deviceId: "ABCD1234-EFGH-5678-IJKL-9012MNOP3456",
-    });
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "ios" });
 
     registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1);
     registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 42.5);
@@ -41,9 +38,7 @@ describe("attachRegistryTelemetry", () => {
       tool_invocation_id: INVOCATION_ID_1,
       platform: "ios",
     });
-    expect((trackSpy.mock.calls[0]![1] as Record<string, unknown>).device_id_hash).toMatch(
-      /^[0-9a-f]{12}$/
-    );
+    expect(trackSpy.mock.calls[0]![1]).not.toHaveProperty("device_id_hash");
 
     expect(trackSpy.mock.calls[1]![0]).toBe("tool:complete");
     expect(trackSpy.mock.calls[1]![1]).toMatchObject({
@@ -60,7 +55,7 @@ describe("attachRegistryTelemetry", () => {
     const registry = new Registry();
     const handle = attachRegistryTelemetry(registry);
 
-    handle.recordInvocation("screenshot", { platform: "android" });
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "android" });
 
     registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
 
@@ -124,7 +119,7 @@ describe("attachRegistryTelemetry", () => {
     const trackSpy = vi.spyOn(telemetry, "track");
     const registry = new Registry();
     const handle = attachRegistryTelemetry(registry);
-    const release = handle.recordInvocation("screenshot", { platform: "android" });
+    const release = handle.recordInvocation(INVOCATION_ID_1, { platform: "android" });
 
     release();
     registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
@@ -136,13 +131,13 @@ describe("attachRegistryTelemetry", () => {
     handle.detach();
   });
 
-  it("keeps same-tool invocation metadata separate by invocation id", () => {
+  it("keeps same-tool invocation metadata separate by caller-provided invocation id", () => {
     const trackSpy = vi.spyOn(telemetry, "track");
     const registry = new Registry();
     const handle = attachRegistryTelemetry(registry);
 
-    handle.recordInvocation("screenshot", { platform: "ios" });
-    handle.recordInvocation("screenshot", { platform: "android" });
+    handle.recordInvocation(INVOCATION_ID_2, { platform: "android" });
+    handle.recordInvocation(INVOCATION_ID_1, { platform: "ios" });
 
     registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_1);
     registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2);

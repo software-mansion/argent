@@ -40,7 +40,6 @@ const arrayOf =
 
 const TOOL_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
 const PLATFORM = oneOf(["ios", "android"] as const);
-const ID_HASH = matches(/^[0-9a-f]{12}$/, 12);
 const UUID = matches(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   36
@@ -58,7 +57,6 @@ const PACKAGE_ACTION = oneOf([
   "standalone_install",
   "mcp_update",
 ] as const);
-const TELEMETRY_SUBCOMMAND = oneOf(["status", "enable", "disable", "help", "unknown"] as const);
 const ADAPTER_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
 const COUNT = finiteNonNeg();
 const DURATION_MS = finiteNonNeg();
@@ -130,7 +128,6 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
-    device_id_hash: ID_HASH,
   },
   "tool:complete": {
     tool: TOOL_NAME,
@@ -151,10 +148,6 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
     total_tool_calls: COUNT,
   },
   "telemetry:opt_out": {},
-  "telemetry:command_complete": {
-    subcommand: TELEMETRY_SUBCOMMAND,
-    duration_ms: DURATION_MS,
-  },
 };
 
 /** Strip keys and values that are not allowed for this event. */

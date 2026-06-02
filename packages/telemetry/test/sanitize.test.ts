@@ -220,6 +220,7 @@ describe("sanitize", () => {
       ["customRoot", { customRoot: "/Users/alice/work" }],
       ["fromTar", { from: "/Users/alice/file.tgz" }],
       ["bundle_id_hash", { bundle_id_hash: "0123456789ab" }],
+      ["device_id_hash", { device_id_hash: "0123456789ab" }],
     ])("drops %s when accidentally passed to a tool event", (_label, payload) => {
       const out = sanitize("tool:invoke", { tool: "x", platform: "ios", ...payload });
       expect(out).toEqual({ tool: "x", platform: "ios" });

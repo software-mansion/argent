@@ -3,7 +3,6 @@ import {
   init as telemetryInit,
   attachRegistryTelemetry,
   track as telemetryTrack,
-  trackImmediate as telemetryTrackImmediate,
   shutdown as telemetryShutdown,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
@@ -55,8 +54,6 @@ export function start(): void {
 
   function crashShutdown(label: string, detail: string): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
-    if (shuttingDown) return; // avoid re-entrant shutdown
-    shuttingDown = true;
     shutdownReason = "crash";
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
@@ -104,13 +101,16 @@ export function start(): void {
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
   shutdown = async (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
     updateChecker.dispose();
     stopWatcher();
     httpHandle.dispose();
 
     // Emit toolserver:stop before tearing the registry down.
     try {
-      await telemetryTrackImmediate("toolserver:stop", {
+      telemetryTrack("toolserver:stop", {
         reason: shutdownReason,
         uptime_ms: Date.now() - serverStartedAt,
         total_tool_calls: telemetryHandle.getTotalToolCalls(),
@@ -174,10 +174,13 @@ export function start(): void {
       });
     })
     .catch((err) => {
-      process.stderr.write(
-        `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
-      );
-      process.exit(1);
+      void (async () => {
+        process.stderr.write(
+          `[tool-server] Failed to start: ${err instanceof Error ? err.message : err}\n`
+        );
+        shutdownReason = "crash";
+        await shutdown?.(1);
+      })();
     });
 
   // ── Lifecycle ─────────────────────────────────────────────────────
