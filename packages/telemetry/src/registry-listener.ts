@@ -1,4 +1,4 @@
-import type { Registry } from "@argent/registry";
+import { FAILURE_CODES, getFailureSignalOrFallback, type Registry } from "@argent/registry";
 import { track } from "./index.js";
 
 // HTTP captures request-only metadata here so registry lifecycle events can
@@ -53,11 +53,18 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
     durationMs = 0
   ): void => {
     const meta = consumeActiveMeta(toolInvocationId);
+    const signal = getFailureSignalOrFallback(error, {
+      error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
+      failure_stage: "registry_tool_failed_event",
+      failure_area: "registry",
+      error_kind: "unknown",
+    });
     track("tool:fail", {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
       ...(meta.platform ? { platform: meta.platform } : {}),
       duration_ms: durationMs,
+      ...signal,
     });
   };
 

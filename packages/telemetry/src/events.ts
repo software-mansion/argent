@@ -1,14 +1,18 @@
 // Typed telemetry event names and property shapes. sanitize.ts enforces the
 // same surface at runtime.
 
+import type { FailureSignal } from "@argent/registry";
+
 // Installation events
+
+export type FailureTelemetryProps = Partial<FailureSignal>;
 
 export interface InstallationCliInitStartProps {
   package_manager: "npm" | "yarn" | "pnpm" | "bun" | "unknown";
   is_non_interactive: boolean;
 }
 
-export interface InstallationCliInitCompleteProps {
+export interface InstallationCliInitCompleteProps extends FailureTelemetryProps {
   duration_ms: number;
   is_success: boolean;
   editors_configured_count: number;
@@ -47,6 +51,14 @@ export interface InstallationSkillInstallProps {
   outcome: "success" | "failure" | "skipped";
 }
 
+export interface InstallationSkillRefreshResultProps extends FailureTelemetryProps {
+  is_success: boolean;
+  scope_count: number;
+  synced_count: number;
+  pruned_count: number;
+  failed_count: number;
+}
+
 export type InstallationPackageActionTrigger = "init" | "update" | "mcp_update";
 
 export type InstallationPackageAction =
@@ -60,7 +72,7 @@ export type InstallationPackageAction =
   | "standalone_install"
   | "mcp_update";
 
-export interface InstallationPackageActionProps {
+export interface InstallationPackageActionProps extends FailureTelemetryProps {
   trigger: InstallationPackageActionTrigger;
   action: InstallationPackageAction;
   is_success: boolean;
@@ -73,13 +85,13 @@ export interface InstallationCliUpdateCompleteProps {
   duration_ms: number;
 }
 
-export interface InstallationCliUpdateFailProps {
+export interface InstallationCliUpdateFailProps extends FailureTelemetryProps {
   duration_ms: number;
 }
 
 export interface InstallationCliUninstallStartProps {}
 
-export interface InstallationCliUninstallCompleteProps {
+export interface InstallationCliUninstallCompleteProps extends FailureTelemetryProps {
   has_pruned_content: boolean;
   has_uninstalled_package: boolean;
 }
@@ -99,10 +111,17 @@ export interface ToolCompleteProps {
   duration_ms: number;
 }
 
-export interface ToolFailProps {
+export interface ToolFailProps extends FailureTelemetryProps {
   tool: string;
-  tool_invocation_id: string;
+  tool_invocation_id?: string;
   platform?: "ios" | "android";
+  duration_ms: number;
+}
+
+// CLI command events
+
+export interface CliRunFailProps extends FailureTelemetryProps {
+  tool: string;
   duration_ms: number;
 }
 
@@ -110,7 +129,7 @@ export interface ToolFailProps {
 
 export interface ToolserverStartProps {}
 
-export interface ToolserverStopProps {
+export interface ToolserverStopProps extends FailureTelemetryProps {
   reason: "idle" | "signal" | "crash";
   uptime_ms: number;
   total_tool_calls: number;
@@ -131,6 +150,7 @@ export interface EventPropertyMap {
   "installation:editors_select": InstallationEditorsSelectProps;
   "installation:allowlist_decision": InstallationAllowlistDecisionProps;
   "installation:skill_install": InstallationSkillInstallProps;
+  "installation:skill_refresh_result": InstallationSkillRefreshResultProps;
   "installation:package_action": InstallationPackageActionProps;
   "installation:cli_update_start": InstallationCliUpdateStartProps;
   "installation:cli_update_complete": InstallationCliUpdateCompleteProps;
@@ -140,6 +160,7 @@ export interface EventPropertyMap {
   "tool:invoke": ToolInvokeProps;
   "tool:complete": ToolCompleteProps;
   "tool:fail": ToolFailProps;
+  "cli:run_fail": CliRunFailProps;
   "toolserver:start": ToolserverStartProps;
   "toolserver:stop": ToolserverStopProps;
   "telemetry:opt_out": TelemetryOptOutProps;
@@ -157,6 +178,7 @@ export const EVENT_NAMES: readonly EventName[] = [
   "installation:editors_select",
   "installation:allowlist_decision",
   "installation:skill_install",
+  "installation:skill_refresh_result",
   "installation:package_action",
   "installation:cli_update_start",
   "installation:cli_update_complete",
@@ -166,6 +188,7 @@ export const EVENT_NAMES: readonly EventName[] = [
   "tool:invoke",
   "tool:complete",
   "tool:fail",
+  "cli:run_fail",
   "toolserver:start",
   "toolserver:stop",
   "telemetry:opt_out",

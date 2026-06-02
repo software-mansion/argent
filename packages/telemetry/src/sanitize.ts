@@ -1,3 +1,12 @@
+import {
+  FAILURE_AREAS,
+  FAILURE_CODES,
+  FAILURE_COMMANDS,
+  FAILURE_KINDS,
+  FAILURE_SIGNAL_NAMES,
+  FAILURE_SPAWN_CODES,
+  NETWORK_FAILURES,
+} from "@argent/registry";
 import type { EventName } from "./events.js";
 
 // Per-event property allowlist and validators. Unknown keys and invalid values
@@ -61,6 +70,29 @@ const ADAPTER_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
 const COUNT = finiteNonNeg();
 const DURATION_MS = finiteNonNeg();
 const MAJOR_VERSION = finiteNonNeg(9999);
+const FAILURE_CODE_VALUES = new Set<string>(Object.values(FAILURE_CODES));
+const ERROR_CODE: Validator = (v) =>
+  typeof v === "string" && FAILURE_CODE_VALUES.has(v) ? v : undefined;
+const FAILURE_STAGE = matches(/^[a-z][a-z0-9_]{1,79}$/, 80);
+const FAILURE_AREA = oneOf(FAILURE_AREAS);
+const ERROR_KIND = oneOf(FAILURE_KINDS);
+const FAILURE_COMMAND = oneOf(FAILURE_COMMANDS);
+const FAILURE_EXIT_CODE = finiteNonNeg(255);
+const FAILURE_SIGNAL_NAME = oneOf(FAILURE_SIGNAL_NAMES);
+const FAILURE_SPAWN_CODE = oneOf(FAILURE_SPAWN_CODES);
+const NETWORK_FAILURE = oneOf(NETWORK_FAILURES);
+
+const FAILURE_SIGNAL = {
+  error_code: ERROR_CODE,
+  failure_stage: FAILURE_STAGE,
+  failure_area: FAILURE_AREA,
+  error_kind: ERROR_KIND,
+  failure_command: FAILURE_COMMAND,
+  failure_exit_code: FAILURE_EXIT_CODE,
+  failure_signal: FAILURE_SIGNAL_NAME,
+  failure_spawn_code: FAILURE_SPAWN_CODE,
+  network_failure: NETWORK_FAILURE,
+};
 
 // Per-event validators
 
@@ -73,6 +105,7 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
     duration_ms: DURATION_MS,
     is_success: bool,
     editors_configured_count: COUNT,
+    ...FAILURE_SIGNAL,
   },
   "installation:cli_init_cancel": {
     step: oneOf(["global_install", "editors", "scope", "skills", "allowlist"] as const),
@@ -100,11 +133,20 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
     has_offline_cache: bool,
     outcome: oneOf(["success", "failure", "skipped"] as const),
   },
+  "installation:skill_refresh_result": {
+    is_success: bool,
+    scope_count: COUNT,
+    synced_count: COUNT,
+    pruned_count: COUNT,
+    failed_count: COUNT,
+    ...FAILURE_SIGNAL,
+  },
   "installation:package_action": {
     trigger: PACKAGE_ACTION_TRIGGER,
     action: PACKAGE_ACTION,
     is_success: bool,
     duration_ms: DURATION_MS,
+    ...FAILURE_SIGNAL,
   },
   "installation:cli_update_start": {},
   "installation:cli_update_complete": {
@@ -112,11 +154,13 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
   },
   "installation:cli_update_fail": {
     duration_ms: DURATION_MS,
+    ...FAILURE_SIGNAL,
   },
   "installation:cli_uninstall_start": {},
   "installation:cli_uninstall_complete": {
     has_pruned_content: bool,
     has_uninstalled_package: bool,
+    ...FAILURE_SIGNAL,
   },
   "tool:invoke": {
     tool: TOOL_NAME,
@@ -134,12 +178,19 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
     tool_invocation_id: UUID,
     platform: PLATFORM,
     duration_ms: DURATION_MS,
+    ...FAILURE_SIGNAL,
+  },
+  "cli:run_fail": {
+    tool: TOOL_NAME,
+    duration_ms: DURATION_MS,
+    ...FAILURE_SIGNAL,
   },
   "toolserver:start": {},
   "toolserver:stop": {
     reason: oneOf(["idle", "signal", "crash"] as const),
     uptime_ms: DURATION_MS,
     total_tool_calls: COUNT,
+    ...FAILURE_SIGNAL,
   },
   "telemetry:opt_out": {},
 };

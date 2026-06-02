@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
 import * as path from "path";
-import type { ServiceRef, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type ServiceRef,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   cacheProfilerPaths,
   type ProfilerSessionPaths,
@@ -180,9 +185,15 @@ async function loadReactSession(
   }
 
   if (!hasCpu && !hasCommits) {
-    throw new Error(
+    throw new FailureError(
       `No data found for React session "${sessionId}". ` +
-        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`
+        `Expected files at:\n  ${cpuPath}\n  ${commitsPath}`,
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_load_react_session",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -296,9 +307,15 @@ async function loadNativeSession(
   }
 
   if (!files.cpu && !files.hangs && !files.leaks) {
-    throw new Error(
+    throw new FailureError(
       `No native profiler XML files found for session "${sessionId}". ` +
-        `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`
+        `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`,
+      {
+        error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+        failure_stage: "profiler_load_native_session",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -349,8 +366,14 @@ Fails if the session_id is not found or required XML files are missing from disk
 
       case "load_react": {
         if (!params.session_id) {
-          throw new Error(
-            "load_react mode requires the session_id parameter. Use list mode first."
+          throw new FailureError(
+            "load_react mode requires the session_id parameter. Use list mode first.",
+            {
+              error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+              failure_stage: "profiler_load_params",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         return loadReactSession(debugDir, params.session_id, params.port, params.device_id);
@@ -358,8 +381,14 @@ Fails if the session_id is not found or required XML files are missing from disk
 
       case "load_native": {
         if (!params.session_id) {
-          throw new Error(
-            "load_native mode requires the session_id parameter. Use list mode first."
+          throw new FailureError(
+            "load_native mode requires the session_id parameter. Use list mode first.",
+            {
+              error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+              failure_stage: "profiler_load_params",
+              failure_area: "tool_server",
+              error_kind: "validation",
+            }
           );
         }
         const api = services.session as NativeProfilerSessionApi;
@@ -367,7 +396,12 @@ Fails if the session_id is not found or required XML files are missing from disk
       }
 
       default:
-        throw new Error(`Unknown mode: ${params.mode}`);
+        throw new FailureError(`Unknown mode: ${params.mode}`, {
+          error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+          failure_stage: "profiler_load_mode",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
     }
   },
 };

@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -56,7 +56,12 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
     const api = services.session as NativeProfilerSessionApi;
 
     if (!api.exportedFiles) {
-      throw new Error("No exported trace data found. Call native-profiler-stop first.");
+      throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
+        error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+        failure_stage: "native_profiler_analyze_load_exports",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
 
     // Pre-flight every set path: if the file is missing/unreadable the parsers

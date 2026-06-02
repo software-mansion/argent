@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ToolDependency } from "@argent/registry";
+import { FAILURE_CODES, withFailureSignal, type ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +17,12 @@ export class DependencyMissingError extends Error {
     super(message);
     this.name = "DependencyMissingError";
     this.missing = missing;
+    withFailureSignal(this, {
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "tool_dependency_preflight",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
   }
 }
 

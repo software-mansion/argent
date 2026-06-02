@@ -1,4 +1,6 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { argentHomeDir, configFilePath } from "./paths.js";
 
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
@@ -142,7 +144,27 @@ export function writeConsentFlag(enabled: boolean): void {
     },
   };
 
-  fs.writeFileSync(configFilePath(), JSON.stringify(next, null, 2) + "\n");
+  // Atomic publish: write to a temp file then rename so an interrupted write
+  // can never truncate the shared config (which holds non-telemetry keys too).
+  const finalPath = configFilePath();
+  const tmpPath = path.join(argentHomeDir(), `.config.tmp.${process.pid}.${crypto.randomUUID()}`);
+  const fd = fs.openSync(tmpPath, "wx", 0o600);
+  try {
+    fs.writeSync(fd, JSON.stringify(next, null, 2) + "\n");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.renameSync(tmpPath, finalPath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* nothing to clean up */
+    }
+    throw err;
+  }
   cache.current = null;
 }
 

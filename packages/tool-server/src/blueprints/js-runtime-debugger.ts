@@ -1,4 +1,10 @@
-import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  TypedEventEmitter,
+  type ServiceBlueprint,
+  type ServiceEvents,
+} from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
 import { selectTarget } from "../utils/debugger/target-selection";
 import { CDPClient, type ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
@@ -67,7 +73,14 @@ function createConsoleLogServer(
     server.listen(0, "127.0.0.1", () => {
       const addr = server.address();
       if (!addr || typeof addr === "string") {
-        reject(new Error("Failed to bind console log server"));
+        reject(
+          new FailureError("Failed to bind console log server", {
+            error_code: FAILURE_CODES.JS_RUNTIME_CONSOLE_SERVER_BIND_FAILED,
+            failure_stage: "js_runtime_console_server_bind",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+        );
         return;
       }
       const url = `ws://127.0.0.1:${addr.port}`;
@@ -110,15 +123,33 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
   async factory(_deps, payload, options?) {
     const colonIdx = payload.indexOf(":");
     if (colonIdx < 0) {
-      throw new Error(`JsRuntimeDebugger payload must be "port:deviceId", got: "${payload}"`);
+      throw new FailureError(
+        `JsRuntimeDebugger payload must be "port:deviceId", got: "${payload}"`,
+        {
+          error_code: FAILURE_CODES.JS_RUNTIME_PAYLOAD_INVALID,
+          failure_stage: "js_runtime_debugger_payload",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
+      );
     }
     const deviceId = payload.slice(colonIdx + 1);
     if (!deviceId) {
-      throw new Error(`JsRuntimeDebugger payload missing deviceId: "${payload}"`);
+      throw new FailureError(`JsRuntimeDebugger payload missing deviceId: "${payload}"`, {
+        error_code: FAILURE_CODES.JS_RUNTIME_PAYLOAD_DEVICE_MISSING,
+        failure_stage: "js_runtime_debugger_payload",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
     const port = parseInt(payload.slice(0, colonIdx), 10);
     if (!Number.isFinite(port)) {
-      throw new Error(`JsRuntimeDebugger payload has invalid port: "${payload}"`);
+      throw new FailureError(`JsRuntimeDebugger payload has invalid port: "${payload}"`, {
+        error_code: FAILURE_CODES.JS_RUNTIME_PAYLOAD_PORT_INVALID,
+        failure_stage: "js_runtime_debugger_payload",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
 
     const metro = await discoverMetro(port);
@@ -204,7 +235,16 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     const events = new TypedEventEmitter<ServiceEvents>();
 
     cdp.events.on("disconnected", (error) => {
-      events.emit("terminated", error ?? new Error("CDP disconnected"));
+      events.emit(
+        "terminated",
+        error ??
+          new FailureError("CDP disconnected", {
+            error_code: FAILURE_CODES.JS_RUNTIME_CDP_DISCONNECTED,
+            failure_stage: "js_runtime_debugger_cdp_lifecycle",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+      );
     });
 
     return {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FAILURE_CODES } from "@argent/registry";
 import { sanitize, ALLOWED } from "../src/sanitize.js";
 import { EVENT_NAMES } from "../src/events.js";
 
@@ -88,11 +89,168 @@ describe("sanitize", () => {
           platform: "ios",
           duration_ms: 1,
           error_message: "ENOENT /Users/alice/.ssh/id_rsa",
+          stack: "Error: ENOENT\n    at /Users/alice/project/app.ts:1",
         })
       ).toEqual({
         tool: "gesture-tap",
         platform: "ios",
         duration_ms: 1,
+      });
+    });
+
+    it("allows static failure signal fields on tool failures", () => {
+      expect(
+        sanitize("tool:fail", {
+          tool: "gesture-tap",
+          platform: "ios",
+          duration_ms: 1,
+          error_code: "HTTP_ZOD_VALIDATION_FAILED",
+          failure_stage: "http_zod_validation",
+          failure_area: "http",
+          error_kind: "validation",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        platform: "ios",
+        duration_ms: 1,
+        error_code: "HTTP_ZOD_VALIDATION_FAILED",
+        failure_stage: "http_zod_validation",
+        failure_area: "http",
+        error_kind: "validation",
+      });
+    });
+
+    it("allows coarse subprocess and network failure metadata", () => {
+      expect(
+        sanitize("tool:fail", {
+          tool: "gesture-tap",
+          platform: "ios",
+          duration_ms: 1,
+          error_code: "ANDROID_ADB_COMMAND_FAILED",
+          failure_stage: "android_adb_command",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+          failure_command: "adb",
+          failure_exit_code: 1,
+          failure_signal: "SIGKILL",
+          failure_spawn_code: "ENOENT",
+          network_failure: "connection_refused",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        platform: "ios",
+        duration_ms: 1,
+        error_code: "ANDROID_ADB_COMMAND_FAILED",
+        failure_stage: "android_adb_command",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "adb",
+        failure_exit_code: 1,
+        failure_signal: "SIGKILL",
+        failure_spawn_code: "ENOENT",
+        network_failure: "connection_refused",
+      });
+    });
+
+    it("rejects unsafe subprocess and network metadata", () => {
+      expect(
+        sanitize("tool:fail", {
+          tool: "gesture-tap",
+          platform: "ios",
+          duration_ms: 1,
+          failure_command: "adb -s /Users/alice/device shell secret",
+          failure_exit_code: 999,
+          failure_signal: "SIGUSR1",
+          failure_spawn_code: "ESECRET",
+          network_failure: "https://internal.example",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        platform: "ios",
+        duration_ms: 1,
+      });
+    });
+
+    it("accepts every centrally registered failure code", () => {
+      for (const errorCode of Object.values(FAILURE_CODES)) {
+        expect(
+          sanitize("tool:fail", {
+            tool: "gesture-tap",
+            platform: "ios",
+            duration_ms: 1,
+            error_code: errorCode,
+          })
+        ).toMatchObject({ error_code: errorCode });
+      }
+    });
+
+    it("rejects non-static-looking failure signals", () => {
+      expect(
+        sanitize("tool:fail", {
+          tool: "gesture-tap",
+          platform: "ios",
+          duration_ms: 1,
+          error_code: "ENOENT /Users/alice/.ssh/id_rsa",
+          failure_stage: "../secret",
+          failure_area: "laptop",
+          error_kind: "password",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        platform: "ios",
+        duration_ms: 1,
+      });
+    });
+
+    it("rejects static-looking but unregistered failure codes", () => {
+      expect(
+        sanitize("tool:fail", {
+          tool: "gesture-tap",
+          platform: "ios",
+          duration_ms: 1,
+          error_code: "SOME_NEW_UNREGISTERED_FAILURE",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        platform: "ios",
+        duration_ms: 1,
+      });
+    });
+
+    it("allows static failure signal fields on CLI run failures", () => {
+      expect(
+        sanitize("cli:run_fail", {
+          tool: "gesture-tap",
+          duration_ms: 1,
+          error_code: "CLI_RUN_ARGS_JSON_INVALID",
+          failure_stage: "cli_run_parse_raw_args",
+          failure_area: "cli",
+          error_kind: "validation",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        duration_ms: 1,
+        error_code: "CLI_RUN_ARGS_JSON_INVALID",
+        failure_stage: "cli_run_parse_raw_args",
+        failure_area: "cli",
+        error_kind: "validation",
+      });
+    });
+
+    it("drops server-only and unsafe fields from CLI run failures", () => {
+      expect(
+        sanitize("cli:run_fail", {
+          tool: "Gesture-Tap!",
+          duration_ms: 1,
+          tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+          platform: "ios",
+          error_message: "ENOENT /Users/alice/.ssh/id_rsa",
+          stack: "Error: ENOENT\n    at /Users/alice/project/app.ts:1",
+          error_code: "CLI_RUN_TOOL_CALL_FAILED",
+        })
+      ).toEqual({
+        duration_ms: 1,
+        error_code: "CLI_RUN_TOOL_CALL_FAILED",
       });
     });
   });
@@ -145,6 +303,29 @@ describe("sanitize", () => {
         platform: "ios",
         duration_ms: 42.5,
       });
+    });
+  });
+
+  it("allows static failure signal fields on crash stop events", () => {
+    expect(
+      sanitize("toolserver:stop", {
+        reason: "crash",
+        uptime_ms: 10,
+        total_tool_calls: 2,
+        error_code: "TOOLSERVER_UNCAUGHT_EXCEPTION",
+        failure_stage: "toolserver_uncaught_exception",
+        failure_area: "tool_server",
+        error_kind: "crash",
+        stack: "Error: secret at /Users/alice/project/app.ts:1",
+      })
+    ).toEqual({
+      reason: "crash",
+      uptime_ms: 10,
+      total_tool_calls: 2,
+      error_code: "TOOLSERVER_UNCAUGHT_EXCEPTION",
+      failure_stage: "toolserver_uncaught_exception",
+      failure_area: "tool_server",
+      error_kind: "crash",
     });
   });
 

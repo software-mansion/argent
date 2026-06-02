@@ -1,4 +1,10 @@
-import { TypedEventEmitter, type ServiceBlueprint, type ServiceEvents } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  TypedEventEmitter,
+  type ServiceBlueprint,
+  type ServiceEvents,
+} from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { JsRuntimeDebuggerApi } from "./js-runtime-debugger";
 import { NETWORK_INTERCEPTOR_SCRIPT } from "../utils/debugger/scripts/network-interceptor";
@@ -40,7 +46,16 @@ export const networkInspectorBlueprint: ServiceBlueprint<NetworkInspectorApi, st
     const events = new TypedEventEmitter<ServiceEvents>();
 
     cdp.events.on("disconnected", (error) => {
-      events.emit("terminated", error ?? new Error("CDP disconnected"));
+      events.emit(
+        "terminated",
+        error ??
+          new FailureError("CDP disconnected", {
+            error_code: FAILURE_CODES.NETWORK_INSPECTOR_CDP_DISCONNECTED,
+            failure_stage: "network_inspector_cdp_lifecycle",
+            failure_area: "tool_server",
+            error_kind: "network",
+          })
+      );
     });
 
     return {

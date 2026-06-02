@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { Registry } from "@argent/registry";
+import { FAILURE_CODES, Registry, withFailureSignal } from "@argent/registry";
 import { attachRegistryTelemetry } from "../src/registry-listener.js";
 import { scopeHome } from "./helpers.js";
 import * as telemetry from "../src/index.js";
@@ -75,10 +75,45 @@ describe("attachRegistryTelemetry", () => {
       tool_invocation_id: INVOCATION_ID_1,
       platform: "android",
       duration_ms: 17.25,
+      error_code: "REGISTRY_TOOL_FAILURE_UNCLASSIFIED",
+      failure_stage: "registry_tool_failed_event",
+      failure_area: "registry",
+      error_kind: "unknown",
     });
     // The error MESSAGE must never reach the payload.
     expect(JSON.stringify(trackSpy.mock.calls[1]![1])).not.toContain("ETIMEDOUT");
     expect(JSON.stringify(trackSpy.mock.calls[1]![1])).not.toContain("1.2.3.4");
+
+    handle.detach();
+  });
+
+  it("forwards static failure signals from wrapped errors", () => {
+    const trackSpy = vi.spyOn(telemetry, "track");
+    const registry = new Registry();
+    const handle = attachRegistryTelemetry(registry);
+
+    const error = withFailureSignal(new Error("private /Users/alice/project failure"), {
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "screenshot_execute",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    });
+
+    emitToolFailed(registry, "screenshot", INVOCATION_ID_1, error, 9);
+
+    expect(trackSpy).toHaveBeenCalledWith(
+      "tool:fail",
+      expect.objectContaining({
+        tool: "screenshot",
+        tool_invocation_id: INVOCATION_ID_1,
+        duration_ms: 9,
+        error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+        failure_stage: "screenshot_execute",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      })
+    );
+    expect(JSON.stringify(trackSpy.mock.calls[0]![1])).not.toContain("/Users/alice");
 
     handle.detach();
   });

@@ -3,6 +3,7 @@ import pc from "picocolors";
 import { execFileSync } from "node:child_process";
 import semver from "semver";
 import { init as telemetryInit, track } from "@argent/telemetry";
+import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
   findConfiguredAdapterScopes,
@@ -21,7 +22,11 @@ import {
   RULES_DIR,
   AGENTS_DIR,
 } from "./utils.js";
-import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
+import {
+  refreshArgentSkills,
+  formatSkillRefreshSummary,
+  summarizeSkillRefreshForTelemetry,
+} from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServer } from "@argent/tools-client";
@@ -43,6 +48,43 @@ function getRequestedVersion(args: string[]): string | null {
 type UpdateTrigger = "update" | "mcp_update";
 type UpdatePackageAction = "standalone_update" | "standalone_install" | "mcp_update";
 
+type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+
+const UPDATE_INSTALLED_VERSION_DETECT_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_INSTALLED_VERSION_DETECT_FAILED,
+  failure_stage: "installer_update_installed_version_detect",
+  failure_area: "installer",
+  error_kind: "unknown",
+};
+
+const UPDATE_REGISTRY_CHECK_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_REGISTRY_CHECK_FAILED,
+  failure_stage: "installer_update_registry_check",
+  failure_area: "installer",
+  error_kind: "network",
+};
+
+const UPDATE_TOOLSERVER_STOP_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_TOOLSERVER_STOP_FAILED,
+  failure_stage: "installer_update_toolserver_stop",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const UPDATE_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_PACKAGE_ACTION_FAILED,
+  failure_stage: "installer_update_package_action",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const INSTALL_SKILLS_REFRESH_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
+  failure_stage: "installer_update_skills_refresh",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
 export function getUpdateTriggerFromEnv(env: NodeJS.ProcessEnv = process.env): UpdateTrigger {
   return env.ARGENT_UPDATE_TRIGGER === "mcp_update" ? "mcp_update" : "update";
 }
@@ -61,28 +103,31 @@ export async function update(args: string[]): Promise<void> {
   const trigger = getUpdateTriggerFromEnv();
   telemetryInit("installer");
   const updateStartTime = performance.now();
-  track("installation:cli_update_start", {});
+  await track("installation:cli_update_start", {});
   let telemetryFinalized = false;
 
   const trackPackageAction = async (
     action: UpdatePackageAction | "no_update" | "update_skipped" | "update_failed",
     startedAt: number,
-    isSuccess: boolean
+    isSuccess: boolean,
+    failureSignal?: InstallerFailureSignal
   ): Promise<void> => {
-    track("installation:package_action", {
+    await track("installation:package_action", {
       trigger,
       action,
       is_success: isSuccess,
       duration_ms: performance.now() - startedAt,
+      ...(failureSignal ?? {}),
     });
   };
 
-  const failUpdateTelemetry = async (): Promise<void> => {
+  const failUpdateTelemetry = async (failureSignal?: InstallerFailureSignal): Promise<void> => {
     if (telemetryFinalized) return;
     telemetryFinalized = true;
     await finalizeTelemetry(() => {
       track("installation:cli_update_fail", {
         duration_ms: performance.now() - updateStartTime,
+        ...(failureSignal ?? {}),
       });
     });
   };
@@ -111,8 +156,13 @@ export async function update(args: string[]): Promise<void> {
     const installed = globallyInstalled ? getGloballyInstalledVersion() : null;
 
     if (globallyInstalled && !installed) {
-      await trackPackageAction("update_failed", updateStartTime, false);
-      await failUpdateTelemetry();
+      await trackPackageAction(
+        "update_failed",
+        updateStartTime,
+        false,
+        UPDATE_INSTALLED_VERSION_DETECT_FAILED
+      );
+      await failUpdateTelemetry(UPDATE_INSTALLED_VERSION_DETECT_FAILED);
       p.log.error("Could not determine installed version.");
       process.exit(1);
     }
@@ -128,8 +178,13 @@ export async function update(args: string[]): Promise<void> {
     if (requestedVersion !== null) {
       if (!semver.valid(requestedVersion) || semver.prerelease(requestedVersion)) {
         spinner.stop(pc.red("Invalid update target."));
-        await trackPackageAction("update_failed", updateStartTime, false);
-        await failUpdateTelemetry();
+        await trackPackageAction(
+          "update_failed",
+          updateStartTime,
+          false,
+          UPDATE_REGISTRY_CHECK_FAILED
+        );
+        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
         process.exit(1);
       }
@@ -140,16 +195,26 @@ export async function update(args: string[]): Promise<void> {
         resolved = await resolveInstallableUpdateTarget(pm, installed);
       } catch (err) {
         spinner.stop(pc.red("Could not reach registry."));
-        await trackPackageAction("update_failed", updateStartTime, false);
-        await failUpdateTelemetry();
+        await trackPackageAction(
+          "update_failed",
+          updateStartTime,
+          false,
+          UPDATE_REGISTRY_CHECK_FAILED
+        );
+        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error(`Failed to check registry: ${err}`);
         process.exit(1);
       }
 
       if (resolved === null) {
         spinner.stop(pc.red("Could not reach registry."));
-        await trackPackageAction("update_failed", updateStartTime, false);
-        await failUpdateTelemetry();
+        await trackPackageAction(
+          "update_failed",
+          updateStartTime,
+          false,
+          UPDATE_REGISTRY_CHECK_FAILED
+        );
+        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
         p.log.error("Failed to determine the latest Argent release from the registry.");
         process.exit(1);
       }
@@ -209,8 +274,13 @@ export async function update(args: string[]): Promise<void> {
       try {
         await killToolServer();
       } catch (err) {
-        await trackPackageAction("update_failed", updateStartTime, false);
-        await failUpdateTelemetry();
+        await trackPackageAction(
+          "update_failed",
+          updateStartTime,
+          false,
+          UPDATE_TOOLSERVER_STOP_FAILED
+        );
+        await failUpdateTelemetry(UPDATE_TOOLSERVER_STOP_FAILED);
         p.log.error(`Could not stop the running tool server: ${err}`);
         process.exit(1);
       }
@@ -223,8 +293,13 @@ export async function update(args: string[]): Promise<void> {
           env: { ...process.env, ARGENT_SKIP_POSTINSTALL: "1" },
         });
       } catch (err) {
-        await trackPackageAction(packageAction, packageActionStartedAt, false);
-        await failUpdateTelemetry();
+        await trackPackageAction(
+          packageAction,
+          packageActionStartedAt,
+          false,
+          UPDATE_PACKAGE_ACTION_FAILED
+        );
+        await failUpdateTelemetry(UPDATE_PACKAGE_ACTION_FAILED);
         p.log.error(`${installed ? "Update" : "Install"} failed: ${err}`);
         process.exit(1);
       }
@@ -301,9 +376,18 @@ export async function update(args: string[]): Promise<void> {
       p.note(ruleResults.join("\n"), "Rules & Agents Updated");
     }
 
-    const skillSummary = formatSkillRefreshSummary(refreshArgentSkills(projectRoot));
+    const skillRefreshResults = refreshArgentSkills(projectRoot);
+    const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
     if (skillSummary) {
       p.note(skillSummary, "Skills Updated");
+    }
+    const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
+    if (skillTelemetrySummary.scope_count > 0) {
+      await track("installation:skill_refresh_result", {
+        is_success: skillTelemetrySummary.failed_count === 0,
+        ...skillTelemetrySummary,
+        ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
+      });
     }
 
     await completeUpdateTelemetry();
