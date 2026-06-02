@@ -443,12 +443,23 @@ describe("enable / disable CLI", () => {
 
 describe("flags (list) CLI", () => {
   it("prints a friendly message when the registry is empty", () => {
-    // Default (production) registry ships empty.
-    const out = captureConsole(() => flagsCmd([]));
+    // Pass an explicit empty registry: on this branch the default FLAG_REGISTRY
+    // ships the variant-selection flag (see the next test), so the empty-state
+    // message only appears when the registry is genuinely empty.
+    const out = captureConsole(() => flagsCmd([], []));
     expect(out.stdout).toContain("No feature flags are defined.");
     expect(out.stdout).toContain(getFlagsPath("global"));
     expect(out.stdout).toContain(getFlagsPath("project"));
   });
+
+  it("ships the variant-selection flag in the production registry", () => {
+    // Guards the gate: setup-registry.ts reads isFlagEnabled("variant-selection"),
+    // so that exact name must stay registered (and discoverable via `argent flags`).
+    const out = captureConsole(() => flagsCmd([]));
+    expect(out.stdout).toContain("variant-selection");
+    expect(out.stdout).not.toContain("No feature flags are defined.");
+  });
+
 
   it("lists every registry flag with its description and effective scope", () => {
     setFlag("a", true, "global");

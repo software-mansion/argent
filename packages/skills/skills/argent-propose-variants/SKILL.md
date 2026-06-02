@@ -1,11 +1,11 @@
 ---
 name: argent-propose-variants
-description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent preview UI. Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
+description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent preview window. Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
 ---
 
 ## 1. Overview
 
-You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant`. Each proposed element shows up as a floating card next to the live simulator stream in the Argent preview UI, connected by a thin line to the real element. The human picks per element, optionally pins free-form comments to elements, and presses **Complete selection**. `await_user_selection` is the single blocking call that returns their decision.
+You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant`. Each proposed element shows up as a floating card next to the live simulator stream in the Argent preview window (a native window that opens automatically), connected by a thin line to the real element. The human picks per element, optionally pins free-form comments to elements, and presses **Complete selection**. `await_user_selection` is the single blocking call that returns their decision.
 
 **The golden rule: one variant = one real, _distinct_ screenshot.** A proposal is only useful if its `previewImage` shows the variant actually rendered on the device, captured AFTER that specific variant was applied. Never propose a variant you have not built and seen on screen, and never point two variants at the same file path — if two captures end up byte-identical you have not actually changed anything and the choice UI degenerates to identical thumbnails. Plan → build → navigate → screenshot → propose, repeated for every variant of every element, then await once.
 
@@ -20,7 +20,7 @@ You implement several candidate designs, capture each one running on the device,
 
 ## 3. Workflow
 
-Resolve a simulator/emulator first (`argent-ios-simulator-setup` / `argent-android-emulator-setup`) and, for React Native, `argent-react-native-app-workflow` to run the app and reload the bundle. The human opens the preview UI the tool-server serves (`/preview/`); you do not launch a browser.
+Resolve a simulator/emulator first (`argent-ios-simulator-setup` / `argent-android-emulator-setup`) and, for React Native, `argent-react-native-app-workflow` to run the app and reload the bundle. Argent shows the staged variants in a native preview window that opens automatically on the user's screen; you don't open or display anything yourself. Just stage variants and call `await_user_selection`, and the window appears on its own.
 
 ### Step 0 — Plan the variants
 
@@ -43,8 +43,8 @@ Loop over every variant of every element:
 1. **Build the variant.** Implement that one variant in code.
 2. **Apply it on the device.** Reload the RN bundle (`debugger-reload-metro`) or rebuild as needed so the running app shows this variant.
 3. **Navigate to it.** Drive the app (`argent-device-interact`) to the screen where the element is visible — a screenshot is only meaningful if the element is actually on screen.
-4. **Screenshot.** Call `screenshot`; keep the returned file path. The preview UI auto-crops the image to the element's box using `match`, so capture the whole screen — do not hand-crop. The path you got back must be a NEW file; if you suspect the device froze or the variant didn't apply (you see no visible change vs. the previous capture), diff with the previous path (`shasum -a 256`) before proposing — byte-identical captures mean the variant is not on screen yet. Fix that before proposing, never propose anyway.
-5. **Propose.** Call `propose_variant` with `element`, `match`, and `variant.previewImage` set to that screenshot path. Add `summary` (what changed and why) and `code`/`filePath` when useful.
+4. **Screenshot.** Call `screenshot`; keep the returned file path. The preview window auto-crops the image to the element's box using `match`, so capture the whole screen — do not hand-crop. The path you got back must be a NEW file; if you suspect the device froze or the variant didn't apply (you see no visible change vs. the previous capture), diff with the previous path (`shasum -a 256`) before proposing — byte-identical captures mean the variant is not on screen yet. Fix that before proposing, never propose anyway.
+5. **Propose.** Call `propose_variant` with `element`, `match`, and `variant.previewImage` set to that screenshot path. **Also pass `variant.frame`** — the matched element's normalized `frame` (`{x, y, width, height}` in 0..1) from a `describe` run on THIS variant while it's on screen. The element moves/resizes between variants, so capture it per variant; without it, every thumbnail crops to the same stale bounds. Add `summary` (what changed and why) and `code`/`filePath` when useful.
 6. **Revert.** Roll the variant change back before building the next one — only one variant can be on screen at a time. Keep going; `propose_variant` does not block.
 
 `previewImage` accepts a local screenshot path (served from the OS temp dir / cwd), an `http(s)` URL, or a `data:` URI. A local screenshot of the real running variant is strongly preferred.

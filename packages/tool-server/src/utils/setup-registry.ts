@@ -153,7 +153,13 @@ export function createRegistry(): Registry {
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
 
-  // Variant proposal tools (non-blocking propose + single blocking await)
+  // Variant proposal tools (non-blocking propose + single blocking await).
+  // Both declare `featureFlag: "variant-selection"`, so the HTTP layer
+  // (http.ts) hides them from GET /tools and rejects invocation when the flag
+  // is off — re-checked on every request, so `argent enable/disable
+  // variant-selection` takes effect on the next tools/list WITHOUT restarting
+  // the long-lived tool-server. Registered unconditionally; the flag gates at
+  // the exposure boundary, not at registration.
   registry.registerTool(proposeVariantTool);
   registry.registerTool(awaitUserSelectionTool);
 

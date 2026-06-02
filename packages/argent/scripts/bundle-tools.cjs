@@ -111,7 +111,17 @@ if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
-// Bundle the tools server
+// Bundle the tools server.
+//
+// `electron` MUST stay external. It is a runtime dependency of
+// @swmansion/argent (npm installs it into node_modules/electron). If esbuild
+// inlines electron's index.js into this bundle, electron's binary-path lookup
+// runs with __dirname = <install>/dist (no path.txt there) and throws
+// "Electron failed to install correctly" at eval time. That throw is swallowed
+// by preview-window.ts's try/catch, so the variant-selection window silently
+// never opens. Keeping it external means the runtime `require("electron")` in
+// preview-window.ts resolves against the real node_modules/electron with an
+// intact __dirname. (The preview-window bundle below externalises it too.)
 esbuild.buildSync({
   entryPoints: [TOOLS_ENTRY],
   bundle: true,
@@ -120,6 +130,7 @@ esbuild.buildSync({
   format: "cjs",
   outfile: OUT_FILE,
   alias: ALIASES,
+  external: ["electron"],
   mainFields: MAIN_FIELDS,
 });
 

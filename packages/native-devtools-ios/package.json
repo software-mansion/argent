@@ -1,6 +1,6 @@
 {
   "name": "@argent/native-devtools-ios",
-"version": "0.9.1",: bundle preview-window into @swmansion/argent)
+"version": "0.9.3",: flag-gate the feature, fix prod bundling, demo polish)
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

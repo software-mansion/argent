@@ -32,6 +32,11 @@
         border-bottom: var(--border-hairline) solid var(--color-border);
         background: var(--color-surface);
         flex-shrink: 0;
+        /* The Electron host window is frameless (no title bar), so the toolbar
+           doubles as the drag handle for moving the window. Interactive
+           controls below opt back out with -webkit-app-region: no-drag.
+           Harmless in the browser, where the property is simply ignored. */
+        -webkit-app-region: drag;
       }
       .toolbar label {
         color: var(--color-muted);
@@ -47,6 +52,8 @@
         padding: var(--pad-control);
         border-radius: var(--radius-control);
         font-size: var(--fs-body);
+        /* Stay clickable inside the draggable toolbar (see .toolbar). */
+        -webkit-app-region: no-drag;
       }
       .toolbar select {
         min-width: var(--select-min-width);
@@ -451,31 +458,13 @@
       .vrow.staged {
         background: var(--color-row-staged);
       }
-      /* Once a variant is staged on a card, the other variants collapse to
-         a name-only line so they stop dominating the screen — they stay
-         clickable so the user can switch picks, and re-clicking the staged
-         row unstages and brings everyone back. The non-thumb properties
-         transition via the .vrow rule above; the thumb's own
-         width/height/opacity/border animate via the .thumb rule below. */
-      .vcard:has(.vrow.staged) .vrow:not(.staged) {
-        align-items: center;
-        padding: 4px 10px;
-        gap: var(--gap-inline);
-        font-size: var(--fs-note);
-        color: var(--color-muted);
-      }
-      .vcard:has(.vrow.staged) .vrow:not(.staged) .thumb {
-        /* Discrete `display: none` would skip the animation. Shrink to
-           zero with no border/opacity instead — same visual end state,
-           but animatable. */
-        width: 0;
-        height: 0;
-        border-width: 0;
-        opacity: 0;
-      }
-      .vcard:has(.vrow.staged) .vrow:not(.staged):hover {
-        color: var(--color-fg);
-      }
+      /* DEMO: collapse-on-stage + non-selected image hiding are DISABLED.
+         Staging a variant only tints its row (.vrow.staged above); the other
+         variants stay full-size with their images visible. This removes the
+         inner-layout collapse — and the card resize that was driving the
+         never-ending bounce/jitter on selection — and the dead space left when
+         images hid but rows didn't shrink. To re-enable, restore the
+         `:has(.vrow.staged) .vrow:not(.staged)` collapse + `.thumb` hide rules. */
       /* Wide/square previews read better stacked (image above text); only
          clearly-portrait previews keep the side-by-side row. */
       .vrow.col {
@@ -1479,7 +1468,7 @@
         if (!info.streamUrl) {
           setStatus("no stream URL", "error");
           viewport.innerHTML =
-            '<div class="error-box">Simulator-server is running but did not advertise a stream URL.<br/>Rebuild with the <code>argent</code> cargo feature (which enables <code>streaming</code>).</div>';
+            '<div class="error-box">Simulator-server is running but did not advertise a stream URL.<br/>Rebuild it with the <code>streaming</code> cargo feature enabled.</div>';
           return;
         }
 
@@ -2201,6 +2190,9 @@
       function applyThumbCrop(tw, frame) {
         const im = tw.querySelector(".thumb-img");
         if (!im || !im.naturalWidth || !im.naturalHeight) return;
+        // Prefer the per-variant frame stashed on the thumb (each variant's
+        // layout differs); the passed `frame` is the per-element fallback.
+        if (tw._variantFrame) frame = tw._variantFrame;
         const NW = im.naturalWidth,
           NH = im.naturalHeight;
         let fx = 0,
@@ -2408,6 +2400,11 @@
             tw.className = "thumb";
             // data: previews are author-supplied art — show whole, don't crop.
             tw._noCrop = /^data:/i.test(src);
+            // Per-variant crop frame: the element's bounds WHEN THIS VARIANT was
+            // captured (supplied by propose_variant). The layout differs between
+            // variants, so each thumbnail must crop to its own bounds. Falls back
+            // to the per-element frozen frame (vp.thumbFrames[p.id]) when absent.
+            tw._variantFrame = v.frame || null;
             const im = document.createElement("img");
             im.className = "thumb-img";
             im.draggable = false;

@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-"version": "0.9.1",: bundle preview-window into @swmansion/argent)
+"version": "0.9.3",: flag-gate the feature, fix prod bundling, demo polish)
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
   "repository": {

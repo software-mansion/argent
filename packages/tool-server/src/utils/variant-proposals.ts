@@ -51,6 +51,13 @@ export interface Variant {
    * `GET /preview/variant-image/:elementId/:variantId`.
    */
   previewImage?: string;
+  /**
+   * Normalized [0..1] bounds of the target element AS IT APPEARED in this
+   * variant's screenshot. The preview window crops the screenshot to these
+   * bounds so each variant shows its own (re-laid-out) element instead of every
+   * variant sharing one frozen frame. Optional (older callers omit it).
+   */
+  frame?: { x: number; y: number; width: number; height: number };
   createdAt: number;
 }
 
@@ -218,6 +225,7 @@ export class VariantProposalStore {
       code?: string;
       filePath?: string;
       previewImage?: string;
+      frame?: { x: number; y: number; width: number; height: number };
     };
   }): {
     round: number;
@@ -253,6 +261,7 @@ export class VariantProposalStore {
       code: input.variant.code,
       filePath: input.variant.filePath,
       previewImage: input.variant.previewImage,
+      frame: input.variant.frame,
       createdAt: Date.now(),
     };
     proposal.variants.push(variant);
@@ -454,7 +463,7 @@ export class VariantProposalStore {
             round: waiter.round,
             message:
               "User has not completed their selection yet. The proposals are still live in " +
-              "the preview UI — call await_user_selection again to keep waiting (this is " +
+              "the preview window — call await_user_selection again to keep waiting (this is " +
               "expected; it is not an error).",
             proposedElements: this.proposals.map((p) => ({
               element: p.element,

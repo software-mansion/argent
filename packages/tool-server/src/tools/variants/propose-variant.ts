@@ -17,7 +17,7 @@ const zodSchema = z.object({
       by: z
         .enum(["text", "label", "identifier", "role"])
         .describe(
-          "How the preview UI locates the live element in the running app's accessibility tree: " +
+          "How the preview window locates the live element in the running app's accessibility tree: " +
             "`text` (fuzzy contains on label/value/identifier), `label` (exact a11y label), " +
             "`identifier` (exact testID / accessibilityIdentifier / resource-id), `role` (e.g. Button)."
         ),
@@ -60,6 +60,21 @@ const zodSchema = z.object({
             "URL, a data: URI, or a local image file path (e.g. a screenshot path returned by " +
             "the screenshot tool after you rendered the variant)."
         ),
+      frame: z
+        .object({
+          x: z.number(),
+          y: z.number(),
+          width: z.number(),
+          height: z.number(),
+        })
+        .optional()
+        .describe(
+          "Normalized [0..1] bounds (fractions of screen width/height) of the target element AS IT " +
+            "APPEARS IN THIS VARIANT — read the matched node's `frame` from `describe` AFTER applying " +
+            "this variant. The preview window crops the screenshot to these bounds, so each variant " +
+            "shows its own re-laid-out element instead of every variant sharing one stale frame. The " +
+            "element moves/resizes between variants, so capture it per variant. Omit if unknown."
+        ),
     })
     .describe("The variant being proposed for `element`."),
 });
@@ -68,14 +83,16 @@ type Params = z.infer<typeof zodSchema>;
 
 export const proposeVariantTool: ToolDefinition<Params> = {
   id: "propose_variant",
+  featureFlag: "variant-selection",
   description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
 
 Use when you have produced multiple alternative designs for an element and want the human to pick.
 Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Foo", v2),
 propose_variant("Bar", v1)…  Variants accumulate per element and across elements. The agent is NOT
-blocked — keep proposing and keep working. Each element appears live in the Argent preview UI as a
-floating card beside the streamed simulator, with a thin line connecting it to the matched on-screen
-element; pass variant.previewImage (e.g. a screenshot path) to show how each variant looks.
+blocked — keep proposing and keep working. Each element appears live in the Argent preview window (a
+native window that opens automatically) as a floating card beside the streamed simulator, with a thin
+line connecting it to the matched on-screen element; you don't open or display anything yourself. Pass
+variant.previewImage (e.g. a screenshot path) to show how each variant looks.
 
 When you have proposed every variant for every element, call \`await_user_selection\` once — that is
 the single blocking call that waits for the human's picks.

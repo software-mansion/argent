@@ -45,10 +45,11 @@ export interface FlagDefinition {
 // to make `argent enable <name>` accept it and `argent flags` document it.
 // An empty registry means no flags are available yet.
 export const FLAG_REGISTRY: readonly FlagDefinition[] = [
-  // {
-  //   name: "example-flag",
-  //   description: "One-line summary shown by `argent flags`.",
-  // },
+  {
+    name: "variant-selection",
+    description:
+      "Variant proposal & selection UI — the propose_variant / await_user_selection tools and the Electron preview window. Off by default while the feature is in development.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

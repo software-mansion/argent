@@ -184,7 +184,7 @@
      spring is slow & barely-overshooting (cards drift into place); the tight
      spring is fast & critically damped (connectors/pins track every frame). */
   --spring-bubble-omega: 4.2;
-  --spring-bubble-zeta: 0.9;
+  --spring-bubble-zeta: 1; /* DEMO: critically damped — no overshoot/bounce on cards */
   --spring-tight-omega: 26;
   --spring-tight-zeta: 1;
   --card-gone-grace-ms: 550; /* ride out brief edge drop-outs before fading */

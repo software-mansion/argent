@@ -13,6 +13,7 @@ import {
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import { isFlagEnabled } from "@argent/cli";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -35,6 +36,16 @@ function constantTimeEqual(a: string, b: string): boolean {
 function extractBearerToken(authHeader: string | undefined): string | null {
   if (!authHeader || !authHeader.startsWith(BEARER_PREFIX)) return null;
   return authHeader.slice(BEARER_PREFIX.length).trim() || null;
+}
+
+// A tool that declares a `featureFlag` is exposed (listed + invocable) only
+// while that flag is enabled. Re-evaluated on every request — reading the tiny
+// `~/.argent/flags.json` (and project override) each time — so toggling
+// `argent enable/disable <flag>` takes effect on the next `tools/list` without
+// restarting the long-lived tool-server. Tools without a `featureFlag` are
+// always exposed (no flag read).
+function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
+  return !!def && (!def.featureFlag || isFlagEnabled(def.featureFlag));
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
@@ -171,27 +182,30 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   app.get("/tools", (_req: Request, res: Response) => {
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
-    const tools = snapshot.tools.map((id) => {
-      const def = registry.getTool(id);
-      const entry: {
-        name: string;
-        description: string;
-        inputSchema: Record<string, unknown>;
-        outputHint?: string;
-        alwaysLoad?: boolean;
-        searchHint?: string;
-        longRunning?: boolean;
-      } = {
-        name: id,
-        description: def?.description ?? "",
-        inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
-      };
-      if (def?.outputHint) entry.outputHint = def.outputHint;
-      if (def?.alwaysLoad) entry.alwaysLoad = true;
-      if (def?.searchHint) entry.searchHint = def.searchHint;
-      if (def?.longRunning) entry.longRunning = true;
-      return entry;
-    });
+    const tools = snapshot.tools
+      .map((id) => registry.getTool(id))
+      // Hide feature-flagged tools whose flag is currently off.
+      .filter((def): def is NonNullable<typeof def> => isToolExposed(def))
+      .map((def) => {
+        const entry: {
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          outputHint?: string;
+          alwaysLoad?: boolean;
+          searchHint?: string;
+          longRunning?: boolean;
+        } = {
+          name: def.id,
+          description: def.description ?? "",
+          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+        };
+        if (def.outputHint) entry.outputHint = def.outputHint;
+        if (def.alwaysLoad) entry.alwaysLoad = true;
+        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.longRunning) entry.longRunning = true;
+        return entry;
+      });
     res.json({ tools });
   });
 
@@ -206,6 +220,13 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
       const def = registry.getTool(name);
       if (!def) {
+        res.status(404).json({ error: `Tool "${name}" not found` });
+        return;
+      }
+      // A feature-flagged tool with its flag off is hidden from /tools and
+      // must not be invocable either — report it as not found (re-checked here
+      // per call, so the gate tracks `argent enable/disable` without a restart).
+      if (!isToolExposed(def)) {
         res.status(404).json({ error: `Tool "${name}" not found` });
         return;
       }

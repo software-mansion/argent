@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/mcp",
-"version": "0.9.1",: bundle preview-window into @swmansion/argent)
+"version": "0.9.3",: flag-gate the feature, fix prod bundling, demo polish)
   "description": "MCP stdio protocol adapter — talks to the argent tool-server and forwards calls",
   "type": "module",
   "main": "dist/index.js",

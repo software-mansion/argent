@@ -1,6 +1,6 @@
 {
   "name": "@argent/preview-window",
-"version": "0.9.1",: bundle preview-window into @swmansion/argent)
+"version": "0.9.3",: flag-gate the feature, fix prod bundling, demo polish)
   "private": true,
   "description": "Electron host for the Argent variant-selection preview UI.",
   "main": "dist/main.js",
