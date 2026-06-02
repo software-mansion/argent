@@ -10,8 +10,12 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { bootstrapDylibPath } from "@argent/native-devtools-ios";
+import { bootstrapDylibPath, bootstrapDylibPathTcp } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+
+export type NativeDevtoolsTransport = "unix" | "tcp";
+
+export const NATIVE_DEVTOOLS_TCP_PORT = Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
 
 const execFileAsync = promisify(execFile);
 
@@ -91,15 +95,22 @@ export async function precheckNativeDevtools(
   return null;
 }
 
-type NativeDevtoolsFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+type NativeDevtoolsFactoryOptions = Record<string, unknown> & {
+  device: DeviceInfo;
+  transport?: NativeDevtoolsTransport;
+};
 
-export function nativeDevtoolsRef(device: DeviceInfo): {
+export function nativeDevtoolsRef(
+  device: DeviceInfo,
+  { transport = "unix" }: { transport?: NativeDevtoolsTransport } = {}
+): {
   urn: string;
   options: NativeDevtoolsFactoryOptions;
 } {
+  const transportSuffix = transport === "tcp" ? ":tcp" : "";
   return {
-    urn: `${NATIVE_DEVTOOLS_NAMESPACE}:${device.id}`,
-    options: { device },
+    urn: `${NATIVE_DEVTOOLS_NAMESPACE}:${device.id}${transportSuffix}`,
+    options: { device, transport },
   };
 }
 
@@ -245,8 +256,12 @@ async function ensureAccessibilityEnabled(udid: string): Promise<void> {
   );
 }
 
-async function ensureEnv(udid: string, socketPath: string): Promise<void> {
-  const bootstrapPath = bootstrapDylibPath();
+async function ensureEnv(
+  udid: string,
+  endpoint: { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number }
+): Promise<void> {
+  const bootstrapPath =
+    endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
 
   // Read from launchctl inside the simulator (via simctl spawn) instead of
   // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
@@ -269,13 +284,37 @@ async function ensureEnv(udid: string, socketPath: string): Promise<void> {
     );
   }
 
-  // Always re-set the socket path — deterministic value, cheap no-op if already correct,
+  // Always re-set the endpoint env var — deterministic value, cheap no-op if already correct,
   // ensures correctness after tool-server restarts.
-  await execFileAsync(
-    "xcrun",
-    ["simctl", "spawn", udid, "launchctl", "setenv", "NATIVE_DEVTOOLS_IOS_CDP_SOCKET", socketPath],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  );
+  if (endpoint.transport === "tcp") {
+    await execFileAsync(
+      "xcrun",
+      [
+        "simctl",
+        "spawn",
+        udid,
+        "launchctl",
+        "setenv",
+        "NATIVE_DEVTOOLS_IOS_CDP_PORT",
+        String(endpoint.port),
+      ],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    );
+  } else {
+    await execFileAsync(
+      "xcrun",
+      [
+        "simctl",
+        "spawn",
+        udid,
+        "launchctl",
+        "setenv",
+        "NATIVE_DEVTOOLS_IOS_CDP_SOCKET",
+        endpoint.socketPath,
+      ],
+      { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
+    );
+  }
 
   // Ensure the accessibility runtime is enabled so that describeScreen works on iOS 26+.
   await ensureAccessibilityEnabled(udid);
@@ -313,6 +352,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     }
 
     const { device } = opts;
+    const transport: NativeDevtoolsTransport = opts.transport ?? "unix";
     if (device.platform !== "ios") {
       throw new Error(
         `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
@@ -321,6 +361,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
+    const tcpPort = NATIVE_DEVTOOLS_TCP_PORT;
+    const endpoint =
+      transport === "tcp"
+        ? ({ transport: "tcp", port: tcpPort } as const)
+        : ({ transport: "unix", socketPath } as const);
     const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
     const pendingRpc = new Map<
@@ -356,7 +401,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       if (inFlight) return inFlight;
 
       inFlight = Promise.resolve()
-        .then(() => ensureEnv(udid, socketPath))
+        .then(() => ensureEnv(udid, endpoint))
         .then(() => {
           envSetup = true;
           initFailure = null;
@@ -406,10 +451,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     }
 
-    // Remove stale socket file from a crashed previous run
-    try {
-      fs.unlinkSync(socketPath);
-    } catch {}
+    // Remove stale socket file from a crashed previous run (unix-only).
+    if (transport === "unix") {
+      try {
+        fs.unlinkSync(socketPath);
+      } catch {}
+    }
 
     // ── Socket server ─────────────────────────────────────────────────────────
     const server = net.createServer((socket) => {
@@ -495,7 +542,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     });
 
-    server.listen(socketPath);
+    if (transport === "tcp") {
+      server.listen(tcpPort, "127.0.0.1");
+    } else {
+      server.listen(socketPath);
+    }
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the
     // registry's `_teardown` skips dispose when `node.instance` is never set.
@@ -607,9 +658,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         connections.clear();
         activatedBundleIds.clear();
         server.close();
-        try {
-          fs.unlinkSync(socketPath);
-        } catch {}
+        if (transport === "unix") {
+          try {
+            fs.unlinkSync(socketPath);
+          } catch {}
+        }
         for (const { reject } of pendingRpc.values()) {
           reject(new Error("NativeDevtools service disposed"));
         }

@@ -97,14 +97,17 @@ argent init
 
 ## CLI Reference
 
-| Command            | Description                                                 |
-| ------------------ | ----------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace |
-| `argent install`   | Alias for `init` command                                    |
-| `argent update`    | Pull the latest version and refresh workspace configuration |
-| `argent remove`    | Unregister the MCP server and uninstall the package         |
-| `argent uninstall` | Alias for `remove` command                                  |
-| `argent mcp`       | Start MCP server instance, used internally by agent         |
+| Command            | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace            |
+| `argent install`   | Alias for `init` command                                               |
+| `argent update`    | Pull the latest version and refresh workspace configuration            |
+| `argent remove`    | Unregister the MCP server and uninstall the package                    |
+| `argent uninstall` | Alias for `remove` command                                             |
+| `argent mcp`       | Start MCP server instance, used internally by agent                    |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
+| `argent flags`     | List available feature flags and their state                           |
 
 ## Supported Editors
 

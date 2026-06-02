@@ -13,9 +13,6 @@ const PACKAGE_NAME = "@swmansion/argent";
 const REGISTRY_URL = `https://registry.npmjs.org/${PACKAGE_NAME}`;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000 * 24; // 24 hour
 
-/** Set truthy to silence the update reminder entirely (no check, no note). */
-const DISABLE_ENV = "ARGENT_DISABLE_UPDATE_NOTIFICATIONS";
-
 function getSuppressionFilePath(): string {
   return path.join(os.homedir(), ".argent", "update-suppression.json");
 }
@@ -75,12 +72,6 @@ let state: UpdateState = {
 
 let interval: ReturnType<typeof setInterval> | null = null;
 let suppressUntil = loadSuppressUntil();
-
-/** True when update reminders are disabled via the environment. */
-export function areUpdateNotificationsDisabled(): boolean {
-  const v = process.env[DISABLE_ENV];
-  return v === "1" || v === "true";
-}
 
 /** Returns the current update state (read-only snapshot). */
 export function getUpdateState(): Readonly<UpdateState> {
@@ -145,13 +136,9 @@ async function check(): Promise<void> {
 
 /**
  * Run an immediate check, then recheck every 24h. Returns a dispose fn for the
- * timer. No-op when reminders are disabled (no request, state stays default).
+ * timer.
  */
 export function startUpdateChecker(): { dispose(): void } {
-  if (areUpdateNotificationsDisabled()) {
-    return { dispose() {} };
-  }
-
   // Clear any leaked interval from a prior call.
   if (interval) {
     clearInterval(interval);

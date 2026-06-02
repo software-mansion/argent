@@ -43,7 +43,6 @@ describe("update-checker", () => {
     vi.setSystemTime(NOW);
     vi.resetModules();
     vi.clearAllMocks();
-    delete process.env.ARGENT_DISABLE_UPDATE_NOTIFICATIONS;
     mockFetchRegistryInfo.mockReset();
     mockDetectMinReleaseAgeMs.mockReset();
     mockDetectMinReleaseAgeMs.mockResolvedValue(0); // no policy by default
@@ -57,7 +56,6 @@ describe("update-checker", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    delete process.env.ARGENT_DISABLE_UPDATE_NOTIFICATIONS;
   });
 
   it("detects an available, installable update on startup", async () => {
@@ -234,25 +232,6 @@ describe("update-checker", () => {
     expect(state.updateInstallable).toBe(false);
     expect(state.installableVersion).toBeNull();
     expect(state.latestPublishedAt).toBeNull();
-
-    handle.dispose();
-  });
-
-  // ── Disable flag ───────────────────────────────────────────────────
-
-  it("does not check or notify when notifications are disabled", async () => {
-    process.env.ARGENT_DISABLE_UPDATE_NOTIFICATIONS = "1";
-    vi.resetModules();
-    const mod = await import("../src/utils/update-checker");
-
-    mockFetchRegistryInfo.mockResolvedValue(singleVersion("99.0.0", "2020-01-01T00:00:00Z"));
-
-    const handle = mod.startUpdateChecker();
-    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 * 24);
-
-    expect(mockFetchRegistryInfo).not.toHaveBeenCalled();
-    expect(mod.getUpdateState().updateInstallable).toBe(false);
-    expect(mod.areUpdateNotificationsDisabled()).toBe(true);
 
     handle.dispose();
   });
