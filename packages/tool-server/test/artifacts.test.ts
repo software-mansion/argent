@@ -2,10 +2,19 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { getArtifactRegistry } from "../src/artifacts";
 import type { Registry } from "@argent/registry";
+
+// supertest/superagent doesn't buffer binary bodies (gzip) by default.
+function binaryParser(res: NodeJS.ReadableStream, cb: (err: Error | null, body: Buffer) => void) {
+  const chunks: Buffer[] = [];
+  res.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  res.on("end", () => cb(null, Buffer.concat(chunks)));
+  res.on("error", (e: Error) => cb(e, Buffer.alloc(0)));
+}
 
 vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn(() => ({
@@ -61,6 +70,29 @@ describe("artifact registry", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("marks a directory (e.g. a .trace bundle) for tar.gz delivery", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-dir-"));
+    try {
+      const bundle = join(root, "session.trace");
+      await mkdir(bundle, { recursive: true });
+      await writeFile(join(bundle, "data.bin"), "trace");
+
+      const handle = await getArtifactRegistry().register(bundle);
+      expect(handle.archive).toBe("tar.gz");
+      expect(handle.filename).toBe("session.trace");
+      expect(handle.hostPath).toBe(bundle);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("honours an explicit archive option when the path can't be stat'd", async () => {
+    const handle = await getArtifactRegistry().register("/tmp/does-not-exist-yet.trace", {
+      archive: "tar.gz",
+    });
+    expect(handle.archive).toBe("tar.gz");
+  });
 });
 
 describe("GET /artifacts/:id", () => {
@@ -87,6 +119,36 @@ describe("GET /artifacts/:id", () => {
       expect(Buffer.from(res.body)).toEqual(bytes);
     } finally {
       await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("streams a directory bundle as a gzipped tar that unpacks to the original files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "artifact-bundle-"));
+    try {
+      const bundle = join(root, "session.trace");
+      await mkdir(join(bundle, "sub"), { recursive: true });
+      await writeFile(join(bundle, "top.txt"), "top");
+      await writeFile(join(bundle, "sub", "nested.txt"), "nested");
+
+      const artifact = await getArtifactRegistry().register(bundle);
+      handle = createHttpApp(stubRegistry());
+      const res = await supertest(handle.app)
+        .get(`/artifacts/${artifact.id}`)
+        .buffer(true)
+        .parse(binaryParser as never);
+
+      expect(res.status).toBe(200);
+      expect(res.headers["content-type"]).toContain("application/gzip");
+      expect(res.headers["content-disposition"]).toContain("session.trace.tar.gz");
+
+      // Round-trip: the gzipped tar lists the bundle's own files under its name.
+      const tarball = join(root, "out.tar.gz");
+      await writeFile(tarball, res.body);
+      const listing = execFileSync("tar", ["-tzf", tarball], { encoding: "utf8" });
+      expect(listing).toContain("session.trace/top.txt");
+      expect(listing).toContain("session.trace/sub/nested.txt");
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

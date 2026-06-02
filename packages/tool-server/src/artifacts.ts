@@ -17,7 +17,8 @@
 import { createReadStream } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { basename, extname } from "node:path";
+import { basename, dirname, extname } from "node:path";
+import { spawn } from "node:child_process";
 import type { Request, Response } from "express";
 
 /** Discriminant key identifying an artifact handle inside a tool result. */
@@ -40,6 +41,14 @@ export interface ArtifactHandle {
   hostPath: string;
   /** mtime of `hostPath` (ms) at registration, for the client's integrity check. */
   mtimeMs?: number;
+  /**
+   * Set when `hostPath` is a directory (e.g. an Instruments `.trace` bundle).
+   * A single file can't represent a directory, so `GET /artifacts/:id` streams
+   * it as a gzipped tar **only when a remote client actually requests it** —
+   * never in local mode, where the client uses the directory in place via the
+   * gate. The client unpacks the tar back into a directory after download.
+   */
+  archive?: "tar.gz";
 }
 
 interface ArtifactEntry {
@@ -47,6 +56,7 @@ interface ArtifactEntry {
   filename: string;
   mimeType: string;
   size: number;
+  isDirectory: boolean;
 }
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -71,6 +81,12 @@ export interface RegisterArtifactOptions {
   filename?: string;
   /** Override the inferred MIME type. */
   mimeType?: string;
+  /**
+   * Force directory (tar.gz) delivery even if the path can't be stat'd at
+   * registration time (e.g. a `.trace` bundle referenced from a recovered
+   * session). When omitted, directories are auto-detected via stat.
+   */
+  archive?: "tar.gz";
 }
 
 /**
@@ -86,17 +102,19 @@ class ArtifactRegistry {
     const mimeType = opts?.mimeType ?? inferMimeType(hostPath);
     let size = 0;
     let mtimeMs: number | undefined;
+    let isDirectory = opts?.archive === "tar.gz";
     try {
       const st = await stat(hostPath);
       size = st.size;
       mtimeMs = st.mtimeMs;
+      if (st.isDirectory()) isDirectory = true;
     } catch {
       // File may be produced lazily or be a bundle directory; size/mtime are
       // advisory. A co-located client re-stats and falls back to download if
       // they don't match what's on disk at read time.
     }
     const id = randomUUID();
-    this.entries.set(id, { path: hostPath, filename, mimeType, size });
+    this.entries.set(id, { path: hostPath, filename, mimeType, size, isDirectory });
     const handle: ArtifactHandle = {
       [ARTIFACT_MARKER]: true,
       id,
@@ -106,6 +124,7 @@ class ArtifactRegistry {
       hostPath,
     };
     if (mtimeMs != null) handle.mtimeMs = mtimeMs;
+    if (isDirectory) handle.archive = "tar.gz";
     return handle;
   }
 
@@ -142,6 +161,14 @@ export async function handleArtifactRequest(req: Request, res: Response): Promis
     return;
   }
 
+  // Directory bundle (e.g. a `.trace`): archive on demand. This only runs when
+  // a remote client actually downloads it — local clients use the directory in
+  // place via the gate, so we never spend time zipping in local mode.
+  if (entry.isDirectory) {
+    streamDirectoryAsTarGz(id, entry, res);
+    return;
+  }
+
   res.setHeader("Content-Type", entry.mimeType);
   res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}"`);
   if (entry.size > 0) res.setHeader("Content-Length", String(entry.size));
@@ -152,4 +179,25 @@ export async function handleArtifactRequest(req: Request, res: Response): Promis
     else res.destroy();
   });
   stream.pipe(res);
+}
+
+/**
+ * Stream a directory as a gzipped tar via the system `tar` (already relied on
+ * for `xctrace` in the same profiling flow). `-C <parent> <base>` keeps the
+ * bundle's own directory as the single top-level entry, so the client unpacks
+ * it back to `<dir>/<base>`.
+ */
+function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response): void {
+  res.setHeader("Content-Type", "application/gzip");
+  res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.tar.gz"`);
+
+  const child = spawn("tar", ["-czf", "-", "-C", dirname(entry.path), basename(entry.path)]);
+  child.on("error", (err) => {
+    if (!res.headersSent) {
+      res.status(500).json({ error: `Failed to archive artifact "${id}": ${err.message}` });
+    } else {
+      res.destroy();
+    }
+  });
+  child.stdout.pipe(res);
 }

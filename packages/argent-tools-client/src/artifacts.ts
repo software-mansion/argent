@@ -27,10 +27,14 @@
  *              otherwise.
  */
 
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /** Must match the tool-server's wire contract (`tool-server/src/artifacts.ts`). */
 export const ARTIFACT_MARKER = "__argentArtifact" as const;
@@ -52,6 +56,12 @@ export interface ArtifactHandle {
   hostPath?: string;
   /** mtime of {@link hostPath} (ms) at registration, for the integrity check. */
   mtimeMs?: number;
+  /**
+   * Present when the artifact is a directory bundle (e.g. an Instruments
+   * `.trace`). Locally the gate uses the directory in place; on a remote miss
+   * the download is a gzipped tar that the client unpacks back into a directory.
+   */
+  archive?: "tar.gz";
 }
 
 export function isArtifactHandle(value: unknown): value is ArtifactHandle {
@@ -131,6 +141,12 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
   if (!handle.hostPath) return null;
   try {
     const st = await stat(handle.hostPath);
+    if (handle.archive) {
+      // Directory bundle: existence as a directory is the integrity check
+      // (size/mtime are meaningless for a dir). A hit means we use the bundle
+      // in place — the remote tar.gz round-trip is skipped entirely.
+      return st.isDirectory() ? handle.hostPath : null;
+    }
     if (!st.isFile()) return null;
     if (st.size !== handle.size) return null;
     if (handle.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(handle.mtimeMs)) {
@@ -139,6 +155,33 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
     return handle.hostPath;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Download a directory artifact (a gzipped tar) and unpack it back into a
+ * directory under `dir`, returning the unpacked path. Uses the system `tar`
+ * (universally present on macOS/Linux and Windows 10+); returns null if `tar`
+ * is unavailable or extraction fails, so a missing bundle degrades to a
+ * missing-file signal rather than throwing.
+ */
+async function downloadAndExtractArchive(
+  handle: ArtifactHandle,
+  data: Buffer,
+  dir: string
+): Promise<string | null> {
+  const tarball = join(dir, `${sanitizeSegment(handle.filename)}.tar.gz`);
+  try {
+    await writeFile(tarball, data);
+    // `-C dir` recreates the bundle's own top-level directory inside `dir`. The
+    // server tars `basename(hostPath)`, which equals `handle.filename`, so the
+    // unpacked bundle lands at `dir/<filename>`.
+    await execFileAsync("tar", ["-xzf", tarball, "-C", dir]);
+    return join(dir, handle.filename);
+  } catch {
+    return null;
+  } finally {
+    await rm(tarball, { force: true }).catch(() => {});
   }
 }
 
@@ -184,6 +227,11 @@ export async function materializeArtifacts(
         if (!res.ok) return null;
         const data = Buffer.from(await res.arrayBuffer());
         await ensureDir();
+        // Directory bundle: the download is a gzipped tar — unpack it back into
+        // a directory rather than writing the archive as a single file.
+        if (value.archive === "tar.gz") {
+          return await downloadAndExtractArchive(value, data, dir);
+        }
         const downloadedPath = join(dir, sanitizeSegment(value.filename));
         await writeFile(downloadedPath, data);
         if (value.mimeType.startsWith("image/")) {

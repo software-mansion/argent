@@ -19,6 +19,18 @@ import {
   writeDumpCompact,
 } from "../../../utils/react-profiler/debug/dump";
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
+import { getArtifactRegistry, type ArtifactHandle } from "../../../artifacts";
+
+/**
+ * Register a server-side file path as a downloadable artifact (or pass through
+ * null/undefined). Lets the client materialize the raw profiler dumps (CPU
+ * profile, commit tree) and the rendered report to local files — in place when
+ * co-located, downloaded when remote — instead of receiving a dangling host
+ * path it can't open.
+ */
+async function fileArtifact(p: string | null | undefined): Promise<ArtifactHandle | null> {
+  return p ? getArtifactRegistry().register(p) : null;
+}
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
@@ -200,13 +212,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
 
     const result: Record<string, unknown> = {
       report,
-      reportFile,
+      reportFile: await fileArtifact(reportFile),
       hotCommitsTotal,
       hotCommitsShown,
       sessionFiles: {
         sessionId: sessionPaths.sessionId,
-        cpuProfile: sessionPaths.cpuProfilePath,
-        commits: sessionPaths.commitsPath,
+        cpuProfile: await fileArtifact(sessionPaths.cpuProfilePath),
+        commits: await fileArtifact(sessionPaths.commitsPath),
       },
     };
 

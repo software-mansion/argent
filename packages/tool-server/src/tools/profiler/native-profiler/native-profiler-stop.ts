@@ -14,23 +14,19 @@ const STOP_GRACE_MS = 30_000;
 const STOP_TERM_MS = 5_000;
 const STOP_KILL_MS = 5_000;
 
-// The raw `.trace` is an Instruments bundle (a directory), not a single file,
-// so it isn't streamable through the artifact layer yet (archiving is a
-// follow-up). The exported XML files are what's useful to inspect, and they
-// ARE materialized to the client. This note explains the absence.
-const TRACE_FILE_NOTE =
-  "The raw .trace bundle remains on the profiling host (it's a directory; " +
-  "archiving for download is a follow-up). The exported XML files below are " +
-  "materialized locally.";
-
 const zodSchema = z.object({
   device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
 });
 
 interface StopResult {
+  /**
+   * The raw Instruments `.trace` bundle as an artifact handle. It's a directory,
+   * so the artifact layer delivers it as a gzipped tar — but only when a remote
+   * client actually downloads it; local clients use the bundle in place.
+   */
+  traceFile: ArtifactHandle;
   /** Exported XML data as artifact handles the MCP client materializes locally. */
   exportedFiles: Record<string, ArtifactHandle | null>;
-  traceFileNote: string;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
 }
@@ -47,6 +43,15 @@ async function exportedFilesToArtifacts(
   return out;
 }
 
+/**
+ * Register the `.trace` bundle for download. Marked `archive: "tar.gz"` so it
+ * works even though the path is a directory (and even if it can't be stat'd at
+ * registration, e.g. a recovered session).
+ */
+function registerTrace(traceFile: string): Promise<ArtifactHandle> {
+  return getArtifactRegistry().register(traceFile, { archive: "tar.gz" });
+}
+
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
   requires: ["xcrun"],
@@ -54,7 +59,7 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   description: `Stop native profiling and export trace data to XML files.
 iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks data. Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.
-Returns { exportedFiles, traceFileNote, exportDiagnostics }; exportedFiles are downloadable artifacts materialized to local paths.
+Returns { traceFile, exportedFiles, exportDiagnostics }; traceFile is the raw .trace bundle and exportedFiles the XML exports, all downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
   services: (params) => ({
@@ -78,6 +83,7 @@ Fails if no active native-profiler-start session exists for the given device_id.
       api.exportedFiles = exportedFiles;
 
       const exportedArtifacts = await exportedFilesToArtifacts(exportedFiles);
+      const traceArtifact = await registerTrace(traceFile);
 
       const warning = wasTimeout
         ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -89,8 +95,8 @@ Fails if no active native-profiler-start session exists for the given device_id.
       process.stderr.write(`[native-profiler] ${warning}\n`);
 
       return {
+        traceFile: traceArtifact,
         exportedFiles: exportedArtifacts,
-        traceFileNote: TRACE_FILE_NOTE,
         exportDiagnostics: diagnostics,
         warning,
       };
@@ -131,8 +137,8 @@ Fails if no active native-profiler-start session exists for the given device_id.
     api.exportedFiles = exportedFiles;
 
     const stopResult: StopResult = {
+      traceFile: await registerTrace(api.traceFile),
       exportedFiles: await exportedFilesToArtifacts(exportedFiles),
-      traceFileNote: TRACE_FILE_NOTE,
       exportDiagnostics: diagnostics,
     };
     if (warning) stopResult.warning = warning;

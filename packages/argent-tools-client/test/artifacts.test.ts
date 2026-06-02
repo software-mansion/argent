@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, rm, readFile, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile, writeFile, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -211,5 +212,99 @@ describe("materializeArtifacts local short-circuit", () => {
       { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ img3: PNG }) }
     );
     expect((result as { image: string }).image.startsWith(artifactDir())).toBe(true);
+  });
+});
+
+// ── directory bundles (e.g. .trace) delivered as tar.gz ──────────────
+
+function fakeFetchBuffer(map: Record<string, Buffer>): typeof fetch {
+  return (async (url: string) => {
+    const id = url.split("/artifacts/")[1]!;
+    const buf = map[id];
+    if (!buf) return { ok: false, arrayBuffer: async () => new ArrayBuffer(0) };
+    return {
+      ok: true,
+      arrayBuffer: async () => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength),
+    };
+  }) as unknown as typeof fetch;
+}
+
+describe("materializeArtifacts directory bundles", () => {
+  let root: string; // ARGENT_ARTIFACTS_DIR
+  let hostDir: string; // stands in for the tool-server host
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
+    hostDir = await mkdtemp(join(tmpdir(), "argent-host-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
+  });
+
+  afterEach(async () => {
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
+    await rm(hostDir, { recursive: true, force: true });
+  });
+
+  // Build a real .trace-like bundle and a gzipped tar of it (as the server would
+  // stream on demand), so the client extraction runs against genuine tar output.
+  async function makeBundle(): Promise<{ bundlePath: string; tarGz: Buffer }> {
+    const bundlePath = join(hostDir, "session.trace");
+    await mkdir(join(bundlePath, "sub"), { recursive: true });
+    await writeFile(join(bundlePath, "top.txt"), "top");
+    await writeFile(join(bundlePath, "sub", "nested.txt"), "nested");
+    const tarPath = join(hostDir, "session.tar.gz");
+    execFileSync("tar", ["-czf", tarPath, "-C", hostDir, "session.trace"]);
+    const tarGz = await readFile(tarPath);
+    await rm(tarPath, { force: true });
+    return { bundlePath, tarGz };
+  }
+
+  function archiveHandle(id: string, hostPath: string): ArtifactHandle {
+    return {
+      [ARTIFACT_MARKER]: true,
+      id,
+      filename: "session.trace",
+      mimeType: "application/octet-stream",
+      size: 0,
+      hostPath,
+      archive: "tar.gz",
+    };
+  }
+
+  const throwingFetch: typeof fetch = (async () => {
+    throw new Error("fetch must not be called for a co-located directory bundle");
+  }) as unknown as typeof fetch;
+
+  it("co-located: uses the bundle directory in place, no download", async () => {
+    const { bundlePath } = await makeBundle();
+    const { result, images } = await materializeArtifacts(
+      { traceFile: archiveHandle("t1", bundlePath) },
+      { toolsUrl: "http://localhost:3001", fetchImpl: throwingFetch }
+    );
+    expect((result as { traceFile: string }).traceFile).toBe(bundlePath);
+    expect(images).toHaveLength(0);
+  });
+
+  it("remote: downloads the tar.gz and unpacks it back into a directory", async () => {
+    const { tarGz } = await makeBundle();
+    const { result } = await materializeArtifacts(
+      // hostPath absent locally → gate miss → download + extract.
+      { traceFile: archiveHandle("t2", join(hostDir, "gone.trace")) },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetchBuffer({ t2: tarGz }) }
+    );
+
+    const extracted = (result as { traceFile: string }).traceFile;
+    expect(extracted).toBe(join(artifactDir(), "session.trace"));
+    expect((await stat(extracted)).isDirectory()).toBe(true);
+    expect(await readFile(join(extracted, "top.txt"), "utf8")).toBe("top");
+    expect(await readFile(join(extracted, "sub", "nested.txt"), "utf8")).toBe("nested");
+  });
+
+  it("remote: a failed bundle download rewrites to null", async () => {
+    const { result } = await materializeArtifacts(
+      { traceFile: archiveHandle("missing", join(hostDir, "gone.trace")) },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetchBuffer({}) }
+    );
+    expect((result as { traceFile: null }).traceFile).toBeNull();
   });
 });

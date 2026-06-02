@@ -123,7 +123,13 @@ describe("native-profiler-stop recovery branch", () => {
       __argentArtifact: true,
       filename: "hangs.xml",
     });
-    expect(result.traceFileNote).toContain("profiling host");
+    // The .trace bundle is now a downloadable artifact (delivered as tar.gz
+    // on demand), not a "stays on the host" note.
+    expect(result.traceFile).toMatchObject({
+      __argentArtifact: true,
+      archive: "tar.gz",
+      filename: "ios-profiler-20260101-000000.trace",
+    });
     expect(result.exportDiagnostics).toEqual(FAKE_EXPORT_RESULT.diagnostics);
     expect(result.warning).toBeDefined();
     expect(api.recordingExitedUnexpectedly).toBe(false);
