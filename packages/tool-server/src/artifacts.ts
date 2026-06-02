@@ -191,12 +191,26 @@ function streamDirectoryAsTarGz(id: string, entry: ArtifactEntry, res: Response)
   res.setHeader("Content-Type", "application/gzip");
   res.setHeader("Content-Disposition", `attachment; filename="${entry.filename}.tar.gz"`);
 
-  const child = spawn("tar", ["-czf", "-", "-C", dirname(entry.path), basename(entry.path)]);
+  // stdin/stderr are ignored, not piped: an unread stderr pipe can fill its
+  // buffer (e.g. tar's "file changed as we read it" warnings on a live trace)
+  // and deadlock the child. A truncated archive from a non-zero exit is caught
+  // client-side, where extraction fails and the artifact resolves to null.
+  const child = spawn("tar", ["-czf", "-", "-C", dirname(entry.path), basename(entry.path)], {
+    stdio: ["ignore", "pipe", "ignore"],
+  });
   child.on("error", (err) => {
     if (!res.headersSent) {
       res.status(500).json({ error: `Failed to archive artifact "${id}": ${err.message}` });
     } else {
       res.destroy();
+    }
+  });
+  // Don't leave tar running if the client aborts the download mid-stream.
+  // `writableFinished` distinguishes an abort from normal completion, so we
+  // don't signal an already-finished child on a clean end.
+  res.on("close", () => {
+    if (!res.writableFinished && child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
     }
   });
   child.stdout.pipe(res);

@@ -106,6 +106,21 @@ describe("materializeArtifacts", () => {
     expect((result as { image: null }).image).toBeNull();
   });
 
+  it("rewrites a handle to null when the downloaded byte count doesn't match size", async () => {
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "trunc",
+      filename: "data.xml",
+      mimeType: "application/xml",
+      size: 99, // server announced 99 bytes…
+    };
+    const { result } = await materializeArtifacts(
+      { file: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ trunc: [1, 2, 3] }) } // …delivered 3
+    );
+    expect((result as { file: null }).file).toBeNull();
+  });
+
   it("scopes the cache dir by device and omits the device segment when absent", () => {
     expect(artifactDir("DEV-9").endsWith("DEV-9")).toBe(true);
     expect(artifactDir()).not.toContain("undefined");
@@ -182,16 +197,27 @@ describe("materializeArtifacts local short-circuit", () => {
     expect(images).toHaveLength(0);
   });
 
-  it("falls back to download when the recorded size no longer matches", async () => {
-    const h = await localFileHandle("img2", "shot.png", "image/png", PNG);
-    const stale = { ...h, size: h.size + 1 }; // file changed since registration
+  it("falls back to download when the local file no longer matches the recorded size", async () => {
+    // Local file is stale (2 bytes) but the handle records the authoritative
+    // size (PNG.length), so the gate misses and re-downloads. The server serves
+    // bytes matching the recorded size, so the download's integrity check passes.
+    const hostPath = join(hostDir, "shot.png");
+    await writeFile(hostPath, Buffer.from([0x01, 0x02]));
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "img2",
+      filename: "shot.png",
+      mimeType: "image/png",
+      size: PNG.length,
+      hostPath,
+    };
     const { result, images } = await materializeArtifacts(
-      { image: stale },
+      { image: h },
       { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ img2: PNG }) }
     );
 
     const out = (result as { image: string }).image;
-    expect(out).not.toBe(h.hostPath);
+    expect(out).not.toBe(hostPath);
     expect(out.startsWith(artifactDir())).toBe(true); // downloaded into the temp cache
     expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(PNG));
     expect(images).toHaveLength(1);

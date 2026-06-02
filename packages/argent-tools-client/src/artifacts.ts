@@ -232,6 +232,10 @@ export async function materializeArtifacts(
         if (value.archive === "tar.gz") {
           return await downloadAndExtractArchive(value, data, dir);
         }
+        // Integrity: don't persist a cleanly-truncated download as if it were
+        // whole. Mirrors the gate's size check on the local path; skipped when
+        // size is unknown (0, e.g. a lazily-registered file).
+        if (value.size > 0 && data.length !== value.size) return null;
         const downloadedPath = join(dir, sanitizeSegment(value.filename));
         await writeFile(downloadedPath, data);
         if (value.mimeType.startsWith("image/")) {
