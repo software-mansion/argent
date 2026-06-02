@@ -1,6 +1,6 @@
 {
   "name": "@argent/preview-window",
-"version": "0.9.3",: flag-gate the feature, fix prod bundling, demo polish)
+"version": "0.9.0",
   "private": true,
   "description": "Electron host for the Argent variant-selection preview UI.",
   "main": "dist/main.js",
