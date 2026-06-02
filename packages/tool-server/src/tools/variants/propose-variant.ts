@@ -12,6 +12,17 @@ const zodSchema = z.object({
         '"profile header". Repeated calls with the same element accumulate multiple variants ' +
         "on it. Used as the default screen matcher when `match` is omitted."
     ),
+  udid: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe(
+      "Device id (iOS udid / Android serial) the variants were captured on. The preview window " +
+        "streams THIS device directly — pass the same udid you screenshotted/described with, so " +
+        "the human never has to pick a simulator. Set it on the first propose_variant of a round; " +
+        "later calls may omit it (the last non-empty value wins)."
+    ),
   match: z
     .object({
       by: z

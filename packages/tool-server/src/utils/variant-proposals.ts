@@ -125,6 +125,12 @@ export interface StoreSnapshot {
   completed: boolean;
   globalComment: string;
   proposals: ElementProposal[];
+  /**
+   * Device (iOS udid / Android serial) the variants target. The preview window
+   * streams it directly instead of showing a chooser. Null until an agent
+   * supplies one via `propose_variant`.
+   */
+  device: string | null;
   /** Whether at least one `await_user_selection` call is currently parked. */
   agentWaiting: boolean;
 }
@@ -141,6 +147,13 @@ type StoreEvents = {
   awaitParked: () => void;
   /** Emitted after a successful `submitSelection` — the round is done. */
   selectionSubmitted: () => void;
+  /**
+   * Emitted when the user clicks "Close" in the preview window — a request to
+   * dismiss the window (the tool-server owns its lifecycle). Does NOT settle
+   * any parked await; the agent keeps waiting and the window re-opens on the
+   * next round.
+   */
+  closeRequested: () => void;
 };
 
 /** A parked `await_user_selection` call, bound to the round it is waiting on. */
@@ -166,6 +179,12 @@ export class VariantProposalStore {
   private completed = false;
   private consumed = false;
   private globalComment = "";
+  /**
+   * Device the variants target (last non-empty udid an agent passed to
+   * `propose_variant`). Persists across rounds — the agent works on one device
+   * — so it is intentionally NOT cleared by `reset()`.
+   */
+  private device: string | null = null;
   private submitted: SubmittedSelection[] = [];
   private submittedAnnotations: ElementAnnotation[] = [];
   private variantSeq = 0;
@@ -210,6 +229,11 @@ export class VariantProposalStore {
     return p?.variants.find((v) => v.id === variantId) ?? null;
   }
 
+  /** Preview UI's "Close" button — ask listeners to dismiss the window. */
+  requestWindowClose(): void {
+    this.events.emit("closeRequested");
+  }
+
   private autoRollIfConsumed(): void {
     // A completed round that has already been handed to the agent is closed —
     // the next proposal starts a clean round automatically.
@@ -219,6 +243,7 @@ export class VariantProposalStore {
   proposeVariant(input: {
     element: string;
     match?: VariantMatch;
+    udid?: string;
     variant: {
       name: string;
       summary: string;
@@ -236,6 +261,10 @@ export class VariantProposalStore {
     totalElements: number;
   } {
     this.autoRollIfConsumed();
+
+    // Remember which device these variants are for, so the window streams it
+    // directly. Last non-empty value wins; usually set once on the first call.
+    if (input.udid && input.udid.trim()) this.device = input.udid.trim();
 
     const match: VariantMatch = input.match ?? { by: "text", value: input.element };
     const key = `${match.by}:${match.value.trim().toLowerCase()}`;
@@ -286,6 +315,7 @@ export class VariantProposalStore {
         ...p,
         variants: p.variants.map((v) => ({ ...v })),
       })),
+      device: this.device,
       agentWaiting: this.waitersList.some((w) => !w.settled),
     };
   }

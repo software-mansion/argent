@@ -128,6 +128,14 @@ export function createPreviewRouter(registry: Registry): Router {
     res.json(variantProposalStore.snapshot());
   });
 
+  // Human pressed "Close" in the preview window — dismiss it. The tool-server
+  // owns the Electron window lifecycle (index.ts listens for `closeRequested`),
+  // so the UI just signals intent here. Does not affect any parked await.
+  router.post("/close", (_req: Request, res: Response) => {
+    variantProposalStore.requestWindowClose();
+    res.json({ ok: true });
+  });
+
   // Human pressed "Complete selection" in the UI — unblocks await_user_selection.
   router.post("/variants/selection", (req: Request, res: Response) => {
     const body = req.body ?? {};

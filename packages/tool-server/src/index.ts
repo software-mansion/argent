@@ -94,7 +94,12 @@ export function start(): void {
     if (!server) return null;
     const addr = server.address();
     const port = typeof addr === "object" && addr ? addr.port : null;
-    return port ? `http://127.0.0.1:${port}/preview/` : null;
+    if (!port) return null;
+    // Stream the device the agent proposed against (if any), so the window
+    // connects directly instead of asking the user to pick a simulator.
+    const device = variantProposalStore.snapshot().device;
+    const query = device ? `?udid=${encodeURIComponent(device)}` : "";
+    return `http://127.0.0.1:${port}/preview/${query}`;
   };
   let pendingCloseTimer: NodeJS.Timeout | null = null;
   const cancelPendingClose = (): void => {
@@ -118,14 +123,22 @@ export function start(): void {
       previewWindow.requestClose();
     }, PREVIEW_CLOSE_DELAY_MS);
   };
+  // User clicked "Close" in the preview window — dismiss it immediately (the
+  // animated close), leaving any parked await still waiting.
+  const onCloseRequested = (): void => {
+    cancelPendingClose();
+    previewWindow.requestClose();
+  };
   variantProposalStore.events.on("awaitParked", onAwaitParked);
   variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
+  variantProposalStore.events.on("closeRequested", onCloseRequested);
 
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
   shutdown = async (exitCode = 0) => {
     variantProposalStore.events.off("awaitParked", onAwaitParked);
     variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    variantProposalStore.events.off("closeRequested", onCloseRequested);
     cancelPendingClose();
     previewWindow.dispose();
     updateChecker.dispose();

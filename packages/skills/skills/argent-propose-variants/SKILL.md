@@ -16,7 +16,9 @@ You implement several candidate designs, capture each one running on the device,
 | `propose_variant`      | No        | Stage ONE variant for ONE element. Call once per variant. Keep working. |
 | `await_user_selection` | Yes       | Call ONCE after every variant is staged. Parks until the human is done. |
 
-`propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), and `variant` (`{ name, summary, code?, filePath?, previewImage? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards.
+`propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device id you captured the variants on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards.
+
+**Always pass `udid`** (the same simulator/emulator id you screenshotted and described with). The preview window then streams *that* device directly — the human never has to pick a simulator. Set it on the first `propose_variant` of a round; later calls may omit it (the last value wins).
 
 ## 3. Workflow
 
@@ -44,7 +46,7 @@ Loop over every variant of every element:
 2. **Apply it on the device.** Reload the RN bundle (`debugger-reload-metro`) or rebuild as needed so the running app shows this variant.
 3. **Navigate to it.** Drive the app (`argent-device-interact`) to the screen where the element is visible — a screenshot is only meaningful if the element is actually on screen.
 4. **Screenshot.** Call `screenshot` and pass the returned file path **straight through** as `variant.previewImage`. **NEVER hand-crop, resize, re-encode, or copy the screenshot to another folder** (e.g. a `crop.py` into `/tmp/variants/`): that double-crops against the preview window's own cropping and writes the image somewhere the server won't serve it ("No preview"). Capture the whole screen — the preview window crops it for you using `variant.frame` (step 5). The path you got back must be a NEW file; if you suspect the device froze or the variant didn't apply (you see no visible change vs. the previous capture), diff with the previous path (`shasum -a 256`) before proposing — byte-identical captures mean the variant is not on screen yet. Fix that before proposing, never propose anyway.
-5. **Propose.** Call `propose_variant` with `element`, `match`, and `variant.previewImage` set to that screenshot path. **Also pass `variant.frame`** — the matched element's normalized `frame` (`{x, y, width, height}` in 0..1) from a `describe` run on THIS variant while it's on screen. The element moves/resizes between variants, so capture it per variant; without it, every thumbnail crops to the same stale bounds. Add `summary` (what changed and why) and `code`/`filePath` when useful.
+5. **Propose.** Call `propose_variant` with `element`, `match`, `udid` (the device you captured on), and `variant.previewImage` set to that screenshot path. **Also pass `variant.frame`** — the matched element's normalized `frame` (`{x, y, width, height}` in 0..1) from a `describe` run on THIS variant while it's on screen. The element moves/resizes between variants, so capture it per variant; without it, every thumbnail crops to the same stale bounds. Add `summary` (what changed and why) and `code`/`filePath` when useful.
 6. **Revert.** Roll the variant change back before building the next one — only one variant can be on screen at a time. Keep going; `propose_variant` does not block.
 
 `previewImage` accepts a local screenshot path (served from the OS temp dir / cwd), an `http(s)` URL, or a `data:` URI. A local screenshot of the real running variant is strongly preferred.

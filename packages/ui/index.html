@@ -24,54 +24,43 @@
         flex-direction: column;
         height: 100%;
       }
-      .toolbar {
-        display: flex;
-        align-items: center;
-        gap: var(--gap-bar);
-        padding: var(--pad-bar);
-        border-bottom: var(--border-hairline) solid var(--color-border);
-        background: var(--color-surface);
-        flex-shrink: 0;
-        /* The Electron host window is frameless (no title bar), so the toolbar
-           doubles as the drag handle for moving the window. Interactive
-           controls below opt back out with -webkit-app-region: no-drag.
-           Harmless in the browser, where the property is simply ignored. */
+      /* Frameless window, no title bar / toolbar. The empty space around the
+         streamed phone is the window drag handle; every interactive overlay
+         opts back out with -webkit-app-region: no-drag. Harmless in a browser,
+         where the property is simply ignored. */
+      #main {
         -webkit-app-region: drag;
       }
-      .toolbar label {
-        color: var(--color-muted);
-        font-size: var(--fs-label);
-        text-transform: uppercase;
-        letter-spacing: var(--tracking-label);
-      }
-      .toolbar select,
-      .toolbar button {
-        background: var(--color-bg);
-        color: var(--color-fg);
-        border: var(--border-hairline) solid var(--color-border);
-        padding: var(--pad-control);
-        border-radius: var(--radius-control);
-        font-size: var(--fs-body);
-        /* Stay clickable inside the draggable toolbar (see .toolbar). */
+      .stage,
+      .cards,
+      .float-controls,
+      .float-status,
+      .footbar,
+      .comment-pop,
+      .ann-pop,
+      .modal,
+      .dev-picker {
         -webkit-app-region: no-drag;
       }
-      .toolbar select {
-        min-width: var(--select-min-width);
+      /* Floating status pill (top-left). Hidden while idle; surfaces loading /
+         error / disconnect messages without a permanent bar. */
+      .float-status {
+        position: absolute;
+        top: var(--footbar-bottom);
+        left: var(--footbar-right);
+        display: flex;
+        align-items: center;
+        gap: var(--gap-list);
+        z-index: var(--z-overlay);
       }
-      .toolbar button {
-        cursor: pointer;
-      }
-      .toolbar .status {
-        margin-left: auto;
+      .status {
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-pill);
+        padding: var(--pad-pill);
         color: var(--color-muted);
         font-size: var(--fs-note);
-      }
-      .toolbar .debug {
-        color: var(--color-muted);
-        font-family: var(--font-mono);
-        font-size: var(--fs-label);
-        min-width: var(--debug-min-width);
-        text-align: right;
+        box-shadow: var(--shadow-card);
       }
       .status.error::before {
         content: "";
@@ -269,45 +258,49 @@
         min-height: 0;
         position: relative;
       }
-      #sim-picker {
-        display: inline-flex;
-        align-items: center;
-        gap: var(--gap-bar);
-      }
-      #sim-label {
-        color: var(--color-fg);
-        font-size: var(--fs-body);
-      }
-      .round-badge {
-        color: var(--color-muted);
-        font-size: var(--fs-label);
-      }
       /* `.hidden-badge` surfaces proposals whose element isn't on screen and
-         whose location is unknown (never matched). Brand-accent + bumped
-         size/weight relative to round-badge so it actually reads as a signal
-         (the user has things they can't see), not muted metadata. */
+         whose location is unknown (never matched). A floating accent pill so it
+         reads as a signal (the user has things they can't see), not metadata. */
       .hidden-badge {
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-pill);
+        padding: var(--pad-pill);
         color: var(--color-accent);
         font-size: var(--fs-note);
         font-weight: var(--fw-semibold);
+        box-shadow: var(--shadow-card);
       }
-      .tool-toggle {
-        background: var(--color-bg);
+      /* Floating top-right controls (Add comment, Close): larger pill buttons
+         that sit over the stream, away from the slim drag-handle toolbar. */
+      .float-controls {
+        position: absolute;
+        top: var(--footbar-bottom);
+        right: var(--footbar-right);
+        display: flex;
+        gap: var(--gap-list);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+      }
+      .float-btn {
+        background: var(--color-surface);
         color: var(--color-fg);
         border: var(--border-hairline) solid var(--color-border);
-        padding: var(--pad-toggle);
-        border-radius: var(--radius-control);
+        border-radius: var(--radius-button);
+        padding: var(--pad-complete);
         font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
         cursor: pointer;
+        box-shadow: var(--shadow-card);
+        white-space: nowrap;
       }
-      .tool-toggle:hover {
+      .float-btn:hover {
         border-color: var(--color-accent);
       }
-      .tool-toggle.active {
+      .float-btn.active {
         background: var(--color-accent);
         color: var(--color-on-accent);
         border-color: var(--color-accent);
-        font-weight: var(--fw-bold);
       }
 
       /* SVG layer for thin connector lines between cards and elements. */
@@ -921,20 +914,6 @@
   </head>
   <body>
     <div id="root">
-      <div class="toolbar">
-        <span id="sim-picker">
-          <label for="sim-select">Simulator</label>
-          <select id="sim-select">
-            <option>Loading…</option>
-          </select>
-          <button id="refresh-btn" title="Refresh simulator list">⟳</button>
-        </span>
-        <span id="sim-label"></span>
-        <button id="comment-btn" class="tool-toggle" hidden>＋ Add comment</button>
-        <span id="round-badge" class="round-badge"></span>
-        <span id="hidden-badge" class="hidden-badge" hidden></span>
-        <span id="status" class="status">idle</span>
-      </div>
       <div class="main" id="main">
         <div class="viewport" id="viewport">
           <div class="empty">Loading simulators…</div>
@@ -945,6 +924,14 @@
         <div class="os-pill" id="os-bot"></div>
         <div class="comment-pop" id="comment-pop" hidden></div>
         <div class="ann-pop" id="ann-pop" hidden></div>
+        <div class="float-status" id="float-status">
+          <span id="status" class="status" hidden></span>
+          <span id="hidden-badge" class="hidden-badge" hidden></span>
+        </div>
+        <div class="float-controls" id="float-controls">
+          <button id="comment-btn" class="float-btn" hidden>＋ Add comment</button>
+          <button id="close-btn" class="float-btn" title="Close preview window">✕ Close</button>
+        </div>
         <div class="footbar" id="footbar" hidden>
           <textarea
             id="global-comment"
@@ -1128,11 +1115,12 @@
         : new Set(["ControlLeft", "ControlRight"]);
 
       // ── DOM ─────────────────────────────────────────────────────────────
-      const select = document.getElementById("sim-select");
-      const simLabel = document.getElementById("sim-label");
       const status = document.getElementById("status");
       const viewport = document.getElementById("viewport");
-      const refreshBtn = document.getElementById("refresh-btn");
+      // Device the window was opened for (?udid=…), set by the tool-server from
+      // the agent's propose_variant. When present we connect straight to it and
+      // never show a simulator chooser.
+      const initialUdid = urlParams.get("udid");
 
       // ── State ───────────────────────────────────────────────────────────
       /** @type {WebSocket | null} */
@@ -1166,6 +1154,9 @@
       function setStatus(text, kind = "") {
         status.textContent = text;
         status.className = "status" + (kind ? " " + kind : "");
+        // The status is a floating pill now — keep it out of the way unless
+        // there is something worth showing (loading / error / disconnect).
+        status.hidden = !text || text === "idle";
       }
 
       function nextCmdId() {
@@ -1273,8 +1264,6 @@
       }
 
       // ── Simulator list ─────────────────────────────────────────────────
-      const simPicker = document.getElementById("sim-picker");
-
       // Device chooser rendered into the main viewport when there are multiple
       // booted simulators (or none) and nothing is connected yet. Replaces the
       // old static "Connecting…" placeholder, which looked stuck because the
@@ -1319,7 +1308,6 @@
             if (!disabled) {
               b.addEventListener("click", () => {
                 b.blur();
-                if (select) select.value = s.udid;
                 connect(s.udid).catch((err) => setStatus(String(err.message || err), "error"));
               });
             }
@@ -1352,14 +1340,11 @@
           const res = await fetch(`${TOOL_SERVER}/preview/simulators`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const { simulators } = await res.json();
-          const booted = (simulators || []).filter((s) => s.state === "Booted");
+          const all = simulators || [];
+          const booted = all.filter((s) => s.state === "Booted");
 
-          // Exactly one usable simulator → skip the picker entirely and just
-          // connect to it; show its name as a static label instead.
+          // Exactly one usable simulator → connect to it directly.
           if (booted.length === 1) {
-            simPicker.hidden = true;
-            simLabel.hidden = false;
-            simLabel.textContent = booted[0].name;
             setStatus("idle");
             if (currentUdid !== booted[0].udid) {
               connect(booted[0].udid).catch((err) =>
@@ -1369,38 +1354,14 @@
             return;
           }
 
-          simPicker.hidden = false;
-          simLabel.hidden = true;
-          select.innerHTML = "";
-          const all = simulators || [];
-          const bootedCount = all.filter((s) => s.state === "Booted").length;
-          if (all.length === 0) {
-            const opt = document.createElement("option");
-            opt.textContent = "(no simulators found)";
-            select.appendChild(opt);
-            select.disabled = true;
-            setStatus("no simulators", "error");
-          } else {
-            select.disabled = false;
-            const placeholder = document.createElement("option");
-            placeholder.value = "";
-            placeholder.textContent = "— choose simulator —";
-            select.appendChild(placeholder);
-            for (const s of all) {
-              const opt = document.createElement("option");
-              opt.value = s.udid;
-              opt.textContent = `${s.state === "Booted" ? "● " : "○ "}${s.name}`;
-              opt.disabled = s.state !== "Booted";
-              select.appendChild(opt);
-            }
-            setStatus(
-              bootedCount ? "choose a device" : "no booted simulators",
-              bootedCount ? "" : "error"
-            );
-          }
-          // Multiple (or zero) choices and nothing live yet → show the device
-          // list in the main area instead of a misleading "Connecting…". Don't
+          // Zero or multiple booted and nothing live yet → in-viewport device
+          // picker. This is only a fallback: normally the window is opened for a
+          // specific ?udid and connects without ever reaching here. Don't
           // clobber an active stream when ⟳ is pressed while connected.
+          setStatus(
+            booted.length ? "choose a device" : "no booted simulators",
+            booted.length ? "" : "error"
+          );
           if (!currentUdid) renderDevicePicker(all);
         } catch (err) {
           setStatus(`failed: ${err.message || err}`, "error");
@@ -1641,18 +1602,14 @@
       }
 
       // ── Events ──────────────────────────────────────────────────────────
-      select.addEventListener("change", () => {
-        const udid = select.value;
-        if (!udid) return;
-        // Blur the select so keys (including the multi-touch Option/Ctrl modifier)
-        // route to our window-level handler instead of being swallowed by the
-        // dropdown's built-in keyboard handling.
-        select.blur();
-        connect(udid).catch((err) => setStatus(String(err.message || err), "error"));
-      });
-      refreshBtn.addEventListener("click", () => {
-        refreshBtn.blur();
-        refreshSimulators();
+      // Close button: ask the tool-server to dismiss the Electron window (it
+      // owns the window lifecycle over stdin, so it plays the close animation
+      // and quits the host cleanly — more reliable than renderer window.close()
+      // under the sandboxed BrowserWindow).
+      const closeBtn = document.getElementById("close-btn");
+      closeBtn.addEventListener("click", () => {
+        closeBtn.blur();
+        fetch(`${TOOL_SERVER}/preview/close`, { method: "POST" }).catch(() => {});
       });
 
       // Global keyboard forwarding — active whenever a simulator is connected
@@ -1792,7 +1749,6 @@
       const osBot = document.getElementById("os-bot");
       const footEl = document.getElementById("footbar");
       const commentBtn = document.getElementById("comment-btn");
-      const roundBadge = document.getElementById("round-badge");
       const hiddenBadge = document.getElementById("hidden-badge");
       const completeBtn = document.getElementById("complete-btn");
       const clearBtn = document.getElementById("clear-btn");
@@ -3546,7 +3502,6 @@
 
         const has = vp.proposals.length > 0 || vp.annotations.length > 0;
         footEl.hidden = !has;
-        roundBadge.textContent = vp.proposals.length > 0 ? `round ${vp.round}` : "";
         completeBtn.disabled = vp.submitting || !has;
         commentBtn.hidden = !img; // only when a stream is live
       }
@@ -3819,7 +3774,14 @@
       pollVariants();
       pollDescribe(); // arms the single fast describe loop
 
-      refreshSimulators();
+      // Opened for a specific device → stream it straight away. Otherwise fall
+      // back to discovering booted simulators (single → auto-connect, multiple →
+      // in-viewport picker).
+      if (initialUdid) {
+        connect(initialUdid).catch((err) => setStatus(String(err.message || err), "error"));
+      } else {
+        refreshSimulators();
+      }
     </script>
   </body>
 </html>
