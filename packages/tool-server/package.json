@@ -10,7 +10,6 @@
     "dev": "ts-node src/index.ts start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:sql-smoke": "vitest run sql-smoke",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
