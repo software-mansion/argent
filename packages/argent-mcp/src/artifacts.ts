@@ -4,8 +4,14 @@
  * Tool results from the (possibly remote) tool-server carry {@link ArtifactHandle}
  * markers in place of host paths. This module deep-walks a result, downloads
  * each artifact over the remote-aware `TOOLS_URL` (`GET /artifacts/:id`), writes
- * it into a structured local cache, and rewrites the marker to the **local**
- * path the agent can actually open.
+ * it into a structured cache under the OS temp dir, and rewrites the marker to
+ * the **local** path the agent can actually open.
+ *
+ * The root lives in `tmpdir()` so materialized artifacts are disposable scratch
+ * the OS reclaims — matching how the sim-server (its own TempDir) and the
+ * profiler (`tmpdir()/argent-profiler-cwd`) already treat produced files, and
+ * leaving no persistent footprint under $HOME. Point ARGENT_ARTIFACTS_DIR at a
+ * durable location to opt into cross-session persistence.
  *
  * Cache layout (override the root with ARGENT_ARTIFACTS_DIR):
  *
@@ -20,7 +26,7 @@
  */
 
 import { mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -69,7 +75,7 @@ function projectSlug(): string {
 }
 
 export function artifactsRoot(): string {
-  return process.env.ARGENT_ARTIFACTS_DIR ?? join(homedir(), ".argent", "artifacts");
+  return process.env.ARGENT_ARTIFACTS_DIR ?? join(tmpdir(), "argent-artifacts");
 }
 
 export function artifactDir(deviceId?: string): string {
