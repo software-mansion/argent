@@ -9,7 +9,10 @@ import type { LaunchAppIosServices, LaunchAppParams, LaunchAppResult } from "../
  * verbs differ — parametrised via `backend`.
  */
 export function buildIosLaunchHandler(backend: SimctlBackend) {
-  return async (services: LaunchAppIosServices, params: LaunchAppParams): Promise<LaunchAppResult> => {
+  return async (
+    services: LaunchAppIosServices,
+    params: LaunchAppParams
+  ): Promise<LaunchAppResult> => {
     const blocked = await precheckNativeDevtools(services.nativeDevtools, params.udid);
     if (blocked) return blocked;
     await backend.launch(params.udid, params.bundleId);

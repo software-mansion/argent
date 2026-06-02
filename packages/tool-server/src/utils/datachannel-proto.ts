@@ -115,11 +115,7 @@ export type ButtonName =
   | "volumeDown"
   | "appSwitch"
   | "actionButton";
-export type RotationName =
-  | "Portrait"
-  | "PortraitUpsideDown"
-  | "LandscapeLeft"
-  | "LandscapeRight";
+export type RotationName = "Portrait" | "PortraitUpsideDown" | "LandscapeLeft" | "LandscapeRight";
 
 const TOUCH_ACTION: Record<TouchActionName, number> = {
   Down: TouchAction.TOUCH_DOWN ?? 0,
@@ -199,11 +195,6 @@ export function encodeScreenshot(opts?: {
   return encode({ screenshot });
 }
 
-export function encodeWheel(opts: {
-  x: number;
-  y: number;
-  dx: number;
-  dy: number;
-}): Uint8Array {
+export function encodeWheel(opts: { x: number; y: number; dx: number; dy: number }): Uint8Array {
   return encode({ wheel: { x: opts.x, y: opts.y, dx: opts.dx, dy: opts.dy } });
 }

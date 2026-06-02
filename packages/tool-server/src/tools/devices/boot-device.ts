@@ -323,7 +323,9 @@ async function bootIosRemote(
   id: string,
   registry: Registry,
   force?: boolean
-): Promise<{ platform: "ios-remote"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
+): Promise<
+  { platform: "ios-remote"; udid: string; booted: true } | NativeDevtoolsInitFailedResult
+> {
   await ensureDep("sim-remote");
   const udid = stripRemotePrefix(id);
 

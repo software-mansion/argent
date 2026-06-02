@@ -181,7 +181,10 @@ export async function httpScreenshot(
   return { url: resBody.url, path: resBody.path };
 }
 
-function routeViaTransport(transport: SimulatorServerTransport, cmd: Record<string, unknown>): void {
+function routeViaTransport(
+  transport: SimulatorServerTransport,
+  cmd: Record<string, unknown>
+): void {
   switch (cmd.cmd) {
     case "touch": {
       // Local WebSocket protocol uses snake_case second_x/second_y (set to
@@ -252,9 +255,7 @@ export function createMoqTransport(
       );
     },
     button(opts) {
-      void moq.sendControl(
-        encodeButton({ action: opts.direction, button: opts.button })
-      );
+      void moq.sendControl(encodeButton({ action: opts.direction, button: opts.button }));
     },
     rotate(direction) {
       void moq.sendControl(encodeRotate(direction));

@@ -209,7 +209,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     const host = pickIosHost(device);
     // Remote sims can't use unix sockets because the QUIC reverse tunnel
     // only bridges TCP streams.
-    const transport: NativeDevtoolsTransport = host.requiresTcp ? "tcp" : (opts.transport ?? "unix");
+    const transport: NativeDevtoolsTransport = host.requiresTcp
+      ? "tcp"
+      : (opts.transport ?? "unix");
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
