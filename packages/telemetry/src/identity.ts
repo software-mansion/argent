@@ -72,6 +72,11 @@ export function readOrCreateAnonId(): string {
   throw new Error("telemetry: failed to create anonymous identity after retries");
 }
 
+/** Read the anonymous id without creating one. Returns null if absent. */
+export function peekAnonId(): string | null {
+  return tryReadId(identityFilePath());
+}
+
 /** Delete the identity file. Used by uninstall cleanup. */
 export function deleteAnonId(): void {
   cached = null;

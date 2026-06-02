@@ -1,7 +1,6 @@
 // Anonymous opt-out telemetry for Argent. Public functions swallow telemetry
 // failures and surface diagnostics only when ARGENT_TELEMETRY_DEBUG=1.
 
-import * as fs from "node:fs";
 import {
   getClient,
   getConstructedClient,
@@ -11,8 +10,7 @@ import {
 } from "./posthog.js";
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
-import { readOrCreateAnonId } from "./identity.js";
-import { identityFilePath } from "./paths.js";
+import { readOrCreateAnonId, peekAnonId } from "./identity.js";
 import { isEnabled as consentIsEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
@@ -214,17 +212,9 @@ export function status(): {
   const consent = getConsentState();
 
   // Read the id without creating one; status must be side-effect free.
-  let anonIdPrefix: string | null = null;
-  let hasAnonIdOnDisk = false;
-  try {
-    const raw = fs.readFileSync(identityFilePath(), "utf8").trim();
-    if (/^[0-9a-fA-F-]{32,128}$/.test(raw)) {
-      hasAnonIdOnDisk = true;
-      anonIdPrefix = raw.slice(0, 8);
-    }
-  } catch {
-    /* missing — keep nulls */
-  }
+  const anonId = peekAnonId();
+  const hasAnonIdOnDisk = anonId !== null;
+  const anonIdPrefix = anonId ? anonId.slice(0, 8) : null;
 
   const config = resolveConfig();
   return {

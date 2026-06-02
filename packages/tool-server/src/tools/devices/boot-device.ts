@@ -1,7 +1,13 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type Registry,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -664,9 +670,15 @@ async function attemptBoot(params: {
     // with nothing to fall back to.
     if (params.tearDownIfUnready) {
       await killEmulatorQuietly(serial, child);
-      throw new Error(
+      throw new FailureError(
         `PackageManager did not respond on ${serial} within ${Math.round(pmBudgetMs / 1000)}s ` +
-          `after boot_completed. Emulator has been terminated.`
+          `after boot_completed. Emulator has been terminated.`,
+        {
+          error_code: FAILURE_CODES.BOOT_ANDROID_PACKAGE_MANAGER_UNAVAILABLE,
+          failure_stage: "boot_android_package_manager",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }
       );
     }
     process.stderr.write(

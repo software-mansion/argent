@@ -25,6 +25,13 @@ export interface SkillScopeResult {
   pruneError: string | null;
 }
 
+export interface SkillRefreshTelemetrySummary {
+  scope_count: number;
+  synced_count: number;
+  pruned_count: number;
+  failed_count: number;
+}
+
 interface ScopeSpec {
   scope: SkillScope;
   lockPath: string;
@@ -150,4 +157,15 @@ export function formatSkillRefreshSummary(results: readonly SkillScopeResult[]):
     }
   }
   return lines.length > 0 ? lines.join("\n") : null;
+}
+
+export function summarizeSkillRefreshForTelemetry(
+  results: readonly SkillScopeResult[]
+): SkillRefreshTelemetrySummary {
+  return {
+    scope_count: results.length,
+    synced_count: results.reduce((sum, result) => sum + result.synced, 0),
+    pruned_count: results.reduce((sum, result) => sum + result.pruned.length, 0),
+    failed_count: results.filter((result) => result.syncError || result.pruneError).length,
+  };
 }

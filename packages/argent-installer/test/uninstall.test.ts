@@ -132,10 +132,14 @@ describe("uninstall — telemetry consent preservation", () => {
 
     await uninstall(["--yes"]);
 
-    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
-      has_pruned_content: true,
-      has_uninstalled_package: false,
-    });
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_pruned_content: true,
+        has_uninstalled_package: false,
+      })
+    );
     expect(telemetryMock.forget).not.toHaveBeenCalled();
   });
 
@@ -145,10 +149,14 @@ describe("uninstall — telemetry consent preservation", () => {
 
     await expect(uninstall(["--yes"])).rejects.toThrow("tool server busy");
 
-    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
-      has_pruned_content: true,
-      has_uninstalled_package: false,
-    });
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_TOOLSERVER_STOP_FAILED",
+        has_pruned_content: true,
+        has_uninstalled_package: false,
+      })
+    );
     expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
     expect(telemetryMock.forget).not.toHaveBeenCalled();
   });

@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { init as telemetryInit, track, forget as telemetryForget } from "@argent/telemetry";
+import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
   getManagedContentTargets,
@@ -23,6 +24,22 @@ import {
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
+
+type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+
+const UNINSTALL_TOOLSERVER_STOP_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_TOOLSERVER_STOP_FAILED,
+  failure_stage: "installer_uninstall_toolserver_stop",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const UNINSTALL_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_PACKAGE_ACTION_FAILED,
+  failure_stage: "installer_uninstall_package_action",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
 
 export interface BundledContentRemoval {
   removedPaths: string[];
@@ -289,12 +306,13 @@ export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
 
   telemetryInit("installer");
-  track("installation:cli_uninstall_start", {});
-  let telemetryFinalized = false;
+  await track("installation:cli_uninstall_start", {});
 
+  let telemetryFinalized = false;
   const finalizeUninstallTelemetry = async (
     hasPrunedContent: boolean,
-    hasUninstalledPackage: boolean
+    hasUninstalledPackage: boolean,
+    failureSignal?: InstallerFailureSignal
   ): Promise<void> => {
     if (telemetryFinalized) return;
     telemetryFinalized = true;
@@ -302,219 +320,217 @@ export async function uninstall(args: string[]): Promise<void> {
       track("installation:cli_uninstall_complete", {
         has_pruned_content: hasPrunedContent,
         has_uninstalled_package: hasUninstalledPackage,
+        ...(failureSignal ?? {}),
       });
     });
   };
 
-  let shouldPrune = nonInteractive;
-  let hasUninstalledPackage = false;
+  p.intro(pc.bgRed(pc.white(" argent uninstall ")));
 
-  try {
-    p.intro(pc.bgRed(pc.white(" argent uninstall ")));
+  if (!nonInteractive) {
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
-    if (!nonInteractive) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+    const proceed = await p.confirm({
+      message: "Remove argent configuration from this workspace?",
+      initialValue: true,
+    });
 
-      const proceed = await p.confirm({
-        message: "Remove argent configuration from this workspace?",
-        initialValue: true,
-      });
-
-      if (p.isCancel(proceed) || !proceed) {
-        await finalizeUninstallTelemetry(false, false);
-        p.cancel("Uninstall cancelled.");
-        process.exit(0);
-      }
+    if (p.isCancel(proceed) || !proceed) {
+      await finalizeUninstallTelemetry(false, false);
+      p.cancel("Uninstall cancelled.");
+      process.exit(0);
     }
-
-    const projectRoot = resolveProjectRoot(process.cwd());
-    const results: string[] = [];
-
-    // ── Remove MCP entries ──────────────────────────────────────────────────────
-
-    p.log.step(pc.bold("Removing MCP server entries..."));
-
-    for (const adapter of ALL_ADAPTERS) {
-      for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
-        const configPath = pathFn();
-        if (!configPath) continue;
-        try {
-          const removed = adapter.remove(configPath);
-          if (removed) {
-            results.push(`${pc.green("+")} Removed from ${adapter.name} ${pc.dim(configPath)}`);
-          }
-        } catch {
-          // non-fatal
-        }
-      }
-    }
-
-    // ── Remove allowlists ──────────────────────────────────────────────────────
-
-    for (const adapter of ALL_ADAPTERS) {
-      if (!adapter.removeAllowlist) continue;
-      for (const s of ["local", "global"] as const) {
-        try {
-          adapter.removeAllowlist(projectRoot, s);
-          results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
-        } catch {
-          // non-fatal
-        }
-      }
-    }
-
-    if (results.length > 0) {
-      p.note(results.join("\n"), "MCP Entries Removed");
-    } else {
-      p.log.info(pc.dim("No MCP entries found to remove."));
-    }
-
-    // ── Prune skills / rules / agents ───────────────────────────────────────────
-
-    if (!nonInteractive) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const pruneChoice = await p.confirm({
-        message: "Also remove Argent-owned skills, rules, and agents?",
-        initialValue: true,
-      });
-
-      if (!p.isCancel(pruneChoice)) {
-        shouldPrune = pruneChoice as boolean;
-      }
-    }
-
-    if (shouldPrune) {
-      const pruneResults: string[] = [];
-      const localTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local");
-      const globalTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global");
-
-      const bundledSkillNames = getBundledSkillNames(SKILLS_DIR);
-      pruneResults.push(
-        ...cleanupBundledSkills(bundledSkillNames, [
-          ...localTargets.skillTargets,
-          ...globalTargets.skillTargets,
-        ])
-      );
-
-      for (const { targetPath, label } of [
-        ...localTargets.skillsLockTargets,
-        ...globalTargets.skillsLockTargets,
-      ]) {
-        try {
-          const { removedSkills, removedFile } = cleanupSkillsLockFile(
-            targetPath,
-            bundledSkillNames
-          );
-          if (removedSkills.length === 0 && !removedFile) continue;
-
-          const itemsLabel = removedSkills.length === 1 ? "skill" : "skills";
-          const fileLabel = removedFile ? " and removed the now-empty lockfile" : "";
-          pruneResults.push(
-            `${pc.green("+")} Removed ${removedSkills.length} Argent ${itemsLabel} from ${label}${fileLabel}`
-          );
-        } catch (err) {
-          pruneResults.push(`${pc.red("x")} Could not clean ${label}: ${err}`);
-        }
-      }
-
-      const bundledTargets: Array<{
-        sourceDir: string;
-        targets: ManagedContentTarget[];
-        contentLabel: string;
-      }> = [
-        {
-          sourceDir: AGENTS_DIR,
-          targets: [...localTargets.agentTargets, ...globalTargets.agentTargets],
-          contentLabel: "agent",
-        },
-        {
-          sourceDir: RULES_DIR,
-          targets: [...localTargets.ruleTargets, ...globalTargets.ruleTargets],
-          contentLabel: "rule",
-        },
-      ];
-
-      for (const { sourceDir, targets, contentLabel } of bundledTargets) {
-        try {
-          pruneResults.push(...cleanupBundledTargets(sourceDir, targets, contentLabel));
-        } catch {
-          // non-fatal
-        }
-      }
-
-      // Codex: remove argent rules from developer_instructions in config.toml
-      for (const { targetPath, label } of [
-        ...localTargets.codexConfigTargets,
-        ...globalTargets.codexConfigTargets,
-      ]) {
-        try {
-          if (removeCodexRules(targetPath)) {
-            pruneResults.push(`${pc.green("+")} Removed argent rules from ${label}`);
-          }
-        } catch (err) {
-          pruneResults.push(`${pc.red("x")} Could not clean ${label}: ${err}`);
-        }
-      }
-
-      if (pruneResults.length > 0) {
-        p.note(pruneResults.join("\n"), "Pruned Argent Content");
-      } else {
-        p.log.info(pc.dim("No Argent-owned skills, rules, or agents found to remove."));
-      }
-    } else {
-      p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
-    }
-
-    // ── Uninstall the global package ────────────────────────────────────────────
-
-    const globallyInstalled = isGloballyInstalled();
-    let shouldUninstallPackage = nonInteractive && globallyInstalled;
-
-    if (!globallyInstalled) {
-      p.log.info(pc.dim(`${PACKAGE_NAME} is not installed globally; skipping package uninstall.`));
-    } else if (!nonInteractive) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const uninstallPkg = await p.confirm({
-        message: `Uninstall the global ${PACKAGE_NAME} package?`,
-        initialValue: false,
-      });
-
-      if (!p.isCancel(uninstallPkg)) {
-        shouldUninstallPackage = uninstallPkg as boolean;
-      }
-    }
-
-    if (shouldUninstallPackage) {
-      const pm = detectPackageManager();
-      const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
-      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
-
-      await killToolServer();
-
-      try {
-        execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
-        p.log.success("Package uninstalled.");
-        hasUninstalledPackage = true;
-      } catch (err) {
-        p.log.error(`Uninstall failed: ${err}`);
-      }
-    }
-
-    await finalizeUninstallTelemetry(shouldPrune, hasUninstalledPackage);
-
-    if (hasUninstalledPackage) {
-      try {
-        await telemetryForget({ disableConsent: false });
-      } catch {
-        /* swallow — uninstall must succeed even if forget fails */
-      }
-    }
-
-    p.outro(pc.green("argent has been removed."));
-  } catch (err) {
-    await finalizeUninstallTelemetry(shouldPrune, hasUninstalledPackage);
-    throw err;
   }
+
+  const projectRoot = resolveProjectRoot(process.cwd());
+  const results: string[] = [];
+
+  // ── Remove MCP entries ──────────────────────────────────────────────────────
+
+  p.log.step(pc.bold("Removing MCP server entries..."));
+
+  for (const adapter of ALL_ADAPTERS) {
+    for (const pathFn of [() => adapter.projectPath(projectRoot), () => adapter.globalPath()]) {
+      const configPath = pathFn();
+      if (!configPath) continue;
+      try {
+        const removed = adapter.remove(configPath);
+        if (removed) {
+          results.push(`${pc.green("+")} Removed from ${adapter.name} ${pc.dim(configPath)}`);
+        }
+      } catch {
+        // non-fatal
+      }
+    }
+  }
+
+  // ── Remove allowlists ──────────────────────────────────────────────────────
+
+  for (const adapter of ALL_ADAPTERS) {
+    if (!adapter.removeAllowlist) continue;
+    for (const s of ["local", "global"] as const) {
+      try {
+        adapter.removeAllowlist(projectRoot, s);
+        results.push(`${pc.green("+")} Removed ${adapter.name} allowlist ${pc.dim(`(${s})`)}`);
+      } catch {
+        // non-fatal
+      }
+    }
+  }
+
+  if (results.length > 0) {
+    p.note(results.join("\n"), "MCP Entries Removed");
+  } else {
+    p.log.info(pc.dim("No MCP entries found to remove."));
+  }
+
+  // ── Prune skills / rules / agents ───────────────────────────────────────────
+
+  let shouldPrune = nonInteractive;
+
+  if (!nonInteractive) {
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+
+    const pruneChoice = await p.confirm({
+      message: "Also remove Argent-owned skills, rules, and agents?",
+      initialValue: true,
+    });
+
+    if (!p.isCancel(pruneChoice)) {
+      shouldPrune = pruneChoice as boolean;
+    }
+  }
+
+  if (shouldPrune) {
+    const pruneResults: string[] = [];
+    const localTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "local");
+    const globalTargets = getManagedContentTargets(ALL_ADAPTERS, projectRoot, "global");
+
+    const bundledSkillNames = getBundledSkillNames(SKILLS_DIR);
+    pruneResults.push(
+      ...cleanupBundledSkills(bundledSkillNames, [
+        ...localTargets.skillTargets,
+        ...globalTargets.skillTargets,
+      ])
+    );
+
+    for (const { targetPath, label } of [
+      ...localTargets.skillsLockTargets,
+      ...globalTargets.skillsLockTargets,
+    ]) {
+      try {
+        const { removedSkills, removedFile } = cleanupSkillsLockFile(targetPath, bundledSkillNames);
+        if (removedSkills.length === 0 && !removedFile) continue;
+
+        const itemsLabel = removedSkills.length === 1 ? "skill" : "skills";
+        const fileLabel = removedFile ? " and removed the now-empty lockfile" : "";
+        pruneResults.push(
+          `${pc.green("+")} Removed ${removedSkills.length} Argent ${itemsLabel} from ${label}${fileLabel}`
+        );
+      } catch (err) {
+        pruneResults.push(`${pc.red("x")} Could not clean ${label}: ${err}`);
+      }
+    }
+
+    const bundledTargets: Array<{
+      sourceDir: string;
+      targets: ManagedContentTarget[];
+      contentLabel: string;
+    }> = [
+      {
+        sourceDir: AGENTS_DIR,
+        targets: [...localTargets.agentTargets, ...globalTargets.agentTargets],
+        contentLabel: "agent",
+      },
+      {
+        sourceDir: RULES_DIR,
+        targets: [...localTargets.ruleTargets, ...globalTargets.ruleTargets],
+        contentLabel: "rule",
+      },
+    ];
+
+    for (const { sourceDir, targets, contentLabel } of bundledTargets) {
+      try {
+        pruneResults.push(...cleanupBundledTargets(sourceDir, targets, contentLabel));
+      } catch {
+        // non-fatal
+      }
+    }
+
+    // Codex: remove argent rules from developer_instructions in config.toml
+    for (const { targetPath, label } of [
+      ...localTargets.codexConfigTargets,
+      ...globalTargets.codexConfigTargets,
+    ]) {
+      try {
+        if (removeCodexRules(targetPath)) {
+          pruneResults.push(`${pc.green("+")} Removed argent rules from ${label}`);
+        }
+      } catch (err) {
+        pruneResults.push(`${pc.red("x")} Could not clean ${label}: ${err}`);
+      }
+    }
+
+    if (pruneResults.length > 0) {
+      p.note(pruneResults.join("\n"), "Pruned Argent Content");
+    } else {
+      p.log.info(pc.dim("No Argent-owned skills, rules, or agents found to remove."));
+    }
+  } else {
+    p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
+  }
+
+  // ── Uninstall the global package ────────────────────────────────────────────
+
+  const globallyInstalled = isGloballyInstalled();
+  let shouldUninstallPackage = nonInteractive && globallyInstalled;
+
+  if (!nonInteractive && globallyInstalled) {
+    p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+
+    const uninstallPkg = await p.confirm({
+      message: `Uninstall the global ${PACKAGE_NAME} package?`,
+      initialValue: false,
+    });
+
+    if (!p.isCancel(uninstallPkg)) {
+      shouldUninstallPackage = uninstallPkg as boolean;
+    }
+  }
+
+  let hasUninstalledPackage = false;
+  if (shouldUninstallPackage) {
+    const pm = detectPackageManager();
+    const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
+    p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
+
+    try {
+      await killToolServer();
+    } catch (err) {
+      p.log.error(`Could not stop the running tool server: ${err}`);
+      await finalizeUninstallTelemetry(shouldPrune, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
+      throw err;
+    }
+
+    try {
+      execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
+      p.log.success("Package uninstalled.");
+      hasUninstalledPackage = true;
+    } catch (err) {
+      p.log.error(`Uninstall failed: ${err}`);
+      await finalizeUninstallTelemetry(shouldPrune, false, UNINSTALL_PACKAGE_ACTION_FAILED);
+      return;
+    }
+  }
+
+  await finalizeUninstallTelemetry(shouldPrune, hasUninstalledPackage);
+  if (hasUninstalledPackage) {
+    try {
+      await telemetryForget({ disableConsent: false });
+    } catch {
+      /* swallow — uninstall must succeed even if forget fails */
+    }
+  }
+
+  p.outro(pc.green("argent has been removed."));
 }
