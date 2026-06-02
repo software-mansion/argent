@@ -25,7 +25,7 @@
  *              otherwise.
  */
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -39,6 +39,17 @@ export interface ArtifactHandle {
   filename: string;
   mimeType: string;
   size: number;
+  /**
+   * Absolute path of the file on the tool-server host. When the tool-server is
+   * co-located with this client, the file is already on disk here — the gate
+   * reads it directly instead of downloading it over `/artifacts/:id`, avoiding
+   * a redundant second copy. Verified against {@link size}/{@link mtimeMs}
+   * before it is trusted; any mismatch (or a remote host) falls back to the
+   * download path. Absent on older tool-servers that don't emit it.
+   */
+  hostPath?: string;
+  /** mtime of {@link hostPath} (ms) at registration, for the integrity check. */
+  mtimeMs?: number;
 }
 
 export function isArtifactHandle(value: unknown): value is ArtifactHandle {
@@ -105,10 +116,39 @@ export interface MaterializeResult {
 }
 
 /**
- * Walk `result`, download any artifact handles into the local cache, and
- * return the rewritten result plus any image artifacts. A handle whose
- * download fails is rewritten to `null` so the agent sees a missing-file
- * signal rather than a dangling remote reference.
+ * Resolve a handle's `hostPath` to a directly-usable local file, or `null` if
+ * it can't be trusted. The file must exist, be a regular file, and match the
+ * handle's recorded `size` (and `mtimeMs` when present). This is the gate's
+ * "is the file already here?" check: it succeeds when the tool-server is
+ * co-located (same machine, or a shared filesystem — where a match means it's
+ * literally the same file), and fails for a genuinely remote host, falling
+ * through to the download path. The integrity check guards against a stale or
+ * unrelated file sitting at the same path.
+ */
+async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> {
+  if (!handle.hostPath) return null;
+  try {
+    const st = await stat(handle.hostPath);
+    if (!st.isFile()) return null;
+    if (st.size !== handle.size) return null;
+    if (handle.mtimeMs != null && Math.round(st.mtimeMs) !== Math.round(handle.mtimeMs)) {
+      return null;
+    }
+    return handle.hostPath;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Walk `result`, resolving every artifact handle to a local path, and return
+ * the rewritten result plus any image artifacts. Each handle is resolved by a
+ * gate: if its `hostPath` is already readable locally (co-located tool-server),
+ * it is used in place with no copy; otherwise the bytes are downloaded over
+ * `/artifacts/:id` into a temp cache. Either way the handle is replaced by a
+ * real local path, so all downstream rendering is location-agnostic. A handle
+ * that resolves to neither is rewritten to `null` so the agent sees a
+ * missing-file signal rather than a dangling reference.
  */
 export async function materializeArtifacts(
   result: unknown,
@@ -128,17 +168,25 @@ export async function materializeArtifacts(
 
   async function walk(value: unknown): Promise<unknown> {
     if (isArtifactHandle(value)) {
+      // Gate: prefer the file already on this host; only download on a miss.
+      const localPath = await resolveLocalFile(value);
+      if (localPath) {
+        if (value.mimeType.startsWith("image/")) {
+          images.push({ localPath, data: await readFile(localPath), mimeType: value.mimeType });
+        }
+        return localPath;
+      }
       try {
         const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`);
         if (!res.ok) return null;
         const data = Buffer.from(await res.arrayBuffer());
         await ensureDir();
-        const localPath = join(dir, sanitizeSegment(value.filename));
-        await writeFile(localPath, data);
+        const downloadedPath = join(dir, sanitizeSegment(value.filename));
+        await writeFile(downloadedPath, data);
         if (value.mimeType.startsWith("image/")) {
-          images.push({ localPath, data, mimeType: value.mimeType });
+          images.push({ localPath: downloadedPath, data, mimeType: value.mimeType });
         }
-        return localPath;
+        return downloadedPath;
       } catch {
         return null;
       }

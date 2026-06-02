@@ -30,6 +30,16 @@ export interface ArtifactHandle {
   filename: string;
   mimeType: string;
   size: number;
+  /**
+   * Absolute path of the file on this (tool-server) host. A co-located client
+   * uses it to read the file directly instead of downloading it over
+   * `/artifacts/:id`. The client verifies it against `size`/`mtimeMs` first, so
+   * a remote client (where the path is meaningless or absent) simply falls back
+   * to the download route.
+   */
+  hostPath: string;
+  /** mtime of `hostPath` (ms) at registration, for the client's integrity check. */
+  mtimeMs?: number;
 }
 
 interface ArtifactEntry {
@@ -75,14 +85,28 @@ class ArtifactRegistry {
     const filename = opts?.filename ?? basename(hostPath);
     const mimeType = opts?.mimeType ?? inferMimeType(hostPath);
     let size = 0;
+    let mtimeMs: number | undefined;
     try {
-      size = (await stat(hostPath)).size;
+      const st = await stat(hostPath);
+      size = st.size;
+      mtimeMs = st.mtimeMs;
     } catch {
-      // File may be produced lazily or be a bundle directory; size is advisory.
+      // File may be produced lazily or be a bundle directory; size/mtime are
+      // advisory. A co-located client re-stats and falls back to download if
+      // they don't match what's on disk at read time.
     }
     const id = randomUUID();
     this.entries.set(id, { path: hostPath, filename, mimeType, size });
-    return { [ARTIFACT_MARKER]: true, id, filename, mimeType, size };
+    const handle: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id,
+      filename,
+      mimeType,
+      size,
+      hostPath,
+    };
+    if (mtimeMs != null) handle.mtimeMs = mtimeMs;
+    return handle;
   }
 
   get(id: string): ArtifactEntry | undefined {

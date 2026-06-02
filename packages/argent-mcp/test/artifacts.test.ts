@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, stat } from "node:fs/promises";
 import {
   materializeArtifacts,
   isArtifactHandle,
@@ -108,5 +108,108 @@ describe("materializeArtifacts", () => {
   it("scopes the cache dir by device and omits the device segment when absent", () => {
     expect(artifactDir("DEV-9").endsWith("DEV-9")).toBe(true);
     expect(artifactDir()).not.toContain("undefined");
+  });
+});
+
+// ── gate: local short-circuit (co-located tool-server) ───────────────
+
+describe("materializeArtifacts local short-circuit", () => {
+  let root: string;
+  let hostDir: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "argent-artifacts-"));
+    hostDir = await mkdtemp(join(tmpdir(), "argent-host-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
+  });
+
+  afterEach(async () => {
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
+    await rm(hostDir, { recursive: true, force: true });
+  });
+
+  // Writes a real file and returns a handle pointing at it with matching
+  // integrity metadata — i.e. what a co-located tool-server would emit.
+  async function localFileHandle(
+    id: string,
+    filename: string,
+    mimeType: string,
+    bytes: number[]
+  ): Promise<ArtifactHandle> {
+    const hostPath = join(hostDir, filename);
+    await writeFile(hostPath, Buffer.from(bytes));
+    const st = await stat(hostPath);
+    return {
+      [ARTIFACT_MARKER]: true,
+      id,
+      filename,
+      mimeType,
+      size: st.size,
+      hostPath,
+      mtimeMs: st.mtimeMs,
+    };
+  }
+
+  const throwingFetch: typeof fetch = (async () => {
+    throw new Error("fetch must not be called when the file is already local");
+  }) as unknown as typeof fetch;
+
+  it("uses hostPath directly without downloading and reads image bytes in place", async () => {
+    const h = await localFileHandle("img1", "shot.png", "image/png", PNG);
+    const { result, images } = await materializeArtifacts(
+      { image: h },
+      { toolsUrl: "http://localhost:3001", deviceId: "DEV-1", fetchImpl: throwingFetch }
+    );
+
+    // Resolved to the original host path — no copy under the temp cache.
+    expect((result as { image: string }).image).toBe(h.hostPath);
+    expect((result as { image: string }).image.startsWith(artifactDir("DEV-1"))).toBe(false);
+
+    expect(images).toHaveLength(1);
+    expect(images[0]!.localPath).toBe(h.hostPath);
+    expect(images[0]!.data).toEqual(Buffer.from(PNG));
+  });
+
+  it("uses hostPath for non-image artifacts without reading or copying", async () => {
+    const h = await localFileHandle("cpu1", "cpu.xml", "application/xml", [60, 61, 62]);
+    const { result, images } = await materializeArtifacts(
+      { exportedFiles: { cpu: h } },
+      { toolsUrl: "http://localhost:3001", fetchImpl: throwingFetch }
+    );
+    expect((result as { exportedFiles: { cpu: string } }).exportedFiles.cpu).toBe(h.hostPath);
+    expect(images).toHaveLength(0);
+  });
+
+  it("falls back to download when the recorded size no longer matches", async () => {
+    const h = await localFileHandle("img2", "shot.png", "image/png", PNG);
+    const stale = { ...h, size: h.size + 1 }; // file changed since registration
+    const { result, images } = await materializeArtifacts(
+      { image: stale },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ img2: PNG }) }
+    );
+
+    const out = (result as { image: string }).image;
+    expect(out).not.toBe(h.hostPath);
+    expect(out.startsWith(artifactDir())).toBe(true); // downloaded into the temp cache
+    expect(Buffer.from(await readFile(out))).toEqual(Buffer.from(PNG));
+    expect(images).toHaveLength(1);
+  });
+
+  it("falls back to download when hostPath does not exist locally (remote host)", async () => {
+    const h: ArtifactHandle = {
+      [ARTIFACT_MARKER]: true,
+      id: "img3",
+      filename: "shot.png",
+      mimeType: "image/png",
+      size: PNG.length,
+      hostPath: join(hostDir, "does-not-exist.png"),
+      mtimeMs: 123,
+    };
+    const { result } = await materializeArtifacts(
+      { image: h },
+      { toolsUrl: "http://remote:3001", fetchImpl: fakeFetch({ img3: PNG }) }
+    );
+    expect((result as { image: string }).image.startsWith(artifactDir())).toBe(true);
   });
 });

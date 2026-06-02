@@ -38,6 +38,9 @@ describe("artifact registry", () => {
       expect(handle.mimeType).toBe("image/png");
       expect(handle.size).toBe(4);
       expect(typeof handle.id).toBe("string");
+      // Emitted so a co-located client can read the file directly (gate).
+      expect(handle.hostPath).toBe(filePath);
+      expect(typeof handle.mtimeMs).toBe("number");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
