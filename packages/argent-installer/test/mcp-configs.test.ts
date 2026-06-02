@@ -1399,6 +1399,30 @@ describe("findConfiguredAdapterScopes", () => {
       "Claude Code:project",
     ]);
   });
+
+  it("skips a malformed config instead of aborting detection", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    // Hermes' hasArgentEntry parses YAML and throws on broken input. A single
+    // unparseable config must not take down detection for every other adapter
+    // (regression: it previously propagated out of update()).
+    const hermes = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
+    const hermesPath = hermes.globalPath()!;
+    fs.mkdirSync(path.dirname(hermesPath), { recursive: true });
+    fs.writeFileSync(hermesPath, "mcp_servers: : not: valid: yaml\n  - broken");
+
+    // A properly configured adapter alongside the broken one.
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    claude.write(claude.globalPath()!, getMcpEntry());
+
+    let result: ReturnType<typeof findConfiguredAdapterScopes> = [];
+    expect(() => {
+      result = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+    }).not.toThrow();
+    expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toContain("Claude Code:global");
+    expect(result.map((r) => r.adapter.name)).not.toContain("Hermes");
+  });
 });
 
 // ── Portability: generated configs must not embed absolute home paths ───────

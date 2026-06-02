@@ -861,18 +861,31 @@ export interface ConfiguredAdapterScope {
 // Returns the (adapter, scope, configPath) tuples where argent is already
 // configured. `update` uses this to skip editors the user opted out of during
 // `init` even when their config dir happens to exist on disk (issue #195).
+//
+// Detection is best-effort per scope: `hasArgentEntry` parses the on-disk
+// config and some backings throw on malformed input (e.g. Hermes' readYaml on
+// a broken ~/.hermes/config.yaml). One unparseable file must not abort the
+// whole update flow, so a throwing probe is treated as "not configured" and
+// skipped rather than propagated.
 export function findConfiguredAdapterScopes(
   adapters: readonly McpConfigAdapter[],
   projectRoot: string
 ): ConfiguredAdapterScope[] {
   const results: ConfiguredAdapterScope[] = [];
+  const hasEntry = (adapter: McpConfigAdapter, configPath: string): boolean => {
+    try {
+      return adapter.hasArgentEntry(configPath);
+    } catch {
+      return false;
+    }
+  };
   for (const adapter of adapters) {
     const projectPath = adapter.projectPath(projectRoot);
-    if (projectPath && adapter.hasArgentEntry(projectPath)) {
+    if (projectPath && hasEntry(adapter, projectPath)) {
       results.push({ adapter, scope: "project", configPath: projectPath });
     }
     const globalPath = adapter.globalPath();
-    if (globalPath && adapter.hasArgentEntry(globalPath)) {
+    if (globalPath && hasEntry(adapter, globalPath)) {
       results.push({ adapter, scope: "global", configPath: globalPath });
     }
   }
