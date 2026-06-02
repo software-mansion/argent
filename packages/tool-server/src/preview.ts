@@ -186,7 +186,10 @@ export function createPreviewRouter(registry: Registry): Router {
   const MAX_PREVIEW_BYTES = 25 * 1024 * 1024;
   const allowedRoots = (() => {
     const roots = new Set<string>();
-    for (const r of [os.tmpdir(), process.cwd()]) {
+    // `/tmp` in addition to os.tmpdir(): on macOS os.tmpdir() is a per-user
+    // `/var/folders/…` path, so agents that drop screenshots under `/tmp`
+    // (a very common choice) would otherwise 404 and show "No preview".
+    for (const r of [os.tmpdir(), process.cwd(), "/tmp"]) {
       try {
         roots.add(fs.realpathSync(r));
       } catch {
