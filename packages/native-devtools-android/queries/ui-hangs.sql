@@ -20,9 +20,14 @@
 -- we GROUP BY the frame timestamp to emit one hang per frame, keeping the
 -- longest slice duration and a representative jank_type / layer_name.
 --
--- TARGET_PROCESS is substituted at runtime by run-tp.ts.
+-- The target process is injected once into the _argent_args view (by
+-- run-tp.ts) and referenced by name below, instead of as a bare token.
 
 INCLUDE PERFETTO MODULE android.anrs;
+
+DROP VIEW IF EXISTS _argent_args;
+CREATE PERFETTO VIEW _argent_args AS
+SELECT '{{TARGET_PROCESS}}' AS target_process;
 
 SELECT
   'anr' AS kind,
@@ -32,7 +37,7 @@ SELECT
   subject AS reason,
   error_id AS error_id
 FROM android_anrs
-WHERE process_name = 'TARGET_PROCESS'
+WHERE process_name = (SELECT target_process FROM _argent_args)
 
 UNION ALL
 
@@ -45,7 +50,7 @@ SELECT
   MAX(aft.layer_name) AS error_id
 FROM actual_frame_timeline_slice aft
 JOIN process p ON aft.upid = p.upid
-WHERE p.name = 'TARGET_PROCESS'
+WHERE p.name = (SELECT target_process FROM _argent_args)
   AND aft.jank_type != 'None'
   AND aft.jank_type GLOB '*App Deadline Missed*'
 GROUP BY aft.ts, p.name

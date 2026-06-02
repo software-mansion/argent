@@ -18,11 +18,17 @@ export interface RunTpQueryOptions {
   /** Filename in queries/ (e.g. "cpu-hotspots.sql"). */
   query: string;
   /**
-   * Token → replacement substitutions applied before running. Used for
-   * TARGET_PROCESS, HANG_START_NS, HANG_END_NS, THREAD_NAME, FUNCTION_NAME.
-   * Values are NOT shell-escaped — they're interpolated into SQL via a
-   * tempfile, not a shell command. Callers are expected to validate values
-   * (numeric for ns; identifier-shaped for thread/function/process names).
+   * Placeholder → replacement substitutions applied before running. Each query
+   * declares its placeholders once in a small `_argent_args` PERFETTO VIEW
+   * header (e.g. `'{{TARGET_PROCESS}}' AS target_process`) and references them
+   * by name in the body, so the substitution lands at a single, self-documenting
+   * site per value rather than scattered through the SQL. Placeholders use the
+   * `{{NAME}}` sigil and are resolved by `renderSqlTemplate`, which throws on a
+   * forgotten/mistyped token instead of leaking it into a SQLite error. Keys
+   * are the bare names (e.g. `TARGET_PROCESS`, `HANG_START_NS`). Values are NOT
+   * shell-escaped — they're interpolated into SQL via a tempfile, not a shell
+   * command. Callers are expected to validate values (numeric for ns;
+   * identifier-shaped for thread/function/process names).
    */
   substitutions: Record<string, string>;
 }
@@ -47,11 +53,47 @@ export async function runTpQuery<Row = Record<string, unknown>>(
 ): Promise<Row[]> {
   const queryPath = path.join(traceProcessorQueriesDir(), opts.query);
   const template = await fs.readFile(queryPath, "utf8");
-  let sql = template;
-  for (const [token, value] of Object.entries(opts.substitutions)) {
-    sql = sql.replaceAll(token, value);
-  }
+  const sql = renderSqlTemplate(template, opts.substitutions);
   return runTpInline<Row>({ tracePath: opts.tracePath, sql });
+}
+
+/**
+ * Resolve `{{NAME}}` placeholders in a SQL template against a substitution map.
+ *
+ * The sigil makes substitution sites unambiguous (a `{{TARGET_PROCESS}}` can
+ * never be confused with a real column/keyword) and lets us validate both
+ * directions in one pass:
+ *   • a placeholder with no matching substitution throws here, with the token
+ *     name — far clearer than the downstream `no such column: {{TARGET_PROCESS}}`
+ *     SQLite error a forgotten substitution would otherwise produce;
+ *   • a substitution that the template never references also throws, catching
+ *     a renamed/stale token before it silently does nothing.
+ *
+ * Values are inserted via a function replacer, so `$`-sequences in a value are
+ * NOT treated as `String.replace` special patterns.
+ */
+export function renderSqlTemplate(
+  template: string,
+  substitutions: Record<string, string>
+): string {
+  const used = new Set<string>();
+  const rendered = template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => {
+    const value = substitutions[name];
+    if (value === undefined) {
+      throw new Error(
+        `SQL template references {{${name}}} but no substitution was provided`
+      );
+    }
+    used.add(name);
+    return value;
+  });
+  const unused = Object.keys(substitutions).filter((name) => !used.has(name));
+  if (unused.length > 0) {
+    throw new Error(
+      `Substitution(s) provided but not referenced by the template: ${unused.join(", ")}`
+    );
+  }
+  return rendered;
 }
 
 /**

@@ -17,11 +17,17 @@
 -- Substituted by pipeline/hang-folds-batched.ts before running (this template
 -- is loaded via traceProcessorQueriesDir(), NOT through runTpQuery's generic
 -- substitution map). The TS replaces:
---   * the single-quoted TARGET_PROCESS token with the validated package name;
+--   * the single-quoted target-process token in the _argent_args view below
+--     with the validated package name; the two views reference it by name as
+--     (SELECT target_process FROM _argent_args);
 --   * the bare placeholder inside `FROM (VALUES ...)` below with
 --     `(hang_index, start_ns, end_ns)` tuples built from the hang list.
 -- The windows placeholder must NOT appear anywhere else (e.g. in this header),
 -- because its replacement spans multiple lines and would break a comment.
+
+DROP VIEW IF EXISTS _argent_args;
+CREATE PERFETTO VIEW _argent_args AS
+SELECT '{{TARGET_PROCESS}}' AS target_process;
 
 DROP TABLE IF EXISTS argent_hang_windows;
 CREATE PERFETTO TABLE argent_hang_windows AS
@@ -30,7 +36,7 @@ SELECT
   column2 AS start_ns,
   column3 AS end_ns
 FROM (VALUES
-  HANG_WINDOWS_VALUES
+  {{HANG_WINDOWS_VALUES}}
 );
 
 DROP VIEW IF EXISTS argent_hang_state;
@@ -54,7 +60,7 @@ JOIN thread_state ts
   ON ts.ts < hw.end_ns AND ts.ts + ts.dur > hw.start_ns
 JOIN thread t USING (utid)
 JOIN process p USING (upid)
-WHERE p.name = 'TARGET_PROCESS'
+WHERE p.name = (SELECT target_process FROM _argent_args)
   AND t.is_main_thread
 GROUP BY hw.hang_index, ts.state, ts.blocked_function;
 
@@ -76,7 +82,7 @@ JOIN slice s
 JOIN thread_track tt ON s.track_id = tt.id
 JOIN thread t USING (utid)
 JOIN process p USING (upid)
-WHERE p.name = 'TARGET_PROCESS'
+WHERE p.name = (SELECT target_process FROM _argent_args)
   AND t.is_main_thread
   AND s.name GLOB 'GC*';
 

@@ -1,7 +1,14 @@
 import type { CpuHotspot } from "./types";
 
 const MIN_WEIGHT_PERCENTAGE = 3;
-const BURST_GAP_MS = 500;
+/**
+ * Gap (ms) that separates two activity bursts of the same (thread, function).
+ * Single source of truth for BOTH burst paths: the iOS path consumes it here
+ * (timestamp-derived bursts below); the Android path injects `BURST_GAP_MS ×
+ * 1e6` into cpu-hotspots.sql as the `BURST_GAP_NS` token (see pipeline/index.ts)
+ * so the SQL-side and JS-side thresholds can never drift.
+ */
+export const BURST_GAP_MS = 500;
 
 /**
  * Generic aggregator input — one row per (thread, leaf-function) cluster.

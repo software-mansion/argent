@@ -8,15 +8,27 @@
 -- Burst windows are computed here in SQL rather than shipping every sample
 -- timestamp (the old `GROUP_CONCAT(ts_ns)` shipped ~54 KB of timestamps that
 -- JS re-parsed). A "burst" is a run of samples for the same (thread, function)
--- with no >500ms gap (BURST_GAP_MS in aggregate.ts). LAG() finds the gaps,
--- a running SUM() assigns burst ids, and we emit one `start_ms:end_ms:count`
--- triple per burst. start_ms/end_ms are NATIVE (CLOCK_MONOTONIC) ms; the JS
--- side subtracts traceStartMs to make them trace-relative.
+-- with no gap larger than the burst threshold. LAG() finds the gaps, a running
+-- SUM() assigns burst ids, and we emit one `start_ms:end_ms:count` triple per
+-- burst. start_ms/end_ms are NATIVE (CLOCK_MONOTONIC) ms; the JS side subtracts
+-- traceStartMs to make them trace-relative.
 --
--- TARGET_PROCESS is substituted at runtime by run-tp.ts.
+-- Runtime parameters are injected once into the _argent_args view below and
+-- referenced by name in the body, so no bare substitution tokens are scattered
+-- through the query. run-tp.ts fills them in:
+--   target_process — package / cmdline.
+--   burst_gap_ns   — burst gap threshold in ns (BURST_GAP_MS × 1e6 from
+--                    aggregate.ts), so the SQL and iOS-JS burst paths share one
+--                    constant.
 --
 -- The total_samples column is repeated on every output row so the JS side
 -- can compute weight % without a second round-trip.
+
+DROP VIEW IF EXISTS _argent_args;
+CREATE PERFETTO VIEW _argent_args AS
+SELECT
+  '{{TARGET_PROCESS}}' AS target_process,
+  {{BURST_GAP_NS}}     AS burst_gap_ns;
 
 DROP VIEW IF EXISTS argent_app_total_samples;
 CREATE PERFETTO VIEW argent_app_total_samples AS
@@ -24,7 +36,7 @@ SELECT COUNT(*) AS total_samples
 FROM perf_sample ps
 JOIN thread t USING (utid)
 JOIN process p USING (upid)
-WHERE p.name = 'TARGET_PROCESS';
+WHERE p.name = (SELECT target_process FROM _argent_args);
 
 WITH samples AS (
   SELECT
@@ -37,16 +49,16 @@ WITH samples AS (
   JOIN process p USING (upid)
   LEFT JOIN stack_profile_callsite spc ON ps.callsite_id = spc.id
   LEFT JOIN stack_profile_frame    spf ON spc.frame_id   = spf.id
-  WHERE p.name = 'TARGET_PROCESS'
+  WHERE p.name = (SELECT target_process FROM _argent_args)
 ),
--- Flag each sample that opens a new burst (>500ms = 500000000ns since the
--- previous sample of the same thread+function). LAG over the first sample is
+-- Flag each sample whose gap to the previous sample of the same
+-- thread+function exceeds the burst threshold. LAG over the first sample is
 -- NULL, so its CASE yields 0 — the opening sample never counts as a gap.
 flagged AS (
   SELECT
     thread_name, is_main_thread, leaf_function, ts_ns,
     CASE
-      WHEN ts_ns - LAG(ts_ns) OVER w > 500000000 THEN 1
+      WHEN ts_ns - LAG(ts_ns) OVER w > (SELECT burst_gap_ns FROM _argent_args) THEN 1
       ELSE 0
     END AS is_new_burst
   FROM samples

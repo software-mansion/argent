@@ -21,7 +21,10 @@ vi.mock("@argent/native-devtools-android", () => {
       path.resolve(__dirname, "../../../native-devtools-android/queries"),
   };
 });
-vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({
+vi.mock("../../src/utils/android-profiler/pipeline/run-tp", async (importActual) => ({
+  // Keep the real renderSqlTemplate so the batched hang-fold path renders the
+  // on-disk template; only the trace_processor_shell calls are stubbed.
+  ...(await importActual<typeof import("../../src/utils/android-profiler/pipeline/run-tp")>()),
   runTpQuery: vi.fn(async (opts: { query: string; substitutions: Record<string, string> }) => {
     const next = queryResponses.shift();
     if (!next) throw new Error(`runTpQuery called for "${opts.query}" with no queued response`);

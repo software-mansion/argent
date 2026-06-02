@@ -6,6 +6,7 @@ import type {
 } from "../../profiler-shared/types";
 import {
   aggregateCpuHotspots,
+  BURST_GAP_MS,
   type AggregatorInputRow,
 } from "../../profiler-shared/aggregate";
 import { runTpQuery } from "./run-tp";
@@ -25,6 +26,11 @@ import type {
 // Sampling at 100 Hz (see argent.tracecfg.pbtxt). Each sample represents
 // ~10ms of CPU time on the sampled thread. weightNs is sample_count × this.
 const SAMPLE_PERIOD_NS = 10_000_000;
+
+// Burst-gap threshold for cpu-hotspots.sql, injected as the BURST_GAP_NS token.
+// Derived from BURST_GAP_MS so the SQL-side (Android) and JS-side (iOS) burst
+// thresholds share one source of truth.
+const BURST_GAP_NS = String(BURST_GAP_MS * 1_000_000);
 
 /**
  * Query the trace's monotonic-since-boot start time so we can normalise
@@ -91,7 +97,7 @@ export async function runAndroidProfilerPipeline(
     runTpQuery<AndroidCpuHotspotRow>({
       tracePath,
       query: "cpu-hotspots.sql",
-      substitutions: { TARGET_PROCESS: target },
+      substitutions: { TARGET_PROCESS: target, BURST_GAP_NS },
     }),
     runTpQuery<AndroidJankRow>({
       tracePath,

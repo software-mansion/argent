@@ -3,7 +3,12 @@
 -- Powers profiler-stack-query mode=thread_breakdown for Android sessions.
 -- Returns sample_count + share of total per thread.
 --
--- TARGET_PROCESS is substituted at runtime by run-tp.ts.
+-- The target process is injected once into the _argent_args view (by
+-- run-tp.ts) and referenced by name below, instead of as a bare token.
+
+DROP VIEW IF EXISTS _argent_args;
+CREATE PERFETTO VIEW _argent_args AS
+SELECT '{{TARGET_PROCESS}}' AS target_process;
 
 WITH per_thread AS (
   SELECT
@@ -13,7 +18,7 @@ WITH per_thread AS (
   FROM perf_sample ps
   JOIN thread t USING (utid)
   JOIN process p USING (upid)
-  WHERE p.name = 'TARGET_PROCESS'
+  WHERE p.name = (SELECT target_process FROM _argent_args)
   GROUP BY t.name, t.is_main_thread
 ),
 total AS (

@@ -19,7 +19,10 @@ const inlineCalls: Array<{ sql: string; tracePath: string }> = [];
 let inlineResponse: unknown[] = [];
 let inlineError: Error | null = null;
 
-vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({
+vi.mock("../../src/utils/android-profiler/pipeline/run-tp", async (importActual) => ({
+  // Keep the real renderSqlTemplate — the batched module renders the on-disk
+  // template through it, and these tests assert on that rendered output.
+  ...(await importActual<typeof import("../../src/utils/android-profiler/pipeline/run-tp")>()),
   runTpInline: vi.fn(async (opts: { sql: string; tracePath: string }) => {
     inlineCalls.push({ sql: opts.sql, tracePath: opts.tracePath });
     if (inlineError) throw inlineError;
@@ -69,8 +72,10 @@ describe("runBatchedHangFolds", () => {
     // Two VIEWs feed the final UNION ALL — state breakdown + GC overlap
     expect(sql).toContain("CREATE PERFETTO VIEW argent_hang_state");
     expect(sql).toContain("CREATE PERFETTO VIEW argent_hang_gc");
-    // TARGET_PROCESS token was substituted with the validated target.
-    expect(sql).toContain("p.name = 'com.example.app'");
+    // TARGET_PROCESS token was substituted with the validated target — it now
+    // lands once in the _argent_args view, and the body references it by name.
+    expect(sql).toContain("'com.example.app' AS target_process");
+    expect(sql).toContain("p.name = (SELECT target_process FROM _argent_args)");
     // The HANG_WINDOWS_VALUES placeholder must be fully replaced.
     expect(sql).not.toContain("HANG_WINDOWS_VALUES");
     expect(sql).not.toContain("TARGET_PROCESS");

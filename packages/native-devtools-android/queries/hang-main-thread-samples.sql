@@ -4,10 +4,18 @@
 -- perf_sample on the main thread inside the hang window, with the full
 -- callstack text unwound via experimental_slice_callstack.
 --
--- Parameters substituted by run-tp.ts:
---   TARGET_PROCESS  — package / cmdline
---   HANG_START_NS   — hang window start, ns
---   HANG_END_NS     — hang window end, ns
+-- Parameters are injected once into the _argent_args view (by run-tp.ts) and
+-- referenced by name in the body, instead of as bare tokens:
+--   target_process — package / cmdline
+--   hang_start_ns  — hang window start, ns
+--   hang_end_ns    — hang window end, ns
+
+DROP VIEW IF EXISTS _argent_args;
+CREATE PERFETTO VIEW _argent_args AS
+SELECT
+  '{{TARGET_PROCESS}}' AS target_process,
+  {{HANG_START_NS}}    AS hang_start_ns,
+  {{HANG_END_NS}}      AS hang_end_ns;
 
 SELECT
   ps.ts AS ts_ns,
@@ -22,7 +30,8 @@ JOIN thread t USING (utid)
 JOIN process p USING (upid)
 LEFT JOIN stack_profile_callsite spc ON ps.callsite_id = spc.id
 LEFT JOIN stack_profile_frame    spf ON spc.frame_id   = spf.id
-WHERE p.name = 'TARGET_PROCESS'
+WHERE p.name = (SELECT target_process FROM _argent_args)
   AND t.is_main_thread
-  AND ps.ts BETWEEN HANG_START_NS AND HANG_END_NS
+  AND ps.ts BETWEEN (SELECT hang_start_ns FROM _argent_args)
+                AND (SELECT hang_end_ns FROM _argent_args)
 ORDER BY ts_ns;

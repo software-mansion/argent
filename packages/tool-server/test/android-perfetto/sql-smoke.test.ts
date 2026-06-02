@@ -8,8 +8,12 @@ import {
   traceProcessorShellPath,
   traceProcessorQueriesDir,
 } from "@argent/native-devtools-android";
-import { runTpInline } from "../../src/utils/android-profiler/pipeline/run-tp";
+import { runTpInline, renderSqlTemplate } from "../../src/utils/android-profiler/pipeline/run-tp";
 import { runBatchedHangFolds } from "../../src/utils/android-profiler/pipeline/hang-folds-batched";
+import { BURST_GAP_MS } from "../../src/utils/profiler-shared/aggregate";
+
+// cpu-hotspots.sql needs the burst-gap threshold injected, same as the pipeline.
+const BURST_GAP_NS = String(BURST_GAP_MS * 1_000_000);
 
 /**
  * Real-SQL smoke test — runs the actual `queries/*.sql` against a real
@@ -35,12 +39,10 @@ const FIXTURE =
 const fixtureExists = fsSync.existsSync(FIXTURE);
 const binaryAvailable = traceProcessorShellAvailable();
 
-/** Render a query template the same way runTpQuery does: load + replaceAll. */
+/** Render a query template the same way runTpQuery does (shared renderer). */
 async function render(file: string, subs: Record<string, string>): Promise<string> {
   const template = await fs.readFile(path.join(traceProcessorQueriesDir(), file), "utf8");
-  let sql = template;
-  for (const [token, value] of Object.entries(subs)) sql = sql.replaceAll(token, value);
-  return sql;
+  return renderSqlTemplate(template, subs);
 }
 
 /**
@@ -115,7 +117,7 @@ describe.skipIf(!binaryAvailable || !fixtureExists)("PerfettoSQL smoke (real tra
     // 3. A real (thread, leaf_function) for the function-callers drill-down.
     const hotspots = await runTpInline<{ thread_name: string; leaf_function: string | null }>({
       tracePath: FIXTURE,
-      sql: await render("cpu-hotspots.sql", { TARGET_PROCESS: target }),
+      sql: await render("cpu-hotspots.sql", { TARGET_PROCESS: target, BURST_GAP_NS }),
     });
     const withFn = hotspots.find((h) => h.leaf_function);
     drillThread = withFn?.thread_name ?? "main";
@@ -136,7 +138,7 @@ describe.skipIf(!binaryAvailable || !fixtureExists)("PerfettoSQL smoke (real tra
           "total_samples",
           "burst_windows",
         ],
-        subs: () => ({ TARGET_PROCESS: target }),
+        subs: () => ({ TARGET_PROCESS: target, BURST_GAP_NS }),
       },
       {
         file: "ui-hangs.sql",

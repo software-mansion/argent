@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import { traceProcessorQueriesDir } from "@argent/native-devtools-android";
-import { runTpInline } from "./run-tp";
+import { runTpInline, renderSqlTemplate } from "./run-tp";
 import type { AndroidHangStateRow, AndroidHangGcRow } from "../types";
 
 /**
@@ -69,13 +69,15 @@ export async function runBatchedHangFolds(
 
   // The SQL template is the single source of truth in queries/. We only build
   // the validated VALUES tuples + the (already-validated) target here and
-  // substitute them into the loaded template — no SQL string literals live in
-  // this file. Tuples are bare digits/parens; target is identifier-shaped.
+  // resolve the template's `{{...}}` placeholders via the shared renderer — no
+  // SQL string literals live in this file. Tuples are bare digits/parens;
+  // target is identifier-shaped.
   const templatePath = path.join(traceProcessorQueriesDir(), "hang-folds-batched.sql");
   const template = await fs.readFile(templatePath, "utf8");
-  const sql = template
-    .replaceAll("HANG_WINDOWS_VALUES", valuesTuples.join(",\n  "))
-    .replaceAll("TARGET_PROCESS", opts.target);
+  const sql = renderSqlTemplate(template, {
+    HANG_WINDOWS_VALUES: valuesTuples.join(",\n  "),
+    TARGET_PROCESS: opts.target,
+  });
 
   interface BatchRow {
     hang_index: number;
