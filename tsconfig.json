@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/registry" },
+    { "path": "packages/update-core" },
     { "path": "packages/native-devtools-ios" },
     { "path": "packages/native-devtools-android" },
     { "path": "packages/tool-server" },

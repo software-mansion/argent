@@ -1,8 +1,8 @@
 {
   "private": true,
   "name": "@argent/cli",
-  "version": "0.8.1",
-  "description": "Shell CLI commands for argent: tools, run, server",
+  "version": "0.9.0",
+  "description": "Shell CLI commands for argent: tools, run, server, enable, disable, flags",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

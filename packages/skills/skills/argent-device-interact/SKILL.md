@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots.
+description: Interact with an iOS simulator or Android emulator using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -184,6 +184,7 @@ Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 Use the explicit `screenshot` tool only when:
 
 - You need the initial screen state before any action.
+- You are about to edit visible UI and need a baseline capture before making changes.
 - The auto-attached screenshot shows a transitional or loading frame.
 - You require extra context.
 - You want to check state after a delay (e.g. waiting for a network response).
@@ -198,7 +199,15 @@ When using `screenshot` for permission or native modal navigation:
 
 Optional rotation parameter: `{ "udid": "<UDID>", "rotation": "LandscapeLeft" }` — rotates the capture without changing simulator orientation.
 
-Screenshots are downscaled by default (30% of original resolution) to reduce context size. `scale` accepts values from 0.01 to 1.0. If UI elements are hard to read or you need to inspect fine detail, pass `scale: 1.0` to get full resolution: `{ "udid": "<UDID>", "scale": 1.0 }`.
+Screenshots are downscaled by default (30% of original resolution) to reduce context size. Use the normal downscaled screenshot for UI context and state checks. `scale` accepts values from 0.01 to 1.0, but do not use `scale: 1.0` as a general readability or tapping aid.
+
+Use full-resolution screenshots only when saving baseline/current PNG files for comparison. In that case, suppress the image block so the full-size PNG is not loaded into agent context:
+
+```json
+{ "udid": "<UDID>", "scale": 1.0, "includeImageInContext": false }
+```
+
+For visual regression checks, before/after screenshot comparisons, and detailed `screenshot-diff` parameter guidance, use the `argent-screenshot-diff` skill. Keep this skill focused on device interaction mechanics and screenshot capture.
 
 ### Troubleshooting
 
