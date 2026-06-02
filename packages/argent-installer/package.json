@@ -1,17 +1,19 @@
 {
   "private": true,
   "name": "@argent/installer",
-  "version": "0.7.1",
+  "version": "0.9.0",
   "description": "Workspace setup logic for argent: init, update, uninstall",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "@argent/tools-client": "file:../argent-tools-client",
+    "@argent/update-core": "file:../update-core",
     "@clack/prompts": "^1.4.0",
     "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",

@@ -13,8 +13,12 @@ function elementLineCount(description: string): number {
   return description.split("\n").filter((l) => /^ {2}AX/.test(l)).length;
 }
 
-function makeAXServiceApi(response: AXDescribeResponse): AXServiceApi {
+function makeAXServiceApi(
+  response: AXDescribeResponse,
+  options?: { degraded?: boolean }
+): AXServiceApi {
   return {
+    degraded: options?.degraded ?? false,
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
     ping: async () => true,
@@ -31,6 +35,7 @@ function makeNativeDevtoolsApi(options: {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
+    getInitFailure: () => null,
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,
     listConnectedBundleIds: () => [...connected],
@@ -255,13 +260,14 @@ describe("describe tool", () => {
     expect(result.should_restart).toBeUndefined();
   });
 
-  it("throws when ax-service is unavailable", async () => {
+  it("returns degraded result with hint when ax-service is unavailable", async () => {
     const registry = makeMockRegistry({});
     const tool = createDescribeTool(registry);
 
-    await expect(
-      tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" })
-    ).rejects.toThrow("ax-service not available");
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.source).toBe("ax-service");
+    expect(result.hint).toMatch(/boot-device/);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("returns multiple elements with correct roles", async () => {
@@ -322,6 +328,51 @@ describe("describe tool", () => {
       "AXService:BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
       { device: { id: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", platform: "ios", kind: "simulator" } }
     );
+  });
+
+  it("includes hint when ax-service is degraded (sim booted outside argent)", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+            traits: ["button"],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.source).toBe("ax-service");
+    expect(result.hint).toMatch(/boot-device/);
+    expect(result.hint).toMatch(/system dialogs/i);
+  });
+
+  it("omits hint when ax-service is not degraded", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "General",
+          frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+          traits: ["button"],
+        },
+      ],
+    });
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.hint).toBeUndefined();
   });
 
   it("returns empty AX result when native queryViewHierarchy returns an error", async () => {

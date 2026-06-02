@@ -8,7 +8,11 @@ import { flowStartRecordingTool } from "../../src/tools/flows/flow-start-recordi
 import { flowInsertEchoTool } from "../../src/tools/flows/flow-insert-echo";
 import { flowFinishRecordingTool } from "../../src/tools/flows/flow-finish-recording";
 import { createFlowAddStepTool } from "../../src/tools/flows/flow-add-step";
-import { createRunFlowTool } from "../../src/tools/flows/flow-run";
+import {
+  createRunFlowTool,
+  type FlowRunResult,
+  type FlowPrerequisiteNotice,
+} from "../../src/tools/flows/flow-run";
 import { flowReadPrerequisiteTool } from "../../src/tools/flows/flow-read-prerequisite";
 import {
   clearActiveFlow,
@@ -19,6 +23,14 @@ import {
 } from "../../src/tools/flows/flow-utils";
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+function assertFlowRunResult(
+  r: FlowRunResult | FlowPrerequisiteNotice
+): asserts r is FlowRunResult {
+  if (!("steps" in r)) {
+    throw new Error(`expected FlowRunResult, got prerequisite notice: ${r.notice}`);
+  }
+}
 
 let tmpDir: string;
 
@@ -434,6 +446,7 @@ describe("flow-execute", () => {
       {},
       { name: "run-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
+    assertFlowRunResult(result);
 
     expect(result.flow).toBe("run-test");
     expect(result.executionPrerequisite).toBe(PREREQ);
@@ -452,12 +465,14 @@ describe("flow-execute", () => {
       tool: "tap",
       result: { tapped: true },
       outputHint: undefined,
+      args: { x: 0.5 },
     });
     expect(result.steps[3]).toEqual({
       kind: "tool",
       tool: "screenshot",
       result: { url: "http://img", path: "/tmp/img.png" },
       outputHint: "image",
+      args: {},
     });
 
     expect(registry.invokeTool).toHaveBeenCalledTimes(2);
@@ -482,6 +497,7 @@ describe("flow-execute", () => {
     await fs.writeFile(path.join(dir, "error-test.yaml"), content);
 
     const result = await runFlow.execute({}, { name: "error-test", project_root: tmpDir });
+    assertFlowRunResult(result);
 
     expect(result.steps).toHaveLength(1);
     expect(result.steps[0]).toMatchObject({
@@ -521,6 +537,7 @@ describe("flow-execute", () => {
       {},
       { name: "hint-test", project_root: tmpDir, prerequisiteAcknowledged: true }
     );
+    assertFlowRunResult(result);
 
     expect(result.steps[0]).toMatchObject({
       kind: "tool",
@@ -733,16 +750,21 @@ describe("flow-execute", () => {
     const runFlow = createRunFlowTool(registry);
     const dir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(dir, { recursive: true });
+    // Small delay: the step's configured delayMs is honored before the tool
+    // runs. The magnitude is irrelevant to the regression guard — without the
+    // delay this completes in ~0ms, so a 25ms wait still proves the behavior
+    // while keeping the test off a real ~300ms sleep.
+    const delayMs = 25;
     await fs.writeFile(
       path.join(dir, "pre-delay.yaml"),
       serializeFlow({
         executionPrerequisite: "",
-        steps: [{ kind: "tool", name: "tap", args: { x: 0.5 }, delayMs: 300 }],
+        steps: [{ kind: "tool", name: "tap", args: { x: 0.5 }, delayMs }],
       })
     );
     const start = Date.now();
     await runFlow.execute({}, { name: "pre-delay", project_root: tmpDir });
-    expect(Date.now() - start).toBeGreaterThanOrEqual(290);
+    expect(Date.now() - start).toBeGreaterThanOrEqual(delayMs - 5);
   });
 
   it("does not interfere with active recording state", async () => {

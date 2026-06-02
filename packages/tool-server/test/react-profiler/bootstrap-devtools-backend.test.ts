@@ -179,7 +179,7 @@ describe("BOOTSTRAP_DEVTOOLS_BACKEND_SCRIPT", () => {
       [1, {}],
       [2, {}],
     ]);
-    const connect = vi.fn(() => {
+    const connect = vi.fn((_options?: Record<string, unknown>) => {
       // Simulate initBackend populating rendererInterfaces
       rendererInterfaces.set(1, { id: 1 });
       rendererInterfaces.set(2, { id: 2 });

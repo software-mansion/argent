@@ -6,10 +6,10 @@ import type { DeviceInfo } from "@argent/registry";
 // ─── Mocks ───────────────────────────────────────────────────────────
 //
 // We mock at the module-boundary layer so the real blueprint factory runs —
-// this is a repro of the dispatch, stdio and AX-automation behaviour, not a
-// shape check. If any of these are quietly regressed, hands-on Android
-// sessions will start failing before this test does, so the assertions below
-// are deliberately specific (argv, stdio, ensureAutomationEnabled call count).
+// this is a repro of the dispatch and stdio behaviour, not a shape check.
+// If any of these are quietly regressed, hands-on Android sessions will start
+// failing before this test does, so the assertions below are deliberately
+// specific (argv, stdio).
 
 const spawnMock = vi.fn();
 const ensureAutomationEnabledMock = vi.fn();
@@ -23,7 +23,7 @@ vi.mock("node:child_process", async () => {
 });
 
 vi.mock("../src/blueprints/ax-service", () => ({
-  ensureAutomationEnabled: ensureAutomationEnabledMock,
+  ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
 }));
 
 vi.mock("@argent/native-devtools-ios", () => ({
@@ -46,12 +46,21 @@ function makeFakeProc() {
 }
 
 /**
- * Push an `api_ready` line into stdout so readline's line event fires and the
+ * Push the readiness lines into stdout so readline's line events fire and the
  * blueprint resolves. We push on nextTick so the blueprint has time to attach
  * its listener after calling `spawn`.
+ *
+ * A real streaming simulator-server prints `stream_ready` BEFORE `api_ready`
+ * (see the comment in spawnSimulatorServerProcess). Emitting both — in that
+ * order — lets the blueprint resolve immediately. Emitting only `api_ready`
+ * (the old behavior) forced every test to wait out the full STREAM_GRACE_MS
+ * non-streaming fallback window, adding ~500ms of dead time per test. The
+ * grace-window fallback itself is covered explicitly, with fake timers, by
+ * the dedicated non-streaming test below.
  */
 function signalReady(proc: ReturnType<typeof makeFakeProc>, port: number) {
   setImmediate(() => {
+    proc.stdout.push(`stream_ready http://127.0.0.1:${port + 1}\n`);
     proc.stdout.push(`api_ready http://127.0.0.1:${port}\n`);
   });
 }
@@ -83,7 +92,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     vi.clearAllMocks();
   });
 
-  it("spawns the `ios` subcommand and warms the AX automation flag for an iOS device", async () => {
+  it("spawns the `ios` subcommand for an iOS device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
 
@@ -106,9 +115,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     // as soon as the tool-server pipes /dev/null.
     expect(opts?.stdio).toEqual(["pipe", "pipe", "pipe"]);
 
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledTimes(1);
-    expect(ensureAutomationEnabledMock).toHaveBeenCalledWith(udid);
-
     expect(instance.api.apiUrl).toBe("http://127.0.0.1:55555");
     expect(typeof instance.api.pressKey).toBe("function");
 
@@ -116,7 +122,7 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(fakeProc.kill).toHaveBeenCalledTimes(1);
   });
 
-  it("spawns the `android` subcommand and skips the iOS AX automation flag for an Android device", async () => {
+  it("spawns the `android` subcommand for an Android device", async () => {
     const fakeProc = makeFakeProc();
     spawnMock.mockReturnValue(fakeProc);
 
@@ -130,9 +136,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(spawnMock.mock.calls[0]![1]).toEqual(["android", "--id", serial]);
-
-    // No xcrun AX flag on Android — it is iOS-only and would error out.
-    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
   it("trusts the supplied DeviceInfo and does not reclassify the id", async () => {
@@ -152,7 +155,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await factoryPromise;
 
     expect(spawnMock.mock.calls[0]![1]![0]).toBe("android");
-    expect(ensureAutomationEnabledMock).not.toHaveBeenCalled();
   });
 
   it("pressKey writes the shared stdin command protocol regardless of platform", async () => {
@@ -172,23 +174,6 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     expect(fakeProc.stdin.write).toHaveBeenNthCalledWith(2, "key Up 41\n");
   });
 
-  it("swallows an iOS AX-automation failure — the server must still start", async () => {
-    // ensureAutomationEnabled is best-effort: if xcrun isn't on PATH, or the
-    // simulator is pre-booted with the flag set already, we must continue.
-    ensureAutomationEnabledMock.mockRejectedValueOnce(new Error("xcrun missing"));
-
-    const fakeProc = makeFakeProc();
-    spawnMock.mockReturnValue(fakeProc);
-    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
-
-    const device = iosDevice("22222222-3333-4444-5555-666666666666");
-    const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
-    signalReady(fakeProc, 55559);
-    const instance = await factoryPromise;
-
-    expect(instance.api.apiUrl).toBe("http://127.0.0.1:55559");
-  });
-
   it("rejects when the caller forgets to pass DeviceInfo via options", async () => {
     // Defensive: without a device, the factory has no way to decide ios vs
     // android (and that's intentional — the SOT now lives upstream). Surface a
@@ -199,5 +184,44 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await expect(simulatorServerBlueprint.factory({}, stub)).rejects.toThrow(
       /requires a resolved DeviceInfo via options\.device/
     );
+  });
+
+  it("falls back to the STREAM_GRACE_MS resolve when only api_ready arrives (non-streaming build)", async () => {
+    // Non-streaming / older simulator-server builds never print `stream_ready`.
+    // The blueprint must still resolve, after a bounded grace window, with an
+    // empty streamUrl. Fake timers prove the timing deterministically instead
+    // of burning ~500ms of real wall time (this is exactly the cost the other
+    // tests used to pay implicitly before signalReady emitted stream_ready).
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    vi.useFakeTimers();
+    try {
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+
+      const device = iosDevice("99999999-8888-7777-6666-555555555555");
+      const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+
+      let resolved = false;
+      void factoryPromise.then(() => {
+        resolved = true;
+      });
+
+      // Only api_ready — no stream_ready ever arrives.
+      fakeProc.stdout.push("api_ready http://127.0.0.1:60000\n");
+
+      // Settle the readline pipeline so the blueprint arms its grace timer,
+      // then confirm it is still waiting well inside the grace window.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(resolved).toBe(false);
+
+      // Crossing STREAM_GRACE_MS resolves it — with no stream URL.
+      await vi.advanceTimersByTimeAsync(600);
+      const instance = await factoryPromise;
+      expect(resolved).toBe(true);
+      expect(instance.api.apiUrl).toBe("http://127.0.0.1:60000");
+      expect(instance.api.streamUrl).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
