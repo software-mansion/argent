@@ -8,6 +8,7 @@ import {
   ensureToolsServer,
   getResolvedToolsUrl,
   isRemoteRouted,
+  getDeviceIdFromArgs,
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -23,7 +24,6 @@ import {
   shouldAutoScreenshot,
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
-import { getDeviceIdFromArgs } from "./artifacts.js";
 import { toMcpTool } from "./tool-mapping.js";
 
 const MAX_RETRIES = 4;

@@ -4,7 +4,7 @@
  * Extracted so it can be tested independently of the MCP server wiring.
  */
 
-import { materializeArtifacts, type MaterializeContext } from "./artifacts.js";
+import { materializeArtifacts, type MaterializeContext } from "@argent/tools-client";
 
 export type ContentBlock =
   | { type: "text"; text: string }

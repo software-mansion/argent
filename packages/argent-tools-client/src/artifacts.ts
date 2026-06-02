@@ -1,11 +1,13 @@
 /**
  * Artifact materializer — the client side of the remote file boundary.
  *
+ * Shared by both consumers of the tool-server (the MCP server and the CLI).
  * Tool results from the (possibly remote) tool-server carry {@link ArtifactHandle}
- * markers in place of host paths. This module deep-walks a result, downloads
- * each artifact over the remote-aware `TOOLS_URL` (`GET /artifacts/:id`), writes
- * it into a structured cache under the OS temp dir, and rewrites the marker to
- * the **local** path the agent can actually open.
+ * markers in place of host paths. This module deep-walks a result, resolves each
+ * handle to a real **local** path — reading it in place when the file is already
+ * on this host, or downloading it over the remote-aware tools URL
+ * (`GET /artifacts/:id`) into a cache under the OS temp dir — and rewrites the
+ * marker to that path so all downstream rendering is location-agnostic.
  *
  * The root lives in `tmpdir()` so materialized artifacts are disposable scratch
  * the OS reclaims — matching how the sim-server (its own TempDir) and the
@@ -19,8 +21,8 @@
  *
  * - project  — basename(cwd) + short hash of the full path. Readable yet
  *              collision-safe across multiple checkouts of the same repo.
- * - session  — minted once per argent-mcp process, so re-runs don't pile into
- *              one bucket and old sessions are trivially GC-able.
+ * - session  — minted once per client process, so re-runs don't pile into one
+ *              bucket and old sessions are trivially GC-able.
  * - device   — udid / serial when the artifact is device-scoped; omitted
  *              otherwise.
  */
@@ -147,8 +149,9 @@ async function resolveLocalFile(handle: ArtifactHandle): Promise<string | null> 
  * it is used in place with no copy; otherwise the bytes are downloaded over
  * `/artifacts/:id` into a temp cache. Either way the handle is replaced by a
  * real local path, so all downstream rendering is location-agnostic. A handle
- * that resolves to neither is rewritten to `null` so the agent sees a
- * missing-file signal rather than a dangling reference.
+ * that resolves to neither is rewritten to `null` so the caller sees a
+ * missing-file signal rather than a dangling reference. Results with no handles
+ * pass through untouched (no fetch, no temp dir created).
  */
 export async function materializeArtifacts(
   result: unknown,
