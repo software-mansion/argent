@@ -223,6 +223,12 @@ jobs:
       - name: Screenshot returns real pixels (not all-zero framebuffer)
         run: |
           set -e
+          # After boot_completed=1 the SurfaceFlinger compositor needs a few
+          # more seconds to paint the lockscreen UI. On fast cold boots (~40s)
+          # screencap can still return an all-zero framebuffer if taken
+          # immediately. 15s is enough headroom without meaningfully extending
+          # the overall job time.
+          sleep 15
           curl -sS -m 60 -X POST http://127.0.0.1:3033/tools/screenshot \
             -H 'Content-Type: application/json' \
             -d '{"udid":"emulator-5554"}' > /tmp/shot.json
