@@ -24,6 +24,7 @@ import {
   waitForBootCompleted,
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
+import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 
 const execFileAsync = promisify(execFile);
@@ -659,6 +660,10 @@ async function bootAndroidImpl(params: {
   // resolver, which honors `$ANDROID_HOME` in addition to PATH.
   await ensureDep("adb");
   await ensureDep("emulator");
+
+  for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {
+    console.warn(`[boot-device:linux] ${msg}`);
+  }
   const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
