@@ -97,6 +97,11 @@
         max-height: 100%;
         display: flex;
       }
+      /* While a card/chip is being dragged (#root.drag-muting, set by vpTick),
+         the stream is inert so the drag never taps the device. */
+      .drag-muting .stage {
+        pointer-events: none;
+      }
       .stage img {
         max-width: 100%;
         max-height: var(--stream-max-h);
@@ -1766,6 +1771,7 @@
       // the agent's await_user_selection via "Complete selection".
       const mainEl = document.getElementById("main");
       const cardsEl = document.getElementById("cards");
+      const rootEl = document.getElementById("root");
       const connEl = document.getElementById("connectors");
       const popEl = document.getElementById("comment-pop");
       const annPop = document.getElementById("ann-pop");
@@ -1796,6 +1802,7 @@
         treeAt: 0,
         cards: new Map(), // id -> { el, sig, target, anim, animVel, home, pos, vel, pinned, gone, spawned, dragging }
         thumbFrames: {}, // id -> frozen frame for the static preview crop
+        anchors: {}, // id -> last-matched element centre (disambiguates shared labels)
         conn: new Map(), // id -> { path, dot } reused SVG nodes
         pinEls: new Map(), // annId -> reused pin element
         annId: 0,
@@ -1880,7 +1887,7 @@
           .replace(/[\s,]+/g, " ")
           .trim();
       }
-      function vpMatchNode(node, match) {
+      function vpMatchNode(node, match, anchor) {
         const needle = vpNormLabel(match.value);
         const out = [];
         const walk = (n) => {
@@ -1899,8 +1906,17 @@
           if (Array.isArray(n.children)) n.children.forEach(walk);
         };
         walk(node);
+        // Disambiguate elements that share a label (e.g. a "Favourites" tab AND
+        // a "Favourites" header): when the proposal carries an `anchor` — the
+        // matched element's frame centre captured at propose time — pick the
+        // candidate nearest it, and ONLY if it's within range. So when the real
+        // target leaves the screen the bubble goes off-screen instead of
+        // snapping onto a different element that merely shares the label.
+        // Without an anchor (older proposals / no frame) fall back to the
+        // smallest sane box.
+        const MAX_ANCHOR_DIST = 0.4; // normalized; e.g. header↔tab are far apart
         let best = null,
-          bestArea = Infinity;
+          bestScore = Infinity;
         for (const n of out) {
           const f = n.frame;
           if (!f || f.width <= 0 || f.height <= 0) continue;
@@ -1912,8 +1928,16 @@
           // resolves to a container root doesn't paint a screen-spanning
           // bubble. Same filter `vpNodeAtPoint` uses for the inspector pick.
           if (a > THEME.spotMaxFrameArea) continue;
-          if (a < bestArea) {
-            bestArea = a;
+          let score;
+          if (anchor) {
+            const d = Math.hypot(cx - anchor.x, cy - anchor.y);
+            if (d > MAX_ANCHOR_DIST) continue; // too far to be the same instance
+            score = d;
+          } else {
+            score = a;
+          }
+          if (score < bestScore) {
+            bestScore = score;
             best = n;
           }
         }
@@ -2012,6 +2036,7 @@
                 vp.comments = {};
                 vp.annotations = [];
                 vp.thumbFrames = {};
+                vp.anchors = {};
                 if (globalCommentEl) globalCommentEl.value = "";
                 if (vp.justCompletedRound === snap.round) {
                   /* keep our own success note */
@@ -3532,7 +3557,25 @@
       // and pin tracking are handled every animation frame by vpTick().
       function vpRender() {
         for (const p of vp.proposals) {
-          p._node = vp.tree ? vpMatchNode(vp.tree, p.match) : null;
+          // Anchor the match to where the element was last seen — seeded from
+          // the propose-time frame, then updated to the matched element each
+          // frame. This disambiguates a label shared by two elements, follows
+          // the target as it scrolls, and when the target leaves the screen the
+          // stale anchor keeps the bubble from snapping onto the other one.
+          let anchor = vp.anchors[p.id];
+          if (!anchor) {
+            const av = p.variants && p.variants.find((v) => v.frame);
+            if (av)
+              anchor = vp.anchors[p.id] = {
+                x: av.frame.x + av.frame.width / 2,
+                y: av.frame.y + av.frame.height / 2,
+              };
+          }
+          p._node = vp.tree ? vpMatchNode(vp.tree, p.match, anchor) : null;
+          if (p._node) {
+            const f0 = p._node.frame;
+            vp.anchors[p.id] = { x: f0.x + f0.width / 2, y: f0.y + f0.height / 2 };
+          }
           if (p._node && !vp.thumbFrames[p.id]) {
             const f = p._node.frame;
             vp.thumbFrames[p.id] = { x: f.x, y: f.y, width: f.width, height: f.height };
@@ -3577,6 +3620,12 @@
       let vpAcc = 0;
       function vpTick(now) {
         requestAnimationFrame(vpTick);
+        // Hard-mute the device the entire time a card/chip is being dragged so a
+        // drag that crosses or releases over the phone can't tap it. CSS
+        // pointer-events:none is bulletproof (no event reaches the stream at
+        // all) where the per-handler guard could still race. Held one frame past
+        // release, which also swallows the release tap.
+        rootEl.classList.toggle("drag-muting", vp.cardDragging || vp.dragging);
         const t = now || performance.now();
         if (!vp.proposals.length && !vp.inspect && !vp.annotations.length) {
           vpLastT = t;
@@ -3727,6 +3776,7 @@
       function vpResetOverlay() {
         vp.cards.clear();
         vp.thumbFrames = {};
+        vp.anchors = {};
         vp.conn.clear();
         vp.pinEls.clear();
         if (cardsEl) cardsEl.innerHTML = "";
@@ -3819,7 +3869,39 @@
         } catch {}
         if (data) vpStage(data.elementId, data.variantId);
       });
-      window.addEventListener("resize", () => vpRender());
+      // Keep floating cards in their RELATIVE place across a window resize.
+      // Their left/top is absolute px, so without this they'd stay pinned to the
+      // left/top edge as the window grows; scale each card's live + home
+      // position by the size change so they track the resize immediately (the
+      // spring then settles them to the recomputed homes).
+      let lastMainSize = null;
+      window.addEventListener("resize", () => {
+        const mr = mainEl.getBoundingClientRect();
+        if (
+          lastMainSize &&
+          lastMainSize.w > 0 &&
+          lastMainSize.h > 0 &&
+          mr.width > 0 &&
+          mr.height > 0
+        ) {
+          const sx = mr.width / lastMainSize.w;
+          const sy = mr.height / lastMainSize.h;
+          if (sx !== 1 || sy !== 1) {
+            for (const rec of vp.cards.values()) {
+              if (rec.pos) {
+                rec.pos.x *= sx;
+                rec.pos.y *= sy;
+              }
+              if (rec.home) {
+                rec.home.x *= sx;
+                rec.home.y *= sy;
+              }
+            }
+          }
+        }
+        lastMainSize = { w: mr.width, h: mr.height };
+        vpRender();
+      });
       setInterval(pollVariants, THEME.pollMs);
       pollVariants();
       pollDescribe(); // arms the single fast describe loop
