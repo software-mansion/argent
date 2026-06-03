@@ -58,8 +58,10 @@ const ESM_REQUIRE_BANNER = {
 // only lives under darwin/.
 const BIN_SRC_ROOT = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
 const AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/ax-service");
+const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
+const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
 const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux"];
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
@@ -203,6 +205,17 @@ if (fs.existsSync(AX_BIN_SRC)) {
   console.log(`✓ Copied ax-service binary → ${path.relative(process.cwd(), AX_BIN_DEST)}`);
 } else {
   console.warn(`⚠ ax-service binary not found at ${AX_BIN_SRC} — skipping copy`);
+}
+
+// Copy ax-service TCP variant (darwin/tcp/ax-service). Best-effort: only
+// present when the TCP transport was built; skip without error if absent.
+if (fs.existsSync(AX_TCP_BIN_SRC)) {
+  fs.mkdirSync(path.dirname(AX_TCP_BIN_DEST), { recursive: true });
+  fs.copyFileSync(AX_TCP_BIN_SRC, AX_TCP_BIN_DEST);
+  fs.chmodSync(AX_TCP_BIN_DEST, 0o755);
+  console.log(`✓ Copied ax-service (tcp) binary → ${path.relative(process.cwd(), AX_TCP_BIN_DEST)}`);
+} else {
+  console.warn(`⚠ ax-service (tcp) binary not found at ${AX_TCP_BIN_SRC} — skipping copy`);
 }
 
 // Copy native devtools dylibs so the packaged tool-server can inject them at runtime.

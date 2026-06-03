@@ -50,10 +50,10 @@ SRC_DIR="${SUBMODULE_DIR}/Sources/NativeDevtoolsIos"
 
 if [[ "$TRANSPORT" == "tcp" ]]; then
   DEST_DIR="${ROOT_DIR}/dylibs/tcp"
-  BIN_DIR="${ROOT_DIR}/bin/tcp"
+  BIN_DIR="${ROOT_DIR}/bin/darwin/tcp"
 else
   DEST_DIR="${ROOT_DIR}/dylibs"
-  BIN_DIR="${ROOT_DIR}/bin"
+  BIN_DIR="${ROOT_DIR}/bin/darwin"
 fi
 
 # Verify the submodule is initialised before trying to build.

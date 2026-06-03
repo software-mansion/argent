@@ -74,6 +74,13 @@ describe("requireDarwin gating", () => {
     const r = await loadResolver();
     expect(() => r.axServiceBinaryPath()).toThrow(/requires a macOS host/);
   });
+
+  it("throws with a root-cause message on linux for ax-service (tcp)", async () => {
+    setPlatform("linux");
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = tmpRoot;
+    const r = await loadResolver();
+    expect(() => r.axServiceBinaryPathTcp()).toThrow(/requires a macOS host/);
+  });
 });
 
 describe("simulator-server path resolution", () => {
@@ -102,6 +109,32 @@ describe("simulator-server path resolution", () => {
     const r = await loadResolver();
     expect(() => r.simulatorServerBinaryPath()).toThrow(/simulator-server binary not found/);
     expect(() => r.simulatorServerBinaryPath()).toThrow(new RegExp(process.platform));
+  });
+});
+
+describe("ax-service path resolution", () => {
+  it("joins process.platform into the ax-service bin path", async () => {
+    if (originalPlatform !== "darwin") return;
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-platform-"));
+    const platDir = path.join(dir, "darwin");
+    fs.mkdirSync(platDir, { recursive: true });
+    const binPath = path.join(platDir, "ax-service");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.axServiceBinaryPath()).toBe(binPath);
+  });
+
+  it("joins process.platform/tcp into the ax-service TCP bin path", async () => {
+    if (originalPlatform !== "darwin") return;
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "ax-tcp-"));
+    const tcpDir = path.join(dir, "darwin", "tcp");
+    fs.mkdirSync(tcpDir, { recursive: true });
+    const binPath = path.join(tcpDir, "ax-service");
+    fs.writeFileSync(binPath, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(r.axServiceBinaryPathTcp()).toBe(binPath);
   });
 });
 

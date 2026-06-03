@@ -53,7 +53,10 @@ export const nativeDevtoolsDylibPathTcp = () =>
 function platformBinDir(): string {
   return path.join(BIN_DIR, process.platform);
 }
-const BIN_TCP_DIR = process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR ?? path.join(BIN_DIR, "tcp");
+// TCP dir: <platform>/tcp by default; ARGENT_SIMULATOR_SERVER_TCP_DIR overrides the whole path.
+function platformTcpBinDir(): string {
+  return process.env.ARGENT_SIMULATOR_SERVER_TCP_DIR ?? path.join(platformBinDir(), "tcp");
+}
 
 export function simulatorServerBinaryPath(): string {
   const p = path.join(platformBinDir(), "simulator-server");
@@ -80,9 +83,10 @@ function requireBinIn(dir: string, name: string): string {
 
 export function axServiceBinaryPath(): string {
   requireDarwin("ax-service");
-  return requireBinIn(BIN_DIR, "ax-service");
+  return requireBinIn(platformBinDir(), "ax-service");
 }
 
 export function axServiceBinaryPathTcp(): string {
-  return requireBinIn(BIN_TCP_DIR, "ax-service");
+  requireDarwin("ax-service (tcp)");
+  return requireBinIn(platformTcpBinDir(), "ax-service");
 }
