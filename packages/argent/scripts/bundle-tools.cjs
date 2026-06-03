@@ -12,6 +12,10 @@ const NATIVE_DEVTOOLS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-ios/src/index.ts"
 );
+const NATIVE_DEVTOOLS_ANDROID_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/src/index.ts"
+);
 const TOOLS_CLIENT_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/argent-tools-client/src/index.ts"
@@ -28,6 +32,7 @@ const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
 const ALIASES = {
   "@argent/registry": REGISTRY_ENTRY,
   "@argent/native-devtools-ios": NATIVE_DEVTOOLS_ENTRY,
+  "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,
   "@argent/tools-client": TOOLS_CLIENT_ENTRY,
   "@argent/installer": INSTALLER_ENTRY,
   "@argent/mcp": MCP_ENTRY,
@@ -47,11 +52,17 @@ const MAIN_FIELDS = ["module", "main"];
 const ESM_REQUIRE_BANNER = {
   js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
 };
-const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
-const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
-const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
-const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
+// Source layout mirrors what `scripts/download-simulator-server.sh` writes:
+// platform-keyed subdirectories of bin/, each containing one simulator-server
+// binary. ax-service is macOS-only (it spawns inside an iOS Simulator), so it
+// only lives under darwin/.
+const BIN_SRC_ROOT = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
+const AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/ax-service");
+const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
+const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
+const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux"];
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
@@ -70,6 +81,29 @@ const ANDROID_APK_DEST_DIR = path.resolve(__dirname, "../dist");
 for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
+}
+
+// Copy the hand-written `argent-simulator-server` dispatcher into bin/.
+// It's the file npm's `bin` field publishes; its job is to pick the right
+// per-platform binary at invocation time. Source lives in scripts/ so it
+// isn't entangled with the gitignored bundle output under bin/.
+const DISPATCHER_SRC = path.resolve(__dirname, "argent-simulator-server.cjs");
+const DISPATCHER_DEST = path.resolve(BIN_DIR, "argent-simulator-server.cjs");
+fs.copyFileSync(DISPATCHER_SRC, DISPATCHER_DEST);
+fs.chmodSync(DISPATCHER_DEST, 0o755);
+
+// The Android helper artifacts live alongside the bundles (manifest at the
+// package root, APK inside the shared dist/ folder) so they aren't covered
+// by the per-directory purge above. Removing them explicitly keeps a
+// missing-APK rebuild from leaving a stale manifest behind that would later
+// fool helperManifest() into pointing at an APK that's no longer present.
+fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
+if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
+  for (const entry of fs.readdirSync(ANDROID_APK_DEST_DIR)) {
+    if (/^argent-android-devtools-.*\.apk$/.test(entry)) {
+      fs.rmSync(path.join(ANDROID_APK_DEST_DIR, entry), { force: true });
+    }
+  }
 }
 
 // Ensure dist/ exists
@@ -140,25 +174,50 @@ esbuild.buildSync({
 
 console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
 
-// Copy simulator-server binary (downloaded via scripts/download-simulator-server.sh)
-if (fs.existsSync(BIN_SRC)) {
-  fs.copyFileSync(BIN_SRC, BIN_DEST);
-  fs.chmodSync(BIN_DEST, 0o755);
-  console.log(`✓ Copied simulator-server binary → ${path.relative(process.cwd(), BIN_DEST)}`);
-} else {
-  throw new Error(
-    `simulator-server binary not found at ${BIN_SRC}.\n` +
-      `Run: bash scripts/download-simulator-server.sh`
-  );
+// Copy simulator-server for every supported host platform that's present in
+// the staging area. Require the darwin binary only when bundling ON darwin
+// (the publish pipeline) — a Linux contributor running `npm run pack` locally
+// can't produce the macOS binary, so don't block them on its absence.
+for (const platform of SUPPORTED_HOST_PLATFORMS) {
+  const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
+  const destDir = path.join(BIN_DIR, platform);
+  const dest = path.join(destDir, "simulator-server");
+  if (fs.existsSync(src)) {
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(src, dest);
+    fs.chmodSync(dest, 0o755);
+    console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
+  } else if (platform === "darwin" && process.platform === "darwin") {
+    throw new Error(
+      `simulator-server binary not found at ${src}.\n` +
+        `Run: bash scripts/download-simulator-server.sh`
+    );
+  } else {
+    console.warn(`⚠ simulator-server (${platform}) not found at ${src} — skipping`);
+  }
 }
 
-// Copy ax-service binary
+// Copy ax-service binary (macOS-only — it runs inside an iOS Simulator)
 if (fs.existsSync(AX_BIN_SRC)) {
+  fs.mkdirSync(path.dirname(AX_BIN_DEST), { recursive: true });
   fs.copyFileSync(AX_BIN_SRC, AX_BIN_DEST);
   fs.chmodSync(AX_BIN_DEST, 0o755);
   console.log(`✓ Copied ax-service binary → ${path.relative(process.cwd(), AX_BIN_DEST)}`);
 } else {
   console.warn(`⚠ ax-service binary not found at ${AX_BIN_SRC} — skipping copy`);
+}
+
+// Copy ax-service TCP variant (darwin/tcp/ax-service). Best-effort: only
+// present when the TCP transport was built; skip without error if absent.
+if (fs.existsSync(AX_TCP_BIN_SRC)) {
+  fs.mkdirSync(path.dirname(AX_TCP_BIN_DEST), { recursive: true });
+  fs.copyFileSync(AX_TCP_BIN_SRC, AX_TCP_BIN_DEST);
+  fs.chmodSync(AX_TCP_BIN_DEST, 0o755);
+  console.log(
+    `✓ Copied ax-service (tcp) binary → ${path.relative(process.cwd(), AX_TCP_BIN_DEST)}`
+  );
+} else {
+  console.warn(`⚠ ax-service (tcp) binary not found at ${AX_TCP_BIN_SRC} — skipping copy`);
 }
 
 // Copy native devtools dylibs so the packaged tool-server can inject them at runtime.

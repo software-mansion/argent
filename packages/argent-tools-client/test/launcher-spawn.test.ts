@@ -159,7 +159,9 @@ describe("ensureToolsServer", () => {
 
     const second = await launcher.ensureToolsServer(fakePaths());
 
-    expect(second).toBe(first);
+    // ensureToolsServer returns a fresh handle each call; on reuse the url +
+    // token are derived from the same state file, so compare by value.
+    expect(second).toEqual(first);
     const state = await launcher.readToolsServerState();
     expect(state?.pid).toBe(spawnedPids[0]);
   });
@@ -173,14 +175,14 @@ describe("ensureToolsServer", () => {
       host: "127.0.0.1",
     });
 
-    const url = await launcher.ensureToolsServer(fakePaths());
+    const handle = await launcher.ensureToolsServer(fakePaths());
     const fresh = await launcher.readToolsServerState();
     expect(fresh).not.toBeNull();
     expect(fresh!.pid).not.toBe(2_147_483_646);
     expect(launcher.isToolsServerProcessAlive(fresh!.pid)).toBe(true);
     spawnedPids.push(fresh!.pid);
 
-    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(handle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(await launcher.isToolsServerHealthy(fresh!.port, "127.0.0.1")).toBe(true);
   });
 });

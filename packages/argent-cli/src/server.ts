@@ -15,19 +15,12 @@ import {
   clearToolsServerState,
   formatToolsServerUrl,
   type ToolsServerPaths,
+  type ToolsServerState,
 } from "@argent/tools-client";
 
 const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
-
-interface ToolsServerState {
-  port: number;
-  pid: number;
-  startedAt: string;
-  bundlePath: string;
-  host?: string;
-}
 
 function readState(): ToolsServerState | null {
   try {
@@ -49,9 +42,20 @@ async function statusCmd(json: boolean): Promise<void> {
   }
   const host = state.host ?? "127.0.0.1";
   const alive = isToolsServerProcessAlive(state.pid);
-  const healthy = alive ? await isToolsServerHealthy(state.port, host) : false;
+  const healthy = alive
+    ? await isToolsServerHealthy(state.port, host, 2000, state.token)
+    : false;
   if (json) {
-    console.log(JSON.stringify({ running: alive && healthy, ...state, alive, healthy }, null, 2));
+    // Hide the token from JSON output — it's a secret. Surface its presence
+    // without leaking the value.
+    const { token, ...publicState } = state;
+    console.log(
+      JSON.stringify(
+        { running: alive && healthy, ...publicState, hasToken: !!token, alive, healthy },
+        null,
+        2
+      )
+    );
     return;
   }
   console.log(`tool-server:`);

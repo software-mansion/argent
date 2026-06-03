@@ -38,6 +38,10 @@ const cache = new Map<AndroidBinaryName, CacheEntry>();
  *   1. `command -v <name>` (PATH)
  *   2. `$ANDROID_HOME/<subdir>/<name>` if executable
  *   3. `$ANDROID_SDK_ROOT/<subdir>/<name>` if executable
+ *   4. OS-default install locations (Android Studio defaults + common manual
+ *      paths) — see `androidRoots()`. Lets the resolver succeed when neither
+ *      env var nor PATH was inherited from the user's shell, which is the
+ *      typical state for an MCP server spawned by a GUI process.
  *
  * Returns `null` if none of those resolve. Callers that surface the failure
  * to users should funnel through `ensureDep` so the missing-binary message

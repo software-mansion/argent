@@ -10,6 +10,7 @@ import {
   addClaudePermission,
   removeClaudePermission,
   copyRulesAndAgents,
+  findConfiguredAdapterScopes,
   getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
@@ -1310,6 +1311,128 @@ describe("injectCodexRules / removeCodexRules", () => {
   it("returns null when rulesDir does not exist", () => {
     const configPath = path.join(tmpDir, "config.toml");
     expect(injectCodexRules(configPath, path.join(tmpDir, "nonexistent"))).toBeNull();
+  });
+});
+
+// ── hasArgentEntry / findConfiguredAdapterScopes ─────────────────────────────
+// Regression for issue #195: `update` must not (re)create configs for
+// editors the user opted out of during `init`, even when their config dir
+// exists on disk. The signal is the argent MCP entry in the config file,
+// not the editor dir's presence.
+
+describe("hasArgentEntry — non-mutating per-adapter predicate", () => {
+  // Pin homedir into tmpDir so global-only adapters (projectPath === null)
+  // resolve globalPath() inside the sandbox. Without this, the rmSync below
+  // would delete the developer's real Windsurf/Hermes config.
+  beforeEach(() => {
+    homedirOverride = tmpDir;
+  });
+
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  for (const adapter of ALL_ADAPTERS) {
+    describe(adapter.name, () => {
+      it("returns false when the config file does not exist", () => {
+        const configPath =
+          adapter.projectPath(tmpDir) ?? adapter.globalPath() ?? path.join(tmpDir, "nope");
+        // Adapter-provided paths point into tmpDir for project / homedir for
+        // global; the test's only invariant is "file doesn't exist yet".
+        if (fs.existsSync(configPath)) fs.rmSync(configPath, { force: true });
+        expect(adapter.hasArgentEntry(configPath)).toBe(false);
+      });
+
+      it("returns true after write(), false after remove()", () => {
+        const configPath = adapter.projectPath(tmpDir);
+        if (!configPath) return; // global-only adapter — covered by sibling test below
+        adapter.write(configPath, getMcpEntry());
+        expect(adapter.hasArgentEntry(configPath)).toBe(true);
+
+        adapter.remove(configPath);
+        expect(adapter.hasArgentEntry(configPath)).toBe(false);
+      });
+    });
+  }
+});
+
+describe("findConfiguredAdapterScopes", () => {
+  beforeEach(() => {
+    homedirOverride = tmpDir;
+  });
+
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
+  it("returns empty when no adapter has argent configured", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+    // Create the editor dirs without any argent entry to simulate the
+    // issue #195 scenario: the user has gemini installed on their machine
+    // but never opted argent into it.
+    fs.mkdirSync(path.join(projectRoot, ".gemini"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, ".gemini"), { recursive: true });
+
+    expect(findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot)).toEqual([]);
+  });
+
+  it("returns only adapters with an argent entry, not all detected editor dirs", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    // Gemini: editor present on disk but argent NOT configured.
+    fs.mkdirSync(path.join(tmpDir, ".gemini"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, ".gemini", "settings.json"),
+      JSON.stringify({ mcpServers: { other: { command: "other" } } })
+    );
+
+    // Cursor: argent configured globally (the only scope we should refresh).
+    const cursor = ALL_ADAPTERS.find((a) => a.name === "Cursor")!;
+    cursor.write(cursor.globalPath()!, getMcpEntry());
+
+    const result = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+    expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toEqual(["Cursor:global"]);
+  });
+
+  it("returns both scopes when argent is configured in project and global", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    claude.write(claude.projectPath(projectRoot)!, getMcpEntry());
+    claude.write(claude.globalPath()!, getMcpEntry());
+
+    const result = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+    expect(result.map((r) => `${r.adapter.name}:${r.scope}`).sort()).toEqual([
+      "Claude Code:global",
+      "Claude Code:project",
+    ]);
+  });
+
+  it("skips a malformed config instead of aborting detection", () => {
+    const projectRoot = path.join(tmpDir, "project");
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    // Hermes' hasArgentEntry parses YAML and throws on broken input. A single
+    // unparseable config must not take down detection for every other adapter
+    // (regression: it previously propagated out of update()).
+    const hermes = ALL_ADAPTERS.find((a) => a.name === "Hermes")!;
+    const hermesPath = hermes.globalPath()!;
+    fs.mkdirSync(path.dirname(hermesPath), { recursive: true });
+    fs.writeFileSync(hermesPath, "mcp_servers: : not: valid: yaml\n  - broken");
+
+    // A properly configured adapter alongside the broken one.
+    const claude = ALL_ADAPTERS.find((a) => a.name === "Claude Code")!;
+    claude.write(claude.globalPath()!, getMcpEntry());
+
+    let result: ReturnType<typeof findConfiguredAdapterScopes> = [];
+    expect(() => {
+      result = findConfiguredAdapterScopes(ALL_ADAPTERS, projectRoot);
+    }).not.toThrow();
+    expect(result.map((r) => `${r.adapter.name}:${r.scope}`)).toContain("Claude Code:global");
+    expect(result.map((r) => r.adapter.name)).not.toContain("Hermes");
   });
 });
 

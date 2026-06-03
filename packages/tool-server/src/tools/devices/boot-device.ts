@@ -110,7 +110,65 @@ const STAGE_BUDGET = {
   adbRegister: 60_000, // adb devices sees the serial for this AVD
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
+  firstRealFrame: 90_000, // screencap returns ≥1 non-zero pixel after cold boot
+  firstRealFrameHot: 8_000, // tighter budget for snapshot-restore composite —
+  // the broken state is sticky (per assertScreencapAlive's docstring), so a
+  // few seconds is enough to discriminate transient blanks from genuine wedge.
 } as const;
+
+// Whitelist of -gpu values the emulator binary accepts (per `emulator -help-gpu`).
+// We validate the override at boot-start instead of letting the emulator reject
+// a typoed value mid-launch: that path otherwise burns the full hot-boot budget
+// before surfacing the error, which is the worst possible UX for a 1-line fix.
+const VALID_GPU_MODES = new Set([
+  "auto",
+  "host",
+  "guest",
+  "off",
+  "swiftshader",
+  "swiftshader_indirect",
+  "angle",
+  "angle_indirect",
+  "angle9",
+  "angle9_indirect",
+  "swangle",
+  "swangle_indirect",
+]);
+
+// Linux: `-gpu auto` lands on `hw.gpu.mode=lavapipe` (slow CPU Vulkan via host
+// libvulkan + Mesa shims, ~10× cold-boot regression), and `-gpu host` silently
+// produces a corrupted/black emulator window on dual-GPU laptops, NVIDIA+Mesa
+// hosts via libglvnd, Wayland sessions on hybrid graphics, and containerized
+// hosts — argent's screencap-based screenshot tool reports success while the
+// developer sees a black window. `swiftshader` (emulator's bundled CPU
+// renderer) sidesteps both traps and is indistinguishable from `host` on
+// modern multi-core machines. `ARGENT_EMULATOR_GPU_MODE` overrides. macOS
+// uses `auto` (resolves to ANGLE→Metal, hardware-accelerated).
+function selectGpuMode(): string {
+  const override = process.env.ARGENT_EMULATOR_GPU_MODE;
+  if (override && override.trim()) {
+    const value = override.trim();
+    if (!VALID_GPU_MODES.has(value)) {
+      throw new Error(
+        `ARGENT_EMULATOR_GPU_MODE=${JSON.stringify(value)} is not a known emulator -gpu value. ` +
+          `Valid values: ${[...VALID_GPU_MODES].join(", ")}.`
+      );
+    }
+    return value;
+  }
+  return process.platform === "linux" ? "swiftshader" : "auto";
+}
+
+// Opt-in `-no-window` for CI/containers/Wayland sessions where the emulator's
+// bundled Qt has no wayland plugin (would SIGABRT). `-no-window` selects
+// qemu-system-x86_64-headless which skips Qt entirely; screencap still works.
+function selectExtraEmulatorArgs(): string[] {
+  const noWindow = process.env.ARGENT_EMULATOR_NO_WINDOW;
+  if (noWindow && noWindow.trim() && noWindow.trim() !== "0") {
+    return ["-no-window"];
+  }
+  return [];
+}
 
 // Poll cadences for the boot state machine. These intervals only pace how
 // often we re-probe adb between attempts — they bound latency, not
@@ -123,6 +181,17 @@ const BOOT_POLL_INTERVALS_MS = {
   adbRegister: 1_000, // attemptBoot stage 2: re-scan adb devices for the new serial
   earlyExit: 500, // createEarlyExitRacer: re-check the crash latch during a blocking adb call
 } as const;
+
+// Probe pipeline shared by assertScreencapAlive (hot-boot guard) and
+// awaitFirstRealFrame (cold-boot guard). `screencap -p` emits a PNG of the
+// current frame; awk thresholds the byte count. Real content is reliably
+// >20 KB; a uniform-color frame (sticky-blank or pre-composite) RLE/deflates
+// to <10 KB regardless of resolution — see assertScreencapAlive's docstring
+// for why raw-RGBA byte sniffing isn't sufficient. Outputs exactly "1" or "0".
+// `wc -c` of empty input is "0" so a missing/failed screencap surfaces as
+// "0" rather than a silent pass. Starts with the literal token "screencap"
+// so existing test mocks that match on shellCmd.startsWith("screencap") still fire.
+const FRAME_PROBE = "screencap -p 2>/dev/null | wc -c | awk '$1>20000{print 1;exit} {print 0}'";
 
 async function killEmulatorQuietly(
   serial: string | null,
@@ -188,33 +257,93 @@ function killDetachedEmulator(child: import("node:child_process").ChildProcess):
  * image, which is worse than a slower boot; we pay ~200 ms per hot boot to
  * eliminate that failure mode entirely.
  *
- * Detection: run the check on-device. `screencap` writes a 16-byte header
- * (width, height, format, colorspace) followed by raw RGBA pixel bytes;
- * `tail -c +17` skips the header, `tr -d '\0'` drops null bytes, and
- * `head -c 1 | wc -c` prints `1` if any byte survived or `0` if the stream
- * past the header was entirely null. `head` short-circuits as soon as one
- * non-zero byte appears, so a healthy frame costs microseconds of pixel
- * inspection — no host-side decode, no allocation, no iteration we own.
+ * Detection: take a PNG of the current frame and threshold its byte count.
+ * A uniform-color image (the sticky-blank / pre-composite case) compresses
+ * to a few KB even at full resolution; a real frame with any UI on it is
+ * reliably >20 KB. We can't probe the raw RGBA buffer with a simple
+ * "any non-zero byte" check because Android fills uninitialised framebuffers
+ * with `(0,0,0,0xFF)` — opaque black — so every 4th byte (alpha) is already
+ * non-zero before SurfaceFlinger has drawn anything, which would silently
+ * report a blank frame as healthy. PNG byte-count sidesteps the alpha
+ * pitfall: uniform alpha-only content RLE/deflates to ~7 KB regardless of
+ * pixel count, real content blows past the threshold.
  *
- * On detection we throw; the outer catch in `bootAndroid` kills the hot child
- * and falls through to the cold path, so the serial that eventually reaches
- * the caller is always usable for screenshots.
+ * Polling, not a single probe: snapshot restore can produce a transient blank
+ * for up to 30 s under SwiftShader before the composite hydrates. A
+ * single-probe assertion landing inside that window would kill the emulator
+ * and force a cold boot every time, defeating the whole point of hot-booting.
+ * We poll until either a real frame shows up (success) or `budgetMs` expires
+ * (sticky blank — kill the emulator so the outer catch can fall through to
+ * cold boot, and the eventual serial is always usable for screenshots).
  */
-async function assertScreencapAlive(serial: string): Promise<void> {
-  const out = await adbShell(serial, "screencap | tail -c +17 | tr -d '\\0' | head -c 1 | wc -c", {
-    timeoutMs: 10_000,
-  });
+async function assertScreencapAlive(
+  serial: string,
+  budgetMs: number = STAGE_BUDGET.firstRealFrameHot
+): Promise<void> {
+  const deadline = Date.now() + budgetMs;
   // Match success on "1" specifically: empty output (screencap binary missing,
   // exec-out drained nothing) used to trim to "" which !== "0" and silently
   // returned success — i.e. a broken capture path was reported as healthy.
   // Any non-"1" reading (zero pixels OR no output at all) is a failure.
-  if (out.trim() !== "1") {
-    await killEmulatorQuietly(serial);
-    throw new Error(
-      "hot-boot composite not restored: `screencap` returned an all-zero or empty frame. " +
-        "Falling back to cold boot so screenshots are usable."
-    );
+  let lastReading: string | null = null;
+  while (Date.now() < deadline) {
+    try {
+      const out = await adbShell(serial, FRAME_PROBE, { timeoutMs: 10_000 });
+      lastReading = out.trim();
+      if (lastReading === "1") return;
+    } catch (err) {
+      lastReading = err instanceof Error ? err.message : String(err);
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 1_500));
   }
+  await killEmulatorQuietly(serial);
+  throw new Error(
+    `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
+      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`
+  );
+}
+
+/**
+ * Cold-boot counterpart to `assertScreencapAlive`.
+ *
+ * `sys.boot_completed=1` fires before SurfaceFlinger has actually composited
+ * the lockscreen — on Linux + Weston-headless + SwiftShader software rendering
+ * the gap is 5–60 s. Callers that trust `booted:true` and immediately screenshot
+ * get an all-black 324×720 PNG (~5 KB) instead of a real lockscreen frame.
+ *
+ * Unlike the hot-boot case the blank is *transient* — we just need to wait for
+ * the first real composite. Same on-device probe as `assertScreencapAlive`
+ * (PNG byte-count, see `FRAME_PROBE`), polled until a frame crosses the size
+ * threshold or the deadline is hit. We also issue `KEYCODE_WAKEUP` once on
+ * entry in case the display was driven straight to dim/off after boot
+ * (cheap, idempotent — no-op if already awake).
+ *
+ * On deadline expiry we throw without killing the emulator: the caller's outer
+ * cold-boot catch already wraps with the "wipe-data" hint, and at this point
+ * the device is otherwise healthy, so we'd rather surface the timeout than
+ * orphan a working AVD.
+ */
+async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<void> {
+  await adbShell(serial, "input keyevent 224", { timeoutMs: 5_000 }).catch(() => {
+    // KEYCODE_WAKEUP best-effort; absence of input service is non-fatal.
+  });
+  const deadline = Date.now() + timeoutMs;
+  let lastError: string | null = null;
+  while (Date.now() < deadline) {
+    try {
+      const out = await adbShell(serial, FRAME_PROBE, { timeoutMs: 10_000 });
+      if (out.trim() === "1") return;
+      lastError = `screencap reading was "${out.trim()}"`;
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+  throw new Error(
+    `SurfaceFlinger did not composite a real frame within ${timeoutMs / 1000}s of boot_completed ` +
+      `(${lastError ?? "no probe response"}). The emulator booted but every screenshot would be all-black.`
+  );
 }
 
 async function findSerialByAvdName(avdName: string, deadline: number): Promise<string | null> {
@@ -248,6 +377,14 @@ async function bootIos(
   registry: Registry,
   force?: boolean
 ): Promise<{ platform: "ios"; udid: string; booted: true } | NativeDevtoolsInitFailedResult> {
+  // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
+  // gets "iOS requires macOS" rather than a misleading "install xcode-select".
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `iOS Simulator is unavailable on ${process.platform}: it requires a macOS host. ` +
+        `Pass \`avdName\` (Android) instead of \`udid\` (iOS) to boot a device from this host.`
+    );
+  }
   await ensureDep("xcrun");
 
   const simState = await listIosSimulators()
@@ -615,13 +752,12 @@ async function bootAndroidImpl(params: {
   if (!hasSnapshot) {
     hotBootFailureReason = "no default_boot snapshot exists";
   } else {
-    // `-gpu auto` overrides `hw.gpu.enabled=no` (avdmanager's default) so the
-    // emulator picks up a hardware Vulkan ICD when available instead of
-    // falling back to lavapipe/swangle. Probe and boot must share the same
-    // renderer-affecting argv — otherwise the probe resolves a different
-    // renderer than the boot and rejects every valid snapshot with "different
-    // renderer configured". RENDERER_ARGS keeps the two in lockstep.
-    const RENDERER_ARGS = ["-gpu", "auto"] as const;
+    // Probe and boot must share the same renderer-affecting argv — otherwise
+    // the probe resolves a different renderer than the boot and rejects every
+    // valid snapshot with "different renderer configured". RENDERER_ARGS
+    // keeps the two in lockstep. `-gpu` value and the optional `-no-window`
+    // come from `selectGpuMode` / `selectExtraEmulatorArgs`.
+    const RENDERER_ARGS = ["-gpu", selectGpuMode(), ...selectExtraEmulatorArgs()];
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
       extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
     });
@@ -680,7 +816,7 @@ async function bootAndroidImpl(params: {
   }
 
   // Cold boot fallback (either no usable snapshot, or hot-boot attempt failed).
-  // `-gpu auto` mirrors the hot-boot path so the snapshot this cold boot
+  // Renderer args mirror the hot-boot path so the snapshot this cold boot
   // saves matches the renderer the next launch's probe will resolve.
   // LAUNCH_HARDENING_ARGS likewise — `-noaudio` and `-netfast` change device
   // topology, so a mismatch between cold-save and hot-load would invalidate
@@ -690,7 +826,8 @@ async function bootAndroidImpl(params: {
     params.avdName,
     "-no-snapshot-load",
     "-gpu",
-    "auto",
+    selectGpuMode(),
+    ...selectExtraEmulatorArgs(),
     ...LAUNCH_HARDENING_ARGS,
   ];
   let coldResult: { serial: string };
@@ -715,6 +852,11 @@ async function bootAndroidImpl(params: {
         ` If this keeps happening, wipe the AVD with \`emulator -avd ${params.avdName} -wipe-data\`.${suffix}`
     );
   }
+
+  // Cold-boot post-condition: under SwiftShader the lockscreen composite lags
+  // boot_completed by 5–60 s. Without this, a caller chaining boot-device →
+  // screenshot gets a silent all-black PNG. See `awaitFirstRealFrame`.
+  await awaitFirstRealFrame(coldResult.serial, STAGE_BUDGET.firstRealFrame);
 
   return {
     platform: "android",

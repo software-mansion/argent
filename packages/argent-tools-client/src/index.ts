@@ -11,9 +11,11 @@ export {
   writeToolsServerStateSync,
   clearToolsServerState,
   formatToolsServerUrl,
+  AUTH_TOKEN_ENV,
   STATE_PATHS,
   type ToolsServerPaths,
   type ToolsServerState,
+  type ToolsServerHandle,
   type BuildToolsServerEnvOptions,
   type SpawnToolsServerOptions,
 } from "./launcher.js";

@@ -10,7 +10,7 @@
   "type": "module",
   "bin": {
     "argent": "dist/cli.js",
-    "argent-simulator-server": "bin/simulator-server"
+    "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
   "scripts": {
     "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
