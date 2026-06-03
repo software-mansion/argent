@@ -472,13 +472,20 @@
       .vrow.staged {
         background: var(--color-row-staged);
       }
-      /* DEMO: collapse-on-stage + non-selected image hiding are DISABLED.
-         Staging a variant only tints its row (.vrow.staged above); the other
-         variants stay full-size with their images visible. This removes the
-         inner-layout collapse — and the card resize that was driving the
-         never-ending bounce/jitter on selection — and the dead space left when
-         images hid but rows didn't shrink. To re-enable, restore the
-         `:has(.vrow.staged) .vrow:not(.staged)` collapse + `.thumb` hide rules. */
+      /* Collapse-on-stage: once a variant is picked, every OTHER variant in the
+         same card collapses to a compact row — forced side-by-side (image beside
+         name) regardless of its resting direction, with the preview shrunk to
+         ~3 lines of text tall (applyThumbCrop sizes the thumb; this just sets the
+         direction). The thumb's width/height transition animates the shrink, and
+         the shorter rows let layoutCards spring the card to its new height. The
+         `:has()` keeps it pure-CSS and reactive to the .staged class toggle. */
+      .vcard:has(.vrow.staged) .vrow:not(.staged) {
+        flex-direction: row;
+        align-items: flex-start;
+      }
+      .vcard:has(.vrow.staged) .vrow:not(.staged) .meta {
+        opacity: var(--opacity-disabled);
+      }
       /* Wide/square previews read better stacked (image above text); only
          clearly-portrait previews keep the side-by-side row. */
       .vrow.col {
@@ -1026,6 +1033,7 @@
         spotTrajReach: cssNum("--spot-traj-reach", 0.5),
         spotTrajHitboxMargin: cssNum("--spot-traj-hitbox-margin", 0.2),
         spotMaxFrameArea: cssNum("--spot-max-frame-area", 0.85),
+        collapsedThumbH: cssNum("--collapsed-thumb-h", 58),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
         successToastShowMs: cssNum("--success-toast-show-ms", 1200),
       };
@@ -1887,6 +1895,41 @@
           .replace(/[\s,]+/g, " ")
           .trim();
       }
+      // Does candidate `n` carry the SAME identity as the locked descriptor
+      // (`anchor`)? The agent's `match` is a loose net (a label `includes` test)
+      // that deliberately catches every element sharing the text — a "Favourites"
+      // header AND a "Favourites (5)" tab both pass. `descMatches` is the precise
+      // identity check that tells them apart, captured once from the first good
+      // match and then required forever after. Priority of evidence:
+      //   • identifier (testID / a11y id) — definitive when present;
+      //   • role — a header is AXStaticText, a tab is AXButton, so role alone
+      //     separates the classic collision;
+      //   • label — must stay consistent, but leniently (one containing the
+      //     other) so a live counter suffix like "(5)"→"(6)" doesn't break it.
+      // This is what gives CERTAINTY: when the real target leaves the screen the
+      // surviving same-text element fails this check, so the bubble goes
+      // off-screen instead of silently re-homing onto the wrong element.
+      // Label with its dynamic tail stripped — drop parenthetical groups and
+      // standalone numbers ("Favourites (5)" → "favourites", "Item 7" → "item")
+      // so a live counter or index doesn't read as a different element.
+      function vpCoreLabel(s) {
+        return vpNormLabel(s)
+          .replace(/\s*\([^)]*\)\s*/g, " ")
+          .replace(/\b\d+\b/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+      function vpDescMatches(n, desc) {
+        if (desc.identifier) return vpNormLabel(n.identifier) === desc.identifier;
+        if (desc.role && (n.role || "").toLowerCase() !== desc.role) return false;
+        const lbl = vpNormLabel(n.label);
+        if (!desc.label || !lbl || desc.label === lbl) return true;
+        if (lbl.includes(desc.label) || desc.label.includes(lbl)) return true;
+        // Compare with dynamic tails removed so a changing count still matches.
+        const cl = vpCoreLabel(lbl),
+          cd = vpCoreLabel(desc.label);
+        return !!cl && !!cd && (cl === cd || cl.includes(cd) || cd.includes(cl));
+      }
       function vpMatchNode(node, match, anchor) {
         const needle = vpNormLabel(match.value);
         const out = [];
@@ -1902,92 +1945,100 @@
           else if (match.by === "identifier") hit = ident === needle;
           else if (match.by === "role") hit = role === needle;
           else hit = label.includes(needle) || ident.includes(needle) || value.includes(needle);
-          if (hit && n.frame) out.push(n);
+          // Drop near-full-screen / off-screen / zero-size hits up front so every
+          // later stage sees only sane, visible candidates. Same area filter
+          // `vpNodeAtPoint` uses, so a proposal that resolves to a container root
+          // never paints a screen-spanning bubble.
+          if (hit && n.frame && n.frame.width > 0 && n.frame.height > 0) {
+            const f = n.frame;
+            const cx = f.x + f.width / 2,
+              cy = f.y + f.height / 2;
+            if (
+              cx >= 0 &&
+              cx <= 1 &&
+              cy >= 0 &&
+              cy <= 1 &&
+              f.width * f.height <= THEME.spotMaxFrameArea
+            )
+              out.push(n);
+          }
           if (Array.isArray(n.children)) n.children.forEach(walk);
         };
         walk(node);
-        // Disambiguate elements that share a label (e.g. a "Favourites" tab AND
-        // a "Favourites" header). The stable signal is SIZE, not position: an
-        // element keeps its width/height as it scrolls (it can teleport across
-        // the screen in a single frame on a fast scroll or a refresh and still
-        // be the same element), whereas a different same-labeled element is a
-        // very different size. So `anchor` (the matched element's last frame,
-        // seeded from the propose-time frame) gates candidates by size, and
-        // position is only a tie-breaker among the size-matches. When the real
-        // target leaves the screen, the remaining same-labeled element fails the
-        // size gate → the bubble goes off-screen instead of snapping onto it.
-        // Without an anchor (older proposals / no frame) fall back to the
-        // smallest sane box.
-        const MAX_SIZE_RATIO = 2.5; // per dimension; header↔tab differ far more
-        const sizeMatches = (f) => {
-          const wr =
-            Math.max(f.width, anchor.width) / Math.max(1e-6, Math.min(f.width, anchor.width));
-          const hr =
-            Math.max(f.height, anchor.height) / Math.max(1e-6, Math.min(f.height, anchor.height));
-          return wr <= MAX_SIZE_RATIO && hr <= MAX_SIZE_RATIO;
-        };
+        if (!out.length) return null;
+
+        // Identity FIRST. Once a descriptor is locked on the anchor, a candidate
+        // must prove it is that same element (`vpDescMatches`). If none do, the
+        // target is genuinely gone → return null rather than re-homing onto a
+        // same-text impostor (the "the other one takes over" bug). Size/position
+        // only break a tie BETWEEN elements that are identity-indistinguishable
+        // (e.g. two identical list rows), never to *choose* an identity.
+        const hasDesc = anchor && (anchor.role || anchor.label || anchor.identifier);
+        let pool = out;
+        if (hasDesc) {
+          pool = out.filter((n) => vpDescMatches(n, anchor));
+          if (!pool.length) return null; // certainty: this element is off-screen
+          if (pool.length === 1) return pool[0];
+        }
+
+        // Tie-break. Among identity-equal (or, with no descriptor yet, all loose)
+        // candidates, SIZE is the stable signal — an element keeps its width/
+        // height as it scrolls (it can teleport across the screen in one frame on
+        // a fast scroll/refresh and still be itself), so gate by size and let
+        // position settle the rest. Without an anchor (annotations, older
+        // proposals) fall back to the smallest sane box.
+        const MAX_SIZE_RATIO = 2.5;
+        const sizeMatches = (f) =>
+          Math.max(f.width, anchor.width) / Math.max(1e-6, Math.min(f.width, anchor.width)) <=
+            MAX_SIZE_RATIO &&
+          Math.max(f.height, anchor.height) / Math.max(1e-6, Math.min(f.height, anchor.height)) <=
+            MAX_SIZE_RATIO;
+        const dist = (f) =>
+          Math.hypot(
+            f.x + f.width / 2 - (anchor.x + anchor.width / 2),
+            f.y + f.height / 2 - (anchor.y + anchor.height / 2)
+          );
         let best = null,
           bestScore = Infinity;
-        for (const n of out) {
+        for (const n of pool) {
           const f = n.frame;
-          if (!f || f.width <= 0 || f.height <= 0) continue;
-          const cx = f.x + f.width / 2,
-            cy = f.y + f.height / 2;
-          if (cx < 0 || cx > 1 || cy < 0 || cy > 1) continue;
-          const a = f.width * f.height;
-          // Ignore near-full-screen matches so a proposal that accidentally
-          // resolves to a container root doesn't paint a screen-spanning
-          // bubble. Same filter `vpNodeAtPoint` uses for the inspector pick.
-          if (a > THEME.spotMaxFrameArea) continue;
-          let score;
-          if (anchor) {
-            if (!sizeMatches(f)) continue; // wrong size → not this element
-            // Nearest to the last-known position wins (only matters when two
-            // same-sized, same-labeled elements are both on screen).
-            score = Math.hypot(
-              cx - (anchor.x + anchor.width / 2),
-              cy - (anchor.y + anchor.height / 2)
-            );
-          } else {
-            score = a;
-          }
+          const score = anchor ? dist(f) : f.width * f.height;
+          if (anchor && !hasDesc && !sizeMatches(f)) continue; // size gate only bootstraps identity
           if (score < bestScore) {
             bestScore = score;
             best = n;
           }
         }
+        // A locked identity must never be dropped over a size wobble: if the size
+        // gate isn't in play (hasDesc) `best` is simply the nearest identity match.
         return best;
       }
 
-      // Smallest on-screen node whose frame contains a normalized point
-      // (inspector pick). Deliberately NOT gated on element text: an icon-only
-      // pressable (a star button, a bare <Pressable>, an image button) has no
-      // label/value/identifier, so the old text gate made it un-hoverable.
-      // "Innermost" falls out of smallest-area, so a labelled child still wins
-      // over its container without any role/interactivity heuristic (those
-      // overfit per-platform and Android/iOS expose traits differently). The
-      // on-screen guard — positive size + centre within the viewport, the same
-      // test vpMatchNode uses — keeps scrolled-away / zero-size tree nodes from
-      // being selected (the earlier "I can pick things that aren't visible"
-      // regression), generalised rather than special-cased.
+      // Topmost on-screen node whose frame contains a normalized point
+      // (inspector pick). Precedence is PAINT ORDER, not smallest area: a tree
+      // is walked depth-first parent-before-children and earlier-sibling-before-
+      // later, which is exactly the order the platform paints, so the LAST
+      // containing node visited is the one drawn on top. Overwriting `best` on
+      // every hit therefore returns the topmost element — a labelled child still
+      // beats its container (children paint after the parent), AND when two
+      // siblings overlap the visually-on-top one wins instead of whichever
+      // happens to be smaller (the old smallest-area rule silently picked the
+      // element *underneath*, so anything sitting on top of it was un-selectable).
+      //
+      // Not gated on element text: an icon-only pressable (a star button, a bare
+      // <Pressable>, an image button) has no label/value/identifier, so a text
+      // gate would make it un-hoverable. The on-screen guard — positive size +
+      // centre within the viewport — keeps scrolled-away / zero-size tree nodes
+      // from being selected.
       //
       // The describe ROOT node (an "AXGroup" that spans the whole stream) is
-      // treated as if it did not exist: it contains every point, so without
-      // this it would be the smallest match over empty gaps — making the
-      // whole screen the "element" (full-stream focus, no release path ever
-      // fires) and visually swallowing small nested pressables. Skipping it
-      // means a gap returns null → the trajectory-based release applies, and
-      // real descendants are still picked normally.
-      //
-      // The `isRoot` flag handles iOS's single explicit root. Android dumps
-      // tend to expose multiple full-screen-or-near container Views below the
-      // root, so we also drop any node whose frame covers more than
-      // spotMaxFrameArea of the screen — a generic size filter that catches
-      // those Android wrappers (and any future near-root container on either
-      // platform) without per-platform special-casing.
+      // skipped: it contains every point, so otherwise a gap (or any click)
+      // would resolve to the whole screen. We also drop any node whose frame
+      // covers more than spotMaxFrameArea of the screen — a generic filter for
+      // near-root container Views (Android exposes several) that would otherwise,
+      // as the last-painted ancestor, swallow the real element on top of them.
       function vpNodeAtPoint(node, x, y) {
-        let best = null,
-          bestArea = Infinity;
+        let best = null;
         const walk = (n, isRoot) => {
           if (!n || typeof n !== "object") return;
           const f = n.frame;
@@ -2005,10 +2056,8 @@
               cy = f.y + f.height / 2;
             const onScreen = cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1;
             const a = f.width * f.height;
-            if (onScreen && a < bestArea && a <= THEME.spotMaxFrameArea) {
-              bestArea = a;
-              best = n;
-            }
+            // Last hit in paint order wins → topmost element gets priority.
+            if (onScreen && a <= THEME.spotMaxFrameArea) best = n;
           }
           if (Array.isArray(n.children)) n.children.forEach((c) => walk(c, false));
         };
@@ -2238,11 +2287,25 @@
         // portrait — at least 1.2× taller than wide — where a side-by-side
         // row reads better. rw=fw*NW, rh=fh*NH (cropped region, px).
         const _vr = tw.closest(".vrow");
-        if (_vr) _vr.classList.toggle("col", !(fh * NH >= 1.2 * (fw * NW)));
-        // Width is part of the cache key so a scrollbar appearing or
-        // disappearing (no stable gutter) busts the cache and re-fits.
+        // Collapsed = some OTHER variant in this card is staged and this row is
+        // not. Then it shrinks to a compact side-by-side row (see the `:has()`
+        // CSS); force row layout (drop `.col`) and a fixed 3-line-tall preview
+        // below, overriding the aspect-based column/row choice.
+        const _card = _vr && _vr.closest(".vcard");
+        const collapsed = !!(
+          _card &&
+          !_vr.classList.contains("staged") &&
+          _card.querySelector(".vrow.staged")
+        );
+        if (_vr) {
+          if (collapsed) _vr.classList.remove("col");
+          else _vr.classList.toggle("col", !(fh * NH >= 1.2 * (fw * NW)));
+        }
+        // Width AND collapsed state are part of the cache key: a scrollbar
+        // appearing/disappearing (no stable gutter) or a selection collapsing
+        // the row must bust the cache so the preview re-fits to its new box.
         const _vrW = _vr ? _vr.clientWidth : 0;
-        const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}:${_vrW}`;
+        const key = `${NW}x${NH}:${fx.toFixed(4)},${fy.toFixed(4)},${fw.toFixed(4)},${fh.toFixed(4)}:${_vrW}:${collapsed ? "c" : ""}`;
         if (tw._cropKey === key) return; // unchanged — avoid layout thrash
         tw._cropKey = key;
         const rw = fw * NW,
@@ -2257,10 +2320,15 @@
         // cache key above includes the row's clientWidth — the cache then
         // misses on scrollbar toggle and the preview re-fits to the new
         // width instead of overhanging.
-        const colMode = _vr ? _vr.classList.contains("col") : false;
+        const colMode = collapsed ? false : _vr ? _vr.classList.contains("col") : false;
         const availW = Math.max(120, (_vr ? _vr.clientWidth : 212) - 20);
         let W, H;
-        if (colMode) {
+        if (collapsed) {
+          // Picked-away rows: a small, fixed 3-line-tall preview beside the name.
+          H = THEME.collapsedThumbH;
+          W = Math.round(H * ar);
+          W = Math.max(40, Math.min(W, Math.round(availW * 0.6)));
+        } else if (colMode) {
           W = availW;
           H = Math.round(W / ar);
           H = Math.max(56, Math.min(H, Math.round(W * 1.25)));
@@ -3572,13 +3640,15 @@
       // and pin tracking are handled every animation frame by vpTick().
       function vpRender() {
         for (const p of vp.proposals) {
-          // Anchor the match to the element's last-seen FRAME — seeded from the
-          // propose-time frame, then updated to the matched element each frame.
-          // Size is the stable identity signal: it disambiguates a label shared
-          // by two differently-sized elements (a header vs a tab) and follows the
-          // target across a big scroll jump (same size), while a same-labeled
-          // element that's left the screen fails the size gate so the bubble goes
-          // off-screen instead of snapping onto it. See vpMatchNode.
+          // The anchor carries two things: the element's last-seen FRAME (seeded
+          // from the propose-time frame, updated every match) and, once known, a
+          // locked IDENTITY descriptor (role/label/identifier). The frame's SIZE
+          // bootstraps the very first match — among same-text candidates it picks
+          // the right-sized one — and that first match's metadata is then locked
+          // as the descriptor, which gives every later frame certainty: the
+          // element is followed across big scroll jumps, and when it leaves the
+          // screen the bubble goes off-screen instead of re-homing onto a
+          // same-text impostor. See vpMatchNode / vpDescMatches.
           let anchor = vp.anchors[p.id];
           if (!anchor) {
             const av = p.variants && p.variants.find((v) => v.frame);
@@ -3587,7 +3657,17 @@
           p._node = vp.tree ? vpMatchNode(vp.tree, p.match, anchor) : null;
           if (p._node) {
             const f0 = p._node.frame;
-            vp.anchors[p.id] = { x: f0.x, y: f0.y, width: f0.width, height: f0.height };
+            const a = vp.anchors[p.id] || {};
+            vp.anchors[p.id] = {
+              x: f0.x,
+              y: f0.y,
+              width: f0.width,
+              height: f0.height,
+              // Lock identity once (first match wins) so it can't drift.
+              role: a.role || (p._node.role || "").toLowerCase() || undefined,
+              label: a.label || vpNormLabel(p._node.label) || undefined,
+              identifier: a.identifier || vpNormLabel(p._node.identifier) || undefined,
+            };
           }
           if (p._node && !vp.thumbFrames[p.id]) {
             const f = p._node.frame;

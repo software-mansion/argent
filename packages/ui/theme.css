@@ -130,6 +130,7 @@
   --card-width: 232px;
   --vcard-body-max-h: none; /* JS sets a per-card max-height only when the column overflows the viewport; otherwise the body fits its variant count. */
   --thumb-size: 96px;
+  --collapsed-thumb-h: 58px; /* once a variant is picked, the others collapse to a row with the preview ~3 lines of body text tall (3 × --fs-body × --lh-normal ≈ 58px) */
   --pin-size: 20px;
   --dot-size: 8px; /* status dot, device-picker dot */
   --card-dot-size: 7px; /* card-header dot */
