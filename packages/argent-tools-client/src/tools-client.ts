@@ -1,9 +1,5 @@
-import {
-  ensureToolsServer,
-  AUTH_TOKEN_ENV,
-  type ToolsServerHandle,
-  type ToolsServerPaths,
-} from "./launcher.js";
+import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
+import { getResolvedToolsUrl } from "./link-config.js";
 
 export interface ToolMeta {
   name: string;
@@ -46,15 +42,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   let cached: ToolsServerHandle | null = null;
 
   async function baseUrl(): Promise<ToolsServerHandle> {
-    if (process.env.ARGENT_TOOLS_URL) {
-      // External clients pass the URL via env; the matching auth token comes
-      // from the same env var the tool-server reads (ARGENT_AUTH_TOKEN).
-      // Empty/unset means the caller is responsible for an unauthenticated
-      // server (legacy / dev).
-      return {
-        url: process.env.ARGENT_TOOLS_URL,
-        token: process.env[AUTH_TOKEN_ENV] ?? "",
-      };
+    // Resolution precedence (ARGENT_TOOLS_URL env > ~/.argent/link.json > none)
+    // lives in getResolvedToolsUrl. When a remote target is configured, the
+    // matching auth token comes from ARGENT_AUTH_TOKEN — empty/unset means the
+    // caller owns an unauthenticated server (legacy / dev). With no override
+    // (the default when the user never ran `argent link`), fall through to a
+    // locally auto-spawned, token-authenticated tool-server.
+    const resolved = await getResolvedToolsUrl();
+    if (resolved.url) {
+      return { url: resolved.url, token: resolved.token ?? "" };
     }
     if (cached) return cached;
     if (!options.paths) {

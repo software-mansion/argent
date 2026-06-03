@@ -66,6 +66,16 @@ describe("requireDarwin gating", () => {
     expect(() => r.keyboardPatchDylibPath()).toThrow(/requires a macOS host/);
   });
 
+  it("throws with a root-cause message on linux for TCP iOS-only dylibs", async () => {
+    // TCP variants are equally iOS-Simulator-only; the guard must fire before
+    // the file-existence check so Linux callers get the platform error, not
+    // a misleading "dylib not found" for the tcp/ subdirectory.
+    setPlatform("linux");
+    const r = await loadResolver();
+    expect(() => r.bootstrapDylibPathTcp()).toThrow(/requires a macOS host/);
+    expect(() => r.nativeDevtoolsDylibPathTcp()).toThrow(/requires a macOS host/);
+  });
+
   it("throws with a root-cause message on linux for ax-service", async () => {
     // ax-service is darwin-only (runs INSIDE the iOS Simulator), so the
     // resolver must throw the platform error BEFORE the file-existence check.
@@ -108,6 +118,22 @@ describe("simulator-server path resolution", () => {
     process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
     const r = await loadResolver();
     expect(() => r.simulatorServerBinaryPath()).toThrow(/simulator-server binary not found/);
+    expect(() => r.simulatorServerBinaryPath()).toThrow(new RegExp(process.platform));
+  });
+
+  it("includes a migration hint when ARGENT_SIMULATOR_SERVER_DIR points at the old flat layout", async () => {
+    // Prior to the Linux per-platform layout, ARGENT_SIMULATOR_SERVER_DIR
+    // was the directory that contained simulator-server directly. A user
+    // with that setup now gets a "not found" error; the migration hint in
+    // the message tells them exactly what changed and how to fix it.
+    const dir = fs.mkdtempSync(path.join(tmpRoot, "flat-layout-"));
+    fs.mkdirSync(path.join(dir, process.platform), { recursive: true });
+    // Place the binary at the flat (old) path.
+    const flatBin = path.join(dir, "simulator-server");
+    fs.writeFileSync(flatBin, "", { mode: 0o755 });
+    process.env.ARGENT_SIMULATOR_SERVER_DIR = dir;
+    const r = await loadResolver();
+    expect(() => r.simulatorServerBinaryPath()).toThrow(/old flat path/);
     expect(() => r.simulatorServerBinaryPath()).toThrow(new RegExp(process.platform));
   });
 });
