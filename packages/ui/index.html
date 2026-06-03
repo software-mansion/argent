@@ -1512,6 +1512,11 @@
         target.addEventListener("dragstart", (ev) => ev.preventDefault());
 
         target.addEventListener("pointerdown", (ev) => {
+          // Mute the device while a floating card (or a variant chip) is being
+          // dragged: a drag that crosses or is released over the stream must
+          // never register as a tap on the simulator. Blocking the Down here is
+          // enough — Move/Up only fire once a Down has armed `isPressing`.
+          if (vp.cardDragging || vp.dragging) return;
           // Only the primary button drives the device. Right-click (button 2)
           // is reserved for the comment-popover shortcut handled in the
           // window-level `contextmenu` listener; middle-click is ignored too.
@@ -2485,9 +2490,9 @@
       // Keep a card's HOME out of the streamed-phone rect: if it would overlap,
       // slide it horizontally to just past the nearer side of the stream. The
       // bubble spring then glides the card off the phone — the same way homes
-      // are inset from the window edges. Stream avoidance is preferred over the
-      // edge margin in a narrow window: the phone is the content being judged,
-      // so a card may sit a little tighter to the edge but never on the stream.
+      // are inset from the window edges. Priority: staying IN BOUNDS beats
+      // avoiding the stream — when there's no room beside the phone, the card
+      // overlaps the phone rather than spilling out of the window.
       function homeOffStream(home, cardW, cardH, sr, mw) {
         if (!sr) return home;
         const PAD = 14;
@@ -2502,7 +2507,10 @@
         let nx;
         if (leftFits && (nearerLeft || !rightFits)) nx = leftSide;
         else if (rightFits) nx = rightSide;
-        else nx = nearerLeft ? leftSide : rightSide; // neither side fits cleanly
+        // Neither side fits in bounds: keep the in-bounds home and let the card
+        // overlap the stream. Border-avoidance beats stream-avoidance — going
+        // out of bounds is the worse of the two evils.
+        else return home;
         return { x: nx, y: home.y };
       }
       function layoutCards() {
