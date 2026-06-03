@@ -1802,7 +1802,7 @@
         treeAt: 0,
         cards: new Map(), // id -> { el, sig, target, anim, animVel, home, pos, vel, pinned, gone, spawned, dragging }
         thumbFrames: {}, // id -> frozen frame for the static preview crop
-        anchors: {}, // id -> last-matched element centre (disambiguates shared labels)
+        anchors: {}, // id -> last-matched element frame {x,y,width,height} (disambiguates shared labels by size)
         conn: new Map(), // id -> { path, dot } reused SVG nodes
         pinEls: new Map(), // annId -> reused pin element
         annId: 0,
@@ -1907,14 +1907,24 @@
         };
         walk(node);
         // Disambiguate elements that share a label (e.g. a "Favourites" tab AND
-        // a "Favourites" header): when the proposal carries an `anchor` — the
-        // matched element's frame centre captured at propose time — pick the
-        // candidate nearest it, and ONLY if it's within range. So when the real
-        // target leaves the screen the bubble goes off-screen instead of
-        // snapping onto a different element that merely shares the label.
+        // a "Favourites" header). The stable signal is SIZE, not position: an
+        // element keeps its width/height as it scrolls (it can teleport across
+        // the screen in a single frame on a fast scroll or a refresh and still
+        // be the same element), whereas a different same-labeled element is a
+        // very different size. So `anchor` (the matched element's last frame,
+        // seeded from the propose-time frame) gates candidates by size, and
+        // position is only a tie-breaker among the size-matches. When the real
+        // target leaves the screen, the remaining same-labeled element fails the
+        // size gate → the bubble goes off-screen instead of snapping onto it.
         // Without an anchor (older proposals / no frame) fall back to the
         // smallest sane box.
-        const MAX_ANCHOR_DIST = 0.4; // normalized; e.g. header↔tab are far apart
+        const MAX_SIZE_RATIO = 2.5; // per dimension; header↔tab differ far more
+        const sizeMatches = (f) => {
+          const wr = Math.max(f.width, anchor.width) / Math.max(1e-6, Math.min(f.width, anchor.width));
+          const hr =
+            Math.max(f.height, anchor.height) / Math.max(1e-6, Math.min(f.height, anchor.height));
+          return wr <= MAX_SIZE_RATIO && hr <= MAX_SIZE_RATIO;
+        };
         let best = null,
           bestScore = Infinity;
         for (const n of out) {
@@ -1930,9 +1940,10 @@
           if (a > THEME.spotMaxFrameArea) continue;
           let score;
           if (anchor) {
-            const d = Math.hypot(cx - anchor.x, cy - anchor.y);
-            if (d > MAX_ANCHOR_DIST) continue; // too far to be the same instance
-            score = d;
+            if (!sizeMatches(f)) continue; // wrong size → not this element
+            // Nearest to the last-known position wins (only matters when two
+            // same-sized, same-labeled elements are both on screen).
+            score = Math.hypot(cx - (anchor.x + anchor.width / 2), cy - (anchor.y + anchor.height / 2));
           } else {
             score = a;
           }
@@ -3557,24 +3568,22 @@
       // and pin tracking are handled every animation frame by vpTick().
       function vpRender() {
         for (const p of vp.proposals) {
-          // Anchor the match to where the element was last seen — seeded from
-          // the propose-time frame, then updated to the matched element each
-          // frame. This disambiguates a label shared by two elements, follows
-          // the target as it scrolls, and when the target leaves the screen the
-          // stale anchor keeps the bubble from snapping onto the other one.
+          // Anchor the match to the element's last-seen FRAME — seeded from the
+          // propose-time frame, then updated to the matched element each frame.
+          // Size is the stable identity signal: it disambiguates a label shared
+          // by two differently-sized elements (a header vs a tab) and follows the
+          // target across a big scroll jump (same size), while a same-labeled
+          // element that's left the screen fails the size gate so the bubble goes
+          // off-screen instead of snapping onto it. See vpMatchNode.
           let anchor = vp.anchors[p.id];
           if (!anchor) {
             const av = p.variants && p.variants.find((v) => v.frame);
-            if (av)
-              anchor = vp.anchors[p.id] = {
-                x: av.frame.x + av.frame.width / 2,
-                y: av.frame.y + av.frame.height / 2,
-              };
+            if (av) anchor = vp.anchors[p.id] = { ...av.frame };
           }
           p._node = vp.tree ? vpMatchNode(vp.tree, p.match, anchor) : null;
           if (p._node) {
             const f0 = p._node.frame;
-            vp.anchors[p.id] = { x: f0.x + f0.width / 2, y: f0.y + f0.height / 2 };
+            vp.anchors[p.id] = { x: f0.x, y: f0.y, width: f0.width, height: f0.height };
           }
           if (p._node && !vp.thumbFrames[p.id]) {
             const f = p._node.frame;
