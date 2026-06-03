@@ -141,6 +141,7 @@
   --footbar-input-width: 260px;
   --footbar-bottom: 14px;
   --footbar-right: 14px;
+  --resize-edge: 6px; /* drag-layer inset so the frameless window's edges still resize */
   --footbar-max-width: 70%;
   --select-min-width: 240px;
   --debug-min-width: 220px;

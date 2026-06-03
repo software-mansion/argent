@@ -24,15 +24,25 @@
         flex-direction: column;
         height: 100%;
       }
-      /* Frameless window, no title bar / toolbar. The empty space around the
-         streamed phone is the window drag handle; every interactive overlay
-         opts back out with -webkit-app-region: no-drag. Harmless in a browser,
-         where the property is simply ignored. */
-      #main {
+      /* Frameless window, no title bar / toolbar. Dragging is done by a
+         full-bleed drag LAYER rather than #main itself: -webkit-app-region is
+         "union of drag boxes minus no-drag boxes", so a full-cover no-drag layer
+         (.cards) would cancel the entire region. The drag layer is:
+           • inset a few px so the window's resize edges keep working (the top
+             edge resizes, it does NOT drag),
+           • pointer-events:none so clicks fall through to the stream/cards.
+         Every interactive surface subtracts itself with no-drag. Crucially the
+         .cards POSITIONING layer is NOT no-drag — only the real .vcard chips are,
+         so the empty background between/around them stays draggable. Harmless in
+         a browser, where the property is simply ignored. */
+      .drag-region {
+        position: absolute;
+        inset: var(--resize-edge);
+        pointer-events: none;
         -webkit-app-region: drag;
       }
       .stage,
-      .cards,
+      .vcard,
       .float-controls,
       .float-status,
       .footbar,
@@ -412,12 +422,18 @@
       .vcard-body {
         max-height: var(--vcard-body-max-h);
         overflow-y: auto;
-        /* No stable scrollbar gutter: it reserved ~15px on the right inside
-           the body, sitting outside .vrow's content box, so a hovered row
-           had a visible un-highlighted strip on its right. The previews
-           still don't oscillate because applyThumbCrop's cache key includes
-           the row's current content width — when the scrollbar toggles,
-           the cache misses and the preview re-fits to the new width. */
+        /* Hide the scrollbar so its appearance NEVER changes the body's content
+           width. A space-taking scrollbar caused a perpetual resize loop: a
+           preview sized to the full width pushes the body past max-height → the
+           scrollbar appears → content width shrinks ~15px → applyThumbCrop (its
+           cache key includes that width) re-fits the preview smaller → content
+           fits → scrollbar disappears → width grows → re-fit bigger → … forever.
+           Hidden = constant width = no loop, and no un-highlighted gutter strip
+           on hovered rows. The body still scrolls by wheel/trackpad. */
+        scrollbar-width: none;
+      }
+      .vcard-body::-webkit-scrollbar {
+        display: none;
       }
       .vrow {
         display: flex;
@@ -915,6 +931,9 @@
   <body>
     <div id="root">
       <div class="main" id="main">
+        <!-- Window drag handle: a full-bleed, click-through layer behind the
+             content. See .drag-region in the stylesheet. -->
+        <div class="drag-region"></div>
         <div class="viewport" id="viewport">
           <div class="empty">Loading simulators…</div>
         </div>
@@ -2463,6 +2482,29 @@
       // off-screen fade, and compute each visible card's spring "home"
       // anchored to its element (vertical de-overlap) — not a rigid column.
       const GONE_GRACE_MS = THEME.goneGraceMs; // ride out brief edge drop-outs before fading
+      // Keep a card's HOME out of the streamed-phone rect: if it would overlap,
+      // slide it horizontally to just past the nearer side of the stream. The
+      // bubble spring then glides the card off the phone — the same way homes
+      // are inset from the window edges. Stream avoidance is preferred over the
+      // edge margin in a narrow window: the phone is the content being judged,
+      // so a card may sit a little tighter to the edge but never on the stream.
+      function homeOffStream(home, cardW, cardH, sr, mw) {
+        if (!sr) return home;
+        const PAD = 14;
+        const overlapX = home.x < sr.x + sr.w && home.x + cardW > sr.x;
+        const overlapY = home.y < sr.y + sr.h && home.y + cardH > sr.y;
+        if (!overlapX || !overlapY) return home;
+        const leftSide = sr.x - cardW - PAD;
+        const rightSide = sr.x + sr.w + PAD;
+        const leftFits = leftSide >= 2;
+        const rightFits = rightSide + cardW <= mw - 2;
+        const nearerLeft = home.x + cardW / 2 < sr.x + sr.w / 2;
+        let nx;
+        if (leftFits && (nearerLeft || !rightFits)) nx = leftSide;
+        else if (rightFits) nx = rightSide;
+        else nx = nearerLeft ? leftSide : rightSide; // neither side fits cleanly
+        return { x: nx, y: home.y };
+      }
       function layoutCards() {
         const now = Date.now();
         const mr = mainEl.getBoundingClientRect();
@@ -2707,7 +2749,7 @@
               y: Math.max(COL_PAD, Math.min(mh - elH - COL_PAD, w.rec.pos.y)),
             };
           }
-          w.rec.home = pinHome || { x: hx, y: w.y };
+          w.rec.home = homeOffStream(pinHome || { x: hx, y: w.y }, cardW, w.ch, r, mw);
           if (!w.rec.pos) {
             // First appearance: drift in from just outside its own side
             // toward home so it floats into place like a cloud (px/s — the

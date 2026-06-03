@@ -25,21 +25,32 @@ let win: BrowserWindow | null = null;
 // `transitionend`, so the main process learns when the animation has
 // actually finished instead of having to time it.
 function squeezeSnippet(toScale: number, durationMs: number): string {
+  // Squeeze-IN (toScale 1) must DROP the transform once it settles: a lingering
+  // `transform: scaleY(1)` on <html> establishes a containing block that breaks
+  // Chromium's `-webkit-app-region` hit-testing, so the window stops being
+  // draggable by its background. scaleY(1) === none visually, so clearing it is
+  // invisible. Squeeze-OUT (toScale 0) keeps the transform — the window quits
+  // immediately after, and clearing it would pop the collapsed card back.
+  const clearWhenDone = toScale === 1;
   return `
     new Promise(resolve => {
       const root = document.documentElement;
       const s = root.style;
       s.transformOrigin = '50% 50%';
       s.transition = 'transform ${durationMs}ms cubic-bezier(0.22, 1, 0.36, 1)';
+      const done = () => {
+        ${clearWhenDone ? "s.transition = ''; s.transform = '';" : ""}
+        resolve();
+      };
       // Two rAFs so the previous transform (set just before this snippet)
       // has been committed and rendered before the transition starts.
       // Without this, the browser collapses both writes into one frame
       // and skips the animation.
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        const onEnd = () => { root.removeEventListener('transitionend', onEnd); resolve(); };
+        const onEnd = () => { root.removeEventListener('transitionend', onEnd); done(); };
         root.addEventListener('transitionend', onEnd, { once: true });
         // Safety in case transitionend never fires (off-screen tab, e.g.):
-        setTimeout(resolve, ${durationMs + 80});
+        setTimeout(done, ${durationMs + 80});
         s.transform = 'scaleY(${toScale})';
       }));
     });
