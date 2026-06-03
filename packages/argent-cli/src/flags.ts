@@ -10,6 +10,7 @@
 // cleared from storage, and `argent flags` lists such leftovers under an
 // "unrecognized" section so they can be cleaned up.
 
+import pc from "picocolors";
 import {
   FLAG_REGISTRY,
   getFlagDefinition,
@@ -20,6 +21,15 @@ import {
   type FlagScope,
   type FlagDefinition,
 } from "@argent/configuration-core";
+
+// Green for enabled, red for disabled. The label is padded first, then wrapped,
+// so column alignment is computed from the plain text and never thrown off by
+// ANSI escapes. picocolors is a no-op when stdout isn't a TTY or NO_COLOR is
+// set, so piped/redirected output stays plain.
+function colorState(enabled: boolean): string {
+  const label = (enabled ? "enabled" : "disabled").padEnd(8);
+  return enabled ? pc.green(label) : pc.red(label);
+}
 
 // Flag names: start with a letter, then letters/digits/dot/underscore/dash.
 // Keeps file contents predictable and avoids shell-quoting surprises.
@@ -246,9 +256,8 @@ Options:
     console.log("Feature flags (project overrides global):");
     const maxName = registryView.reduce((m, f) => Math.max(m, f.name.length), 0);
     for (const f of registryView) {
-      const stateLabel = f.enabled ? "enabled" : "disabled";
       const scopeLabel = f.scope ? ` (${f.scope})` : "";
-      console.log(`  ${f.name.padEnd(maxName, " ")}  ${stateLabel.padEnd(8)}${scopeLabel}`);
+      console.log(`  ${f.name.padEnd(maxName, " ")}  ${colorState(f.enabled)}${scopeLabel}`);
       console.log(`  ${" ".repeat(maxName)}  ${f.description}`);
     }
   }
@@ -257,8 +266,7 @@ Options:
     console.log("\nStored but no longer recognized (safe to `argent disable`):");
     const maxName = unrecognized.reduce((m, f) => Math.max(m, f.name.length), 0);
     for (const f of unrecognized) {
-      const stateLabel = f.enabled ? "enabled" : "disabled";
-      console.log(`  ${f.name.padEnd(maxName, " ")}  ${stateLabel.padEnd(8)} (${f.scope})`);
+      console.log(`  ${f.name.padEnd(maxName, " ")}  ${colorState(f.enabled)} (${f.scope})`);
     }
   }
 

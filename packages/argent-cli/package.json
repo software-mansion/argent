@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@argent/configuration-core": "file:../configuration-core",
-    "@argent/tools-client": "file:../argent-tools-client"
+    "@argent/tools-client": "file:../argent-tools-client",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",
