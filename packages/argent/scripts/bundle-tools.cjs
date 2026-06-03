@@ -213,7 +213,9 @@ if (fs.existsSync(AX_TCP_BIN_SRC)) {
   fs.mkdirSync(path.dirname(AX_TCP_BIN_DEST), { recursive: true });
   fs.copyFileSync(AX_TCP_BIN_SRC, AX_TCP_BIN_DEST);
   fs.chmodSync(AX_TCP_BIN_DEST, 0o755);
-  console.log(`✓ Copied ax-service (tcp) binary → ${path.relative(process.cwd(), AX_TCP_BIN_DEST)}`);
+  console.log(
+    `✓ Copied ax-service (tcp) binary → ${path.relative(process.cwd(), AX_TCP_BIN_DEST)}`
+  );
 } else {
   console.warn(`⚠ ax-service (tcp) binary not found at ${AX_TCP_BIN_SRC} — skipping copy`);
 }
