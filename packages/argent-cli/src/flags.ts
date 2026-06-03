@@ -24,10 +24,13 @@ import {
 
 // Green for enabled, red for disabled. The label is padded first, then wrapped,
 // so column alignment is computed from the plain text and never thrown off by
-// ANSI escapes. picocolors is a no-op when stdout isn't a TTY or NO_COLOR is
-// set, so piped/redirected output stays plain.
+// ANSI escapes. We only colorize for an interactive TTY: picocolors' own
+// auto-detection also turns colors on when the CI env var is set (e.g. GitHub
+// Actions), which would leak escapes into captured/piped output, so we gate on
+// isTTY ourselves to keep piped/redirected/CI output plain.
 function colorState(enabled: boolean): string {
   const label = (enabled ? "enabled" : "disabled").padEnd(8);
+  if (!process.stdout.isTTY) return label;
   return enabled ? pc.green(label) : pc.red(label);
 }
 
