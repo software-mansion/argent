@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/tool-server",
-"version": "0.9.0",
+  "version": "0.9.0",
   "description": "Framework-agnostic tool registry for iOS simulator and Android emulator control",
   "main": "dist/index.js",
   "scripts": {
@@ -13,11 +13,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-<<<<<<< HEAD
-=======
-    "@argent/registry": "file:../registry",
     "@argent/cli": "file:../argent-cli",
->>>>>>> c0de7f1f (feat(propose-variants): flag-gate the feature, fix prod bundling, demo polish)
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@argent/native-devtools-android": "file:../native-devtools-android",
     "@argent/preview-window": "file:../preview-window",

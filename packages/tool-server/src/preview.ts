@@ -259,7 +259,7 @@ export function createPreviewRouter(registry: Registry): Router {
       const data: DescribeTreeData =
         device.platform === "ios"
           ? await describeIos(registry, device, {})
-          : await describeAndroid(udid);
+          : await describeAndroid(registry, udid);
       res.set("Cache-Control", "no-store");
       res.json(data);
     } catch (err) {

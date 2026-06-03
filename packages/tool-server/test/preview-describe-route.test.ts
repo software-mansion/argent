@@ -77,7 +77,8 @@ describe("GET /preview/describe/:udid (describe-based; post-#197 text-contract r
     expect(res.body).not.toHaveProperty("description");
     expect(res.body.source).toBe("uiautomator");
     expect(mockedAndroid).toHaveBeenCalledTimes(1);
-    expect(mockedAndroid).toHaveBeenCalledWith(ANDROID_SERIAL);
+    // dispatched as describeAndroid(registry, serial) — mirrors the describe tool
+    expect(mockedAndroid).toHaveBeenCalledWith(expect.anything(), ANDROID_SERIAL);
     expect(mockedIos).not.toHaveBeenCalled();
   });
 

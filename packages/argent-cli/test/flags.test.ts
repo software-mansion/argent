@@ -460,7 +460,6 @@ describe("flags (list) CLI", () => {
     expect(out.stdout).not.toContain("No feature flags are defined.");
   });
 
-
   it("lists every registry flag with its description and effective scope", () => {
     setFlag("a", true, "global");
     setFlag("b", true, "global");
