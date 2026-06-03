@@ -49,7 +49,7 @@
     "@argent/mcp": "file:../argent-mcp",
     "@argent/tools-client": "file:../argent-tools-client",
     "@clack/prompts": "^1.1.0",
-    "@types/node": "^25.9.0",
+    "@types/node": "^25.9.1",
     "@types/semver": "^7.7.1",
     "esbuild": "^0.28.0",
     "picocolors": "^1.1.1",
