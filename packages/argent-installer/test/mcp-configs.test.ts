@@ -1321,6 +1321,17 @@ describe("injectCodexRules / removeCodexRules", () => {
 // not the editor dir's presence.
 
 describe("hasArgentEntry — non-mutating per-adapter predicate", () => {
+  // Pin homedir into tmpDir so global-only adapters (projectPath === null)
+  // resolve globalPath() inside the sandbox. Without this, the rmSync below
+  // would delete the developer's real Windsurf/Hermes config.
+  beforeEach(() => {
+    homedirOverride = tmpDir;
+  });
+
+  afterEach(() => {
+    homedirOverride = undefined;
+  });
+
   for (const adapter of ALL_ADAPTERS) {
     describe(adapter.name, () => {
       it("returns false when the config file does not exist", () => {
