@@ -50,6 +50,22 @@ export const SKILLS_DIR = resolveBundledDir("skills");
 export const RULES_DIR = resolveBundledDir("rules");
 export const AGENTS_DIR = resolveBundledDir("agents");
 
+// GitHub source shorthand the `skills` CLI parses to a github-typed entry with
+// `subpath: "packages/skills/skills"` and the supplied ref. Pinning to the
+// installed argent version's git tag is what keeps `skills-lock.json` portable
+// across machines (see issue #208) — install paths stop being absolute and
+// teammates resolve the same SHA.
+export const ARGENT_SKILLS_REPO = "software-mansion/argent/packages/skills/skills";
+
+// Build the `skills add` source argument. Returns the GitHub-pinned shorthand
+// when a clean version is available; falls back to the bundled local SKILLS_DIR
+// when the version is unknown (e.g. dev tarball) so offline / pre-release
+// installs still succeed.
+export function buildArgentSkillsSource(version: string | null | undefined): string {
+  if (!version || version === "unknown") return SKILLS_DIR;
+  return `${ARGENT_SKILLS_REPO}#v${version}`;
+}
+
 // Returns the names of the skills that ship with this argent install — each
 // subdirectory of SKILLS_DIR that contains a SKILL.md. Used to detect which
 // skills on the user's machine are argent-owned so we don't touch anything

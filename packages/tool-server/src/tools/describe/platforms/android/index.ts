@@ -1,12 +1,53 @@
-import type { ToolDependency } from "@argent/registry";
-import type { DescribeResult } from "../../contract";
+import type { Registry, ToolDependency } from "@argent/registry";
+import type { DescribeTreeData } from "../../contract";
 import { adbExecOutBinary } from "../../../../utils/adb";
 import { getAndroidScreenSize } from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
+import {
+  androidDevtoolsRef,
+  type AndroidDevtoolsApi,
+} from "../../../../blueprints/android-devtools";
 
 export const androidRequires: ToolDependency[] = ["adb"];
 
-export async function describeAndroid(udid: string, _bundleId?: string): Promise<DescribeResult> {
+/**
+ * Try the persistent `android-devtools` helper first; on any error fall back
+ * to the legacy `uiautomator dump` path. The fallback exists because the
+ * legacy path has independent failure modes (it can survive an APK install
+ * rejection, a process spawn failure, an adb-forward conflict) and continues
+ * to work for users on locked-down devices that block `adb install -t`.
+ */
+export async function describeAndroid(
+  registry: Registry | undefined,
+  serial: string,
+  _bundleId?: string
+): Promise<DescribeTreeData> {
+  if (registry) {
+    try {
+      const device = { id: serial, platform: "android" as const, kind: "emulator" as const };
+      const ref = androidDevtoolsRef(device);
+      const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
+      const [{ xml }, size] = await Promise.all([
+        devtools.getHierarchy(),
+        devtools.getScreenSize(),
+      ]);
+      const tree = parseUiAutomatorDump(xml, size.width, size.height);
+      return { tree, source: "android-devtools" };
+    } catch (serviceErr) {
+      // Fall through to the legacy uiautomator path. Every error here is
+      // recoverable because the legacy path has independent failure modes.
+      // Surface at debug level so the failure is observable without leaking
+      // into the per-call result.
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[describe.android] devtools service failed, falling back to uiautomator dump: ${
+          serviceErr instanceof Error ? serviceErr.message : String(serviceErr)
+        }`
+      );
+    }
+  }
+
+  // ── Legacy uiautomator dump fallback ───────────────────────────────────
   // Per-call dump path so concurrent describes on the same serial don't race
   // on /sdcard/window_dump.xml (one call's cat would read the other's dump
   // mid-write). `uiautomator` rejects unwritable paths, so we target
@@ -22,9 +63,9 @@ export async function describeAndroid(udid: string, _bundleId?: string): Promise
   // Trailing `; rm -f` (not `&& rm -f`) so the cleanup fires even when `dump`
   // or `cat` fails — keyguard/MFA flaps used to leak a dump file per attempt.
   const [size, rawBuf] = await Promise.all([
-    getAndroidScreenSize(udid),
+    getAndroidScreenSize(serial),
     adbExecOutBinary(
-      udid,
+      serial,
       `uiautomator dump --compressed ${dumpPath} >/dev/null && cat ${dumpPath}; rm -f ${dumpPath}`,
       { timeoutMs: 20_000 }
     ),

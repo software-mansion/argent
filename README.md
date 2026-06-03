@@ -18,7 +18,7 @@ npx @swmansion/argent init
 - **UI interaction** - Give your agent full control toolkit - tapping, swiping, pinching, typing, gestures, hardware buttons and all other gears included. Let it navigate your app exactly as a user would, without lifting a finger.
 - **Profiling with batteries included** - Argent can perform and analyze both React-Native and Xcode Instruments profiling sessions. Get comprehensive summaries and ask to optimise your app where you find fit.
 - **Debugging and diagnostics** - Let your agent inspect logs, capture crash reports, and reproduce failing states on the simulator, so you can jump straight to the fix.
-- **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any iOS app - no extra setup required.
+- **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any native app - no extra setup required.
 
 > **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
 
@@ -60,14 +60,17 @@ argent init
 
 ## CLI Reference
 
-| Command            | Description                                                 |
-| ------------------ | ----------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace |
-| `argent install`   | Alias for `init` command                                    |
-| `argent update`    | Pull the latest version and refresh workspace configuration |
-| `argent remove`    | Unregister the MCP server and uninstall the package         |
-| `argent uninstall` | Alias for `remove` command                                  |
-| `argent mcp`       | Start MCP server instance, used internally by agent         |
+| Command            | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace            |
+| `argent install`   | Alias for `init` command                                               |
+| `argent update`    | Pull the latest version and refresh workspace configuration            |
+| `argent remove`    | Unregister the MCP server and uninstall the package                    |
+| `argent uninstall` | Alias for `remove` command                                             |
+| `argent mcp`       | Start MCP server instance, used internally by agent                    |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
+| `argent flags`     | List available feature flags and their state                           |
 
 ## Supported Editors
 

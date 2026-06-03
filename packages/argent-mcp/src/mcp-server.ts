@@ -15,7 +15,10 @@ import {
 import {
   toMcpContent,
   flowRunToMcpContent,
+  screenshotDiffToMcpContent,
+  isScreenshotDiffResult,
   type ContentContext,
+  type ContentBlock,
   type FlowExecuteResult,
 } from "./content.js";
 import {
@@ -37,7 +40,7 @@ export async function fetchWithReconnect(
     init?: RequestInit;
     expBackoffBase?: number;
     maxRetries?: number;
-    fetchTimeoutMs?: number;
+    fetchTimeoutMs?: number | null;
   }
 ): Promise<Response> {
   const {
@@ -51,7 +54,8 @@ export async function fetchWithReconnect(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    const timer =
+      fetchTimeoutMs !== null ? setTimeout(() => controller.abort(), fetchTimeoutMs) : undefined;
     try {
       return await fetch(getUrl(), { ...init, signal: controller.signal });
     } catch (err) {
@@ -149,6 +153,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(args ?? {}),
       },
+      fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,
     });
 
     const json = (await res.json()) as ToolAPIResponse;
@@ -212,14 +217,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
-      let content =
+      let content: ContentBlock[];
+      if (
         params.name === "flow-execute" &&
         result &&
         typeof result === "object" &&
         "flow" in result &&
         "steps" in result
-          ? await flowRunToMcpContent(result as FlowExecuteResult, ctx)
-          : await toMcpContent(result, outputHint, ctx);
+      ) {
+        content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
+      } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
+        content = await screenshotDiffToMcpContent(result);
+      } else {
+        content = await toMcpContent(result, outputHint, ctx, params.arguments);
+      }
 
       const udid = getUdidFromArgs(params.arguments);
       if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
@@ -232,22 +243,19 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
             toolsUrl: TOOLS_URL,
             deviceId: udid,
           });
-          content = [
-            ...content,
-            {
-              type: "text" as const,
-              text: "--- Screen after action ---",
-            },
-            ...screenshotContent,
-          ];
-        } catch (ssErr) {
-          content = [
-            ...content,
-            {
-              type: "text" as const,
-              text: `(Auto-screenshot skipped: ${ssErr instanceof Error ? ssErr.message : String(ssErr)})`,
-            },
-          ];
+          const hasImage = screenshotContent.some((b) => b.type === "image");
+          if (hasImage) {
+            content = [
+              ...content,
+              {
+                type: "text" as const,
+                text: "--- Screen after action ---",
+              },
+              ...screenshotContent,
+            ];
+          }
+        } catch {
+          // Auto-screenshot failed — silently drop it.
         }
       }
 

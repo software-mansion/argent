@@ -10,12 +10,16 @@
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",
     "download:native-binaries": "bash scripts/download-native-binaries.sh",
+    "build:ios-binaries": "bash packages/native-devtools-ios/scripts/build.sh dev",
+    "build:android-binaries": "bash packages/native-devtools-android/scripts/build.sh",
     "pack": "npm run download:simulator-server && npm run download:native-binaries && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "pack:mcp": "npm run pack",
+    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
   },
   "devDependencies": {
-    "prettier": "^3.0.0"
+    "prettier": "^3.8.3"
   }
 }

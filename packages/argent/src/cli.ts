@@ -21,6 +21,9 @@
  *   argent server status|stop|logs   Manage the shared tool-server
  *   argent link [flags]           Route client requests to a remote tool-server
  *   argent unlink                 Remove the persisted remote link
+ *   argent enable <flag>          Enable a feature flag (global by default)
+ *   argent disable <flag>         Disable a feature flag (global by default)
+ *   argent flags                  Show current feature-flag state
  */
 
 import * as fs from "node:fs";
@@ -29,6 +32,7 @@ import type * as Installer from "@argent/installer";
 import type * as Mcp from "@argent/mcp";
 import type * as Cli from "@argent/cli";
 import { BUNDLED_RUNTIME_PATHS } from "./bundled-paths.js";
+import { installFatalHandlers } from "./fatal-handlers.js";
 
 const PACKAGE_NAME = "@swmansion/argent";
 
@@ -47,16 +51,7 @@ function getInstalledVersion(): string | null {
 const [, , command, ...rest] = process.argv;
 const isMcpServer = command === "mcp";
 
-process.on("uncaughtException", (err) => {
-  process.stderr.write(`[argent] Uncaught exception: ${err.stack ?? err}\n`);
-  if (!isMcpServer) process.exit(1);
-});
-process.on("unhandledRejection", (reason) => {
-  process.stderr.write(
-    `[argent] Unhandled rejection: ${reason instanceof Error ? (reason.stack ?? reason.message) : reason}\n`
-  );
-  if (!isMcpServer) process.exit(1);
-});
+installFatalHandlers({ isMcpServer });
 
 function printHelp(): void {
   const version = getInstalledVersion() ?? "unknown";
@@ -77,6 +72,9 @@ Commands:
   server      Manage the shared tool-server (start / status / stop / logs)
   link        Route client requests to a remote tool-server
   unlink      Remove the persisted remote tool-server link
+  enable      Enable a feature flag (global by default, --scope project for project)
+  disable     Disable a feature flag (global by default, --scope project for project)
+  flags       Show current feature-flag state
 
 Options:
   --help, -h     Show this help message
@@ -126,6 +124,12 @@ async function main(): Promise<void> {
       return (await loadCli()).link(rest);
     case "unlink":
       return (await loadCli()).unlink(rest);
+    case "enable":
+      return (await loadCli()).enable(rest);
+    case "disable":
+      return (await loadCli()).disable(rest);
+    case "flags":
+      return (await loadCli()).flags(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

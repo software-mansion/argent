@@ -94,6 +94,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         outputHint?: string;
         alwaysLoad?: boolean;
         searchHint?: string;
+        longRunning?: boolean;
       } = {
         name: id,
         description: def?.description ?? "",
@@ -102,6 +103,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (def?.outputHint) entry.outputHint = def.outputHint;
       if (def?.alwaysLoad) entry.alwaysLoad = true;
       if (def?.searchHint) entry.searchHint = def.searchHint;
+      if (def?.longRunning) entry.longRunning = true;
       return entry;
     });
     res.json({ tools });
@@ -189,15 +191,23 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
         });
-        const { updateAvailable, currentVersion, latestVersion } = getUpdateState();
-        const shouldNotify = updateAvailable && !isUpdateNoteSuppressed();
+        // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
+        // version the resolver would install — both account for the release-age policy.
+        const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
+        const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
         if (shouldNotify) {
-          suppressUpdateNote(AUTO_SUPPRESS_MS);
+          // Best-effort: a persistence failure here must not fail the user's tool call.
+          // Worst case: the note appears again on the next request.
+          try {
+            suppressUpdateNote(AUTO_SUPPRESS_MS);
+          } catch {
+            // ignore
+          }
         }
         res.json({
           data,
           ...(shouldNotify
-            ? { note: buildUpdateNote(currentVersion, latestVersion ?? "unknown") }
+            ? { note: buildUpdateNote(currentVersion, installableVersion ?? "unknown") }
             : {}),
         });
       } catch (err: unknown) {

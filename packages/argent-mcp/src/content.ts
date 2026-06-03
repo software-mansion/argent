@@ -4,6 +4,7 @@
  * Extracted so it can be tested independently of the MCP server wiring.
  */
 
+import { readFile } from "node:fs/promises";
 import { materializeArtifacts, type MaterializeContext } from "@argent/tools-client";
 
 export type ContentBlock =
@@ -17,15 +18,38 @@ export type ContentBlock =
  */
 export type ContentContext = MaterializeContext;
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 function imageBlock(data: Buffer, mimeType: string): ContentBlock {
   return { type: "image", data: data.toString("base64"), mimeType };
+}
+
+// Fetch image bytes and confirm they actually start with a PNG signature.
+// Without this check, a 404 (file missing), an HTML error page, or any other
+// non-PNG response would be base64'd and labelled `image/png`, which the
+// model API rejects with "Image could not be processed" (issue #255).
+async function fetchPngBytes(url: string): Promise<Buffer | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < PNG_SIGNATURE.length) return null;
+    if (!buf.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return null;
+    return buf;
+  } catch {
+    return null;
+  }
 }
 
 export async function toMcpContent(
   result: unknown,
   outputHint?: string,
-  ctx?: ContentContext
+  ctx?: ContentContext,
+  args?: unknown
 ): Promise<ContentBlock[]> {
+  // `includeImageInContext: false` asks for the saved-path text only — no inline image.
+  const suppressImage = isRecord(args) && args.includeImageInContext === false;
+
   // Artifact path: when a context is available, resolve handles to local files.
   // Tools producing files (screenshots, profiler exports) return artifact
   // handles instead of host paths, so this works regardless of where the
@@ -35,38 +59,95 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
+        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
+        if (suppressImage) return [saved];
         const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
-        blocks.push({ type: "text", text: `Saved: ${images[0]!.localPath}` });
+        blocks.push(saved);
         return blocks;
       }
       // No image artifact present — fall back to the legacy `{ url, path }`
       // shape for older tool-servers.
-      return legacyImageContent(rewritten);
+      return legacyImageContent(rewritten, suppressImage);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: JSON.stringify(rewritten, null, 2) }];
     // Surface any images that rode along on a non-image result.
-    for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
+    if (!suppressImage) for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
     return blocks;
   }
 
   if (outputHint === "image") {
-    return legacyImageContent(result);
+    return legacyImageContent(result, suppressImage);
   }
 
   return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
 }
 
-/** Legacy screenshot rendering: fetch the `{ url, path }` media URL directly. */
-async function legacyImageContent(result: unknown): Promise<ContentBlock[]> {
+/**
+ * Legacy screenshot rendering for older tool-servers that return `{ url, path }`
+ * instead of an artifact handle: fetch the media URL directly, validating it is
+ * a real PNG (issue #255) before shipping it as an image.
+ */
+async function legacyImageContent(
+  result: unknown,
+  suppressImage: boolean
+): Promise<ContentBlock[]> {
   if (result && typeof result === "object" && "url" in result) {
-    const imgRes = await fetch((result as { url: string }).url);
-    const buf = Buffer.from(await imgRes.arrayBuffer());
-    const filePath = (result as { path?: string }).path ?? "";
-    return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${filePath}` }];
+    const r = result as { url: string; path?: string };
+    if (suppressImage) {
+      return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
+    }
+    const buf = await fetchPngBytes(r.url);
+    if (buf) {
+      return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
+    }
+    return [
+      {
+        type: "text" as const,
+        text: `(Screenshot unavailable: no valid PNG at ${r.url}. Take a new screenshot.)`,
+      },
+    ];
   }
   return [{ type: "text", text: JSON.stringify(result, null, 2) }];
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+// ── screenshot-diff adapter ──────────────────────────────────────────
+
+export interface ScreenshotDiffResult {
+  summary: string;
+  diffPath?: string;
+  contextDiffPath?: string;
+}
+
+export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffResult {
+  if (!isRecord(value)) return false;
+  return typeof value.summary === "string";
+}
+
+// Render a screenshot-diff tool result as MCP content blocks.
+export async function screenshotDiffToMcpContent(
+  result: ScreenshotDiffResult
+): Promise<ContentBlock[]> {
+  const blocks: ContentBlock[] = [];
+
+  if (typeof result.contextDiffPath === "string") {
+    const buf = await readFile(result.contextDiffPath);
+    blocks.push({
+      type: "image" as const,
+      data: buf.toString("base64"),
+      mimeType: "image/png" as const,
+    });
+  }
+
+  blocks.push({ type: "text" as const, text: result.summary });
+  return blocks;
+}
+
+// ── flow-execute adapter ─────────────────────────────────────────────
 
 export type FlowExecuteResult = {
   flow: string;
@@ -77,6 +158,7 @@ export type FlowExecuteResult = {
     message?: string;
     result?: unknown;
     outputHint?: string;
+    args?: unknown;
     error?: string;
   }[];
 };
@@ -116,7 +198,7 @@ export async function flowRunToMcpContent(
       });
     } else {
       blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint, ctx);
+      const stepContent = await toMcpContent(step.result, step.outputHint, ctx, step.args);
       blocks.push(...stepContent);
     }
   }
