@@ -74,3 +74,49 @@ describe("Host header validation", () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe("Host header validation — explicit non-loopback bind host", () => {
+  let handle: HttpAppHandle;
+
+  beforeEach(() => {
+    handle = createHttpApp(stubRegistry(), { bindHost: "192.168.92.208" });
+  });
+
+  afterEach(() => handle?.dispose());
+
+  it("accepts the configured bind host (the `argent link` path)", async () => {
+    const res = await supertest(handle.app).get("/tools").set("Host", "192.168.92.208:3001");
+    expect(res.status).toBe(200);
+  });
+
+  it("still accepts loopback", async () => {
+    const res = await supertest(handle.app).get("/tools").set("Host", "127.0.0.1:3001");
+    expect(res.status).toBe(200);
+  });
+
+  it("still rejects a different non-loopback host (DNS-rebinding)", async () => {
+    const res = await supertest(handle.app).get("/tools").set("Host", "evil.com:3001");
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/192\.168\.92\.208/);
+  });
+});
+
+describe("Host header validation — wildcard bind disables the guard", () => {
+  let handle: HttpAppHandle;
+
+  beforeEach(() => {
+    handle = createHttpApp(stubRegistry(), { bindHost: "0.0.0.0" });
+  });
+
+  afterEach(() => handle?.dispose());
+
+  it("accepts an arbitrary Host when bound to all interfaces", async () => {
+    const res = await supertest(handle.app).get("/tools").set("Host", "10.0.0.42:3001");
+    expect(res.status).toBe(200);
+  });
+
+  it("accepts a request with no Host header", async () => {
+    const res = await supertest(handle.app).get("/tools");
+    expect(res.status).toBe(200);
+  });
+});

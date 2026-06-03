@@ -6,7 +6,8 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   ensureToolsServer,
-  AUTH_TOKEN_ENV,
+  getResolvedToolsUrl,
+  isRemoteRouted,
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -83,9 +84,13 @@ export interface StartMcpServerOptions {
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
-  if (process.env.ARGENT_TOOLS_URL) {
-    TOOLS_URL = process.env.ARGENT_TOOLS_URL;
-    AUTH_TOKEN = process.env[AUTH_TOKEN_ENV] ?? "";
+  // Honor a configured remote target (ARGENT_TOOLS_URL env or ~/.argent/link.json)
+  // before auto-spawning. The token for a remote server comes from
+  // ARGENT_AUTH_TOKEN; the local auto-spawn path mints and returns its own.
+  const resolved = await getResolvedToolsUrl();
+  if (resolved.url) {
+    TOOLS_URL = resolved.url;
+    AUTH_TOKEN = resolved.token ?? "";
   } else {
     try {
       const handle = await ensureToolsServer(options.paths);
@@ -104,7 +109,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
-    if (process.env.ARGENT_TOOLS_URL) return;
+    if (await isRemoteRouted()) return;
     if (!reconnectPromise) {
       reconnectPromise = ensureToolsServer(options.paths)
         .then((handle) => {
@@ -286,8 +291,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   await server.connect(new StdioServerTransport());
 
-  // Proactive health monitoring — restart tool server if it dies between requests
-  if (!process.env.ARGENT_TOOLS_URL) {
+  // Proactive health monitoring — restart tool server if it dies between requests.
+  // Only run for auto-spawned servers; remote-routed targets (env var or link)
+  // are the user's responsibility, and a silent local respawn would mask outages.
+  if (!(await isRemoteRouted())) {
     const HEALTH_INTERVAL_MS = 30_000;
     const healthInterval = setInterval(async () => {
       try {

@@ -53,6 +53,16 @@ export interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;
+  /**
+   * Address the server is bound to (the launcher's `ARGENT_HOST`). Defaults to
+   * loopback. When the operator deliberately binds to a routable address
+   * (`argent server start --host <ip>`), that host is added to the Host-header
+   * allow-list so legitimate remote clients aren't mistaken for DNS-rebinding.
+   * A wildcard bind (0.0.0.0 / ::) disables the guard entirely — the machine is
+   * reachable by addresses we can't enumerate, and the operator has explicitly
+   * opted into network exposure (and is warned at startup).
+   */
+  bindHost?: string;
 }
 
 export interface HttpAppHandle {
@@ -64,11 +74,22 @@ export interface HttpAppHandle {
 }
 
 // Loopback hostnames the browser is allowed to address us by. The
-// tool-server binds to 127.0.0.1 only, but a public attacker page that
+// tool-server binds to 127.0.0.1 by default, but a public attacker page that
 // briefly DNS-rebinds its own hostname to 127.0.0.1 can still reach us
 // — the Host header is the only signal that distinguishes that traffic
 // from a legitimate same-origin request, so we gate on it.
-const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOOPBACK_HOSTNAMES = ["127.0.0.1", "localhost", "::1"];
+
+function isLoopbackHost(host: string): boolean {
+  return host === "" || LOOPBACK_HOSTNAMES.includes(host);
+}
+
+// Wildcard binds accept connections on every interface; a client can reach
+// them via any of the machine's addresses, which we can't enumerate — so the
+// Host guard can't be applied meaningfully and is disabled for this case.
+function isWildcardHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "::0";
+}
 
 function extractHostname(host: string): string {
   // IPv6 literals are bracketed: "[::1]:8080" → "::1"
@@ -86,25 +107,42 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
-  // Reject requests whose Host header points to anything other than a
-  // loopback hostname. Closes the DNS-rebinding bypass, where a public
+  // Hostnames a client is allowed to address us by. Always includes loopback;
+  // a non-loopback bind host (`argent server start --host <ip>`) is added so
+  // its legitimate clients pass the guard. A wildcard bind disables the guard.
+  const bindHost = options?.bindHost ?? "127.0.0.1";
+  const hostGuardDisabled = isWildcardHost(bindHost);
+  const allowedHostnames = new Set<string>(LOOPBACK_HOSTNAMES);
+  if (!isLoopbackHost(bindHost) && !isWildcardHost(bindHost)) {
+    allowedHostnames.add(bindHost);
+  }
+
+  // Reject requests whose Host header points to anything other than an
+  // allowed hostname. Closes the DNS-rebinding bypass, where a public
   // origin's hostname briefly resolves to 127.0.0.1 and the browser dutifully
   // forwards the rebound origin's cookies/CSRF state to us. Runs before the
   // auth gate so a rebound public origin doesn't even reach the token check.
   app.use((req, res, next) => {
+    // Server explicitly bound to all interfaces — the guard is moot (see
+    // isWildcardHost) and the operator opted into network exposure.
+    if (hostGuardDisabled) {
+      next();
+      return;
+    }
     const host = req.headers.host;
     if (!host) {
       res.status(400).json({ error: "Missing Host header" });
       return;
     }
     const hostname = extractHostname(host);
-    if (!ALLOWED_HOSTNAMES.has(hostname)) {
+    if (!allowedHostnames.has(hostname)) {
       res.status(403).json({
         error:
-          `Refusing request with Host "${host}". The tool-server only accepts ` +
-          `loopback hostnames (127.0.0.1, localhost, ::1) to defend against ` +
-          `DNS-rebinding. If you are reaching this from your own client, use ` +
-          `127.0.0.1 instead of a public hostname.`,
+          `Refusing request with Host "${host}". The tool-server accepts ` +
+          `loopback hostnames (127.0.0.1, localhost, ::1)` +
+          (isLoopbackHost(bindHost) ? "" : ` and its bind host (${bindHost})`) +
+          ` to defend against DNS-rebinding. If you are reaching this from ` +
+          `your own client, use one of those instead of a public hostname.`,
       });
       return;
     }

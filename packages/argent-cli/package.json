@@ -12,7 +12,9 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "@argent/tools-client": "file:../argent-tools-client"
+    "@argent/tools-client": "file:../argent-tools-client",
+    "@clack/prompts": "^1.1.0",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",
