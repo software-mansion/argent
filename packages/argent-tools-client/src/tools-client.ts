@@ -1,9 +1,4 @@
-import {
-  ensureToolsServer,
-  AUTH_TOKEN_ENV,
-  type ToolsServerHandle,
-  type ToolsServerPaths,
-} from "./launcher.js";
+import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
 import { getResolvedToolsUrl } from "./link-config.js";
 
 export interface ToolMeta {
@@ -55,7 +50,7 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     // locally auto-spawned, token-authenticated tool-server.
     const resolved = await getResolvedToolsUrl();
     if (resolved.url) {
-      return { url: resolved.url, token: process.env[AUTH_TOKEN_ENV] ?? "" };
+      return { url: resolved.url, token: resolved.token ?? "" };
     }
     if (cached) return cached;
     if (!options.paths) {

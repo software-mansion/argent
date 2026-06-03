@@ -7,6 +7,7 @@ describe("parseLinkFlags — defaults", () => {
     expect(parseLinkFlags([])).toEqual({
       host: null,
       port: null,
+      token: null,
       yes: false,
       noVerify: false,
       help: false,
@@ -39,10 +40,38 @@ describe("parseLinkFlags — flag forms", () => {
     expect(flags).toEqual({
       host: "10.0.0.42",
       port: 4567,
+      token: null,
       yes: true,
       noVerify: true,
       help: false,
     });
+  });
+
+  it("parses --token in space and equals form", () => {
+    expect(parseLinkFlags(["--token", "ab12cd"]).token).toBe("ab12cd");
+    expect(parseLinkFlags(["--token=ab12cd"]).token).toBe("ab12cd");
+  });
+
+  it("parses an argent:// connection string into host, port, and token", () => {
+    const flags = parseLinkFlags(["argent://tok_abc@10.0.0.42:3001"]);
+    expect(flags.host).toBe("10.0.0.42");
+    expect(flags.port).toBe(3001);
+    expect(flags.token).toBe("tok_abc");
+  });
+
+  it("parses an argent:// connection string without a token", () => {
+    const flags = parseLinkFlags(["argent://10.0.0.42:3001"]);
+    expect(flags.host).toBe("10.0.0.42");
+    expect(flags.port).toBe(3001);
+    expect(flags.token).toBeNull();
+  });
+
+  it("rejects an argent:// string whose host is a wildcard bind address", () => {
+    expect(() => parseLinkFlags(["argent://0.0.0.0:3001"])).toThrow(StartFlagError);
+  });
+
+  it("rejects a non-argent positional argument", () => {
+    expect(() => parseLinkFlags(["10.0.0.42"])).toThrow(StartFlagError);
   });
 });
 

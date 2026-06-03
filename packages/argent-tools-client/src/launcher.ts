@@ -93,6 +93,14 @@ function generateToken(): string {
   return randomBytes(AUTH_TOKEN_BYTES).toString("hex");
 }
 
+/**
+ * Mint a fresh tool-server auth token. Exposed so `argent server start` can
+ * issue one for a long-lived / remote server.
+ */
+export function generateAuthToken(): string {
+  return generateToken();
+}
+
 export function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();

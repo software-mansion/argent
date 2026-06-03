@@ -8,7 +8,6 @@ import {
   ensureToolsServer,
   getResolvedToolsUrl,
   isRemoteRouted,
-  AUTH_TOKEN_ENV,
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -91,7 +90,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   const resolved = await getResolvedToolsUrl();
   if (resolved.url) {
     TOOLS_URL = resolved.url;
-    AUTH_TOKEN = process.env[AUTH_TOKEN_ENV] ?? "";
+    AUTH_TOKEN = resolved.token ?? "";
   } else {
     try {
       const handle = await ensureToolsServer(options.paths);
