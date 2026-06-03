@@ -384,16 +384,9 @@ export function getGloballyInstalledVersion(): string | null {
 const PROBE_TIMEOUT_MS = 3_000;
 
 export function getLatestVersion(): string {
-  // stdio: ["ignore", "pipe", "ignore"] — matches `getGlobalBinaryPath` above.
-  // Without it, npm warnings (notably EBADDEVENGINES when the user's cwd
-  // package.json pins a different package-manager or node version) print
-  // straight to the user's terminal, even though argent catches the thrown
-  // exception silently. Bluesky's package.json triggers this on every host
-  // that doesn't match its `devEngines.runtime` / `devEngines.packageManager`.
   const result = execSync(`npm view ${PACKAGE_NAME} version --registry ${NPM_REGISTRY}`, {
     encoding: "utf8",
     timeout: PROBE_TIMEOUT_MS,
-    stdio: ["ignore", "pipe", "ignore"],
   });
   return result.trim();
 }
