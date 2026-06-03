@@ -69,7 +69,7 @@ import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-dat
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
-import { proposeVariantTool } from "../tools/variants/propose-variant";
+import { createProposeVariantTool } from "../tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 
 export function createRegistry(): Registry {
@@ -160,7 +160,7 @@ export function createRegistry(): Registry {
   // variant-selection` takes effect on the next tools/list WITHOUT restarting
   // the long-lived tool-server. Registered unconditionally; the flag gates at
   // the exposure boundary, not at registration.
-  registry.registerTool(proposeVariantTool);
+  registry.registerTool(createProposeVariantTool(registry));
   registry.registerTool(awaitUserSelectionTool);
 
   return registry;

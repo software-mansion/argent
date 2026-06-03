@@ -16,7 +16,7 @@ import { z } from "zod";
 vi.mock("@argent/cli", () => ({ isFlagEnabled: vi.fn() }));
 import { isFlagEnabled } from "@argent/cli";
 import { createHttpApp } from "../src/http";
-import { proposeVariantTool } from "../src/tools/variants/propose-variant";
+import { createProposeVariantTool } from "../src/tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../src/tools/variants/await-user-selection";
 
 const mockFlag = vi.mocked(isFlagEnabled);
@@ -54,7 +54,7 @@ describe("variant-selection feature-flag gate (dynamic, HTTP layer)", () => {
   beforeEach(() => mockFlag.mockReset());
 
   it("the real variant tools declare the variant-selection flag", () => {
-    expect(proposeVariantTool.featureFlag).toBe("variant-selection");
+    expect(createProposeVariantTool(new Registry()).featureFlag).toBe("variant-selection");
     expect(awaitUserSelectionTool.featureFlag).toBe("variant-selection");
   });
 

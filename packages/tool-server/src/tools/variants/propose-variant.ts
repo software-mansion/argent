@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { Registry, ToolDefinition } from "@argent/registry";
 import { variantProposalStore } from "../../utils/variant-proposals";
+import { captureElementFrame } from "../../utils/match-element-frame";
 
 const zodSchema = z.object({
   element: z
@@ -92,10 +93,11 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-export const proposeVariantTool: ToolDefinition<Params> = {
-  id: "propose_variant",
-  featureFlag: "variant-selection",
-  description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
+export function createProposeVariantTool(registry: Registry): ToolDefinition<Params> {
+  return {
+    id: "propose_variant",
+    featureFlag: "variant-selection",
+    description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
 
 Use when you have produced multiple alternative designs for an element and want the human to pick.
 Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Foo", v2),
@@ -110,19 +112,37 @@ the single blocking call that waits for the human's picks.
 
 Returns { round, elementId, variantId, element, variantCount, totalElements } — confirmation only;
 it does not wait for the user.`,
-  searchHint: "propose design variant alternative option for element non-blocking ab choice",
-  zodSchema,
-  services: () => ({}),
-  async execute(_services, params) {
-    const res = variantProposalStore.proposeVariant(params);
-    return {
-      ...res,
-      hint:
-        res.variantCount === 1
-          ? `Staged the first variant for "${res.element}". Propose more variants (for this or ` +
-            `other elements), then call await_user_selection once when done.`
-          : `"${res.element}" now has ${res.variantCount} variants. Keep proposing or call ` +
-            `await_user_selection when every element is covered.`,
-    };
-  },
-};
+    searchHint: "propose design variant alternative option for element non-blocking ab choice",
+    zodSchema,
+    services: () => ({}),
+    async execute(_services, params) {
+      // Auto-capture this variant's crop frame. When the agent didn't pass one,
+      // describe the device NOW — the variant is on screen at propose time — and
+      // match the element, so EVERY variant crops to its own current layout
+      // instead of inheriting the first variant's frozen frame (the bug where
+      // the first thumbnail looked right but the rest were mis-cropped). The
+      // agent can still override by passing variant.frame explicitly.
+      // Best-effort: a failed/empty describe leaves the frame undefined and the
+      // preview UI falls back, so propose_variant never fails over this.
+      let frame = params.variant.frame;
+      if (!frame && params.udid) {
+        const match = params.match ?? { by: "text" as const, value: params.element };
+        const captured = await captureElementFrame(registry, params.udid, match);
+        if (captured) frame = captured;
+      }
+      const res = variantProposalStore.proposeVariant({
+        ...params,
+        variant: { ...params.variant, frame },
+      });
+      return {
+        ...res,
+        hint:
+          res.variantCount === 1
+            ? `Staged the first variant for "${res.element}". Propose more variants (for this or ` +
+              `other elements), then call await_user_selection once when done.`
+            : `"${res.element}" now has ${res.variantCount} variants. Keep proposing or call ` +
+              `await_user_selection when every element is covered.`,
+      };
+    },
+  };
+}
