@@ -310,8 +310,11 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
     ["empty", ""],
     ["whitespace", "   "],
     ["zero", "0"],
+    ["false", "false"],
+    ["no", "no"],
   ])("treats ARGENT_EMULATOR_NO_WINDOW=%s as off", async (_label, value) => {
-    // `export FOO=` is a common shell mis-setting; `0` reads as "disable".
+    // `export FOO=` is a common shell mis-setting; `0`/`false`/`no` all
+    // read as "disable" — only `1`, `true`, `yes` activate -no-window.
     hasSnapshotMock.mockResolvedValue(false);
     mockHappyBootChain();
 

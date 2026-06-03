@@ -162,12 +162,11 @@ function selectGpuMode(): string {
 // Opt-in `-no-window` for CI/containers/Wayland sessions where the emulator's
 // bundled Qt has no wayland plugin (would SIGABRT). `-no-window` selects
 // qemu-system-x86_64-headless which skips Qt entirely; screencap still works.
+// Accepted truthy values: "1", "true", "yes" (case-insensitive). Anything else
+// — including "false", "no", "0", or empty — is treated as disabled.
 function selectExtraEmulatorArgs(): string[] {
-  const noWindow = process.env.ARGENT_EMULATOR_NO_WINDOW;
-  if (noWindow && noWindow.trim() && noWindow.trim() !== "0") {
-    return ["-no-window"];
-  }
-  return [];
+  const trimmed = (process.env.ARGENT_EMULATOR_NO_WINDOW ?? "").trim().toLowerCase();
+  return ["1", "true", "yes"].includes(trimmed) ? ["-no-window"] : [];
 }
 
 // Poll cadences for the boot state machine. These intervals only pace how
@@ -659,6 +658,12 @@ async function bootAndroidImpl(params: {
   // resolver, which honors `$ANDROID_HOME` in addition to PATH.
   await ensureDep("adb");
   await ensureDep("emulator");
+  // Validate and capture boot-configuration env vars upfront so a typo in
+  // ARGENT_EMULATOR_GPU_MODE surfaces before any slow I/O (snapshot probe,
+  // AVD list, emulator spawn) rather than mid-function with a misleading
+  // "emulator has been terminated" suffix.
+  const gpuMode = selectGpuMode();
+  const extraEmulatorArgs = selectExtraEmulatorArgs();
   const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 
@@ -756,8 +761,8 @@ async function bootAndroidImpl(params: {
     // the probe resolves a different renderer than the boot and rejects every
     // valid snapshot with "different renderer configured". RENDERER_ARGS
     // keeps the two in lockstep. `-gpu` value and the optional `-no-window`
-    // come from `selectGpuMode` / `selectExtraEmulatorArgs`.
-    const RENDERER_ARGS = ["-gpu", selectGpuMode(), ...selectExtraEmulatorArgs()];
+    // come from `selectGpuMode` / `selectExtraEmulatorArgs` (resolved upfront).
+    const RENDERER_ARGS = ["-gpu", gpuMode, ...extraEmulatorArgs];
     const probe = await checkSnapshotLoadable(params.avdName, "default_boot", {
       extraArgs: [...RENDERER_ARGS, ...LAUNCH_HARDENING_ARGS],
     });
@@ -826,8 +831,8 @@ async function bootAndroidImpl(params: {
     params.avdName,
     "-no-snapshot-load",
     "-gpu",
-    selectGpuMode(),
-    ...selectExtraEmulatorArgs(),
+    gpuMode,
+    ...extraEmulatorArgs,
     ...LAUNCH_HARDENING_ARGS,
   ];
   let coldResult: { serial: string };
@@ -856,7 +861,19 @@ async function bootAndroidImpl(params: {
   // Cold-boot post-condition: under SwiftShader the lockscreen composite lags
   // boot_completed by 5–60 s. Without this, a caller chaining boot-device →
   // screenshot gets a silent all-black PNG. See `awaitFirstRealFrame`.
-  await awaitFirstRealFrame(coldResult.serial, STAGE_BUDGET.firstRealFrame);
+  // Clamp against the remaining overallDeadline so the frame-wait stage cannot
+  // push total elapsed time past bootTimeoutMs. Kill and throw on timeout so
+  // the emulator doesn't linger until the next boot-device call.
+  const frameWaitBudget = Math.min(
+    STAGE_BUDGET.firstRealFrame,
+    Math.max(0, overallDeadline - Date.now())
+  );
+  try {
+    await awaitFirstRealFrame(coldResult.serial, frameWaitBudget);
+  } catch (err) {
+    await killEmulatorQuietly(coldResult.serial);
+    throw err;
+  }
 
   return {
     platform: "android",
