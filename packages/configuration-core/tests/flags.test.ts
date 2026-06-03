@@ -286,6 +286,10 @@ describe("FLAG_REGISTRY / getFlagDefinition", () => {
     expect(getFlagDefinition("disable-auto-screenshot")?.description).toMatch(/auto/i);
   });
 
+  it("ships the disable-update-notification flag with a description", () => {
+    expect(getFlagDefinition("disable-update-notification")?.description).toMatch(/update/i);
+  });
+
   it("every shipped registry entry has a non-empty name and description", () => {
     // Guards against a half-filled entry being added to the production registry.
     for (const def of FLAG_REGISTRY) {

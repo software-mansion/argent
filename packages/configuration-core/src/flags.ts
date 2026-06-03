@@ -48,6 +48,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "disable-auto-screenshot",
     description: "Disable the automatic screenshot captured after interaction tools.",
   },
+  {
+    name: "disable-update-notification",
+    description:
+      'Suppress the agent-facing "update available" notification note. The `argent update` command and `update-argent` tool still work.',
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

@@ -5,6 +5,7 @@ import type { UpdateState } from "../src/utils/update-checker";
 import type { Registry } from "@argent/registry";
 
 let suppressed = false;
+let updateNotificationOff = false;
 
 /** Build a full UpdateState from partial overrides so tests stay terse. */
 function mkState(overrides: Partial<UpdateState> = {}): UpdateState {
@@ -25,6 +26,11 @@ vi.mock("../src/utils/update-checker", () => ({
   getUpdateState: vi.fn((): UpdateState => mkState()),
   isUpdateNoteSuppressed: vi.fn(() => suppressed),
   suppressUpdateNote: vi.fn(),
+}));
+
+// Mock the permanent opt-out flag so tests need not touch the real flags file.
+vi.mock("../src/utils/update-reminder", () => ({
+  updateNotificationDisabled: vi.fn(() => updateNotificationOff),
 }));
 
 import { getUpdateState, suppressUpdateNote } from "../src/utils/update-checker";
@@ -57,6 +63,7 @@ describe("HTTP update note injection", () => {
 
   beforeEach(async () => {
     suppressed = false;
+    updateNotificationOff = false;
     mockGetUpdateState.mockReturnValue(mkState());
     mockSuppressUpdateNote.mockClear();
   });
@@ -308,6 +315,45 @@ describe("HTTP update note injection", () => {
   });
 
   it("does NOT call suppressUpdateNote when no update is available", async () => {
+    handle = createHttpApp(stubRegistry());
+
+    await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+
+    expect(mockSuppressUpdateNote).not.toHaveBeenCalled();
+  });
+
+  // ── Permanent opt-out flag (disable-update-notification) ──────────
+
+  it("does NOT include a note when the disable-update-notification flag is on", async () => {
+    updateNotificationOff = true;
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
+
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+
+    expect(res.body).toHaveProperty("data");
+    expect(res.body).not.toHaveProperty("note");
+  });
+
+  it("does NOT call suppressUpdateNote when the flag is on (must not burn the temporary window)", async () => {
+    updateNotificationOff = true;
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
+
     handle = createHttpApp(stubRegistry());
 
     await request(handle.app).post("/tools/test-tool").send({}).expect(200);
