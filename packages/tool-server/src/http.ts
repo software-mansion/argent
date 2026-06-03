@@ -5,6 +5,7 @@ import { createIdleTimer } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
+import { updateNotificationDisabled } from "./utils/update-reminder";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
 import {
@@ -188,7 +189,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
         const { updateInstallable, currentVersion, installableVersion } = getUpdateState();
-        const shouldNotify = updateInstallable && !isUpdateNoteSuppressed();
+        // Order matters: `updateInstallable` (cheap in-memory bool) stays first so
+        // the flags file is read only when an update is actually installable — the
+        // common no-update path does zero extra fs work.
+        const shouldNotify =
+          updateInstallable && !updateNotificationDisabled() && !isUpdateNoteSuppressed();
         if (shouldNotify) {
           // Best-effort: a persistence failure here must not fail the user's tool call.
           // Worst case: the note appears again on the next request.
