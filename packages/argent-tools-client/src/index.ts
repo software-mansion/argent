@@ -37,10 +37,12 @@ export {
   isRemoteRouted,
   formatLinkUrl,
   parseLinkUrl,
+  parseLinkTarget,
   LINK_PATHS,
   LINK_URL_SCHEME,
   type LinkConfig,
   type ResolvedToolsUrl,
   type ToolsUrlSource,
   type ParsedLinkUrl,
+  type ParsedLinkTarget,
 } from "./link-config.js";
