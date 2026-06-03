@@ -171,3 +171,61 @@ export function parseLinkUrl(input: string): ParsedLinkUrl | null {
   const token = u.username ? decodeURIComponent(u.username) : undefined;
   return { host, port, ...(token ? { token } : {}) };
 }
+
+// ── Full-URL targets ────────────────────────────────────────────────────
+// `argent link` also accepts a full http(s) URL so it can point at a reverse
+// proxy / tunnel (ngrok, cloudflared, nginx) rather than only a bare host:port.
+
+export interface ParsedLinkTarget {
+  /** Canonical URL to persist and hit verbatim (no trailing slash). */
+  url: string;
+  /** Hostname (for display, the loopback check, and re-prompt defaults). */
+  host: string;
+  /** Port — explicit, or the scheme default (443 for https, 80 for http). */
+  port: number;
+  token?: string;
+}
+
+function httpFromHostPort(host: string, port: number): string {
+  const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `http://${h}:${port}`;
+}
+
+/**
+ * Parse a `link` target. Accepts:
+ *   - argent://[<token>@]<host>:<port>  — the server-start pairing string (→ http)
+ *   - http://… / https://…              — a full URL (scheme, host, optional port + path)
+ *
+ * Returns null for anything else (e.g. a bare host, so the caller can fall back
+ * to --host/--port). Throws on a recognized-but-malformed URL.
+ */
+export function parseLinkTarget(input: string): ParsedLinkTarget | null {
+  // argent:// → http://host:port (parseLinkUrl throws on a malformed argent URL).
+  const argent = parseLinkUrl(input);
+  if (argent) {
+    return {
+      url: httpFromHostPort(argent.host, argent.port),
+      host: argent.host,
+      port: argent.port,
+      ...(argent.token ? { token: argent.token } : {}),
+    };
+  }
+
+  if (!/^https?:\/\//i.test(input)) return null;
+  let u: URL;
+  try {
+    u = new URL(input);
+  } catch {
+    throw new Error(`Invalid URL "${input}" — expected http(s)://<host>[:<port>][/path].`);
+  }
+  const host = u.hostname.startsWith("[") ? u.hostname.slice(1, -1) : u.hostname;
+  if (!host) throw new Error(`URL "${input}" is missing a host.`);
+  const port = u.port ? Number(u.port) : u.protocol === "https:" ? 443 : 80;
+  // Canonical: scheme + host (keeps an explicit non-default port) + path,
+  // dropping a bare trailing slash and any query/fragment. `${url}/tools` then
+  // composes cleanly even when the proxy mounts the server under a path prefix.
+  const path = u.pathname === "/" ? "" : u.pathname.replace(/\/+$/, "");
+  const url = `${u.protocol}//${u.host}${path}`;
+  const token = u.username ? decodeURIComponent(u.username) : undefined;
+  return { url, host, port, ...(token ? { token } : {}) };
+}
