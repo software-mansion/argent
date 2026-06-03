@@ -1920,7 +1920,8 @@
         // smallest sane box.
         const MAX_SIZE_RATIO = 2.5; // per dimension; header↔tab differ far more
         const sizeMatches = (f) => {
-          const wr = Math.max(f.width, anchor.width) / Math.max(1e-6, Math.min(f.width, anchor.width));
+          const wr =
+            Math.max(f.width, anchor.width) / Math.max(1e-6, Math.min(f.width, anchor.width));
           const hr =
             Math.max(f.height, anchor.height) / Math.max(1e-6, Math.min(f.height, anchor.height));
           return wr <= MAX_SIZE_RATIO && hr <= MAX_SIZE_RATIO;
@@ -1943,7 +1944,10 @@
             if (!sizeMatches(f)) continue; // wrong size → not this element
             // Nearest to the last-known position wins (only matters when two
             // same-sized, same-labeled elements are both on screen).
-            score = Math.hypot(cx - (anchor.x + anchor.width / 2), cy - (anchor.y + anchor.height / 2));
+            score = Math.hypot(
+              cx - (anchor.x + anchor.width / 2),
+              cy - (anchor.y + anchor.height / 2)
+            );
           } else {
             score = a;
           }
