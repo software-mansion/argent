@@ -9,18 +9,9 @@ import {
   removeCodexRules,
   type ManagedContentTarget,
 } from "./mcp-configs.js";
-import {
-  AGENTS_DIR,
-  detectPackageManager,
-  formatShellCommand,
-  globalUninstallCommand,
-  isGloballyInstalled,
-  isLocallyInstalled,
-  localDevUninstallCommand,
-  resolveProjectRoot,
-  RULES_DIR,
-  SKILLS_DIR,
-} from "./utils.js";
+import { AGENTS_DIR, resolveProjectRoot, RULES_DIR, SKILLS_DIR } from "./utils.js";
+import { formatShellCommand } from "./package-manager.js";
+import { GLOBAL, LOCAL, TOPOLOGIES, type Topology, type TopologyState } from "./topology.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "@argent/tools-client";
 
@@ -443,93 +434,83 @@ export async function uninstall(args: string[]): Promise<void> {
   }
 
   // ── Uninstall the package itself ────────────────────────────────────────────
-  // Argent can be present globally and/or as a project devDep
-  // independently — probe both and prompt separately.
+  // Iterate TOPOLOGIES — each detected install gets its own confirm
+  // prompt so the user only sees questions that are actually actionable.
 
-  const globallyInstalled = isGloballyInstalled();
-  const locallyInstalled = isLocallyInstalled(projectRoot);
+  const probed = TOPOLOGIES.map((topology) => ({ topology, state: topology.probe(projectRoot) }));
+  const installed = probed.filter((p) => p.state.installed);
 
-  // Kill the tool-server at most once across both branches.
-  let toolServerKilled = false;
-  async function ensureToolServerKilled(): Promise<void> {
-    if (toolServerKilled) return;
-    await killToolServer();
-    toolServerKilled = true;
-  }
-
-  if (globallyInstalled) {
-    let shouldUninstallGlobal = nonInteractive;
-
-    if (!nonInteractive) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const uninstallPkg = await p.confirm({
-        message: `Uninstall the global ${PACKAGE_NAME} package?`,
-        initialValue: false,
-      });
-
-      if (!p.isCancel(uninstallPkg)) {
-        shouldUninstallGlobal = uninstallPkg as boolean;
-      }
-    }
-
-    if (shouldUninstallGlobal) {
-      // Global uninstall doesn't depend on the project's lockfile; no-arg
-      // detectPackageManager() preserves the user-agent fallback.
-      const pm = detectPackageManager();
-      const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
-      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
-
-      await ensureToolServerKilled();
-
-      try {
-        execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
-        p.log.success("Global package uninstalled.");
-      } catch (err) {
-        p.log.error(`Global uninstall failed: ${err}`);
-      }
-    }
-  }
-
-  if (locallyInstalled) {
-    let shouldUninstallLocal = nonInteractive;
-
-    if (!nonInteractive) {
-      p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
-
-      const uninstallPkg = await p.confirm({
-        message:
-          `Argent is also installed as a devDependency at ${pc.dim(projectRoot)}. ` +
-          `Remove it from package.json?`,
-        initialValue: false,
-      });
-
-      if (!p.isCancel(uninstallPkg)) {
-        shouldUninstallLocal = uninstallPkg as boolean;
-      }
-    }
-
-    if (shouldUninstallLocal) {
-      // MUST use the project's lockfile here — under `npx` the user-agent
-      // is always npm regardless of what manages the project.
-      const pm = detectPackageManager(projectRoot);
-      const cmd = localDevUninstallCommand(pm, PACKAGE_NAME);
-      p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))} (in ${pc.dim(projectRoot)})`);
-
-      await ensureToolServerKilled();
-
-      try {
-        execFileSync(cmd.bin, cmd.args, { stdio: "inherit", cwd: projectRoot });
-        p.log.success(`Local devDependency uninstalled via ${pm}.`);
-      } catch (err) {
-        p.log.error(`Local uninstall failed: ${err}`);
-      }
-    }
-  }
-
-  if (!globallyInstalled && !locallyInstalled) {
+  if (installed.length === 0) {
     p.log.info(pc.dim("No argent install detected on disk — only configuration was removed."));
+  } else {
+    const killOnce = makeOnce(killToolServer);
+    for (const { topology, state } of installed) {
+      await uninstallTopology({ topology, state, projectRoot, nonInteractive, killOnce });
+    }
   }
 
   p.outro(pc.green("argent has been removed."));
+}
+
+// ── Per-topology uninstall ─────────────────────────────────────────────
+
+interface UninstallTopologyArgs {
+  topology: Topology;
+  state: TopologyState;
+  projectRoot: string;
+  nonInteractive: boolean;
+  killOnce: () => Promise<void>;
+}
+
+async function uninstallTopology({
+  topology,
+  projectRoot,
+  nonInteractive,
+  killOnce,
+}: UninstallTopologyArgs): Promise<void> {
+  const shouldRun = await confirmUninstall(topology, projectRoot, nonInteractive);
+  if (!shouldRun) return;
+
+  const cmd = topology.uninstallCommand(projectRoot, PACKAGE_NAME);
+  const cwd = topology.spawnCwd(projectRoot);
+  const suffix = cwd ? ` (in ${pc.dim(cwd)})` : "";
+  p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}${suffix}`);
+
+  await killOnce();
+  try {
+    execFileSync(cmd.bin, cmd.args, { stdio: "inherit", ...(cwd ? { cwd } : {}) });
+    p.log.success(
+      topology === LOCAL ? `Local devDependency uninstalled via ${cmd.bin}.` : "Global package uninstalled."
+    );
+  } catch (err) {
+    p.log.error(`${topology.label} uninstall failed: ${err}`);
+  }
+}
+
+async function confirmUninstall(
+  topology: Topology,
+  projectRoot: string,
+  nonInteractive: boolean
+): Promise<boolean> {
+  if (nonInteractive) return true;
+  const message =
+    topology === GLOBAL
+      ? `Uninstall the global ${PACKAGE_NAME} package?`
+      : `Argent is also installed as a devDependency at ${pc.dim(projectRoot)}. Remove it from package.json?`;
+
+  p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
+  const choice = await p.confirm({ message, initialValue: false });
+  if (p.isCancel(choice)) return false;
+  return choice as boolean;
+}
+
+// Single-fire wrapper so killToolServer() runs at most once across both
+// topology branches.
+function makeOnce(fn: () => Promise<void>): () => Promise<void> {
+  let done = false;
+  return async () => {
+    if (done) return;
+    await fn();
+    done = true;
+  };
 }
