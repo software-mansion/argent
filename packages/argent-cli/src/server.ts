@@ -42,9 +42,7 @@ async function statusCmd(json: boolean): Promise<void> {
   }
   const host = state.host ?? "127.0.0.1";
   const alive = isToolsServerProcessAlive(state.pid);
-  const healthy = alive
-    ? await isToolsServerHealthy(state.port, host, 2000, state.token)
-    : false;
+  const healthy = alive ? await isToolsServerHealthy(state.port, host, 2000, state.token) : false;
   if (json) {
     // Hide the token from JSON output — it's a secret. Surface its presence
     // without leaking the value.
