@@ -485,4 +485,31 @@ describe("formatDescribeTree", () => {
     const out = formatDescribeTree(root, { source: "ax-service" });
     expect(elementLines(out)).toHaveLength(0);
   });
+
+  // Regression: nested mode previously keyed on "uiautomator" only, so
+  // "android-devtools" responses rendered flat and lost all descendants.
+  it("renders android-devtools source in nested mode", () => {
+    const root: DescribeNode = {
+      role: "Screen",
+      frame: { x: 0, y: 0, width: 1, height: 1 },
+      children: [
+        {
+          role: "ScrollView",
+          frame: { x: 0, y: 0.1, width: 1, height: 0.8 },
+          scrollable: true,
+          children: [
+            leaf({
+              role: "Button",
+              label: "Like",
+              frame: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 },
+              clickable: true,
+            }),
+          ],
+        },
+      ],
+    };
+    const out = formatDescribeTree(root, { source: "android-devtools" });
+    expect(out).toContain("Mode: nested");
+    expect(out).toMatch(/Button\s+"Like"/);
+  });
 });

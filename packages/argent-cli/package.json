@@ -1,8 +1,8 @@
 {
   "private": true,
   "name": "@argent/cli",
-  "version": "0.8.0",
-  "description": "Shell CLI commands for argent: tools, run, server",
+  "version": "0.10.0",
+  "description": "Shell CLI commands for argent: tools, run, server, enable, disable, flags",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,7 +12,9 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "@argent/tools-client": "file:../argent-tools-client"
+    "@argent/tools-client": "file:../argent-tools-client",
+    "@clack/prompts": "^1.1.0",
+    "picocolors": "^1.1.1"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",

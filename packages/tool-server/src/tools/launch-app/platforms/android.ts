@@ -1,5 +1,5 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell } from "../../../utils/adb";
+import { adbShell, shellQuote } from "../../../utils/adb";
 import type { LaunchAppAndroidServices, LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner. A positive-match check on
@@ -21,7 +21,7 @@ export function assertAmStartOk(out: string): void {
 // `pkg/fully.Qualified.Activity`. This lets the default (no-activity) branch
 // use `am start -W` for a proper blocking launch instead of `monkey 1`.
 export async function resolveLauncherActivity(udid: string, bundleId: string): Promise<string> {
-  const raw = await adbShell(udid, `cmd package resolve-activity --brief ${bundleId}`, {
+  const raw = await adbShell(udid, `cmd package resolve-activity --brief ${shellQuote(bundleId)}`, {
     timeoutMs: 10_000,
   });
   const last = raw
@@ -71,7 +71,7 @@ export const androidImpl: PlatformImpl<LaunchAppAndroidServices, LaunchAppParams
       } else {
         component = await resolveLauncherActivity(params.udid, params.bundleId);
       }
-      const out = await adbShell(params.udid, `am start -W -n ${component}`, {
+      const out = await adbShell(params.udid, `am start -W -n ${shellQuote(component)}`, {
         timeoutMs: 30_000,
       });
       assertAmStartOk(out);

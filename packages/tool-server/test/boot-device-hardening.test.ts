@@ -34,6 +34,21 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// Stub the snapshot probes so pre-flight does no real ~/.android filesystem
+// I/O. That keeps the whole boot path on microtasks + faked timers (vitest
+// fake timers can't deterministically drive real libuv fs callbacks).
+// `false` forces the cold path — behaviour-identical to the real probe for a
+// fake AVD with no default_boot snapshot. (Same partial-mock shape as
+// boot-device-hotboot.test.ts.)
+vi.mock("../src/utils/adb", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
+  return {
+    ...actual,
+    hasDefaultBootSnapshot: async () => false,
+    checkSnapshotLoadable: async () => ({ loadable: false, reason: "test" }),
+  };
+});
+
 import {
   __resetInFlightBootsForTesting,
   createBootDeviceTool,
@@ -147,41 +162,55 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
   it("reports the emulator crash error instead of an adb wait-for-device timeout", async () => {
     // Simulate: emulator spawns, registers in adb, then crashes. Stage 3
     // (wait-for-device) would previously block for the full 180s budget
-    // and throw a generic timeout. The fix races against earlyExitError.
-    const serial = "emulator-5554";
-    const proc = new EventEmitter() as EventEmitter & { unref: () => void };
-    proc.unref = () => {};
-    spawnMock.mockReturnValue(proc);
+    // and throw a generic timeout. The fix surfaces earlyExitError instead.
+    //
+    // Fake timers: the impl parks the stage-2 adb-register poll on a real
+    // 1s setTimeout (the pre-existing serial is in the before-snapshot, so
+    // no "new" serial appears). Driving it with fake timers keeps behaviour
+    // identical but collapses ~1s of real wall time. adb is module-mocked so
+    // pre-flight is microtasks only — fully deterministic.
+    vi.useFakeTimers();
+    try {
+      const serial = "emulator-5554";
+      const proc = new EventEmitter() as EventEmitter & { unref: () => void };
+      proc.unref = () => {};
+      spawnMock.mockReturnValue(proc);
 
-    execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "emulator") return { stdout: "Pixel_7_API_34\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "version") return { stdout: "adb ok\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
-      if (cmd === "adb" && args[0] === "devices") {
-        return { stdout: `List of devices attached\n${serial}\tdevice\n`, stderr: "" };
-      }
-      if (cmd === "adb" && args.includes("wait-for-device")) {
-        // Simulate a slow adb that will never return; the race must win.
-        return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        return { stdout: "\n", stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
-        return { stdout: "OK\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "emulator") return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "version") return { stdout: "adb ok\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          return { stdout: `List of devices attached\n${serial}\tdevice\n`, stderr: "" };
+        }
+        if (cmd === "adb" && args.includes("wait-for-device")) {
+          // Simulate a slow adb that will never return; the race must win.
+          return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          return { stdout: "\n", stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+          return { stdout: "OK\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    const tool = createBootDeviceTool(registry);
-    const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
+      const tool = createBootDeviceTool(registry);
+      const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
+      promise.catch(() => {}); // detach so the rejection can't escape between advances
 
-    // Let the tool get past pre-flight into wait-for-device, then crash the
-    // emulator. waitForEarlyExit polls every 500 ms so the error should surface
-    // in under a couple of seconds.
-    setTimeout(() => proc.emit("exit", 1), 600);
+      // Reach the parked stage-2 poll, then crash the emulator.
+      await vi.advanceTimersByTimeAsync(50);
+      proc.emit("exit", 1);
+      // Wake the poll (>1s, the production cadence) so it throws the crash
+      // error instead of hanging.
+      await vi.advanceTimersByTimeAsync(2_000);
 
-    await expect(promise).rejects.toThrow(/emulator binary exited with code 1/);
+      await expect(promise).rejects.toThrow(/emulator binary exited with code 1/);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 10_000);
 
   it("coalesces concurrent boot calls for the same AVD onto a single spawn", async () => {
@@ -227,36 +256,45 @@ describe("boot-device Android — earlyExitError surfaces promptly (review #4)",
     // segfaults on a bad ram.bin restore the child exits with `code === null,
     // signal !== null`. The previous `code !== null` guard treated this as a
     // normal exit so the outer wait blocked for the full per-stage budget.
-    const serial = "emulator-5554";
-    const proc = new EventEmitter() as EventEmitter & { unref: () => void };
-    proc.unref = () => {};
-    spawnMock.mockReturnValue(proc);
+    // Fake timers: same rationale as the sibling crash test above.
+    vi.useFakeTimers();
+    try {
+      const serial = "emulator-5554";
+      const proc = new EventEmitter() as EventEmitter & { unref: () => void };
+      proc.unref = () => {};
+      spawnMock.mockReturnValue(proc);
 
-    execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === "emulator") return { stdout: "Pixel_7_API_34\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "version") return { stdout: "adb ok\n", stderr: "" };
-      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
-      if (cmd === "adb" && args[0] === "devices") {
-        return { stdout: `List of devices attached\n${serial}\tdevice\n`, stderr: "" };
-      }
-      if (cmd === "adb" && args.includes("wait-for-device")) {
-        return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        return { stdout: "\n", stderr: "" };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
-        return { stdout: "OK\n", stderr: "" };
-      }
-      return { stdout: "", stderr: "" };
-    });
+      execFileMock.mockImplementation((cmd: string, args: string[]) => {
+        if (cmd === "emulator") return { stdout: "Pixel_7_API_34\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "version") return { stdout: "adb ok\n", stderr: "" };
+        if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+        if (cmd === "adb" && args[0] === "devices") {
+          return { stdout: `List of devices attached\n${serial}\tdevice\n`, stderr: "" };
+        }
+        if (cmd === "adb" && args.includes("wait-for-device")) {
+          return new Promise(() => {}) as unknown as { stdout: string; stderr: string };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+          return { stdout: "\n", stderr: "" };
+        }
+        if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+          return { stdout: "OK\n", stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      });
 
-    const tool = createBootDeviceTool(registry);
-    const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
+      const tool = createBootDeviceTool(registry);
+      const promise = tool.execute!({}, { avdName: "Pixel_7_API_34", bootTimeoutMs: 30_000 });
+      promise.catch(() => {}); // detach so the rejection can't escape between advances
 
-    setTimeout(() => proc.emit("exit", null, "SIGSEGV"), 600);
+      await vi.advanceTimersByTimeAsync(50);
+      proc.emit("exit", null, "SIGSEGV");
+      await vi.advanceTimersByTimeAsync(2_000);
 
-    await expect(promise).rejects.toThrow(/terminated by signal SIGSEGV/);
+      await expect(promise).rejects.toThrow(/terminated by signal SIGSEGV/);
+    } finally {
+      vi.useRealTimers();
+    }
   }, 10_000);
 });
 

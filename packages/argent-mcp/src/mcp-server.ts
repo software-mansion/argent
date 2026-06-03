@@ -4,8 +4,21 @@ import { homedir } from "node:os";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Server } from "@modelcontextprotocol/sdk/server";
-import { ensureToolsServer, type ToolMeta, type ToolsServerPaths } from "@argent/tools-client";
-import { toMcpContent, flowRunToMcpContent, type FlowExecuteResult } from "./content.js";
+import {
+  ensureToolsServer,
+  getResolvedToolsUrl,
+  isRemoteRouted,
+  type ToolMeta,
+  type ToolsServerPaths,
+} from "@argent/tools-client";
+import {
+  toMcpContent,
+  flowRunToMcpContent,
+  screenshotDiffToMcpContent,
+  isScreenshotDiffResult,
+  type ContentBlock,
+  type FlowExecuteResult,
+} from "./content.js";
 import {
   autoScreenshotEnabled,
   getUdidFromArgs,
@@ -70,25 +83,38 @@ export interface StartMcpServerOptions {
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
   let TOOLS_URL: string;
-  if (process.env.ARGENT_TOOLS_URL) {
-    TOOLS_URL = process.env.ARGENT_TOOLS_URL;
+  let AUTH_TOKEN: string;
+  // Honor a configured remote target (ARGENT_TOOLS_URL env or ~/.argent/link.json)
+  // before auto-spawning. The token for a remote server comes from
+  // ARGENT_AUTH_TOKEN; the local auto-spawn path mints and returns its own.
+  const resolved = await getResolvedToolsUrl();
+  if (resolved.url) {
+    TOOLS_URL = resolved.url;
+    AUTH_TOKEN = resolved.token ?? "";
   } else {
     try {
-      TOOLS_URL = await ensureToolsServer(options.paths);
+      const handle = await ensureToolsServer(options.paths);
+      TOOLS_URL = handle.url;
+      AUTH_TOKEN = handle.token;
     } catch (err) {
       process.stderr.write(`[argent] Failed to start tools server: ${err}\n`);
       process.exit(1);
     }
   }
 
+  function authHeader(): Record<string, string> {
+    return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+  }
+
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
-    if (process.env.ARGENT_TOOLS_URL) return;
+    if (await isRemoteRouted()) return;
     if (!reconnectPromise) {
       reconnectPromise = ensureToolsServer(options.paths)
-        .then((url) => {
-          TOOLS_URL = url;
+        .then((handle) => {
+          TOOLS_URL = handle.url;
+          AUTH_TOKEN = handle.token;
         })
         .finally(() => {
           reconnectPromise = null;
@@ -113,7 +139,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   async function fetchTools(): Promise<ToolMeta[]> {
-    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`, reconnect);
+    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`, reconnect, {
+      init: { headers: authHeader() },
+    });
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
@@ -134,7 +162,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(args ?? {}),
       },
       fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,
@@ -196,14 +224,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         result,
       });
 
-      let content =
+      let content: ContentBlock[];
+      if (
         params.name === "flow-execute" &&
         result &&
         typeof result === "object" &&
         "flow" in result &&
         "steps" in result
-          ? await flowRunToMcpContent(result as FlowExecuteResult)
-          : await toMcpContent(result, outputHint);
+      ) {
+        content = await flowRunToMcpContent(result as FlowExecuteResult);
+      } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
+        content = await screenshotDiffToMcpContent(result);
+      } else {
+        content = await toMcpContent(result, outputHint, params.arguments);
+      }
 
       const udid = getUdidFromArgs(params.arguments);
       if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
@@ -212,23 +246,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(screenshotResult.result, "image");
-          content = [
-            ...content,
-            {
-              type: "text" as const,
-              text: "--- Screen after action ---",
-            },
-            ...screenshotContent,
-          ];
-        } catch (ssErr) {
-          content = [
-            ...content,
-            {
-              type: "text" as const,
-              text: `(Auto-screenshot skipped: ${ssErr instanceof Error ? ssErr.message : String(ssErr)})`,
-            },
-          ];
+          const screenshotContent = await toMcpContent(screenshotResult.result, "image", { udid });
+          const hasImage = screenshotContent.some((b) => b.type === "image");
+          if (hasImage) {
+            content = [
+              ...content,
+              {
+                type: "text" as const,
+                text: "--- Screen after action ---",
+              },
+              ...screenshotContent,
+            ];
+          }
+        } catch {
+          // Auto-screenshot failed — silently drop it.
         }
       }
 
@@ -260,15 +291,20 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   await server.connect(new StdioServerTransport());
 
-  // Proactive health monitoring — restart tool server if it dies between requests
-  if (!process.env.ARGENT_TOOLS_URL) {
+  // Proactive health monitoring — restart tool server if it dies between requests.
+  // Only run for auto-spawned servers; remote-routed targets (env var or link)
+  // are the user's responsibility, and a silent local respawn would mask outages.
+  if (!(await isRemoteRouted())) {
     const HEALTH_INTERVAL_MS = 30_000;
     const healthInterval = setInterval(async () => {
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 3_000);
         try {
-          const res = await fetch(`${TOOLS_URL}/tools`, { signal: controller.signal });
+          const res = await fetch(`${TOOLS_URL}/tools`, {
+            signal: controller.signal,
+            headers: authHeader(),
+          });
           if (!res.ok) throw new Error(`health check returned ${res.status}`);
         } finally {
           clearTimeout(timer);
@@ -283,7 +319,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
     process.stdin.on("close", () => {
-      fetch(`${TOOLS_URL}/shutdown`, { method: "POST" }).catch(() => {});
+      fetch(`${TOOLS_URL}/shutdown`, { method: "POST", headers: authHeader() }).catch(() => {});
       setTimeout(() => process.exit(0), 5_000);
     });
   }

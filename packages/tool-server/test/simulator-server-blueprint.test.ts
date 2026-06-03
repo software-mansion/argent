@@ -46,12 +46,21 @@ function makeFakeProc() {
 }
 
 /**
- * Push an `api_ready` line into stdout so readline's line event fires and the
+ * Push the readiness lines into stdout so readline's line events fire and the
  * blueprint resolves. We push on nextTick so the blueprint has time to attach
  * its listener after calling `spawn`.
+ *
+ * A real streaming simulator-server prints `stream_ready` BEFORE `api_ready`
+ * (see the comment in spawnSimulatorServerProcess). Emitting both — in that
+ * order — lets the blueprint resolve immediately. Emitting only `api_ready`
+ * (the old behavior) forced every test to wait out the full STREAM_GRACE_MS
+ * non-streaming fallback window, adding ~500ms of dead time per test. The
+ * grace-window fallback itself is covered explicitly, with fake timers, by
+ * the dedicated non-streaming test below.
  */
 function signalReady(proc: ReturnType<typeof makeFakeProc>, port: number) {
   setImmediate(() => {
+    proc.stdout.push(`stream_ready http://127.0.0.1:${port + 1}\n`);
     proc.stdout.push(`api_ready http://127.0.0.1:${port}\n`);
   });
 }
@@ -175,5 +184,44 @@ describe("simulatorServerBlueprint.factory — receives a pre-resolved DeviceInf
     await expect(simulatorServerBlueprint.factory({}, stub)).rejects.toThrow(
       /requires a resolved DeviceInfo via options\.device/
     );
+  });
+
+  it("falls back to the STREAM_GRACE_MS resolve when only api_ready arrives (non-streaming build)", async () => {
+    // Non-streaming / older simulator-server builds never print `stream_ready`.
+    // The blueprint must still resolve, after a bounded grace window, with an
+    // empty streamUrl. Fake timers prove the timing deterministically instead
+    // of burning ~500ms of real wall time (this is exactly the cost the other
+    // tests used to pay implicitly before signalReady emitted stream_ready).
+    const { simulatorServerBlueprint } = await import("../src/blueprints/simulator-server");
+    vi.useFakeTimers();
+    try {
+      const fakeProc = makeFakeProc();
+      spawnMock.mockReturnValue(fakeProc);
+
+      const device = iosDevice("99999999-8888-7777-6666-555555555555");
+      const factoryPromise = simulatorServerBlueprint.factory({}, device, { device });
+
+      let resolved = false;
+      void factoryPromise.then(() => {
+        resolved = true;
+      });
+
+      // Only api_ready — no stream_ready ever arrives.
+      fakeProc.stdout.push("api_ready http://127.0.0.1:60000\n");
+
+      // Settle the readline pipeline so the blueprint arms its grace timer,
+      // then confirm it is still waiting well inside the grace window.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(resolved).toBe(false);
+
+      // Crossing STREAM_GRACE_MS resolves it — with no stream URL.
+      await vi.advanceTimersByTimeAsync(600);
+      const instance = await factoryPromise;
+      expect(resolved).toBe(true);
+      expect(instance.api.apiUrl).toBe("http://127.0.0.1:60000");
+      expect(instance.api.streamUrl).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

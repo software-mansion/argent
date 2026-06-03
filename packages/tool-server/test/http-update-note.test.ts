@@ -1,17 +1,28 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
+import type { UpdateState } from "../src/utils/update-checker";
 import type { Registry } from "@argent/registry";
 
 let suppressed = false;
 
+/** Build a full UpdateState from partial overrides so tests stay terse. */
+function mkState(overrides: Partial<UpdateState> = {}): UpdateState {
+  return {
+    updateAvailable: false,
+    updateInstallable: false,
+    installableVersion: null,
+    latestVersion: null,
+    latestPublishedAt: null,
+    minReleaseAgeMs: 0,
+    currentVersion: "1.0.0",
+    ...overrides,
+  };
+}
+
 // Mock update-checker before any imports that use it transitively.
 vi.mock("../src/utils/update-checker", () => ({
-  getUpdateState: vi.fn(() => ({
-    updateAvailable: false,
-    latestVersion: null,
-    currentVersion: "1.0.0",
-  })),
+  getUpdateState: vi.fn((): UpdateState => mkState()),
   isUpdateNoteSuppressed: vi.fn(() => suppressed),
   suppressUpdateNote: vi.fn(),
 }));
@@ -46,11 +57,7 @@ describe("HTTP update note injection", () => {
 
   beforeEach(async () => {
     suppressed = false;
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: false,
-      latestVersion: null,
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(mkState());
     mockSuppressUpdateNote.mockClear();
   });
 
@@ -68,12 +75,15 @@ describe("HTTP update note injection", () => {
     expect(res.body).not.toHaveProperty("note");
   });
 
-  it("includes a note when update is available", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+  it("includes a note when an installable update is available", async () => {
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -85,12 +95,36 @@ describe("HTTP update note injection", () => {
     expect(res.body.note.length).toBeGreaterThan(0);
   });
 
+  it("does NOT include a note when an update is available but held by the release-age policy", async () => {
+    // Newer version exists, but it has not aged past the machine's policy yet,
+    // so it is not installable — the reminder must stay silent.
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: false,
+        latestVersion: "1.2.3",
+        minReleaseAgeMs: 7 * 24 * 60 * 60 * 1000,
+      })
+    );
+
+    handle = createHttpApp(stubRegistry());
+
+    const res = await request(handle.app).post("/tools/test-tool").send({}).expect(200);
+
+    expect(res.body).toHaveProperty("data");
+    expect(res.body).not.toHaveProperty("note");
+    expect(mockSuppressUpdateNote).not.toHaveBeenCalled();
+  });
+
   it("note contains the current -> latest version string", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -100,11 +134,14 @@ describe("HTTP update note injection", () => {
   });
 
   it("note mentions `npx @swmansion/argent update`", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -114,11 +151,14 @@ describe("HTTP update note injection", () => {
   });
 
   it("note mentions `update-argent` tool", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -128,11 +168,14 @@ describe("HTTP update note injection", () => {
   });
 
   it("note mentions `dismiss-update` tool", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -142,11 +185,14 @@ describe("HTTP update note injection", () => {
   });
 
   it("note instructs agent to persist the update info", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -172,11 +218,14 @@ describe("HTTP update note injection", () => {
       }),
     } as unknown as Registry;
 
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(errorRegistry);
 
@@ -187,11 +236,14 @@ describe("HTTP update note injection", () => {
   });
 
   it("does NOT include a note on 404 (unknown tool) responses", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -201,12 +253,10 @@ describe("HTTP update note injection", () => {
     expect(res.body).not.toHaveProperty("note");
   });
 
-  it("note says 'unknown' when latestVersion is null but updateAvailable is true", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: null,
-      currentVersion: "1.0.0",
-    });
+  it("note says 'unknown' when installableVersion is null but the update is installable", async () => {
+    mockGetUpdateState.mockReturnValue(
+      mkState({ updateAvailable: true, updateInstallable: true, installableVersion: null })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -220,11 +270,14 @@ describe("HTTP update note injection", () => {
   // ── Suppression behavior ──────────────────────────────────────────
 
   it("calls suppressUpdateNote after delivering a note", async () => {
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
@@ -236,11 +289,14 @@ describe("HTTP update note injection", () => {
 
   it("does NOT include a note when suppressed", async () => {
     suppressed = true;
-    mockGetUpdateState.mockReturnValue({
-      updateAvailable: true,
-      latestVersion: "1.2.3",
-      currentVersion: "1.0.0",
-    });
+    mockGetUpdateState.mockReturnValue(
+      mkState({
+        updateAvailable: true,
+        updateInstallable: true,
+        latestVersion: "1.2.3",
+        installableVersion: "1.2.3",
+      })
+    );
 
     handle = createHttpApp(stubRegistry());
 
