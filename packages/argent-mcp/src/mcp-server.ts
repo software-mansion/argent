@@ -76,6 +76,10 @@ export interface StartMcpServerOptions {
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
+  // isFlagEnabled hits disk, so resolve it once at startup rather than on every
+  // tool call. A flag change therefore needs an MCP restart to take effect.
+  const autoScreenshotOn = autoScreenshotEnabled();
+
   let TOOLS_URL: string;
   if (process.env.ARGENT_TOOLS_URL) {
     TOOLS_URL = process.env.ARGENT_TOOLS_URL;
@@ -219,7 +223,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
+      if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
         const delayMs = getAutoScreenshotDelayMs(params.name);
         if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
 
@@ -291,7 +295,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     healthInterval.unref();
   }
 
-  if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
+  if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
     process.stdin.on("close", () => {
       fetch(`${TOOLS_URL}/shutdown`, { method: "POST" }).catch(() => {});
       setTimeout(() => process.exit(0), 5_000);

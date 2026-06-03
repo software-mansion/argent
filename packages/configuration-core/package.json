@@ -1,8 +1,8 @@
 {
   "private": true,
-  "name": "@argent/mcp",
+  "name": "@argent/configuration-core",
   "version": "0.9.0",
-  "description": "MCP stdio protocol adapter — talks to the argent tool-server and forwards calls",
+  "description": "Source of truth for argent feature flags: registry, JSON storage, and isFlagEnabled",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,11 +10,6 @@
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "test": "vitest run",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
-  },
-  "dependencies": {
-    "@argent/configuration-core": "file:../configuration-core",
-    "@argent/tools-client": "file:../argent-tools-client",
-    "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",

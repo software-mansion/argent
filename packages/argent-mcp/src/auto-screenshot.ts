@@ -6,6 +6,8 @@
  * All tunables live in this module so they can be tested in isolation.
  */
 
+import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
+
 export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
@@ -44,9 +46,11 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
 
 const DEFAULT_DELAY_MS = 1400;
 
-export function autoScreenshotEnabled(): boolean {
-  const v = process.env.ARGENT_AUTO_SCREENSHOT;
-  return v === undefined || v === "" || v === "1" || v.toLowerCase() === "true";
+// Auto-screenshot is on by default; the opt-out is the off-by-default
+// `disable-auto-screenshot` flag. `options` mirrors isFlagEnabled so tests can
+// point storage at a temp dir.
+export function autoScreenshotEnabled(options?: FlagsPathOptions): boolean {
+  return !isFlagEnabled("disable-auto-screenshot", options);
 }
 
 export function getUdidFromArgs(args: unknown): string | undefined {

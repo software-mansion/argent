@@ -19,6 +19,10 @@ const TOOLS_CLIENT_ENTRY = path.resolve(
 const INSTALLER_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-installer/src/index.ts");
 const MCP_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-mcp/src/index.ts");
 const CLI_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-cli/src/index.ts");
+const CONFIGURATION_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/configuration-core/src/index.ts"
+);
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
@@ -32,6 +36,7 @@ const ALIASES = {
   "@argent/installer": INSTALLER_ENTRY,
   "@argent/mcp": MCP_ENTRY,
   "@argent/cli": CLI_ENTRY,
+  "@argent/configuration-core": CONFIGURATION_ENTRY,
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which
