@@ -105,6 +105,7 @@ export function start(): void {
     idleTimeoutMs,
     onIdle: shutdown,
     onShutdown: shutdown,
+    bindHost: HOST,
   });
 
   // Block advertising readiness until the first watcher poll completes — this
