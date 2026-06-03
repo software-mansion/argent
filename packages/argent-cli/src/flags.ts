@@ -85,7 +85,19 @@ function parseScope(raw: string): FlagScope {
   throw new Error(`--scope must be "project" or "global", got "${raw}"`);
 }
 
-function printToggleHelp(command: "enable" | "disable"): void {
+// Renders the registry as an indented "Available flags:" block for --help
+// output: one line per flag, `name <padding> description`, so users can see
+// what they can toggle without running `argent flags` first.
+function formatAvailableFlags(registry: readonly FlagDefinition[]): string {
+  if (registry.length === 0) {
+    return "Available flags:\n  (none defined)";
+  }
+  const maxName = registry.reduce((m, def) => Math.max(m, def.name.length), 0);
+  const lines = registry.map((def) => `  ${def.name.padEnd(maxName)}  ${def.description}`);
+  return ["Available flags:", ...lines].join("\n");
+}
+
+function printToggleHelp(command: "enable" | "disable", registry: readonly FlagDefinition[]): void {
   const summary =
     command === "enable"
       ? "Enable a predefined feature flag (see `argent flags`) at the chosen scope."
@@ -94,6 +106,8 @@ function printToggleHelp(command: "enable" | "disable"): void {
   console.log(`Usage: argent ${command} <flag-name> [--scope project|global]
 
 ${summary}
+
+${formatAvailableFlags(registry)}
 
 Storage:
   ~/.argent/flags.json                 (global, default)
@@ -111,7 +125,7 @@ function runToggle(
   registry: readonly FlagDefinition[]
 ): void {
   if (argv.includes("--help") || argv.includes("-h")) {
-    printToggleHelp(command);
+    printToggleHelp(command, registry);
     return;
   }
 
@@ -167,6 +181,8 @@ export function flags(argv: string[], registry: readonly FlagDefinition[] = FLAG
 
 List the available feature flags and their current state. Flags are
 predefined; project-scoped values override global ones.
+
+${formatAvailableFlags(registry)}
 
 Options:
   --json   Print machine-readable JSON

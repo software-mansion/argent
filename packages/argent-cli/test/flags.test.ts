@@ -190,6 +190,20 @@ describe("enable / disable CLI", () => {
     expect(readFlags("global")).toEqual({});
   });
 
+  it("--help lists every available flag with its description", () => {
+    const out = captureConsole(() => enable(["--help"], TEST_REGISTRY));
+    expect(out.stdout).toContain("Available flags:");
+    expect(out.stdout).toContain("my-feature-flag");
+    expect(out.stdout).toContain("Primary test flag.");
+    expect(out.stdout).toContain("proj-flag");
+    expect(out.stdout).toContain("Project-scoped test flag.");
+    // -h is an alias for --help and shows the same listing.
+    const short = captureConsole(() => disable(["-h"], TEST_REGISTRY));
+    expect(short.stdout).toContain("Available flags:");
+    expect(short.stdout).toContain("Listing flag A.");
+    expect(readFlags("global")).toEqual({});
+  });
+
   it("enable → disable round trip leaves a clean tree (no stub entry)", () => {
     captureConsole(() => enable(["x"], TEST_REGISTRY));
     captureConsole(() => disable(["x"]));
@@ -272,6 +286,14 @@ describe("flags (list) CLI", () => {
   it("--help prints usage", () => {
     const out = captureConsole(() => flagsCmd(["--help"]));
     expect(out.stdout).toContain("Usage: argent flags");
+  });
+
+  it("--help lists every available flag with its description", () => {
+    const out = captureConsole(() => flagsCmd(["--help"], TEST_REGISTRY));
+    expect(out.stdout).toContain("Available flags:");
+    expect(out.stdout).toContain("my-feature-flag");
+    expect(out.stdout).toContain("Primary test flag.");
+    expect(out.stdout).toContain("Listing flag B.");
   });
 });
 
