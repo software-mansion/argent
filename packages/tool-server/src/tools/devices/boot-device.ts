@@ -24,6 +24,7 @@ import {
   waitForBootCompleted,
 } from "../../utils/adb";
 import { ensureDep } from "../../utils/check-deps";
+import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 
 const execFileAsync = promisify(execFile);
@@ -664,6 +665,10 @@ async function bootAndroidImpl(params: {
   // "emulator has been terminated" suffix.
   const gpuMode = selectGpuMode();
   const extraEmulatorArgs = selectExtraEmulatorArgs();
+
+  for (const msg of linuxBootDiagnostics(params.avdName) ?? []) {
+    console.warn(`[boot-device:linux] ${msg}`);
+  }
   const emulatorBinary = await resolveEmulatorOrThrow();
   const overallDeadline = Date.now() + params.bootTimeoutMs;
 

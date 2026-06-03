@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -101,9 +102,43 @@ function androidRoots(): string[] {
   // alias Android still honors. Some environments set only one. We try both
   // in declared order so a user who set ANDROID_HOME explicitly always wins
   // over a stale ANDROID_SDK_ROOT inherited from elsewhere.
-  return [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT].filter((v): v is string =>
-    Boolean(v && v.trim())
+  const envRoots = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT].filter(
+    (v): v is string => Boolean(v && v.trim())
   );
+  // OS-default install locations. Important: an MCP server (or any process
+  // spawned by a GUI app like Claude Code's desktop client) inherits the GUI's
+  // env, which on Linux+Wayland and macOS Finder-launched apps lacks the
+  // shell-rc-exported ANDROID_HOME. Probing the canonical install paths lets
+  // a user who installed via Android Studio (or apt) have argent "just work"
+  // without hand-editing .mcp.json or exporting env vars in shell rc files
+  // they don't realize the GUI doesn't read.
+  return [...envRoots, ...defaultAndroidRoots()];
+}
+
+/**
+ * Canonical SDK install locations argent probes after env vars come up empty.
+ *
+ * Picked to match what Android Studio installs by default and what the
+ * upstream Android docs / common Linux package managers ship. Order matters
+ * only when the *same* SDK is reachable through two of these — first match
+ * wins via `androidRoots()`'s linear scan.
+ */
+function defaultAndroidRoots(): string[] {
+  const home = homedir();
+  const roots = [
+    // Android Studio defaults (the two big ones — covers the majority of
+    // user installs that arrive without any env-var setup).
+    join(home, "Library", "Android", "sdk"), // macOS Android Studio default
+    join(home, "Android", "Sdk"), // Linux Android Studio default
+    // Common manual install convention. Not picked by any installer but used
+    // often enough in tutorials and Dockerfiles that probing it costs little.
+    join(home, "android-sdk"),
+    // System-wide locations (Linux package managers, Homebrew on macOS).
+    "/opt/android-sdk",
+    "/usr/lib/android-sdk", // Debian/Ubuntu `android-sdk` apt package
+    "/usr/local/share/android-sdk", // Homebrew cask
+  ];
+  return roots;
 }
 
 /** Test-only: clear the resolver cache between tests. */
