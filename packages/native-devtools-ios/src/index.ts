@@ -8,6 +8,18 @@ const DYLIB_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_DIR ?? path.join(__dirname,
 const BIN_DIR = process.env.ARGENT_SIMULATOR_SERVER_DIR ?? path.join(__dirname, "..", "bin");
 const DYLIB_TCP_DIR = process.env.ARGENT_NATIVE_DEVTOOLS_TCP_DIR ?? path.join(DYLIB_DIR, "tcp");
 
+// iOS Simulator only runs on macOS, so the dylibs that get injected into it
+// and the ax-service that gets `simctl spawn`d into it are only ever usable
+// on darwin hosts. Throw with a clear, root-cause message so a Linux user
+// invoking these accidentally doesn't get a confusing "file not found".
+function requireDarwin(what: string): void {
+  if (process.platform !== "darwin") {
+    throw new Error(
+      `${what} requires a macOS host (iOS Simulator is unavailable on ${process.platform})`
+    );
+  }
+}
+
 function requireDylibIn(dir: string, name: string): string {
   const p = path.join(dir, name);
   if (!fs.existsSync(p)) {
@@ -16,11 +28,18 @@ function requireDylibIn(dir: string, name: string): string {
   return p;
 }
 
-export const bootstrapDylibPath = () =>
-  requireDylibIn(DYLIB_DIR, "libArgentInjectionBootstrap.dylib");
-export const nativeDevtoolsDylibPath = () =>
-  requireDylibIn(DYLIB_DIR, "libNativeDevtoolsIos.dylib");
-export const keyboardPatchDylibPath = () => requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
+export const bootstrapDylibPath = () => {
+  requireDarwin("bootstrapDylibPath");
+  return requireDylibIn(DYLIB_DIR, "libArgentInjectionBootstrap.dylib");
+};
+export const nativeDevtoolsDylibPath = () => {
+  requireDarwin("nativeDevtoolsDylibPath");
+  return requireDylibIn(DYLIB_DIR, "libNativeDevtoolsIos.dylib");
+};
+export const keyboardPatchDylibPath = () => {
+  requireDarwin("keyboardPatchDylibPath");
+  return requireDylibIn(DYLIB_DIR, "libKeyboardPatch.dylib");
+};
 
 export const bootstrapDylibPathTcp = () =>
   requireDylibIn(DYLIB_TCP_DIR, "libArgentInjectionBootstrap.dylib");
@@ -60,6 +79,7 @@ function requireBinIn(dir: string, name: string): string {
 }
 
 export function axServiceBinaryPath(): string {
+  requireDarwin("ax-service");
   return requireBinIn(BIN_DIR, "ax-service");
 }
 
