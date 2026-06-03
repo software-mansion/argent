@@ -8,6 +8,7 @@ import {
 import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
+import { adbShell } from "../utils/adb";
 
 // Cross-platform session for the `native-profiler-*` tools: iOS uses an xctrace
 // child, Android an `adb shell perfetto` child. Both sit behind platform-agnostic
@@ -56,6 +57,17 @@ export interface NativeProfilerSessionApi {
 // abandoned: skip the SIGINT finalise grace (that's the native-profiler-stop
 // contract) and SIGKILL straight away so shutdown isn't held up.
 const DISPOSE_REAP_MS = 1_000;
+const ANDROID_DISPOSE_ADB_TIMEOUT_MS = 5_000;
+
+function clearLiveState(state: NativeProfilerSessionApi): void {
+  state.profilingActive = false;
+  state.capturePid = null;
+  state.captureProcess = null;
+  state.androidOnDeviceTracePath = null;
+  state.recordingTimedOut = false;
+  state.recordingExitedUnexpectedly = false;
+  state.lastExitInfo = null;
+}
 
 export const nativeProfilerSessionBlueprint: ServiceBlueprint<
   NativeProfilerSessionApi,
@@ -108,22 +120,38 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
           clearTimeout(state.recordingTimeout);
           state.recordingTimeout = null;
         }
-        const child = state.captureProcess;
-        if (state.profilingActive && child) {
+
+        if (state.platform === "ios") {
+          const child = state.captureProcess;
           try {
-            child.kill("SIGKILL");
-          } catch {
-            // already dead
+            if (state.profilingActive && child) {
+              try {
+                child.kill("SIGKILL");
+              } catch {
+                // already dead
+              }
+              await waitForChildExit(child, DISPOSE_REAP_MS);
+            }
+          } finally {
+            clearLiveState(state);
           }
-          // NOTE (Android): `captureProcess` is the host-side `adb shell perfetto`,
-          // usually already exited (stdin closed when --background-wait returned),
-          // so the kill above is a no-op on a dead handle. The on-device daemon
-          // keeps running, owned by `traced`; a future cleanup pass should
-          // `adb -s <serial> shell kill -KILL <capturePid>` here to reap it.
-          await waitForChildExit(child, DISPOSE_REAP_MS);
-          state.profilingActive = false;
-          state.capturePid = null;
-          state.captureProcess = null;
+          return;
+        }
+
+        const onDeviceTracePath = state.androidOnDeviceTracePath;
+        try {
+          if (state.profilingActive && state.capturePid) {
+            await adbShell(state.deviceId, `kill -KILL ${state.capturePid}`, {
+              timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
+            }).catch(() => {});
+            if (onDeviceTracePath) {
+              await adbShell(state.deviceId, `rm -f ${onDeviceTracePath}`, {
+                timeoutMs: ANDROID_DISPOSE_ADB_TIMEOUT_MS,
+              }).catch(() => {});
+            }
+          }
+        } finally {
+          clearLiveState(state);
         }
       },
       events,

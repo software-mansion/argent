@@ -4,6 +4,7 @@ import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
 import { startPerfetto, stopPerfetto } from "../../../../utils/android-profiler/capture";
 import { detectAndroidRunningApp } from "../../../../utils/android-profiler/detect-app";
 import { runAndroidProfilerPipeline } from "../../../../utils/android-profiler/pipeline/index";
+import { writeAndroidNativeProfilerMetadata } from "../../../../utils/android-profiler/session-metadata";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
@@ -80,8 +81,15 @@ export interface AndroidStopResult {
 export async function stopNativeProfilerAndroid(
   api: NativeProfilerSessionApi
 ): Promise<AndroidStopResult> {
+  const recoveringPartialTrace = api.recordingTimedOut || api.recordingExitedUnexpectedly;
+  if (!api.profilingActive && !recoveringPartialTrace) {
+    throw new Error(
+      "No active native profiling session found. Call native-profiler-start first."
+    );
+  }
+
   if (!api.traceFile || !api.androidOnDeviceTracePath || !api.capturePid) {
-    if (api.recordingTimedOut || api.recordingExitedUnexpectedly) {
+    if (recoveringPartialTrace) {
       throw new Error(
         "Native profiling recording exited unexpectedly and no trace file is available. " +
           "Call native-profiler-start again."
@@ -114,13 +122,23 @@ export async function stopNativeProfilerAndroid(
     // wedges the user until they happen to re-stop. See
     // research/stability_analysis.md #2.
     api.profilingActive = false;
+    api.capturePid = null;
     api.captureProcess = null;
+    api.androidOnDeviceTracePath = null;
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;
+    api.lastExitInfo = null;
   }
 
   const { hostTracePath, warning } = stopResult;
   api.exportedFiles = { pftrace: hostTracePath };
+  if (api.appProcess) {
+    await writeAndroidNativeProfilerMetadata(hostTracePath, {
+      platform: "android",
+      appProcess: api.appProcess,
+      wallClockStartMs: api.wallClockStartMs,
+    });
+  }
 
   const result: AndroidStopResult = {
     traceFile: hostTracePath,

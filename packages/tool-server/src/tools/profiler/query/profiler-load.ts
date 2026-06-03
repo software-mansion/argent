@@ -14,6 +14,7 @@ import { resolveDevice } from "../../../utils/device-info";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
+import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
 
 const zodSchema = z.object({
   mode: z
@@ -40,6 +41,12 @@ const zodSchema = z.object({
     .string()
     .describe(
       "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
+    ),
+  app_process: z
+    .string()
+    .optional()
+    .describe(
+      "Android package name to use when restoring older load_native .pftrace sessions that do not have a metadata sidecar."
     ),
 });
 
@@ -268,7 +275,8 @@ async function loadReactSession(
 async function loadNativeSession(
   debugDir: string,
   sessionId: string,
-  api: NativeProfilerSessionApi
+  api: NativeProfilerSessionApi,
+  appProcessOverride?: string
 ): Promise<string> {
   // Android .pftrace first — the platform field on the resolved session API
   // tells us which shape to load. If the platform is android but the .pftrace
@@ -284,13 +292,24 @@ async function loadNativeSession(
           `Expected file at ${pftrace}`
       );
     }
+    const metadata = await readAndroidNativeProfilerMetadata(pftrace);
+    const appProcess = metadata?.appProcess ?? appProcessOverride?.trim();
+    if (!appProcess) {
+      throw new Error(
+        `Android profiler session "${sessionId}" is missing its metadata sidecar. ` +
+          "Retry profiler-load with app_process set to the Android package name used for the recording."
+      );
+    }
     api.traceFile = pftrace;
     api.exportedFiles = { pftrace };
+    api.appProcess = appProcess;
+    api.wallClockStartMs = metadata?.wallClockStartMs ?? null;
     api.parsedData = null;
     return [
       `Loaded Android profiler session \`${sessionId}\`.`,
       "",
       `- Trace file: \`${pftrace}\``,
+      `- App package: \`${appProcess}\``,
       "",
       "Query tools (`profiler-stack-query`) will re-query the .pftrace on demand.",
       "Run `native-profiler-analyze` to produce a report from this trace.",
@@ -364,6 +383,7 @@ Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
 - load_native: Re-parse native profiler XML files into memory. Requires session_id and device_id.
+  For Android .pftrace restores, pass app_process for older sessions that do not have a metadata sidecar.
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or required XML files are missing from disk.`,
   zodSchema,
@@ -397,7 +417,7 @@ Fails if the session_id is not found or required XML files are missing from disk
           );
         }
         const api = services.session as NativeProfilerSessionApi;
-        return loadNativeSession(debugDir, params.session_id, api);
+        return loadNativeSession(debugDir, params.session_id, api, params.app_process);
       }
 
       default:
