@@ -2324,10 +2324,17 @@
         const availW = Math.max(120, (_vr ? _vr.clientWidth : 212) - 20);
         let W, H;
         if (collapsed) {
-          // Picked-away rows: a small, fixed 3-line-tall preview beside the name.
-          H = THEME.collapsedThumbH;
-          W = Math.round(H * ar);
-          W = Math.max(40, Math.min(W, Math.round(availW * 0.6)));
+          // Picked-away rows: fit the SAME crop into a max box — at most 3 lines
+          // of text tall AND at most half the row wide — keeping its aspect ratio
+          // exactly, so the collapsed preview is the expanded crop shrunk, never
+          // re-cropped or letterboxed. Whichever cap binds first wins: a wide
+          // element caps at 50% width (and ends up shorter than 3 lines), a tall
+          // one caps at 3 lines (and narrower than 50%). Sizing the box to `ar`
+          // means the image fills it exactly (s below has no slack).
+          const maxH = THEME.collapsedThumbH;
+          const maxW = availW * 0.5;
+          W = Math.min(maxW, maxH * ar);
+          H = W / ar;
         } else if (colMode) {
           W = availW;
           H = Math.round(W / ar);
