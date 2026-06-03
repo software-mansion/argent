@@ -7,6 +7,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
+import { ensureDeps } from "../../utils/check-deps";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -57,7 +58,6 @@ type Result =
 
 export const nativeFullHierarchyTool: ToolDefinition<Params, Result> = {
   id: "native-full-hierarchy",
-  requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Get the complete UIKit view tree for the running app.
 WARNING: Output can be extremely large (100KB–500KB+) for complex apps, especially those built with SwiftUI. Prefer native-find-views for targeted queries.
@@ -70,6 +70,9 @@ Fails if native devtools are not connected or the app is not running.`,
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
+
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);

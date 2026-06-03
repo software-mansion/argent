@@ -7,6 +7,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import { resolveDevice } from "../../utils/device-info";
+import { ensureDeps } from "../../utils/check-deps";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -43,7 +44,6 @@ type Result =
 
 export const nativeFindViewsTool: ToolDefinition<Params, Result> = {
   id: "native-find-views",
-  requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true }, appleRemote: { simulator: true } },
   description: `Search for specific UIViews in the running app by class name, accessibility identifier, label, tag, or React Native nativeID.
 Use when you need to locate a specific view by its properties without dumping the entire hierarchy.
@@ -55,6 +55,9 @@ Fails if native devtools are not connected, the app is not running, or status is
     nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    await ensureDeps(device.platform === "ios-remote" ? ["sim-remote"] : ["xcrun"]);
+
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
     const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);

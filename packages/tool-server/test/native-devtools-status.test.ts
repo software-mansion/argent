@@ -4,6 +4,21 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailure,
 } from "../src/blueprints/native-devtools";
+// Both tools gate `execute()` behind `ensureDeps(["xcrun"])`, but the
+// restart-guidance / init_failed logic under test never shells out to xcrun.
+// The real probe makes this pass only on a host with Xcode (dev macOS) and
+// fail on the Linux CI runner with `missing: [xcrun]`. Stub the gate to a
+// no-op so the test exercises the logic it's about, not the host's toolchain.
+// Keep the rest of the module (DependencyMissingError, cache reset) intact.
+vi.mock("../src/utils/check-deps", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/check-deps")>();
+  return {
+    ...actual,
+    ensureDeps: vi.fn(async () => {}),
+    ensureDep: vi.fn(async () => {}),
+  };
+});
+
 import { nativeDevtoolsStatusTool } from "../src/tools/native-devtools/native-devtools-status";
 import { nativeDescribeScreenTool } from "../src/tools/native-devtools/native-describe-screen";
 
