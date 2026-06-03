@@ -10,12 +10,12 @@ class FakeChild extends EventEmitter {
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   stdinWritten = "";
-  stdin = {
+  stdin = Object.assign(new EventEmitter(), {
     write: (chunk: string | Buffer) => {
       this.stdinWritten += chunk.toString();
     },
     end: () => {},
-  };
+  });
 }
 
 // Pop a fresh state holder before each test — vi.mock is hoisted, so any
@@ -38,12 +38,12 @@ vi.mock("child_process", () => ({
       exitCode: number | null = null;
       signalCode: NodeJS.Signals | null = null;
       stdinWritten = "";
-      stdin = {
+      stdin = Object.assign(new Mod.EventEmitter(), {
         write: (chunk: string | Buffer) => {
           this.stdinWritten += chunk.toString();
         },
         end: () => {},
-      };
+      });
     })() as unknown as FakeChild;
     captureState.lastSpawn = { args, child };
     return child;
@@ -135,5 +135,61 @@ describe("startPerfetto", () => {
     lastSpawnRef()!.child.stderr.emit("data", Buffer.from("ERROR: target_cmdline not found\n"));
     lastSpawnRef()!.child.emit("exit", 1, null);
     await expect(promise).rejects.toThrow(/perfetto exited|did not return a PID/);
+  });
+
+  // stability_analysis.md #4 — a chunk split mid-number must NOT resolve a
+  // truncated PID, or stop signals the wrong process and the daemon orphans.
+  it("does not resolve a partial PID when a chunk ends mid-number", async () => {
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    const child = lastSpawnRef()!.child;
+    // First chunk ends mid-number, no trailing newline — must be ignored.
+    child.stdout.emit("data", Buffer.from("123"));
+    // Second chunk completes the line.
+    child.stdout.emit("data", Buffer.from("45\n"));
+    const result = await promise;
+    expect(result.pid).toBe(12345);
+  });
+
+  it("parses a trailing PID with no newline once the process exits", async () => {
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    const child = lastSpawnRef()!.child;
+    child.stdout.emit("data", Buffer.from("4242"));
+    child.emit("exit", 0, null);
+    const result = await promise;
+    expect(result.pid).toBe(4242);
+  });
+
+  // stability_analysis.md #1 — a spawn/exec 'error' with no listener throws as
+  // an uncaught exception; it must reject the start promise instead.
+  it("rejects (does not throw uncaught) when the child emits 'error'", async () => {
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.emit("error", new Error("spawn EACCES"));
+    await expect(promise).rejects.toThrow(/Failed to launch adb for perfetto.*EACCES/);
+  });
+
+  it("rejects when writing the config to a broken stdin emits 'error'", async () => {
+    const promise = startPerfetto({
+      serial: "emulator-5554",
+      appPackage: "com.example.app",
+      timestamp: "20260101-000000",
+    });
+    await waitForSpawn();
+    lastSpawnRef()!.child.stdin.emit("error", new Error("EPIPE"));
+    await expect(promise).rejects.toThrow(/Failed to write perfetto config.*EPIPE/);
   });
 });

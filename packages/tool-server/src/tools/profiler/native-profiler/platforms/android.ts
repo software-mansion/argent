@@ -97,18 +97,29 @@ export async function stopNativeProfilerAndroid(
     api.recordingTimeout = null;
   }
 
-  const { hostTracePath, warning } = await stopPerfetto({
-    serial: api.deviceId,
-    pid: api.capturePid,
-    onDeviceTracePath: api.androidOnDeviceTracePath,
-    hostTracePath: api.traceFile,
-    recordingTimedOut: api.recordingTimedOut,
-  });
+  let stopResult: Awaited<ReturnType<typeof stopPerfetto>>;
+  try {
+    stopResult = await stopPerfetto({
+      serial: api.deviceId,
+      pid: api.capturePid,
+      onDeviceTracePath: api.androidOnDeviceTracePath,
+      hostTracePath: api.traceFile,
+      recordingTimedOut: api.recordingTimedOut,
+    });
+  } finally {
+    // Always return the session to a clean, startable state — even if the
+    // `adb pull` failed (device unplugged mid-stop, on-device file gone, host
+    // disk full). Otherwise a transient stop error leaves profilingActive=true,
+    // which rejects the next start with "a session is already running" and
+    // wedges the user until they happen to re-stop. See
+    // research/stability_analysis.md #2.
+    api.profilingActive = false;
+    api.captureProcess = null;
+    api.recordingTimedOut = false;
+    api.recordingExitedUnexpectedly = false;
+  }
 
-  api.profilingActive = false;
-  api.captureProcess = null;
-  api.recordingTimedOut = false;
-  api.recordingExitedUnexpectedly = false;
+  const { hostTracePath, warning } = stopResult;
   api.exportedFiles = { pftrace: hostTracePath };
 
   const result: AndroidStopResult = {
