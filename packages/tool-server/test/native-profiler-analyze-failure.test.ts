@@ -24,11 +24,30 @@ vi.mock("../src/utils/android-profiler/pipeline/run-tp", () => ({
   parseTpCsvOutput: vi.fn(),
 }));
 
+// The Android pipeline probes trace_processor_shell up front via
+// ensureTraceProcessorRunnable(). Keep every real export (notably the
+// TraceProcessorUnavailableError class the analyze path branches on with
+// `instanceof`) but stub the probe so it doesn't try to exec a real binary —
+// individual tests then drive it to resolve (binary present) or reject
+// (missing / wrong-arch) the banner branch.
+vi.mock("@argent/native-devtools-android", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/native-devtools-android")>();
+  return {
+    ...actual,
+    ensureTraceProcessorRunnable: vi.fn().mockResolvedValue("/fake/trace_processor_shell"),
+  };
+});
+
 import { runTpQuery } from "../src/utils/android-profiler/pipeline/run-tp";
+import {
+  ensureTraceProcessorRunnable,
+  TraceProcessorUnavailableError,
+} from "@argent/native-devtools-android";
 import { nativeProfilerAnalyzeTool } from "../src/tools/profiler/native-profiler/native-profiler-analyze";
 import type { NativeProfilerSessionApi } from "../src/blueprints/native-profiler-session";
 
 const runTpQueryMock = runTpQuery as unknown as ReturnType<typeof vi.fn>;
+const ensureRunnableMock = ensureTraceProcessorRunnable as unknown as ReturnType<typeof vi.fn>;
 
 interface RunTpQueryOpts {
   tracePath: string;
@@ -90,6 +109,9 @@ async function buildSessionWithTrace(): Promise<{
 describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () => {
   beforeEach(() => {
     runTpQueryMock.mockReset();
+    // Default: the binary is present and runnable. The banner test overrides this.
+    ensureRunnableMock.mockReset();
+    ensureRunnableMock.mockResolvedValue("/fake/trace_processor_shell");
   });
 
   it("status=ok with empty exportErrors when all queries succeed and find nothing", async () => {
@@ -221,6 +243,41 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
         "All clear — no CPU hotspots, UI hangs, or memory issues detected."
       );
       expect(result.report).not.toContain("Analysis failed");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("renders the download-dependencies banner when trace_processor_shell is unavailable", async () => {
+    const { session, cleanup } = await buildSessionWithTrace();
+    try {
+      // Probe fails: the binary is missing / wrong-arch. This is a SEPARATE
+      // branch from per-query failures — it must surface as a prominent banner,
+      // NOT folded into exportErrors / "Export warnings".
+      ensureRunnableMock.mockRejectedValue(
+        new TraceProcessorUnavailableError("wrong_arch", {
+          platform: "linux-amd64",
+          version: "v55.3",
+        })
+      );
+
+      const result = await nativeProfilerAnalyzeTool.execute(
+        { session },
+        { device_id: "emulator-5554" }
+      );
+
+      expect(result.status).toBe("analysis_failed");
+      expect(result.bottlenecksTotal).toBe(0);
+      // Empty exportErrors → the banner is the whole story, no per-query noise.
+      expect(result.exportErrors).toEqual({});
+      // The actionable recovery command must appear front-and-centre…
+      expect(result.report).toContain("argent init --download-dependencies");
+      expect(result.report).toContain("Cannot Run");
+      expect(result.report).toContain("ARGENT_TRACE_PROCESSOR_PATH");
+      // …and the per-query "Export warnings" block must NOT.
+      expect(result.report).not.toContain("Export warnings");
+      // The queries are never even attempted once the probe rejects.
+      expect(runTpQueryMock).not.toHaveBeenCalled();
     } finally {
       await cleanup();
     }

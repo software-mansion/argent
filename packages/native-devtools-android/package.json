@@ -11,10 +11,13 @@
   ],
   "scripts": {
     "build": "rm -rf dist/index.* tsconfig.tsbuildinfo && tsc",
-    "build:native": "bash scripts/build.sh"
+    "build:native": "bash scripts/build.sh",
+    "test": "vitest run",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   }
 }

@@ -29,6 +29,16 @@ if (args.length > 1) {
 }
 const tag = args[0];
 
+// Always bundle the mac-arm64 trace_processor_shell, regardless of the packer's
+// host. Both the download (TP_TARGET_PLATFORM → download-native-binaries.sh) and
+// the bundled marker (ARGENT_BUNDLED_TP_PLATFORM → bundle-tools.cjs) are driven
+// off these, so the binary that's copied and the marker that records it can't
+// disagree. Non-mac-arm64 users fetch their own binary on demand via
+// `argent init --download-dependencies`. The `run()` children inherit process.env.
+const BUNDLED_TP_PLATFORM = "mac-arm64";
+process.env.TP_TARGET_PLATFORM = BUNDLED_TP_PLATFORM;
+process.env.ARGENT_BUNDLED_TP_PLATFORM = BUNDLED_TP_PLATFORM;
+
 /** @param {string} cmd @param {string[]} cmdArgs */
 function run(cmd, cmdArgs) {
   const display = [cmd, ...cmdArgs].join(" ");

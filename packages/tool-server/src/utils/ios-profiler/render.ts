@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import * as path from "path";
+import type { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
 import type {
   ProfilerPayload,
   Bottleneck,
@@ -75,6 +76,49 @@ export async function renderNativeProfilerReport(
     status,
     exportErrors,
   };
+}
+
+/**
+ * Render the prominent, actionable banner shown when Android analysis cannot run
+ * because `trace_processor_shell` is missing or the wrong architecture. This is
+ * a *top-level* report body (not a "> Export warnings" line) so the user/agent
+ * sees the recovery command — `argent init --download-dependencies` — front and
+ * centre. The caller pairs this with an empty `exportErrors` and
+ * `status: "analysis_failed"`.
+ */
+export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableError): string {
+  const platform = err.platform ? ` (\`${err.platform}\`)` : "";
+  const lines = [
+    `# Android Perfetto Analysis — Cannot Run`,
+    ``,
+    `> ⚠️ **The Perfetto \`trace_processor_shell\` binary needed to analyze Android ` +
+      `traces is not available on this machine${platform}.**`,
+    ``,
+    err.message,
+    ``,
+    `---`,
+    ``,
+    `## How to fix`,
+    ``,
+    `Run this once to fetch the correct binary for your OS/CPU into the \`~/.argent\` cache:`,
+    ``,
+    "```bash",
+    `argent init --download-dependencies`,
+    "```",
+    ``,
+    `(or the equivalent \`argent download-deps\`). It's a one-time ~12 MB download; ` +
+      `iOS-only and offline users never need it.`,
+    ``,
+    `**Offline / air-gapped, or behind a proxy that blocks GitHub?** Stage a ` +
+      `\`trace_processor_shell\` binary for your platform yourself and point Argent at it:`,
+    ``,
+    "```bash",
+    `export ARGENT_TRACE_PROCESSOR_PATH=/absolute/path/to/trace_processor_shell`,
+    "```",
+    ``,
+    `Then re-run \`native-profiler-analyze\`.`,
+  ];
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------

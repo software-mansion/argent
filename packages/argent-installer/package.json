@@ -21,6 +21,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@argent/native-devtools-android": "file:../native-devtools-android",
     "@types/node": "^25.9.0",
     "@types/semver": "^7.7.1",
     "typescript": "^6.0.3",

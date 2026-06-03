@@ -68,6 +68,18 @@ const TP_BIN_SRC = path.resolve(
   "packages/native-devtools-android/bin/trace_processor_shell"
 );
 const TP_BIN_DEST = path.resolve(__dirname, "../bin/trace_processor_shell");
+// Generated module telling the resolver which platform's trace_processor_shell
+// got bundled (so it never hands a mac-arm64 binary to a Linux host) and the
+// pinned Perfetto version (the ~/.argent cache key). esbuild inlines it into
+// every bundle via the @argent/native-devtools-android alias.
+const BUNDLED_META_DEST = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/src/bundled-meta.ts"
+);
+const PERFETTO_VERSION_FILE = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/argent-private/packages/native-devtools-android/PERFETTO_VERSION"
+);
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
@@ -334,6 +346,62 @@ function copyAsset(a) {
     console.log(`✓ Copied ${a.copiedLabel} → ${rel}`);
   }
 }
+
+/**
+ * Read the pinned Perfetto version from argent-private's PERFETTO_VERSION (the
+ * same file CI builds the binaries against), falling back to the committed
+ * constant in bundled-meta.ts when the submodule isn't checked out (dev/source
+ * builds). Keeps the bundled-marker, the cache key, and the JS the columns
+ * expect all agreeing.
+ */
+function readPerfettoVersion() {
+  try {
+    const v = fs.readFileSync(PERFETTO_VERSION_FILE, "utf8").trim();
+    if (v) return v;
+  } catch {
+    /* submodule absent — fall through to committed constant */
+  }
+  try {
+    const existing = fs.readFileSync(BUNDLED_META_DEST, "utf8");
+    const m = existing.match(/PERFETTO_VERSION\s*=\s*"([^"]+)"/);
+    if (m) return m[1];
+  } catch {
+    /* committed file missing — final fallback below */
+  }
+  return "v55.3";
+}
+
+/**
+ * Regenerate bundled-meta.ts so the resolver learns the actually-bundled
+ * platform and pinned Perfetto version. The platform is derived from the SAME
+ * env (ARGENT_BUNDLED_TP_PLATFORM) that scripts/pack-mcp.cjs passes to
+ * download-native-binaries.sh's TP_TARGET_PLATFORM, so the marker can't disagree
+ * with which binary was copied. Defaults to mac-arm64 (the Mac-arm64 majority).
+ */
+function generateBundledMeta() {
+  const platform = process.env.ARGENT_BUNDLED_TP_PLATFORM || "mac-arm64";
+  const version = readPerfettoVersion();
+  const content = `// GENERATED at pack time by packages/argent/scripts/bundle-tools.cjs.
+//
+// Committed with sane fallback values so dev / source builds (and the
+// submodule-less checkout) still compile; the pack step overwrites this file
+// with the platform whose trace_processor_shell was actually bundled and the
+// Perfetto version pinned in argent-private's PERFETTO_VERSION. esbuild inlines
+// it into every published bundle, so the resolver always knows the bundled
+// platform (and never hands a mac-arm64 binary to a Linux host) and the cache
+// key always matches the version the shipped JS was built against.
+import type { TraceProcessorPlatform } from "./platform";
+
+export const BUNDLED_TRACE_PROCESSOR_PLATFORM: TraceProcessorPlatform = "${platform}";
+export const PERFETTO_VERSION = "${version}";
+`;
+  fs.writeFileSync(BUNDLED_META_DEST, content);
+  console.log(`✓ Generated bundled-meta.ts (platform=${platform}, perfetto=${version})`);
+}
+
+// Generate the bundled marker BEFORE esbuild runs, so the constants get inlined
+// into tool-server.cjs / installer.mjs / etc.
+generateBundledMeta();
 
 // Purge artifact directories so stale files don't survive across builds. Derived
 // from the table (every dir-kind destination, plus BIN_DIR) so it can't drift.

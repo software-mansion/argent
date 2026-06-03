@@ -5,6 +5,8 @@ import * as path from "path";
 import {
   traceProcessorShellPath,
   traceProcessorQueriesDir,
+  isExecFormatError,
+  wrongArchError,
 } from "@argent/native-devtools-android";
 
 const execFileAsync = promisify(execFile);
@@ -102,6 +104,13 @@ export async function runTpInline<Row = Record<string, unknown>>(
       { timeout: QUERY_TIMEOUT_MS, maxBuffer: MAX_OUTPUT_BYTES }
     );
     return parseTpCsvOutput<Row>(stdout);
+  } catch (err) {
+    // A wrong-arch binary (e.g. a Linux ELF shipped to a macOS host) fails to
+    // exec with ENOEXEC / "exec format error". Surface it as the actionable
+    // TraceProcessorUnavailableError so the analyze path renders the
+    // download-dependencies banner instead of a cryptic per-query failure.
+    if (isExecFormatError(err)) throw wrongArchError(err);
+    throw err;
   } finally {
     await fs.unlink(tmpSql).catch(() => {
       // best-effort cleanup

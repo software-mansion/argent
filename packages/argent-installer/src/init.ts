@@ -29,6 +29,14 @@ import {
 } from "./utils.js";
 import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
+import {
+  tryDetectHostPlatform,
+  downloadTraceProcessor,
+  traceProcessorCachePath,
+  resolveReleaseTag,
+  BUNDLED_TRACE_PROCESSOR_PLATFORM,
+  PERFETTO_VERSION,
+} from "@argent/native-devtools-android";
 
 function runShellCommand(cmd: ShellCommand): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -58,8 +66,100 @@ function extractFlag(args: string[], flag: string): string | null {
   return args[idx + 1]!;
 }
 
+// Aliases that all mean "fetch the native profiler binary, then exit". `init`
+// short-circuits on any of them; the `argent download-deps` subcommand forwards
+// through the canonical `--download-dependencies` form.
+export const DOWNLOAD_DEPS_FLAGS = [
+  "--download-dependencies",
+  "--download_dependencies",
+  "--download-deps",
+];
+
+export function hasDownloadDependenciesFlag(args: string[]): boolean {
+  return args.some((a) => DOWNLOAD_DEPS_FLAGS.includes(a));
+}
+
+type NativeDepsStatus = "ready" | "downloaded" | "skipped";
+
+/**
+ * Fetch the host's `trace_processor_shell` into the `~/.argent` cache when it
+ * isn't the bundled platform and isn't already cached. Returns a status for the
+ * init Summary. Never throws — a failed/blocked download warns and continues so
+ * offline / iOS-only Mac users are never blocked (the Android analyze path will
+ * later surface its own actionable banner if the binary is genuinely needed).
+ */
+async function runDownloadDependencies(opts: { force: boolean }): Promise<NativeDepsStatus> {
+  const platform = tryDetectHostPlatform();
+  if (!platform) {
+    p.log.warn(
+      "Native profiler dependencies aren't published for this platform " +
+        "(supported: mac-arm64, mac-amd64, linux-amd64, linux-arm64). Skipping."
+    );
+    return "skipped";
+  }
+
+  // The bundled binary already covers its own platform — nothing to fetch.
+  if (!opts.force && platform === BUNDLED_TRACE_PROCESSOR_PLATFORM) {
+    return "ready";
+  }
+
+  const cachePath = traceProcessorCachePath(PERFETTO_VERSION, platform);
+  if (!opts.force && existsSync(cachePath)) {
+    return "ready";
+  }
+
+  const tag = resolveReleaseTag(getInstalledVersion());
+  const spinner = p.spinner();
+  spinner.start(`Downloading trace_processor_shell (${platform}, ${tag})...`);
+  try {
+    const result = await downloadTraceProcessor({
+      platform,
+      version: PERFETTO_VERSION,
+      tag,
+      onProgress: (downloaded, total) => {
+        if (total) {
+          const pct = Math.floor((downloaded / total) * 100);
+          spinner.message(`Downloading trace_processor_shell (${platform})... ${pct}%`);
+        }
+      },
+    });
+    if (result.fromCache) {
+      spinner.stop(pc.green("Native profiler dependencies already present."));
+      return "ready";
+    }
+    const mb = (result.bytes / (1024 * 1024)).toFixed(1);
+    spinner.stop(pc.green(`Downloaded native profiler dependencies (${mb} MB).`));
+    return "downloaded";
+  } catch (err) {
+    spinner.stop(pc.red("Native profiler dependency download failed."));
+    p.log.error(err instanceof Error ? err.message : String(err));
+    p.log.info(
+      `Retry later with ${pc.cyan("argent download-deps")}, or set ` +
+        `${pc.cyan("ARGENT_TRACE_PROCESSOR_PATH")} to a local trace_processor_shell binary.`
+    );
+    return "skipped";
+  }
+}
+
+/**
+ * Standalone entry for `argent init --download-dependencies` and the
+ * `argent download-deps` subcommand: download only, then exit. Forces the
+ * download even on the bundled platform (so an agent can pre-stage it
+ * deterministically) and exits non-zero on failure so callers can detect it.
+ */
+export async function downloadDependencies(): Promise<void> {
+  p.intro(pc.bgCyan(pc.black(" argent download-deps ")));
+  const status = await runDownloadDependencies({ force: true });
+  if (status === "skipped") {
+    p.outro(pc.red("Native profiler dependencies were not installed."));
+    process.exit(1);
+  }
+  p.outro("Native profiler dependencies ready.");
+}
+
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const downloadDepsOnly = hasDownloadDependenciesFlag(args);
   const fromTar = extractFlag(args, "--from");
 
   printBanner();
@@ -68,6 +168,19 @@ export async function init(args: string[]): Promise<void> {
 
   let version = getInstalledVersion() ?? "unknown";
   p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
+
+  // --download-dependencies short-circuit: fetch the native profiler binary and
+  // exit, without touching MCP config / skills / rules. Non-interactive by
+  // design so an agent can drive it programmatically; exits non-zero on failure.
+  if (downloadDepsOnly) {
+    const status = await runDownloadDependencies({ force: true });
+    if (status === "skipped") {
+      p.outro(pc.red("Native profiler dependencies were not installed."));
+      process.exit(1);
+    }
+    p.outro("Native profiler dependencies ready.");
+    return;
+  }
 
   // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
@@ -537,6 +650,12 @@ export async function init(args: string[]): Promise<void> {
     p.log.info(pc.dim("No rules or agents to copy for selected editors."));
   }
 
+  // ── Step 4: Native profiler dependencies ────────────────────────────────────
+  // Only non-bundled-platform hosts need a download; the bundled mac-arm64
+  // binary works offline for the Mac-arm64 majority. Warn-and-continue on
+  // failure so offline / iOS-only users are never blocked.
+  const nativeDepsStatus = await runDownloadDependencies({ force: false });
+
   // ── Summary ─────────────────────────────────────────────────────────────────
 
   const summaryLines = [
@@ -544,6 +663,7 @@ export async function init(args: string[]): Promise<void> {
     `${pc.green("Auto-approve")} ${allowlistEnabled ? "enabled" : "skipped"}`,
     `${pc.green("Skills")} ${skillsMethod === "manual" ? "instructions printed" : "installed"}`,
     `${pc.green("Rules & agents")} ${copyResults.length > 0 ? "copied" : "n/a"}`,
+    `${pc.green("Native deps")} ${nativeDepsStatus}`,
   ];
 
   p.note(summaryLines.join("\n"), "Summary");

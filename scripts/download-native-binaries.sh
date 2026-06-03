@@ -67,11 +67,17 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${BIN_DIR}/ax-service"
 
-# Pull the host-matching trace_processor_shell variant and rename it to the
-# canonical bundler-expected filename. The release publishes one binary per
-# supported host (see argent-private/.github/workflows/build-native-binaries.yml);
-# we only need the one for whoever's packing.
-TP_ASSET="trace_processor_shell-${HOST_PLATFORM}"
+# Pull the trace_processor_shell variant and rename it to the canonical
+# bundler-expected filename. The release publishes one binary per supported host
+# (see argent-private/.github/workflows/build-native-binaries.yml).
+#
+# By default we fetch the *host* binary (dev convenience: pack on a Mac, run on a
+# Mac). At publish/pack time TP_TARGET_PLATFORM is forced to mac-arm64 (the
+# always-bundled majority platform) regardless of the packer's host — non-mac-arm64
+# users fetch their own binary on demand via `argent init --download-dependencies`.
+# Keep this in lockstep with ARGENT_BUNDLED_TP_PLATFORM (bundle-tools.cjs).
+TP_PLATFORM="${TP_TARGET_PLATFORM:-$HOST_PLATFORM}"
+TP_ASSET="trace_processor_shell-${TP_PLATFORM}"
 echo "  Downloading ${TP_ASSET}..."
 gh release download "${TAG}" \
   --repo "${REPO}" \

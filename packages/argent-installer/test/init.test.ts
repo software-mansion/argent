@@ -7,6 +7,7 @@ import {
   ARGENT_SKILLS_REPO,
   buildArgentSkillsSource,
 } from "../src/utils.js";
+import { hasDownloadDependenciesFlag, DOWNLOAD_DEPS_FLAGS } from "../src/init.js";
 
 // These tests verify the logic used by init.ts without running the full TUI.
 // The actual init flow is interactive and tested via the integration harness.
@@ -95,5 +96,30 @@ describe("init — skills command construction", () => {
     const args = buildArgs(buildArgentSkillsSource("unknown"), "local", "default");
 
     expect(args[2]).toBe(SKILLS_DIR);
+  });
+});
+
+// `argent init --download-dependencies` (and the `download-deps` subcommand)
+// short-circuit init into a download-only flow. The detection must accept all
+// three documented aliases and ignore unrelated flags.
+describe("init — download-dependencies flag parsing", () => {
+  it.each(DOWNLOAD_DEPS_FLAGS)("detects the %s alias", (flag) => {
+    expect(hasDownloadDependenciesFlag([flag])).toBe(true);
+    expect(hasDownloadDependenciesFlag(["--yes", flag, "--from", "x.tgz"])).toBe(true);
+  });
+
+  it("exposes exactly the three documented aliases", () => {
+    expect(DOWNLOAD_DEPS_FLAGS).toEqual([
+      "--download-dependencies",
+      "--download_dependencies",
+      "--download-deps",
+    ]);
+  });
+
+  it("returns false when no download flag is present", () => {
+    expect(hasDownloadDependenciesFlag([])).toBe(false);
+    expect(hasDownloadDependenciesFlag(["--yes", "-y", "--from", "pkg.tgz"])).toBe(false);
+    // Guard against a loose substring match.
+    expect(hasDownloadDependenciesFlag(["--download"])).toBe(false);
   });
 });

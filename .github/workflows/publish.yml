@@ -37,15 +37,23 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download signed native binaries (dylibs, ax-service, trace_processor_shell, Android helper APK)
+        # Force the mac-arm64 trace_processor_shell even though this job runs on
+        # ubuntu-latest: we always bundle mac-arm64 (the majority), and other
+        # platforms download their own binary on demand via
+        # `argent init --download-dependencies`. Keep in lockstep with
+        # ARGENT_BUNDLED_TP_PLATFORM on the build step below.
         run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TP_TARGET_PLATFORM: mac-arm64
 
       - run: npm ci
 
       - run: npx tsc --build
 
       - run: npm run build -w @swmansion/argent
+        env:
+          ARGENT_BUNDLED_TP_PLATFORM: mac-arm64
 
       - run: test -x packages/argent/bin/simulator-server
       - run: test -x packages/argent/bin/ax-service
@@ -53,6 +61,8 @@ jobs:
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
       - run: test -x packages/argent/bin/trace_processor_shell
+      # Guard against a Linux-ELF regression: we must ship the mac-arm64 binary.
+      - run: file packages/argent/bin/trace_processor_shell | grep -q 'Mach-O.*arm64'
       - run: test -f packages/argent/argent.tracecfg.pbtxt
       - run: test -d packages/argent/queries
       - run: test -f packages/argent/manifest.json

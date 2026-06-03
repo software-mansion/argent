@@ -6,8 +6,12 @@ import { detectAndroidRunningApp } from "../../../../utils/android-profiler/dete
 import { runAndroidProfilerPipeline } from "../../../../utils/android-profiler/pipeline/index";
 import { writeAndroidNativeProfilerMetadata } from "../../../../utils/android-profiler/session-metadata";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
-import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
+import {
+  renderNativeProfilerReport,
+  renderTraceProcessorUnavailable,
+} from "../../../../utils/ios-profiler/render";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
+import { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
 
 export interface AndroidStartParams {
   device_id: string;
@@ -157,7 +161,26 @@ export async function analyzeNativeProfilerAndroid(
 
   const hostTracePath = api.exportedFiles.pftrace;
   const appPackage = api.appProcess ?? "";
-  const pipelineResult = await runAndroidProfilerPipeline(hostTracePath, appPackage);
+
+  let pipelineResult: Awaited<ReturnType<typeof runAndroidProfilerPipeline>>;
+  try {
+    pipelineResult = await runAndroidProfilerPipeline(hostTracePath, appPackage);
+  } catch (err) {
+    // Missing / wrong-arch trace_processor_shell: return a prominent banner
+    // (analysis_failed, empty exportErrors so it never renders as a "> Export
+    // warnings" list) pointing at `argent init --download-dependencies`.
+    if (err instanceof TraceProcessorUnavailableError) {
+      api.parsedData = null;
+      return {
+        report: renderTraceProcessorUnavailable(err),
+        reportFile: null,
+        bottlenecksTotal: 0,
+        status: "analysis_failed",
+        exportErrors: {},
+      };
+    }
+    throw err;
+  }
 
   // Android drill-down re-queries the .pftrace; nothing to cache here.
   api.parsedData = null;
