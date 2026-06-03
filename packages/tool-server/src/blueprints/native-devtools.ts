@@ -7,14 +7,12 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { pickIosHost, buildDyldInsertLibraries } from "../utils/ios-host";
+import { pickIosHost, buildDyldInsertLibraries, type IosEndpoint } from "../utils/ios-host";
 
 // Re-exported for the env-merging unit test that imports it from this module.
 export { buildDyldInsertLibraries };
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
-
-export const NATIVE_DEVTOOLS_TCP_PORT = Number(process.env.NATIVE_DEVTOOLS_TCP_PORT) || 9230;
 
 export const NATIVE_DEVTOOLS_NAMESPACE = "NativeDevtools";
 
@@ -215,11 +213,11 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);
-    const tcpPort = NATIVE_DEVTOOLS_TCP_PORT;
-    const endpoint =
-      transport === "tcp"
-        ? ({ transport: "tcp", port: tcpPort } as const)
-        : ({ transport: "unix", socketPath } as const);
+    // For TCP, `port` starts undefined (ephemeral) and is populated by the
+    // listen block below. ensureEnvReady and the dispose path read it after
+    // that point.
+    const endpoint: IosEndpoint =
+      transport === "tcp" ? { transport: "tcp" } : { transport: "unix", socketPath };
     const MAX_LOG_ENTRIES = 1000;
     const connections = new Map<string, AppConnection>();
     const pendingRpc = new Map<
@@ -396,17 +394,29 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       });
     });
 
-    if (transport === "tcp") {
-      server.listen(tcpPort, "127.0.0.1");
-    } else {
-      server.listen(socketPath);
-    }
-
-    if (transport === "tcp") {
+    if (endpoint.transport === "tcp") {
+      // `endpoint.port` is undefined here — bind ephemeral and write the
+      // realized port back so each per-device instance gets its own.
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(endpoint.port ?? 0, "127.0.0.1", () => {
+          server.off("error", reject);
+          const addr = server.address();
+          if (addr === null || typeof addr === "string") {
+            server.close();
+            reject(new Error("native-devtools server failed to bind a TCP port"));
+            return;
+          }
+          endpoint.port = addr.port;
+          resolve();
+        });
+      });
       // Wire the reverse tunnel (no-op on local) before kicking off ensureEnv
       // so the dylib's first dial — which can happen as soon as the env is
       // written — lands on our listener.
-      await host.startProxy(udid, tcpPort);
+      await host.startProxy(udid, endpoint.port!);
+    } else {
+      server.listen(socketPath);
     }
 
     // Tolerate ensureEnv failure: throwing here would leak `server` — the
@@ -528,8 +538,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           reject(new Error("NativeDevtools service disposed"));
         }
         pendingRpc.clear();
-        if (transport === "tcp") {
-          await host.stopProxy(udid, tcpPort);
+        if (endpoint.transport === "tcp") {
+          await host.stopProxy(udid, endpoint.port!);
         }
       },
       events,

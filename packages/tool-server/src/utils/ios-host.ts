@@ -24,7 +24,10 @@ const execFileAsync = promisify(execFile);
 
 export type IosEndpoint =
   | { transport: "unix"; socketPath: string }
-  | { transport: "tcp"; port: number };
+  // `port` is optional: omit (or set undefined) to request an ephemeral OS-assigned
+  // port. The listening side writes the realized port back here, so by the time
+  // an endpoint flows into the `host.*` functions below it always has `port` set.
+  | { transport: "tcp"; port?: number };
 
 /**
  * Strategy that absorbs the local-vs-remote dichotomy out of the iOS
@@ -149,6 +152,9 @@ async function setupNativeDevtoolsEnvLocal(udid: string, endpoint: IosEndpoint):
   }
 
   if (endpoint.transport === "tcp") {
+    if (endpoint.port === undefined) {
+      throw new Error("native-devtools TCP endpoint reached host setup before its port was bound");
+    }
     await execFileAsync(
       "xcrun",
       [
@@ -196,6 +202,9 @@ async function setupNativeDevtoolsEnvRemote(udid: string, endpoint: IosEndpoint)
   if (endpoint.transport !== "tcp") {
     throw new Error("ios-remote native-devtools requires TCP transport");
   }
+  if (endpoint.port === undefined) {
+    throw new Error("native-devtools TCP endpoint reached host setup before its port was bound");
+  }
   await simRemoteSetupNativeDevtools(udid, {
     libs: [REMOTE_BOOTSTRAP_DYLIB_BASENAME],
     cdpPort: endpoint.port,
@@ -221,6 +230,9 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
   const binaryPath =
     endpoint.transport === "tcp" ? axServiceBinaryPathTcp() : axServiceBinaryPath();
 
+  if (endpoint.transport === "tcp" && endpoint.port === undefined) {
+    throw new Error("ax-service TCP endpoint reached spawn before its port was bound");
+  }
   const endpointArgs =
     endpoint.transport === "tcp"
       ? ["--port", String(endpoint.port)]
@@ -247,6 +259,9 @@ function spawnAxDaemonLocal(udid: string, endpoint: IosEndpoint): ChildProcess {
 function spawnAxDaemonRemote(udid: string, endpoint: IosEndpoint): ChildProcess {
   if (endpoint.transport !== "tcp") {
     throw new Error("ios-remote ax-service requires TCP transport");
+  }
+  if (endpoint.port === undefined) {
+    throw new Error("ax-service TCP endpoint reached spawn before its port was bound");
   }
   // ios-remote: the orchestrator-supplied daemon is started by
   // `sim-remote setup ax-service`. There is no local child process to

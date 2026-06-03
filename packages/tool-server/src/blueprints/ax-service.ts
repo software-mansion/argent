@@ -23,8 +23,6 @@ export const AX_SERVICE_NAMESPACE = "AXService";
 
 export type AXServiceTransport = "unix" | "tcp";
 
-export const AX_SERVICE_TCP_PORT = Number(process.env.AX_SERVICE_TCP_PORT) || 9231;
-
 // Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
 type AxServiceFactoryOptions = Record<string, unknown> & {
   device: DeviceInfo;
@@ -83,7 +81,9 @@ interface PendingRpc {
 }
 
 // Listen on the chosen transport. Unix: pre-unlink stale socket from previous
-// runs so listen() doesn't EADDRINUSE.
+// runs so listen() doesn't EADDRINUSE. TCP: when `endpoint.port` is undefined,
+// bind on an OS-assigned ephemeral port and write the realized port back into
+// `endpoint.port` so each per-device instance gets its own non-colliding port.
 function startListener(
   endpoint: IosEndpoint,
   onConnection: (socket: net.Socket) => void
@@ -100,11 +100,20 @@ function startListener(
 
     const onListening = () => {
       server.off("error", reject);
+      if (endpoint.transport === "tcp") {
+        const addr = server.address();
+        if (addr === null || typeof addr === "string") {
+          server.close();
+          reject(new Error("ax-service server failed to bind a TCP port"));
+          return;
+        }
+        endpoint.port = addr.port;
+      }
       resolve(server);
     };
 
     if (endpoint.transport === "tcp") {
-      server.listen(endpoint.port, "127.0.0.1", onListening);
+      server.listen(endpoint.port ?? 0, "127.0.0.1", onListening);
     } else {
       server.listen(endpoint.socketPath, onListening);
     }
@@ -201,7 +210,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const transport: AXServiceTransport = host.requiresTcp ? "tcp" : (opts.transport ?? "unix");
     const endpoint: IosEndpoint =
       transport === "tcp"
-        ? { transport: "tcp", port: AX_SERVICE_TCP_PORT }
+        ? { transport: "tcp" }
         : { transport: "unix", socketPath: getSocketPath(udid) };
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -271,8 +280,8 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       // Wire the reverse tunnel BEFORE asking the orchestrator to start the
       // daemon — the daemon will dial 127.0.0.1:<port> inside the simulator
       // and that dial gets QUIC-forwarded back to our host listener above.
-      // No-op on local.
-      await host.startProxy(udid, endpoint.port);
+      // No-op on local. `port` was populated by startListener.
+      await host.startProxy(udid, endpoint.port!);
     }
 
     const proc = host.spawnAxDaemon(udid, endpoint);
@@ -301,7 +310,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         } catch {}
       }
       if (endpoint.transport === "tcp") {
-        await host.stopProxy(udid, endpoint.port);
+        await host.stopProxy(udid, endpoint.port!);
       }
       throw err;
     }
@@ -369,7 +378,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           } catch {}
         }
         if (endpoint.transport === "tcp") {
-          await host.stopProxy(udid, endpoint.port);
+          await host.stopProxy(udid, endpoint.port!);
         }
       },
       events,
