@@ -35,6 +35,58 @@ export async function resolveEmulatorOrThrow(): Promise<string> {
   return path;
 }
 
+// Memoize per (binary path + flag): `-help` output is stable for a given
+// binary, and a boot may probe more than one flag. Cleared implicitly when the
+// process restarts after an emulator update.
+const emulatorFlagSupportCache = new Map<string, boolean>();
+
+/**
+ * Feature-detect whether the resolved `emulator` binary accepts a given
+ * command-line flag, by checking whether it appears in `emulator -help`.
+ *
+ * Some launch flags exist only in newer emulator builds and are undocumented
+ * in the release notes (e.g. `-crash-report-mode`, added in ~36.x and late
+ * 35.x), so the binary's own `-help` listing is the only reliable signal.
+ * Passing an unrecognized flag makes the emulator abort before boot, so callers
+ * must gate on this before adding such a flag to the launch args.
+ *
+ * Best-effort: returns false if the binary cannot be resolved or `-help` cannot
+ * be run, and never throws.
+ */
+export async function emulatorSupportsFlag(
+  flag: string,
+  options: { timeoutMs?: number } = {}
+): Promise<boolean> {
+  let emulatorPath: string;
+  try {
+    emulatorPath = await resolveEmulatorOrThrow();
+  } catch {
+    return false;
+  }
+
+  const cacheKey = `${emulatorPath}|${flag}`;
+  const cached = emulatorFlagSupportCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  let output = "";
+  try {
+    const { stdout, stderr } = await execFileAsync(emulatorPath, ["-help"], {
+      timeout: options.timeoutMs ?? 10_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    output = stdout + stderr;
+  } catch (err) {
+    // `emulator -help` exits non-zero on some builds; the listing is still
+    // attached to the error. Inspect whatever was captured before giving up.
+    const e = err as { stdout?: string; stderr?: string };
+    output = (e.stdout ?? "") + (e.stderr ?? "");
+  }
+
+  const supported = output.includes(flag);
+  emulatorFlagSupportCache.set(cacheKey, supported);
+  return supported;
+}
+
 export interface AdbRunResult {
   stdout: string;
   stderr: string;
