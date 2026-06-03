@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import type { DeviceInfo, Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -9,6 +9,7 @@ import {
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
 import {
+  axServiceRef,
   ensureAutomationEnabled,
   isEntitlementBypassActive,
   setAccessibilityPrefsPreBoot,
@@ -420,6 +421,33 @@ async function bootIos(
   // prefs via `defaults write` — SB won't pick them up until next restart,
   // but describe surfaces a hint about it.
   await ensureAutomationEnabled(udid).catch(() => undefined);
+
+  // A real (re)boot resets the simulator's launchd environment and restarts
+  // SpringBoard/cfprefsd, which invalidates any per-device service cached from
+  // a previous boot of this udid:
+  //   - native-devtools latches `envSetup=true` after its first successful
+  //     setup and never re-runs `ensureEnv`, so the DYLD_INSERT_LIBRARIES the
+  //     reboot just cleared is never restored — injection silently breaks while
+  //     `native-devtools-status` keeps reporting `envSetup: true`.
+  //   - ax-service computes `degraded` once at factory time and holds a daemon
+  //     socket bound to the now-dead boot, so `describe` returns an empty tree
+  //     and a stale "was not booted through argent" hint.
+  // Dispose both (every transport variant) so the next resolve rebuilds them
+  // against the fresh boot. The native-devtools resolve immediately below then
+  // re-runs `ensureEnv` and re-establishes injection. Guarded because a service
+  // that was never resolved this session isn't in the registry.
+  if (needsPreBoot) {
+    const rebootedDevice: DeviceInfo = { id: udid, platform: "ios", kind: "simulator" };
+    const staleRefs = [
+      nativeDevtoolsRef(rebootedDevice),
+      nativeDevtoolsRef(rebootedDevice, { transport: "tcp" }),
+      axServiceRef(rebootedDevice),
+      axServiceRef(rebootedDevice, { transport: "tcp" }),
+    ];
+    for (const ref of staleRefs) {
+      await registry.disposeService(ref.urn).catch(() => undefined);
+    }
+  }
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);

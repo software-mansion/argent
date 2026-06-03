@@ -38,7 +38,22 @@ vi.mock("../src/blueprints/ax-service", () => ({
   setAccessibilityPrefsPreBoot: (...args: unknown[]) => setAccessibilityPrefsPreBootMock(...args),
   ensureAutomationEnabled: (...args: unknown[]) => ensureAutomationEnabledMock(...args),
   isEntitlementBypassActive: (...args: unknown[]) => isEntitlementBypassActiveMock(...args),
+  axServiceRef: (device: { id: string }, opts?: { transport?: string }) => ({
+    urn: `AXService:${device.id}${opts?.transport === "tcp" ? ":tcp" : ""}`,
+    options: { device, transport: opts?.transport ?? "unix" },
+  }),
 }));
+
+// boot-device disposes stale per-device services before re-resolving them, so
+// the registry mock needs a disposeService. A shared helper keeps every iOS
+// test's registry consistent and lets a test reach into the dispose calls.
+function makeRegistry(resolveService: ReturnType<typeof vi.fn>): {
+  registry: Registry;
+  disposeService: ReturnType<typeof vi.fn>;
+} {
+  const disposeService = vi.fn().mockResolvedValue(undefined);
+  return { registry: { resolveService, disposeService } as unknown as Registry, disposeService };
+}
 
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
@@ -83,6 +98,7 @@ describe("boot-device — iOS path", () => {
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
     const registry = {
       resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
     } as unknown as Registry;
 
     const tool = createBootDeviceTool(registry);
@@ -144,7 +160,10 @@ describe("boot-device — iOS path", () => {
 
   it("skips pre-boot plist write when the sim is already Booted and falls back to ensureAutomationEnabled", async () => {
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
@@ -164,7 +183,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([]);
 
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
     await tool.execute!({}, { udid: "44444444-4444-4444-4444-444444444444" });
@@ -181,7 +203,10 @@ describe("boot-device — iOS path", () => {
     setAccessibilityPrefsPreBootMock.mockRejectedValueOnce(new Error("plutil missing"));
 
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
     await expect(
@@ -203,7 +228,10 @@ describe("boot-device — iOS path", () => {
         givenUp: true,
       }),
     }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
 
     const tool = createBootDeviceTool(registry);
 
@@ -230,7 +258,10 @@ describe("boot-device — iOS path", () => {
       });
 
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
 
     const tool = createBootDeviceTool(registry);
 
@@ -257,7 +288,10 @@ describe("boot-device — iOS path", () => {
 
   it("force=true on a Booted sim triggers shutdown → pre-boot write → boot", async () => {
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
     await expect(
@@ -284,7 +318,10 @@ describe("boot-device — iOS path", () => {
 
   it("force not set on a Booted sim does not shut down", async () => {
     const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
-    const registry = { resolveService } as unknown as Registry;
+    const registry = {
+      resolveService,
+      disposeService: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
 
     await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
@@ -295,6 +332,59 @@ describe("boot-device — iOS path", () => {
       (args: unknown[]) => Array.isArray(args) && args[1] === "shutdown"
     );
     expect(hasShutdown).toBe(false);
+  });
+
+  // Regression: a sim reboot resets launchd (clearing DYLD_INSERT_LIBRARIES)
+  // and restarts SpringBoard, but native-devtools latches `envSetup=true` and
+  // ax-service freezes `degraded` at factory time — so a cached instance from
+  // the previous boot keeps injection broken and `describe` empty with no
+  // self-recovery. boot-device must evict those services on a real (re)boot so
+  // the next resolve rebuilds them against the fresh boot.
+  it("force=true disposes the stale native-devtools and ax-service before re-resolving them", async () => {
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const { registry, disposeService } = makeRegistry(resolveService);
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222", force: true });
+
+    const disposed = disposeService.mock.calls.map(([urn]) => urn);
+    expect(disposed).toEqual(
+      expect.arrayContaining([
+        "NativeDevtools:22222222-2222-2222-2222-222222222222",
+        "NativeDevtools:22222222-2222-2222-2222-222222222222:tcp",
+        "AXService:22222222-2222-2222-2222-222222222222",
+        "AXService:22222222-2222-2222-2222-222222222222:tcp",
+      ])
+    );
+    // The unix native-devtools must be torn down BEFORE it is re-resolved,
+    // otherwise the rebuilt instance would re-use the latched (stale) state.
+    const disposeOrder = disposeService.mock.invocationCallOrder[0]!;
+    const resolveOrder = resolveService.mock.invocationCallOrder[0]!;
+    expect(disposeOrder).toBeLessThan(resolveOrder);
+  });
+
+  it("disposes stale services when booting a Shutdown sim", async () => {
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const { registry, disposeService } = makeRegistry(resolveService);
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" });
+
+    const disposed = disposeService.mock.calls.map(([urn]) => urn);
+    expect(disposed).toContain("NativeDevtools:11111111-1111-1111-1111-111111111111");
+    expect(disposed).toContain("AXService:11111111-1111-1111-1111-111111111111");
+  });
+
+  it("does NOT dispose services when an already-Booted sim is booted without force", async () => {
+    // No reboot happened (needsPreBoot is false), so the running services are
+    // still valid — tearing them down would needlessly drop a live injection.
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const { registry, disposeService } = makeRegistry(resolveService);
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: "22222222-2222-2222-2222-222222222222" });
+
+    expect(disposeService).not.toHaveBeenCalled();
   });
 });
 
