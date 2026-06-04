@@ -6,6 +6,7 @@ import { resolveDevice } from "../../utils/device-info";
 import type { LaunchAppAndroidServices, LaunchAppIosServices, LaunchAppResult } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { iosRemoteImpl } from "./platforms/ios-remote";
 
 // Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;
 // iOS bundle ids use the same reverse-DNS shape with dashes allowed. The union
@@ -43,6 +44,7 @@ type Params = z.infer<typeof zodSchema>;
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -62,7 +64,10 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
   // Resolving it on Android would force the iOS-only blueprint to spin up.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
+    if (device.platform === "ios" || device.platform === "ios-remote") {
+      return { nativeDevtools: nativeDevtoolsRef(device) };
+    }
+    return {};
   },
   execute: dispatchByPlatform<
     LaunchAppIosServices,
@@ -74,5 +79,6 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     capability,
     ios: iosImpl,
     android: androidImpl,
+    iosRemote: iosRemoteImpl,
   }),
 };

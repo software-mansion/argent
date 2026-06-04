@@ -2,8 +2,18 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { listAndroidDevices, listAvds } from "../../utils/adb";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
+import { simctlListDevices } from "../../utils/sim-remote";
+import { withRemotePrefix } from "../../utils/device-info";
 
 type IosDevice = IosSimulator & { platform: "ios" };
+
+type IosRemoteDevice = {
+  platform: "ios-remote";
+  udid: string;
+  name: string;
+  state: string;
+  runtime: string;
+};
 
 type AndroidDevice = {
   platform: "android";
@@ -16,7 +26,7 @@ type AndroidDevice = {
 };
 
 type ListDevicesResult = {
-  devices: Array<IosDevice | AndroidDevice>;
+  devices: Array<IosDevice | IosRemoteDevice | AndroidDevice>;
   avds: Array<{ name: string }>;
 };
 
@@ -40,9 +50,42 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 
 // Float booted/ready devices to the top of the merged list regardless of
 // platform — without this, all iOS entries are emitted before any Android.
-function readinessRank(d: IosDevice | AndroidDevice): number {
-  if (d.platform === "ios") return d.state === "Booted" ? 0 : 1;
-  return d.state === "device" ? 0 : 1;
+function readinessRank(d: IosDevice | IosRemoteDevice | AndroidDevice): number {
+  if (d.platform === "android") return d.state === "device" ? 0 : 1;
+  return d.state === "Booted" ? 0 : 1;
+}
+
+/**
+ * List remote iOS simulators via `sim-remote`. Returns [] (silently) if
+ * sim-remote isn't installed or the user isn't logged in — list-devices
+ * already treats CLI absence as "platform unavailable" rather than failing.
+ */
+async function listRemoteIosSimulators(): Promise<IosRemoteDevice[]> {
+  try {
+    const result = await simctlListDevices();
+    const out: IosRemoteDevice[] = [];
+    for (const [runtime, devices] of Object.entries(result.devices)) {
+      for (const d of devices) {
+        if (d.isAvailable === false) continue;
+        out.push({
+          platform: "ios-remote",
+          udid: withRemotePrefix(d.udid),
+          name: d.name,
+          state: d.state,
+          runtime,
+        });
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function sortIosRemote(a: IosRemoteDevice, b: IosRemoteDevice): number {
+  const aBooted = a.state === "Booted" ? 0 : 1;
+  const bBooted = b.state === "Booted" ? 0 : 1;
+  return aBooted - bBooted;
 }
 
 const zodSchema = z.object({});
@@ -58,13 +101,15 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
-    const [ios, android, avds] = await Promise.all([
+    const [ios, iosRemote, android, avds] = await Promise.all([
       listIosSimulators(),
+      listRemoteIosSimulators(),
       listAndroidDevices().catch(() => []),
       listAvds(),
     ]);
     const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
     iosTagged.sort(sortIos);
+    iosRemote.sort(sortIosRemote);
     const androidTagged: AndroidDevice[] = android.map((d) => ({
       platform: "android",
       serial: d.serial,
@@ -76,7 +121,11 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     }));
     androidTagged.sort(sortAndroid);
 
-    const devices: Array<IosDevice | AndroidDevice> = [...iosTagged, ...androidTagged];
+    const devices: Array<IosDevice | IosRemoteDevice | AndroidDevice> = [
+      ...iosTagged,
+      ...iosRemote,
+      ...androidTagged,
+    ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
     return { devices, avds };

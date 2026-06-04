@@ -27,6 +27,14 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { classifyDevice, stripRemotePrefix } from "../../utils/device-info";
+import {
+  simctlBoot as simRemoteBoot,
+  simctlBootstatus as simRemoteBootstatus,
+  simctlListDevices as simRemoteListDevices,
+  simctlShutdown as simRemoteShutdown,
+  setupAccessibilityDefaults as simRemoteSetupAccessibilityDefaults,
+} from "../../utils/sim-remote";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +77,7 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
+  | { platform: "ios-remote"; udid: string; booted: true }
   | { platform: "android"; serial: string; avdName: string; booted: true }
   | NativeDevtoolsInitFailedResult;
 
@@ -437,6 +446,68 @@ async function bootIos(
   ]);
   await execFileAsync("open", ["-a", "Simulator.app"]);
   return { platform: "ios", udid, booted: true };
+}
+
+/**
+ * Boot a remote iOS simulator through `sim-remote`. Mirrors `bootIos` but:
+ *
+ * - Uses `sim-remote simctl` for boot/shutdown/bootstatus (no local xcrun).
+ * - Applies accessibility defaults via the orchestrator's
+ *   `sim-remote setup accessibility-defaults` rather than the host pre-boot
+ *   plist write (we have no filesystem access to the remote sim).
+ * - Pre-warms the native-devtools blueprint so the dylib injection env is
+ *   set inside the remote sim before the app launches.
+ */
+async function bootIosRemote(
+  id: string,
+  registry: Registry,
+  force?: boolean
+): Promise<
+  { platform: "ios-remote"; udid: string; booted: true } | NativeDevtoolsInitFailedResult
+> {
+  await ensureDep("sim-remote");
+  const udid = stripRemotePrefix(id);
+
+  // Look up current state via sim-remote. Treat lookup failures as "unknown
+  // state" — the boot/bootstatus dance below tolerates an already-booted sim.
+  let simState: string | undefined;
+  try {
+    const list = await simRemoteListDevices();
+    outer: for (const devices of Object.values(list.devices)) {
+      for (const d of devices) {
+        if (d.udid === udid) {
+          simState = d.state;
+          break outer;
+        }
+      }
+    }
+  } catch {
+    simState = undefined;
+  }
+
+  if (force && simState === "Booted") {
+    await simRemoteShutdown(id).catch(() => undefined);
+  }
+
+  // Boot. `Booted` exit-code error from sim-remote means it's already up —
+  // benign; the bootstatus call below normalizes the state regardless.
+  await simRemoteBoot(id).catch((err: Error) => {
+    if (!/Booted/i.test(err.message)) throw err;
+  });
+  await simRemoteBootstatus(id, { boot: true });
+
+  // Idempotent: re-applies the three AX defaults every boot in case the
+  // orchestrator's simulator was wiped between sessions.
+  await simRemoteSetupAccessibilityDefaults(id).catch(() => undefined);
+
+  const ndRef = nativeDevtoolsRef({ id, platform: "ios-remote", kind: "simulator" });
+  const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  const initFailure = ndApi.getInitFailure();
+  if (initFailure?.givenUp) {
+    return buildInitFailedResult(id, initFailure);
+  }
+
+  return { platform: "ios-remote", udid: id, booted: true };
 }
 
 // Tight budget for a hot boot attempt. A successful hot boot completes well
@@ -1004,6 +1075,7 @@ function createEarlyExitRacer(getExit: () => Error | null): {
 // xcrun, etc., and so `list-devices` consumers can rely on uniform metadata.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
@@ -1029,6 +1101,9 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         throw new Error("Provide exactly one of `udid` (iOS) or `avdName` (Android).");
       }
       if (hasUdid) {
+        if (classifyDevice(params.udid!) === "ios-remote") {
+          return bootIosRemote(params.udid!, registry, params.force);
+        }
         return bootIos(params.udid!, registry, params.force);
       }
       return bootAndroid({

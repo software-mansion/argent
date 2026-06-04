@@ -41,6 +41,8 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
+    "@fails-components/webtransport": "^1.6.3",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.3",
     "@modelcontextprotocol/sdk": "^1.20.0"
   },
   "devDependencies": {

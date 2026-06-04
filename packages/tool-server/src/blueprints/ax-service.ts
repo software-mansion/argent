@@ -1,11 +1,7 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import * as fsAsync from "node:fs/promises";
-import * as os from "node:os";
-import * as path from "node:path";
 import * as readline from "node:readline";
-import { promisify } from "node:util";
-import { execFile, ChildProcess } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import {
   TypedEventEmitter,
   type DeviceInfo,
@@ -13,16 +9,19 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
-import { axServiceBinaryPath, axServiceBinaryPathTcp } from "@argent/native-devtools-ios";
-import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
+import { pickIosHost, type IosEndpoint } from "../utils/ios-host";
 
-const execFileAsync = promisify(execFile);
+// Re-export AX-pref helpers that used to live here so existing callers
+// (boot-device, simulator-server) keep their import paths.
+export {
+  ensureAutomationEnabled,
+  isEntitlementBypassActive,
+  setAccessibilityPrefsPreBoot,
+} from "../utils/ax-prefs";
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
 export type AXServiceTransport = "unix" | "tcp";
-
-export const AX_SERVICE_TCP_PORT = Number(process.env.AX_SERVICE_TCP_PORT) || 9231;
 
 // Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
 type AxServiceFactoryOptions = Record<string, unknown> & {
@@ -75,115 +74,18 @@ function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
 }
 
-type AXEndpoint = { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number };
-
 interface PendingRpc {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
-export async function ensureAutomationEnabled(udid: string): Promise<void> {
-  await execFileAsync(
-    "xcrun",
-    [
-      "simctl",
-      "spawn",
-      udid,
-      "defaults",
-      "write",
-      "com.apple.Accessibility",
-      "AutomationEnabled",
-      "-bool",
-      "true",
-    ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  );
-}
-
-/**
- * Check whether `IgnoreAXServerEntitlements` is active on this sim.
- *
- * iOS 26.5+: SB's AX server rejects unentitled MIG clients with
- * kAXError -25215. The pref disables the check, but SB caches it at
- * init — writing it post-boot has no effect until the next restart.
- * The only effective path is the pre-boot plist write in boot-device.
- *
- * This read-only probe tells the caller whether the pre-boot write
- * happened so describe can surface a degraded-quality hint when it didn't.
- */
-export async function isEntitlementBypassActive(udid: string): Promise<boolean> {
-  return execFileAsync(
-    "xcrun",
-    [
-      "simctl",
-      "spawn",
-      udid,
-      "defaults",
-      "read",
-      "com.apple.Accessibility",
-      "IgnoreAXServerEntitlements",
-    ],
-    { timeout: SIMCTL_SPAWN_TIMEOUT_MS }
-  )
-    .then(({ stdout }) => stdout.trim() === "1")
-    .catch(() => false);
-}
-
-/**
- * Host-side `com.apple.Accessibility` plist inside the sim's data container.
- * Writeable while Shutdown; in-sim cfprefsd overwrites it once Booted.
- */
-function accessibilityPlistPath(udid: string): string {
-  return path.join(
-    os.homedir(),
-    "Library/Developer/CoreSimulator/Devices",
-    udid,
-    "data/Library/Preferences/com.apple.Accessibility.plist"
-  );
-}
-
-/**
- * Write the four AX prefs to the sim's host plist BEFORE `simctl boot` so SB
- * caches them at AX-server init and never needs the disruptive kickstart
- * (which kills the foreground app and dismisses in-flight system alerts).
- *
- * All four are required on a freshly-erased sim:
- * - `IgnoreAXServerEntitlements` bypasses the iOS 26.5+ kAXErrorNotEntitled check.
- * - `AutomationEnabled` opts the simctl-spawned ax-service in as an AX client.
- * - `AccessibilityEnabled` + `ApplicationAccessibilityEnabled` gate the AT
- *   subsystem bootstrap. Without them SB never spawns `AccessibilityUIServer`
- *   and describe returns an empty ROOT even though the entitlement check passes
- *   (reproduced on a wiped iPhone 17e: AccessibilityUIServer active count = 0
- *   without these two; auto-spawns at boot with them).
- *
- * Caller must ensure the sim is Shutdown — in-sim cfprefsd would otherwise
- * overwrite this file on flush.
- */
-export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> {
-  const plistPath = accessibilityPlistPath(udid);
-  await fsAsync.mkdir(path.dirname(plistPath), { recursive: true });
-  const exists = await fsAsync
-    .access(plistPath)
-    .then(() => true)
-    .catch(() => false);
-  if (!exists) {
-    await execFileAsync("plutil", ["-create", "binary1", plistPath]);
-  }
-  for (const key of [
-    "AutomationEnabled",
-    "IgnoreAXServerEntitlements",
-    "AccessibilityEnabled",
-    "ApplicationAccessibilityEnabled",
-  ]) {
-    await execFileAsync("plutil", ["-replace", key, "-bool", "true", plistPath]);
-  }
-}
-
 // Listen on the chosen transport. Unix: pre-unlink stale socket from previous
-// runs so listen() doesn't EADDRINUSE.
+// runs so listen() doesn't EADDRINUSE. TCP: when `endpoint.port` is undefined,
+// bind on an OS-assigned ephemeral port and write the realized port back into
+// `endpoint.port` so each per-device instance gets its own non-colliding port.
 function startListener(
-  endpoint: AXEndpoint,
+  endpoint: IosEndpoint,
   onConnection: (socket: net.Socket) => void
 ): Promise<net.Server> {
   return new Promise((resolve, reject) => {
@@ -198,42 +100,24 @@ function startListener(
 
     const onListening = () => {
       server.off("error", reject);
+      if (endpoint.transport === "tcp") {
+        const addr = server.address();
+        if (addr === null || typeof addr === "string") {
+          server.close();
+          reject(new Error("ax-service server failed to bind a TCP port"));
+          return;
+        }
+        endpoint.port = addr.port;
+      }
       resolve(server);
     };
 
     if (endpoint.transport === "tcp") {
-      server.listen(endpoint.port, "127.0.0.1", onListening);
+      server.listen(endpoint.port ?? 0, "127.0.0.1", onListening);
     } else {
       server.listen(endpoint.socketPath, onListening);
     }
   });
-}
-
-function spawnDaemon(udid: string, endpoint: AXEndpoint): ChildProcess {
-  const binaryPath =
-    endpoint.transport === "tcp" ? axServiceBinaryPathTcp() : axServiceBinaryPath();
-
-  const endpointArgs =
-    endpoint.transport === "tcp"
-      ? ["--port", String(endpoint.port)]
-      : ["--socket", endpoint.socketPath];
-
-  const proc = execFile(
-    "xcrun",
-    ["simctl", "spawn", udid, binaryPath, ...endpointArgs, "--timeout", "3600"],
-    { encoding: "utf8" }
-  ) as ChildProcess;
-
-  // Defense-in-depth: a missing udid here would crash the process —
-  // throwing inside an async listener bypasses promise rejection and
-  // bubbles up as `uncaughtException`, which the tool-server treats as
-  // fatal. Tag with "?" instead of dereferencing.
-  const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
-  proc.stderr?.on("data", (data: string) => {
-    process.stderr.write(`[ax-service ${udidTag}] ${data}`);
-  });
-
-  return proc;
 }
 
 // Wait for either the daemon's TCP/UDS connection or an early exit.
@@ -304,7 +188,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const { device } = opts;
-    if (device.platform !== "ios") {
+    if (device.platform !== "ios" && device.platform !== "ios-remote") {
       throw new Error(
         `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as Android — describe falls back to uiautomator on Android, which does not need this service.`
       );
@@ -320,10 +204,13 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const udid = device.id;
-    const transport: AXServiceTransport = opts.transport ?? "unix";
-    const endpoint: AXEndpoint =
+    const host = pickIosHost(device);
+    // Force TCP on remote — unix sockets do not bridge across the QUIC tunnel
+    // sim-remote sets up between the orchestrator and the dev's machine.
+    const transport: AXServiceTransport = host.requiresTcp ? "tcp" : (opts.transport ?? "unix");
+    const endpoint: IosEndpoint =
       transport === "tcp"
-        ? { transport: "tcp", port: AX_SERVICE_TCP_PORT }
+        ? { transport: "tcp" }
         : { transport: "unix", socketPath: getSocketPath(udid) };
     const events = new TypedEventEmitter<ServiceEvents>();
 
@@ -340,8 +227,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       pendingRpc.clear();
     };
 
-    await ensureAutomationEnabled(udid);
-    const entitlementBypassActive = await isEntitlementBypassActive(udid);
+    const { entitlementBypassActive } = await host.bootstrapAx(udid);
 
     // Host listens first, then we spawn the daemon and wait for it to dial in.
     const server = await startListener(endpoint, (socket) => {
@@ -390,7 +276,15 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       });
     });
 
-    const proc = spawnDaemon(udid, endpoint);
+    if (endpoint.transport === "tcp") {
+      // Wire the reverse tunnel BEFORE asking the orchestrator to start the
+      // daemon — the daemon will dial 127.0.0.1:<port> inside the simulator
+      // and that dial gets QUIC-forwarded back to our host listener above.
+      // No-op on local. `port` was populated by startListener.
+      await host.startProxy(udid, endpoint.port!);
+    }
+
+    const proc = host.spawnAxDaemon(udid, endpoint);
 
     proc.on("exit", (code) => {
       if (disposed) return;
@@ -414,6 +308,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         try {
           fs.unlinkSync(endpoint.socketPath);
         } catch {}
+      }
+      if (endpoint.transport === "tcp") {
+        await host.stopProxy(udid, endpoint.port!);
       }
       throw err;
     }
@@ -479,6 +376,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
           try {
             fs.unlinkSync(endpoint.socketPath);
           } catch {}
+        }
+        if (endpoint.transport === "tcp") {
+          await host.stopProxy(udid, endpoint.port!);
         }
       },
       events,
