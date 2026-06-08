@@ -35,6 +35,18 @@ export interface NativeProfilerParsedData {
   memoryLeaks: MemoryLeak[];
 }
 
+/**
+ * How the active (or last) recording was captured.
+ *  - `device-attach`: the normal path — xctrace `--device <udid> --attach <app>`,
+ *    full fidelity (CPU + hangs + leaks).
+ *  - `host-all-processes`: fallback used when the simulator-targeted Instruments
+ *    tap is broken (Xcode 26.x / Instruments 16 cannot package `--device`
+ *    simulator traces — `coreprofilesessiontap` fails). We record the host with
+ *    `--all-processes` Time Profiler instead and scope results to the app's host
+ *    PID. CPU-only: Leaks/Allocations cannot target "All Processes".
+ */
+export type NativeProfilerRecordingMode = "device-attach" | "host-all-processes";
+
 export interface NativeProfilerSessionApi {
   deviceId: string;
   appProcess: string | null;
@@ -49,6 +61,15 @@ export interface NativeProfilerSessionApi {
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
   lastExitInfo: { code: number | null; signal: string | null } | null;
+  /** How the current/last recording was captured (set at start). */
+  recordingMode: NativeProfilerRecordingMode | null;
+  /**
+   * Host PID of the profiled app. Only meaningful in `host-all-processes` mode,
+   * where the trace contains every process and downstream analysis must filter
+   * to `pid: <processFilterPid>` to stay app-scoped. Null in `device-attach`
+   * mode (the trace already contains only the attached app).
+   */
+  processFilterPid: string | null;
 }
 
 // Discard semantics on dispose: registry teardown only fires from process
@@ -102,6 +123,8 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,
       lastExitInfo: null,
+      recordingMode: null,
+      processFilterPid: null,
     };
 
     const events = new TypedEventEmitter<ServiceEvents>();

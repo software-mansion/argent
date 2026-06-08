@@ -3,11 +3,13 @@ import type { ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
+  type NativeProfilerRecordingMode,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
 import { exportIosTraceData } from "../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../utils/ios-profiler/lifecycle";
+import { writeNativeProfilerMetadata } from "../../../utils/ios-profiler/metadata";
 
 const STOP_GRACE_MS = 30_000;
 const STOP_TERM_MS = 5_000;
@@ -21,6 +23,10 @@ interface StopResult {
   traceFile: string;
   exportedFiles: Record<string, string | null>;
   exportDiagnostics: ExportDiagnostics;
+  /** How the recording was captured (see NativeProfilerRecordingMode). */
+  mode: NativeProfilerRecordingMode | null;
+  /** App host PID used to scope a host-all-processes trace; null otherwise. */
+  processFilterPid: string | null;
   warning?: string;
 }
 
@@ -28,6 +34,7 @@ export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, S
   id: "native-profiler-stop",
   requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true } },
+  longRunning: true,
   description: `Stop native profiling and export trace data to XML files.
 iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks data. Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.
@@ -40,6 +47,13 @@ Fails if no active native-profiler-start session exists for the given device_id.
   async execute(services) {
     const api = services.session as NativeProfilerSessionApi;
 
+    // Host all-processes fallback is CPU-only — don't attempt hangs/leaks
+    // export there (they can't be recorded host-wide and only add noise).
+    const exportOptions =
+      api.recordingMode === "host-all-processes" ? { keys: ["cpu"] as const } : {};
+    const mode: NativeProfilerRecordingMode | null = api.recordingMode;
+    const processFilterPid = api.processFilterPid;
+
     // Recover a recording where xctrace is already gone but the trace bundle
     // is on disk: either the in-process 10-min cap fired, or xctrace exited
     // unexpectedly (attached app died, simulator daemon hiccup, etc).
@@ -51,8 +65,13 @@ Fails if no active native-profiler-start session exists for the given device_id.
       api.recordingExitedUnexpectedly = false;
       api.lastExitInfo = null;
 
-      const { files: exportedFiles, diagnostics } = exportIosTraceData(traceFile);
+      const { files: exportedFiles, diagnostics } = exportIosTraceData(traceFile, exportOptions);
       api.exportedFiles = exportedFiles;
+      await writeNativeProfilerMetadata(traceFile, {
+        mode,
+        processFilterPid,
+        appProcess: api.appProcess,
+      });
 
       const warning = wasTimeout
         ? "Recording timed out at 10 min cap; exported the partial trace. " +
@@ -63,7 +82,14 @@ Fails if no active native-profiler-start session exists for the given device_id.
           "Call native-profiler-start again for a fresh recording.";
       process.stderr.write(`[native-profiler] ${warning}\n`);
 
-      return { traceFile, exportedFiles, exportDiagnostics: diagnostics, warning };
+      return {
+        traceFile,
+        exportedFiles,
+        exportDiagnostics: diagnostics,
+        mode,
+        processFilterPid,
+        warning,
+      };
     }
 
     if (!api.profilingActive || !api.xctraceProcess || !api.traceFile) {
@@ -97,13 +123,20 @@ Fails if no active native-profiler-start session exists for the given device_id.
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
 
-    const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile);
+    const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile, exportOptions);
     api.exportedFiles = exportedFiles;
+    await writeNativeProfilerMetadata(api.traceFile, {
+      mode,
+      processFilterPid,
+      appProcess: api.appProcess,
+    });
 
     const stopResult: StopResult = {
       traceFile: api.traceFile,
       exportedFiles,
       exportDiagnostics: diagnostics,
+      mode,
+      processFilterPid,
     };
     if (warning) stopResult.warning = warning;
     return stopResult;

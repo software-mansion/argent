@@ -118,7 +118,20 @@ function tryCpuExportFallback(
   return false;
 }
 
-export function exportIosTraceData(traceFile: string): {
+export interface ExportOptions {
+  /**
+   * Restrict which tables to export. Defaults to all of cpu/hangs/leaks. The
+   * host all-processes fallback passes `["cpu"]` because Leaks/Allocations
+   * cannot record host-wide, so attempting hangs/leaks export there only
+   * produces noise in `diagnostics.errors`.
+   */
+  keys?: readonly (keyof typeof EXPORTS)[];
+}
+
+export function exportIosTraceData(
+  traceFile: string,
+  options: ExportOptions = {}
+): {
   files: Record<string, string | null>;
   diagnostics: ExportDiagnostics;
 } {
@@ -130,8 +143,11 @@ export function exportIosTraceData(traceFile: string): {
   };
   const dir = path.dirname(traceFile);
   const baseName = path.basename(traceFile, ".trace");
+  const selectedKeys: readonly (keyof typeof EXPORTS)[] =
+    options.keys ?? (Object.keys(EXPORTS) as Array<keyof typeof EXPORTS>);
 
   for (const [key, config] of Object.entries(EXPORTS)) {
+    if (!selectedKeys.includes(key as keyof typeof EXPORTS)) continue;
     const outPath = path.join(dir, `${baseName}${config.suffix}`);
 
     if (key === "cpu") {

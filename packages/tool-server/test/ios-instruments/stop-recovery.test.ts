@@ -116,7 +116,8 @@ describe("native-profiler-stop recovery branch", () => {
       device_id: "DEVICE-UDID",
     });
 
-    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
+    // device-attach recording (recordingMode unset) → export all tables (default opts).
+    expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE, {});
     expect(result.traceFile).toBe(FAKE_TRACE);
     expect(result.exportedFiles).toEqual(FAKE_EXPORT_RESULT.files);
     expect(result.exportDiagnostics).toEqual(FAKE_EXPORT_RESULT.diagnostics);
