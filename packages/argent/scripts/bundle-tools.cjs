@@ -424,19 +424,11 @@ const DISPATCHER_DEST = path.resolve(BIN_DIR, "argent-simulator-server.cjs");
 fs.copyFileSync(DISPATCHER_SRC, DISPATCHER_DEST);
 fs.chmodSync(DISPATCHER_DEST, 0o755);
 
-// The Android helper artifacts live alongside the bundles (manifest at the
-// package root, APK inside the shared dist/ folder) so they aren't covered
-// by the per-directory purge above. Removing them explicitly keeps a
-// missing-APK rebuild from leaving a stale manifest behind that would later
-// fool helperManifest() into pointing at an APK that's no longer present.
+// The Android manifest lives outside PURGE_DIRS (it's a single file under
+// assets/), so remove it explicitly so a stale manifest can't fool
+// helperManifest() into pointing at an APK that's no longer present.
+// The APK itself goes into BIN_DIR which is already fully purged above.
 fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
-if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
-  for (const entry of fs.readdirSync(ANDROID_APK_DEST_DIR)) {
-    if (/^argent-android-devtools-.*\.apk$/.test(entry)) {
-      fs.rmSync(path.join(ANDROID_APK_DEST_DIR, entry), { force: true });
-    }
-  }
-}
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });

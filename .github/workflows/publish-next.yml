@@ -98,7 +98,7 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/engine.mjs
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
-      - run: ls packages/argent/dist/argent-android-devtools-*.apk
+      - run: ls packages/argent/bin/argent-android-devtools-*.apk
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent --tag next
