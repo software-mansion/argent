@@ -331,7 +331,7 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
     );
   }
   if (params.mode === "leak_stacks") {
-    return "_Memory leak detection is not yet supported on Android in v1. Use the RSS-growth weak signal in the analyze report as a placeholder, or capture a heap dump manually with `adb shell am dumpheap` for now._";
+    return "_Memory leak detection is not yet supported on Android. Use the RSS-growth weak signal in the analyze report as a hint, or capture a heap dump manually with `adb shell am dumpheap`._";
   }
   return runAndroidStackQuery({
     tracePath: api.traceFile,
@@ -352,7 +352,7 @@ Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls a specific native function and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
-- leak_stacks: Memory leak details (iOS only in v1), optionally filtered by object_type.
+- leak_stacks: Memory leak details (iOS only), optionally filtered by object_type.
 Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,

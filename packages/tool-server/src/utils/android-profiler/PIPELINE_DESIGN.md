@@ -28,9 +28,9 @@ What is left:
   For each detected hang we need a main-thread state breakdown +
   GC-overlap annotation. These are computed in SQL by JOINing the
   `thread_state` and `slice` tables against a runtime
-  `argent_hang_windows` table built from the hang list. The fold runs in
-  a **single** `trace_processor_shell` invocation regardless of hang
-  count; `hang-fold.ts` then merges the rows back into each
+  `argent_hang_windows` table built from the hang list. The fold runs as
+  a single SQL script via the warm WASM engine regardless of hang count;
+  `hang-fold.ts` then merges the rows back into each
   `UiHang` object. The pure row → annotation merge lives in
   `hang-fold.ts` so it stays trivially testable.
 
@@ -69,23 +69,10 @@ walks per query), so re-running it per drill-down would be wasteful.
 
 Android does the opposite: `api.parsedData = null` after analyze, and
 `profiler-stack-query` re-runs the matching SQL file against the `.pftrace`
-on each call. Drill-down is interactive — the user requests one stack at
-a time — so a fresh `trace_processor_shell` fork per call is acceptable
-(~1.4 s for a 76 MB trace, dominated by the trace load, not the SQL).
-
-**Caveat (important):** "30 ms per query" is the *SQL execution* time
-once the trace is loaded, NOT the wall-clock cost of a fresh invocation.
-A fresh invocation pays ~1.3 s of trace load + parser warmup before any
-SQL runs. The analyze pipeline used to assume the 30 ms figure was the
-whole cost and looped one fork per hang per query, which on a trace with
-1000+ jank rows blew through the tool-call deadline. That loop is now
-collapsed into a single batched SQL invocation (see §4).
-
-If the drill-down path ever needs to fire many queries per second, the
-right move is to stand up `trace_processor_shell` in HTTP RPC mode
-(`-D --http-port <p>`) and POST `QueryArgs` protobufs over a persistent
-connection. That is a real architectural change; do not undertake it for
-the current single-query interactive drill-down volume.
+on each call. The in-process WASM engine keeps the trace warm per session
+(loaded once, reused until the session is closed), so each drill-down query
+costs only the SQL execution time (~ms) — not a full trace reload. The
+engine is the cache; there is no value in also caching parsed rows.
 
 If profile traces grow to the point where the analyze-stage fold queries
 themselves slow down, the next move is to cache the per-hang fold rows
@@ -107,25 +94,27 @@ per-hang annotation pass. It:
    (`argent_hang_state` joining `thread_state`, `argent_hang_gc` joining
    `slice`), and a single terminal `UNION ALL` SELECT tagged with
    `row_kind` ∈ {'state','gc'}.
-3. Runs the script in **one** `trace_processor_shell` invocation via
-   `runTpInline`, paying one trace load (~1.3 s) regardless of hang
-   count.
+3. Runs the script as a single SQL string via `runTpInline` (the warm
+   WASM engine). The trace is already loaded by the time the fold runs,
+   so the fold pays only SQL execution time (~100 ms for 1000 hangs).
 4. Demultiplexes the rows by `hang_index` and `row_kind` into two `Map`s,
    which `pipeline/index.ts` then hands to `foldHangAnnotations` per
    hang.
 
-Two reasons the SQL has the exact shape it does:
+Two constraints drive the exact SQL shape:
 
-- **`trace_processor_shell -q` rejects multi-statement scripts where
-  more than one statement returns rows.** ("Result rows were returned
-  for multiples queries. Ensure that only the final statement is a
-  SELECT statement.") So the per-hang state and GC queries cannot be
-  two separate top-level SELECTs — they must be materialised as views
-  and unioned in one terminal SELECT.
+- **The Perfetto engine returns only the final statement's result set.**
+  Per-hang state and GC queries cannot be two separate top-level SELECTs
+  — they must be materialised as VIEWs and unioned in one terminal
+  SELECT. (Historical note: when the pipeline used `trace_processor_shell
+  -q` subprocesses, this constraint was the error "Result rows were
+  returned for multiples queries. Ensure that only the final statement
+  is a SELECT statement." The WASM engine has the same behaviour.)
 - **Perfetto SQL does not accept `VALUES (...) AS t(col1, col2)`** — the
   column-alias form. The script uses
   `SELECT column1 AS hang_index, column2 AS start_ns, column3 AS end_ns
   FROM (VALUES ...)`, leaning on SQLite's implicit `columnN` naming.
 
 End-to-end against a 76 MB trace with 1013 jank rows: **6.3 s** total
-(was: ~47 minutes projected, never completed).
+(was: ~47 minutes projected when the pipeline forked one subprocess per
+hang, never completed before the tool-call deadline).

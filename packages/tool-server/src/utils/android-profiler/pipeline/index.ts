@@ -226,7 +226,7 @@ export async function runAndroidStackQuery(opts: AndroidStackQueryOptions): Prom
     case "thread_breakdown":
       return renderThreadBreakdownAndroid(opts, target);
     case "leak_stacks":
-      return "_Memory leak detection is not yet supported on Android in v1._";
+      return "_Memory leak detection is not yet supported on Android._";
     default:
       throw new Error(`Unknown mode: ${opts.mode as string}`);
   }
