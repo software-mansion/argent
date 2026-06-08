@@ -3,12 +3,10 @@
 // native `trace_processor_shell` binary: one ~13 MB `.wasm` runs on every
 // OS/arch, in-process, fully offline, with no subprocess and no download.
 //
-// It mirrors the proven research loader (`research/perfetto-wasm/v55.3-engine.mjs`,
-// Option B): drive Google's prebuilt v55.3 wasm through its Node-targeted
-// Emscripten glue + the version-agnostic `EngineBase` RPC decoder, over a
-// `MessageChannel`. One warm engine is kept per trace path — the trace is parsed
-// once and reused across the whole analyze pipeline + drill-downs (also the
-// ~1.8x speed-up the research measured).
+// Loads Google's prebuilt v55.3 wasm through its Node-targeted Emscripten glue
+// plus the version-agnostic `EngineBase` RPC decoder, over a `MessageChannel`.
+// One warm engine is kept per trace path — the trace is parsed once and reused
+// across the whole analyze pipeline + drill-downs.
 //
 // The three vendored artifacts are *runtime data*, never statically imported, so
 // the bundler ships them verbatim alongside `assets/queries`:
@@ -31,8 +29,7 @@ import type {
 
 // Time the patched glue is given to finish `onRuntimeInitialized` (addFunction +
 // trace_processor_rpc_init) before the engine accepts queries. 1500 ms is the
-// value proven across Node/Bun/Deno in the research harness; override only for
-// tuning on unusually slow hosts.
+// conservative default; override only on unusually slow hosts.
 const DEFAULT_INIT_MS = 1500;
 // Keep at most this many warm engines (one per trace path). Each holds the trace
 // (~26-76 MB) plus the wasm heap, so the cap bounds resident memory.

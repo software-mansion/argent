@@ -49,7 +49,7 @@ async function getTraceStartNs(tracePath: string): Promise<number> {
     });
     // Coerce-then-validate: `Number.isFinite("5000000000000")` returns false
     // because it checks the input *type*, not the value. A future
-    // trace_processor_shell that emits start_ts as a JSON string would
+    // trace-processor engine that emits start_ts as a JSON string would
     // silently disable the normalisation if we validated first.
     const startTs = Number(rows[0]?.start_ts);
     return Number.isFinite(startTs) ? startTs : 0;
@@ -67,10 +67,10 @@ export interface AndroidPipelineResult {
 }
 
 /**
- * Drive trace_processor_shell against an Android .pftrace and produce the
- * platform-agnostic Bottleneck[] the render layer consumes. CPU + hangs + RSS
- * run as parallel top-level queries; all per-hang folds are batched into one
- * more invocation, so the worst case is fixed-cost (~4 invocations end-to-end).
+ * Drive the in-process Perfetto WASM engine against an Android .pftrace and
+ * produce the platform-agnostic Bottleneck[] the render layer consumes. CPU +
+ * hangs + RSS run as parallel top-level queries; all per-hang folds are batched
+ * into one more query, so the worst case is fixed-cost (~4 queries end-to-end).
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  */
 export async function runAndroidProfilerPipeline(
@@ -212,7 +212,8 @@ export interface AndroidStackQueryOptions {
 /**
  * Drill-down entry point for the Android branch of profiler-stack-query.
  * Re-queries the .pftrace per call instead of caching parsed data in memory —
- * trace_processor_shell is fast enough (~30 ms/query) that caching isn't worth it.
+ * the warm WASM engine makes per-query drill-down fast enough that caching isn't
+ * worth it.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "3. Drill-down: re-query, don't cache"
  */
 export async function runAndroidStackQuery(opts: AndroidStackQueryOptions): Promise<string> {

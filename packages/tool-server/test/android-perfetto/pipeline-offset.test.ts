@@ -23,7 +23,7 @@ vi.mock("@argent/native-devtools-android", () => {
 });
 vi.mock("../../src/utils/android-profiler/pipeline/run-tp", async (importActual) => ({
   // Keep the real renderSqlTemplate so the batched hang-fold path renders the
-  // on-disk template; only the trace_processor_shell calls are stubbed.
+  // on-disk template; only the WASM engine query calls are stubbed.
   ...(await importActual<typeof import("../../src/utils/android-profiler/pipeline/run-tp")>()),
   runTpQuery: vi.fn(async (opts: { query: string; substitutions: Record<string, string> }) => {
     const next = queryResponses.shift();

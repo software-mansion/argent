@@ -3,8 +3,8 @@
 // `vendor/perfetto/engine.js`). The decoder is loaded at runtime by *path*
 // (dynamic `import(pathToFileURL(...))`), so TypeScript cannot associate it with
 // its own `.d.ts`; this file types only the small subset `wasm-trace-processor.ts`
-// actually uses. The full upstream surface lives in `engine.d.ts` next to the
-// vendored bundle. Keep these shapes in sync with that file on a Perfetto bump.
+// actually uses. Keep these shapes in sync with the upstream `@lynx-js/trace-processor`
+// decoder on a Perfetto bump.
 
 /** A single decoded cell. Integers arrive as `bigint`, floats as `number`. */
 export type SqlValue = string | number | bigint | null | Uint8Array;

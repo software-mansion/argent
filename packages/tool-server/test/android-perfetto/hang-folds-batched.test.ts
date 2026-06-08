@@ -38,7 +38,7 @@ describe("runBatchedHangFolds", () => {
     inlineError = null;
   });
 
-  it("returns empty maps without invoking trace_processor_shell when the hang list is empty", async () => {
+  it("returns empty maps without invoking the trace processor when the hang list is empty", async () => {
     const result = await runBatchedHangFolds({
       tracePath: "/fake.pftrace",
       target: "com.example.app",
@@ -208,8 +208,8 @@ describe("runBatchedHangFolds", () => {
     expect(inlineCalls).toHaveLength(0);
   });
 
-  it("propagates the underlying trace_processor_shell error verbatim", async () => {
-    inlineError = new Error("trace_processor_shell: timed out after 60000ms");
+  it("propagates the underlying trace-processor error verbatim", async () => {
+    inlineError = new Error("trace processor query timed out after 60000ms");
     await expect(
       runBatchedHangFolds({
         tracePath: "/fake.pftrace",

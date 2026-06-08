@@ -1,9 +1,10 @@
 # Argent Android profiler — PerfettoSQL queries
 
 These `*.sql` files are the source of truth for every query the Argent Android
-native profiler runs against a captured `.pftrace`. They run through Perfetto's
-`trace_processor_shell` from the tool-server pipeline (`runTpQuery` /
-`runTpInline` in `tool-server/src/utils/android-profiler/pipeline/run-tp.ts`).
+native profiler runs against a captured `.pftrace`. They run through the
+in-process Perfetto WASM trace-processor from the tool-server pipeline
+(`runTpQuery` / `runTpInline` in
+`tool-server/src/utils/android-profiler/pipeline/run-tp.ts`).
 
 The directory lives in `native-devtools-android`; the bundler copies it next to
 the bundled tool-server at publish time, so `traceProcessorQueriesDir()` resolves
@@ -20,7 +21,7 @@ conventions live here so they aren't repeated nine times.
 | `ui-hangs.sql` | analyze | ANRs + app-jank frames → one hang per frame. |
 | `cpu-hotspots.sql` | analyze | Per-thread hottest leaf functions + burst windows. |
 | `thread-breakdown.sql` | profiler-stack-query `mode=thread_breakdown` | Per-thread sample share. |
-| `hang-folds-batched.sql` | batched analyze | State breakdown + GC overlap for ALL hangs in one shell run. |
+| `hang-folds-batched.sql` | batched analyze | State breakdown + GC overlap for ALL hangs in one batched query. |
 | `hang-state-breakdown.sql` | drill-down (single hang) | Main-thread state breakdown for one hang window. |
 | `hang-main-thread-samples.sql` | profiler-stack-query `mode=hang_stacks` | Main-thread CPU samples inside one hang window. |
 | `function-callers.sql` | profiler-stack-query `mode=function_callers` | Callsites that hit one hot function. |
@@ -51,8 +52,8 @@ the query runs. It throws on a mismatch either way: a `{{NAME}}` with no
 substitution, or a substitution the template never uses — catching forgotten or
 stale tokens early.
 
-Values are **not** shell-escaped. They're written to a tempfile and passed to
-`trace_processor_shell -q`, never through a shell, so callers must validate them
+Values are **not** escaped for SQL injection — they're interpolated into the
+query string passed to the in-process engine, so callers must validate them
 (numeric for `*_ns`; identifier-shaped for process/thread/function names) — see
 `hang-folds-batched.ts` for the strictest example.
 
@@ -68,14 +69,14 @@ subtracts it (`traceStartMs`) to normalise every emitted timestamp to
 trace-relative ns. Any native ms/ns a query emits (burst windows, hang bounds)
 stays native until JS does that subtraction.
 
-### One trace-load per shell run → batch
+### One trace parse per warm engine → batch
 
-`trace_processor_shell` reloads the whole trace on every invocation (~1.3 s for
-76 MB), so one invocation per item is quadratic — the per-hang loop this
-replaced took ~47 min for 1013 hangs. Instead, fold many per-item queries into a
-single script with `CREATE PERFETTO VIEW`/`TABLE` + a terminal `UNION ALL
-SELECT`, joining over a runtime-built table. See `hang-folds-batched.sql`: one
-~1.7 s run regardless of hang count. Only the final SELECT reaches stdout.
+Re-parsing the whole trace on every query is expensive (~1.3 s for 76 MB), so
+one query per item is quadratic — the per-hang loop this replaced took ~47 min
+for 1013 hangs. Instead, fold many per-item queries into a single script with
+`CREATE PERFETTO VIEW`/`TABLE` + a terminal `UNION ALL SELECT`, joining over a
+runtime-built table. See `hang-folds-batched.sql`: one ~1.7 s run regardless of
+hang count. Only the final SELECT reaches stdout.
 
 ### Two copies of the hang state breakdown — keep them in sync
 
