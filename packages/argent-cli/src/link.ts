@@ -5,6 +5,7 @@ import {
   writeLinkConfig,
   clearLinkConfig,
   formatToolsServerUrl,
+  parseLinkTarget,
   type LinkConfig,
 } from "@argent/tools-client";
 import { parsePort, StartFlagError } from "./server.js";
@@ -12,6 +13,9 @@ import { parsePort, StartFlagError } from "./server.js";
 interface LinkFlags {
   host: string | null;
   port: number | null;
+  token: string | null;
+  /** Canonical URL when a full http(s):// or argent:// target was given. */
+  url: string | null;
   yes: boolean;
   noVerify: boolean;
   help: boolean;
@@ -52,6 +56,8 @@ export function parseLinkFlags(argv: string[]): LinkFlags {
   const flags: LinkFlags = {
     host: null,
     port: null,
+    token: null,
+    url: null,
     yes: false,
     noVerify: false,
     help: false,
@@ -93,6 +99,31 @@ export function parseLinkFlags(argv: string[]): LinkFlags {
       flags.port = validateConnectPort(tok.slice("--port=".length));
       continue;
     }
+    if (tok === "--token") {
+      flags.token = takeValue("--token");
+      continue;
+    }
+    if (tok.startsWith("--token=")) {
+      flags.token = tok.slice("--token=".length);
+      continue;
+    }
+    // Positional target: an argent://[<token>@]<host>:<port> pairing string or a
+    // full http(s):// URL (for a reverse proxy / tunnel). parseLinkTarget throws
+    // on a malformed recognized URL and returns null for anything else.
+    if (!tok.startsWith("-")) {
+      const parsed = parseLinkTarget(tok);
+      if (!parsed) {
+        throw new StartFlagError(
+          `Unrecognized argument "${tok}". Expected an argent://… pairing string, ` +
+            `an http(s):// URL, or flags (see --help).`
+        );
+      }
+      flags.host = validateHost(parsed.host);
+      flags.port = validateConnectPort(String(parsed.port));
+      flags.url = parsed.url;
+      if (parsed.token) flags.token = parsed.token;
+      continue;
+    }
     throw new StartFlagError(`Unknown flag: ${tok}`);
   }
 
@@ -116,11 +147,23 @@ export function parseUnlinkFlags(argv: string[]): UnlinkFlags {
 }
 
 export function printLinkHelp(): void {
-  console.log(`Usage: argent link [flags]
+  console.log(`Usage: argent link [<target>] [flags]
 
 Route argent client requests (argent tools / run / mcp) to a remote tool-server
 instead of auto-spawning a local one. The target is persisted to ~/.argent/link.json
 and survives shell restarts.
+
+<target> may be:
+  - argent://[<token>@]<host>:<port>   the string \`argent server start\` prints
+  - http(s)://<host>[:<port>][/path]   a full URL — use this for a reverse proxy
+                                       or tunnel (ngrok, cloudflared, nginx). The
+                                       scheme and any path prefix are preserved;
+                                       requests go to <url>/tools.
+
+The easiest LAN path is to paste the connection string from \`argent server start\`:
+  argent link argent://<token>@10.0.0.42:3001
+For a tunnel, point at its public URL and pass the server's token:
+  argent link https://argent.example.com --token <token>
 
 Resolution order for the tool-server URL:
   1. ARGENT_TOOLS_URL environment variable (highest precedence)
@@ -133,21 +176,28 @@ Flags:
                     connect targets, and are rejected — use 127.0.0.1 or the
                     actual reachable host.
   --port, -p <n>    Remote port (1..65535). Defaults to 3001. Prompts if omitted.
+  --token <t>       Bearer token for a server that enforces auth. Usually
+                    supplied inside the argent:// string instead.
   --no-verify       Skip the pre-flight GET /tools health check.
   --yes, -y         Non-interactive. Requires --host (port defaults to 3001).
                     Fails if --host is missing.
   --help, -h        Show this help.
 
 Examples:
+  argent link argent://ab12…c2@10.0.0.42:3001   Pair from a server-start string.
+  argent link https://argent.example.com --token ab12…c2
+                                             Link through an HTTPS tunnel/proxy.
   argent link                                Interactive prompts for host and port.
   argent link --host 10.0.0.42 --port 3001   Confirms interactively, then saves.
-  argent link --host 10.0.0.42 --yes         Saves without confirmation.
+  argent link --host 10.0.0.42 --token ab12…c2 --yes
+                                             Non-interactive, authenticated.
   argent link --host 10.0.0.42 --yes --no-verify
                                              Saves immediately, no health check.
 
 Security:
-  This command does not configure authentication, TLS, or CORS. Treat any
-  non-loopback link as trusted-network-only.
+  The token (if any) is stored 0600 and sent as a bearer header. An http:// link
+  has no TLS — treat any non-loopback http link as trusted-network-only. Prefer
+  an https:// tunnel/proxy when crossing untrusted networks.
 
 Notes:
   - If ARGENT_TOOLS_URL is also set in your environment, it overrides the link.
@@ -228,12 +278,26 @@ async function promptPort(existing: LinkConfig | null, initial?: number): Promis
   return validateConnectPort((portInput as string).trim());
 }
 
-async function preflightHealth(url: string): Promise<{ ok: boolean; error?: string }> {
+async function preflightHealth(
+  url: string,
+  token?: string
+): Promise<{ ok: boolean; error?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3_000);
   try {
-    const res = await fetch(`${url}/tools`, { signal: controller.signal });
-    if (!res.ok) return { ok: false, error: `${res.status} ${res.statusText}` };
+    const res = await fetch(`${url}/tools`, {
+      signal: controller.signal,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const hint =
+        res.status === 401
+          ? " — the server requires a token; pass --token or use the argent:// link from `server start`"
+          : res.status === 403
+            ? " — the server refused this host (DNS-rebinding guard); reach it by its bind host or start it with --host"
+            : "";
+      return { ok: false, error: `${res.status} ${res.statusText}${hint}` };
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -248,12 +312,36 @@ function printRestartHint(): void {
   );
 }
 
-function printSecurityCaveat(host: string): void {
+function printSecurityCaveat(host: string, token: string | undefined, url: string): void {
   if (isLoopback(host)) return;
+  const tls = url.startsWith("https://");
+  if (tls) {
+    // TLS handles transport security; nothing alarming to add beyond the
+    // (already required) token for a public endpoint.
+    if (!token) {
+      process.stderr.write(
+        pc.yellow(
+          `WARNING: ${host} is reached over HTTPS but with NO token — anyone who can ` +
+            `reach the URL can drive the server. Pair with a token.\n`
+        )
+      );
+    }
+    return;
+  }
+  if (token) {
+    process.stderr.write(
+      pc.dim(
+        `Note: ${host} is reached over plain HTTP (bearer-token auth, no TLS). ` +
+          `Keep this link to a trusted network or VPN, or front it with an https:// tunnel.\n`
+      )
+    );
+    return;
+  }
   process.stderr.write(
     pc.yellow(
-      `WARNING: linked target ${host} is non-loopback — tool calls travel over plain HTTP ` +
-        `with no auth. Treat this link as trusted-network-only.\n`
+      `WARNING: linked target ${host} is non-loopback and has NO token — tool calls ` +
+        `travel over plain HTTP with no auth. Treat this link as trusted-network-only, ` +
+        `or pair with a token (start the server without --no-auth).\n`
     )
   );
 }
@@ -307,7 +395,16 @@ export async function link(argv: string[]): Promise<void> {
     port = await promptPort(existing);
   }
 
-  let url = formatToolsServerUrl(host, port);
+  // Resolve token: an explicit --token / argent:// URL wins; otherwise reuse
+  // the existing link's token when re-pointing at the same target, so a bare
+  // `argent link` re-run doesn't silently drop authentication.
+  const token: string | undefined =
+    flags.token ??
+    (existing && existing.host === host && existing.port === port ? existing.token : undefined);
+
+  // A full http(s):// / argent:// target carries its own canonical URL (scheme,
+  // optional path); the --host/--port path builds a plain http://host:port.
+  let url = flags.url ?? formatToolsServerUrl(host, port);
 
   // Overwrite confirmation (interactive only)
   if (!flags.yes && existing) {
@@ -336,7 +433,7 @@ export async function link(argv: string[]): Promise<void> {
         spinner = p.spinner();
         spinner.start(`Verifying tool-server at ${url}...`);
       }
-      const result = await preflightHealth(url);
+      const result = await preflightHealth(url, token);
       if (result.ok) {
         if (spinner) spinner.stop(pc.green("Tool-server reachable."));
         break;
@@ -386,6 +483,7 @@ export async function link(argv: string[]): Promise<void> {
     host,
     port,
     createdAt: new Date().toISOString(),
+    ...(token ? { token } : {}),
   };
   await writeLinkConfig(cfg);
 
@@ -394,7 +492,8 @@ export async function link(argv: string[]): Promise<void> {
   } else {
     console.log(`${pc.green("✓")} Linked: ${pc.cyan(url)}`);
   }
-  printSecurityCaveat(host);
+  if (token) console.log(pc.dim("  auth: token stored in ~/.argent/link.json (0600)"));
+  printSecurityCaveat(host, token, url);
   if (process.env.ARGENT_TOOLS_URL) {
     console.log(
       pc.yellow(

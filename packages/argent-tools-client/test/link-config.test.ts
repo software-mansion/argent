@@ -205,3 +205,125 @@ describe("isRemoteRouted", () => {
     expect(await linkConfig.isRemoteRouted()).toBe(false);
   });
 });
+
+describe("token handling", () => {
+  const withToken = { ...sampleConfig, token: "tok_abc123" };
+
+  it("round-trips an optional token", async () => {
+    await linkConfig.writeLinkConfig(withToken);
+    expect(await linkConfig.readLinkConfig()).toEqual(withToken);
+  });
+
+  it("getResolvedToolsUrl surfaces the link token (source 'link')", async () => {
+    await linkConfig.writeLinkConfig(withToken);
+    const resolved = await linkConfig.getResolvedToolsUrl();
+    expect(resolved.source).toBe("link");
+    expect(resolved.token).toBe("tok_abc123");
+  });
+
+  it("getResolvedToolsUrl omits token for a tokenless link", async () => {
+    await linkConfig.writeLinkConfig(sampleConfig);
+    const resolved = await linkConfig.getResolvedToolsUrl();
+    expect(resolved.source).toBe("link");
+    expect(resolved.token).toBeUndefined();
+  });
+
+  it("getResolvedToolsUrl takes the token from ARGENT_AUTH_TOKEN for source 'env'", async () => {
+    const savedTok = process.env.ARGENT_AUTH_TOKEN;
+    process.env.ARGENT_TOOLS_URL = "http://override.example:9000";
+    process.env.ARGENT_AUTH_TOKEN = "env_tok_xyz";
+    try {
+      const resolved = await linkConfig.getResolvedToolsUrl();
+      expect(resolved.source).toBe("env");
+      expect(resolved.token).toBe("env_tok_xyz");
+    } finally {
+      if (savedTok === undefined) delete process.env.ARGENT_AUTH_TOKEN;
+      else process.env.ARGENT_AUTH_TOKEN = savedTok;
+    }
+  });
+});
+
+describe("connection string (argent://)", () => {
+  it("formats and round-trips host/port/token", () => {
+    const s = linkConfig.formatLinkUrl({ host: "10.0.0.42", port: 3001, token: "tok_abc" });
+    expect(s).toBe("argent://tok_abc@10.0.0.42:3001");
+    expect(linkConfig.parseLinkUrl(s)).toEqual({ host: "10.0.0.42", port: 3001, token: "tok_abc" });
+  });
+
+  it("formats and parses a tokenless string", () => {
+    const s = linkConfig.formatLinkUrl({ host: "10.0.0.42", port: 3001 });
+    expect(s).toBe("argent://10.0.0.42:3001");
+    expect(linkConfig.parseLinkUrl(s)).toEqual({ host: "10.0.0.42", port: 3001 });
+  });
+
+  it("brackets IPv6 literals", () => {
+    expect(linkConfig.formatLinkUrl({ host: "::1", port: 3001 })).toBe("argent://[::1]:3001");
+    expect(linkConfig.parseLinkUrl("argent://tok@[::1]:3001")).toEqual({
+      host: "::1",
+      port: 3001,
+      token: "tok",
+    });
+  });
+
+  it("returns null for a non-argent string", () => {
+    expect(linkConfig.parseLinkUrl("http://10.0.0.42:3001")).toBeNull();
+    expect(linkConfig.parseLinkUrl("10.0.0.42:3001")).toBeNull();
+  });
+
+  it("throws on a malformed argent:// string (missing port)", () => {
+    expect(() => linkConfig.parseLinkUrl("argent://10.0.0.42")).toThrow();
+  });
+});
+
+describe("parseLinkTarget (full URL)", () => {
+  it("maps argent:// to an http URL", () => {
+    expect(linkConfig.parseLinkTarget("argent://tok@10.0.0.42:3001")).toEqual({
+      url: "http://10.0.0.42:3001",
+      host: "10.0.0.42",
+      port: 3001,
+      token: "tok",
+    });
+  });
+
+  it("parses an https URL with default port", () => {
+    expect(linkConfig.parseLinkTarget("https://argent.example.com")).toEqual({
+      url: "https://argent.example.com",
+      host: "argent.example.com",
+      port: 443,
+    });
+  });
+
+  it("preserves explicit port + path and strips a trailing slash", () => {
+    expect(linkConfig.parseLinkTarget("https://proxy.example.com:8443/argent/")).toEqual({
+      url: "https://proxy.example.com:8443/argent",
+      host: "proxy.example.com",
+      port: 8443,
+    });
+  });
+
+  it("reads a userinfo token on an http(s) URL", () => {
+    expect(linkConfig.parseLinkTarget("https://tok_xyz@proxy.example.com")).toEqual({
+      url: "https://proxy.example.com",
+      host: "proxy.example.com",
+      port: 443,
+      token: "tok_xyz",
+    });
+  });
+
+  it("brackets/keeps IPv6 hosts", () => {
+    expect(linkConfig.parseLinkTarget("http://[::1]:3001")).toEqual({
+      url: "http://[::1]:3001",
+      host: "::1",
+      port: 3001,
+    });
+  });
+
+  it("returns null for a bare host or unknown scheme", () => {
+    expect(linkConfig.parseLinkTarget("10.0.0.42")).toBeNull();
+    expect(linkConfig.parseLinkTarget("ftp://example.com")).toBeNull();
+  });
+
+  it("throws on a malformed argent:// target (delegates to parseLinkUrl)", () => {
+    expect(() => linkConfig.parseLinkTarget("argent://10.0.0.42")).toThrow();
+  });
+});

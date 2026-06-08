@@ -9,6 +9,7 @@ describe("parseStartFlags", () => {
       idleTimeoutMinutes: 0,
       detach: false,
       force: false,
+      noAuth: false,
       help: false,
     });
   });
@@ -34,10 +35,11 @@ describe("parseStartFlags", () => {
     expect(parseStartFlags(["--idle-timeout=0"]).idleTimeoutMinutes).toBe(0);
   });
 
-  it("parses boolean flags --detach/-d, --force, --help/-h", () => {
+  it("parses boolean flags --detach/-d, --force, --no-auth, --help/-h", () => {
     expect(parseStartFlags(["--detach"]).detach).toBe(true);
     expect(parseStartFlags(["-d"]).detach).toBe(true);
     expect(parseStartFlags(["--force"]).force).toBe(true);
+    expect(parseStartFlags(["--no-auth"]).noAuth).toBe(true);
     expect(parseStartFlags(["--help"]).help).toBe(true);
     expect(parseStartFlags(["-h"]).help).toBe(true);
   });
@@ -58,6 +60,7 @@ describe("parseStartFlags", () => {
       idleTimeoutMinutes: 15,
       detach: true,
       force: true,
+      noAuth: false,
       help: false,
     });
   });

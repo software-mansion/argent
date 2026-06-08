@@ -2,11 +2,15 @@
 
 # Build native-devtools-ios dylibs for Argent.
 # ObjC source lives in the argent-private submodule at packages/argent-private.
-# Run from the workspace root: bash packages/native-devtools-ios/scripts/build.sh [dev|release]
-# Or from this package: bash scripts/build.sh [dev|release]
+# Run from the workspace root: bash packages/native-devtools-ios/scripts/build.sh [dev|release] [--transport unix|tcp]
+# Or from this package: bash scripts/build.sh [dev|release] [--transport unix|tcp]
 #
-# Usage: build.sh [dev|release]
+# Usage: build.sh [dev|release] [--transport unix|tcp]
 #   mode: dev (fast) or release (optimized, optional signing). Default: release.
+#   --transport: unix (default) builds against AF_UNIX sockets at /tmp/*.sock paths;
+#                tcp builds with -DARGENT_USE_TCP=1 so the dylib/daemon use AF_INET
+#                on 127.0.0.1 with a port. Artifacts go to dylibs/tcp/ and bin/tcp/
+#                so both variants can coexist.
 #
 # Environment:
 #   PREBUILT_NATIVE_DEVTOOLS_IOS  - if set, copy this path to dylibs/ instead of building (CI on non-macOS)
@@ -17,10 +21,25 @@
 
 set -euo pipefail
 
-MODE="${1:-release}"
+MODE="release"
+TRANSPORT="unix"
 
-if [[ "$MODE" != "dev" && "$MODE" != "release" ]]; then
-  echo "Usage: build.sh [dev|release]" >&2
+while (($#)); do
+  case "$1" in
+    dev|release)
+      MODE="$1"; shift ;;
+    --transport)
+      TRANSPORT="${2:-}"; shift 2 ;;
+    --transport=*)
+      TRANSPORT="${1#--transport=}"; shift ;;
+    *)
+      echo "Usage: build.sh [dev|release] [--transport unix|tcp]" >&2
+      exit 1 ;;
+  esac
+done
+
+if [[ "$TRANSPORT" != "unix" && "$TRANSPORT" != "tcp" ]]; then
+  echo "Invalid --transport '$TRANSPORT'. Expected unix or tcp." >&2
   exit 1
 fi
 
@@ -28,7 +47,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE_DIR="$(cd "${ROOT_DIR}/../.." && pwd)"
 SUBMODULE_DIR="${WORKSPACE_DIR}/packages/argent-private/packages/native-devtools-ios"
 SRC_DIR="${SUBMODULE_DIR}/Sources/NativeDevtoolsIos"
-DEST_DIR="${ROOT_DIR}/dylibs"
+
+if [[ "$TRANSPORT" == "tcp" ]]; then
+  DEST_DIR="${ROOT_DIR}/dylibs/tcp"
+  BIN_DIR="${ROOT_DIR}/bin/darwin/tcp"
+else
+  DEST_DIR="${ROOT_DIR}/dylibs"
+  BIN_DIR="${ROOT_DIR}/bin/darwin"
+fi
 
 # Verify the submodule is initialised before trying to build.
 if [[ ! -d "${SRC_DIR}" ]]; then
@@ -80,6 +106,9 @@ SDK_PATH="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 EXTRA_CFLAGS=()
 if [[ "$MODE" == "release" ]]; then
   EXTRA_CFLAGS=(-Os -DNDEBUG)
+fi
+if [[ "$TRANSPORT" == "tcp" ]]; then
+  EXTRA_CFLAGS+=(-DARGENT_USE_TCP=1)
 fi
 
 echo "Building libNativeDevtoolsIos.dylib..."
@@ -134,7 +163,7 @@ xcrun --sdk iphonesimulator clang \
 
 echo "Building ax-service..."
 AX_SRC_DIR="${SUBMODULE_DIR}/Sources/AXService"
-AX_DEST="${ROOT_DIR}/bin/ax-service"
+AX_DEST="${BIN_DIR}/ax-service"
 mkdir -p "$(dirname "$AX_DEST")"
 
 if [[ -n "${PREBUILT_AX_SERVICE:-}" ]]; then
@@ -162,4 +191,4 @@ if [[ "$MODE" == "release" ]]; then
   fi
 fi
 
-echo "Done. Dylibs written to ${DEST_DIR}/"
+echo "Done. Dylibs written to ${DEST_DIR}/ (transport=${TRANSPORT})"

@@ -85,16 +85,27 @@ export interface StartMcpServerOptions {
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
   let TOOLS_URL: string;
+  let AUTH_TOKEN: string;
+  // Honor a configured remote target (ARGENT_TOOLS_URL env or ~/.argent/link.json)
+  // before auto-spawning. The token for a remote server comes from
+  // ARGENT_AUTH_TOKEN; the local auto-spawn path mints and returns its own.
   const resolved = await getResolvedToolsUrl();
   if (resolved.url) {
     TOOLS_URL = resolved.url;
+    AUTH_TOKEN = resolved.token ?? "";
   } else {
     try {
-      TOOLS_URL = await ensureToolsServer(options.paths);
+      const handle = await ensureToolsServer(options.paths);
+      TOOLS_URL = handle.url;
+      AUTH_TOKEN = handle.token;
     } catch (err) {
       process.stderr.write(`[argent] Failed to start tools server: ${err}\n`);
       process.exit(1);
     }
+  }
+
+  function authHeader(): Record<string, string> {
+    return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
   }
 
   let reconnectPromise: Promise<void> | null = null;
@@ -103,8 +114,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     if (await isRemoteRouted()) return;
     if (!reconnectPromise) {
       reconnectPromise = ensureToolsServer(options.paths)
-        .then((url) => {
-          TOOLS_URL = url;
+        .then((handle) => {
+          TOOLS_URL = handle.url;
+          AUTH_TOKEN = handle.token;
         })
         .finally(() => {
           reconnectPromise = null;
@@ -129,7 +141,9 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   async function fetchTools(): Promise<ToolMeta[]> {
-    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`, reconnect);
+    const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools`, reconnect, {
+      init: { headers: authHeader() },
+    });
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
   }
@@ -150,7 +164,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeader() },
         body: JSON.stringify(args ?? {}),
       },
       fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,
@@ -297,7 +311,10 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 3_000);
         try {
-          const res = await fetch(`${TOOLS_URL}/tools`, { signal: controller.signal });
+          const res = await fetch(`${TOOLS_URL}/tools`, {
+            signal: controller.signal,
+            headers: authHeader(),
+          });
           if (!res.ok) throw new Error(`health check returned ${res.status}`);
         } finally {
           clearTimeout(timer);
@@ -312,7 +329,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
     process.stdin.on("close", () => {
-      fetch(`${TOOLS_URL}/shutdown`, { method: "POST" }).catch(() => {});
+      fetch(`${TOOLS_URL}/shutdown`, { method: "POST", headers: authHeader() }).catch(() => {});
       setTimeout(() => process.exit(0), 5_000);
     });
   }

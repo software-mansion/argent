@@ -77,7 +77,23 @@ export class Registry {
     this.events.emit("toolInvoked", id);
 
     try {
-      const aliasToRef = definition.services(params);
+      // Validate params against the tool's zod schema for EVERY dispatch path,
+      // not just the HTTP layer. Internal callers (flow-execute, flow-add-step,
+      // run-sequence) previously reached `execute` with raw, unvalidated args,
+      // which let a flow YAML smuggle a string into a `z.number()` port or
+      // shell metacharacters past a tool's regex (→ injection at the sink).
+      // `params ?? {}` mirrors the HTTP layer (express.json yields {} for an
+      // empty body) so no-arg internal invokes still validate cleanly.
+      let effectiveParams = params;
+      if (definition.zodSchema) {
+        const parsed = definition.zodSchema.safeParse(params ?? {});
+        if (!parsed.success) {
+          throw new Error(`Invalid params for tool "${id}": ${parsed.error.message}`);
+        }
+        effectiveParams = parsed.data;
+      }
+
+      const aliasToRef = definition.services(effectiveParams);
       const resolvedServices: Record<string, unknown> = {};
       for (const [alias, ref] of Object.entries(aliasToRef)) {
         const urn = typeof ref === "string" ? ref : ref.urn;
@@ -85,7 +101,7 @@ export class Registry {
         resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
       }
 
-      const result = await definition.execute(resolvedServices, params, options);
+      const result = await definition.execute(resolvedServices, effectiveParams, options);
 
       const duration = performance.now() - startTime;
       this.events.emit("toolCompleted", id, duration);

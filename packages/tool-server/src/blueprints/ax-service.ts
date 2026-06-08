@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as fsAsync from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as readline from "node:readline";
 import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
@@ -12,28 +13,39 @@ import {
   type ServiceInstance,
   type ServiceEvents,
 } from "@argent/registry";
-import { axServiceBinaryPath } from "@argent/native-devtools-ios";
+import { axServiceBinaryPath, axServiceBinaryPathTcp } from "@argent/native-devtools-ios";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 const execFileAsync = promisify(execFile);
 
 export const AX_SERVICE_NAMESPACE = "AXService";
 
+export type AXServiceTransport = "unix" | "tcp";
+
+export const AX_SERVICE_TCP_PORT = Number(process.env.AX_SERVICE_TCP_PORT) || 9231;
+
 // Same DeviceInfo-via-options pattern as the other iOS-only blueprints.
-type AxServiceFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+type AxServiceFactoryOptions = Record<string, unknown> & {
+  device: DeviceInfo;
+  transport?: AXServiceTransport;
+};
 
 /**
  * Build the `ServiceRef` for the AX service keyed by an already-resolved
  * `DeviceInfo`. The factory's iOS-only check uses the caller's classification
  * rather than running its own.
  */
-export function axServiceRef(device: DeviceInfo): {
+export function axServiceRef(
+  device: DeviceInfo,
+  { transport = "unix" }: { transport?: AXServiceTransport } = {}
+): {
   urn: string;
   options: AxServiceFactoryOptions;
 } {
+  const transportSuffix = transport === "tcp" ? ":tcp" : "";
   return {
-    urn: `${AX_SERVICE_NAMESPACE}:${device.id}`,
-    options: { device },
+    urn: `${AX_SERVICE_NAMESPACE}:${device.id}${transportSuffix}`,
+    options: { device, transport },
   };
 }
 
@@ -63,53 +75,12 @@ function getSocketPath(udid: string): string {
   return `/tmp/ax-${udid.slice(0, 8)}.sock`;
 }
 
-function querySocket(socketPath: string, command: string, timeoutMs = 5000): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let data = "";
-    let settled = false;
+type AXEndpoint = { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number };
 
-    const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        client.destroy();
-        reject(new Error(`ax-service query timed out: ${command}`));
-      }
-    }, timeoutMs);
-
-    const client = net.createConnection(socketPath, () => {
-      client.write(command + "\n");
-    });
-
-    client.on("data", (chunk) => {
-      data += chunk.toString();
-    });
-
-    client.on("end", () => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        resolve(data.trim());
-      }
-    });
-
-    client.on("error", (err) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
-  });
-}
-
-async function pingDaemon(socketPath: string): Promise<boolean> {
-  try {
-    const raw = await querySocket(socketPath, "ping", 2000);
-    const parsed = JSON.parse(raw);
-    return parsed.status === "ok";
-  } catch {
-    return false;
-  }
+interface PendingRpc {
+  resolve: (value: unknown) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export async function ensureAutomationEnabled(udid: string): Promise<void> {
@@ -209,86 +180,110 @@ export async function setAccessibilityPrefsPreBoot(udid: string): Promise<void> 
   }
 }
 
-async function killExistingDaemon(socketPath: string): Promise<void> {
-  try {
-    const raw = await querySocket(socketPath, "ping", 2000);
-    const parsed = JSON.parse(raw);
-    if (parsed.pid) process.kill(parsed.pid, "SIGTERM");
-  } catch {}
-  try {
-    fs.unlinkSync(socketPath);
-  } catch {}
-}
-
-function spawnDaemon(udid: string, socketPath: string): Promise<ChildProcess> {
+// Listen on the chosen transport. Unix: pre-unlink stale socket from previous
+// runs so listen() doesn't EADDRINUSE.
+function startListener(
+  endpoint: AXEndpoint,
+  onConnection: (socket: net.Socket) => void
+): Promise<net.Server> {
   return new Promise((resolve, reject) => {
-    let binaryPath: string;
-    try {
-      binaryPath = axServiceBinaryPath();
-    } catch (err) {
-      reject(err);
-      return;
+    if (endpoint.transport === "unix") {
+      try {
+        fs.unlinkSync(endpoint.socketPath);
+      } catch {}
     }
 
+    const server = net.createServer(onConnection);
+    server.once("error", reject);
+
+    const onListening = () => {
+      server.off("error", reject);
+      resolve(server);
+    };
+
+    if (endpoint.transport === "tcp") {
+      server.listen(endpoint.port, "127.0.0.1", onListening);
+    } else {
+      server.listen(endpoint.socketPath, onListening);
+    }
+  });
+}
+
+function spawnDaemon(udid: string, endpoint: AXEndpoint): ChildProcess {
+  const binaryPath =
+    endpoint.transport === "tcp" ? axServiceBinaryPathTcp() : axServiceBinaryPath();
+
+  const endpointArgs =
+    endpoint.transport === "tcp"
+      ? ["--port", String(endpoint.port)]
+      : ["--socket", endpoint.socketPath];
+
+  const proc = execFile(
+    "xcrun",
+    ["simctl", "spawn", udid, binaryPath, ...endpointArgs, "--timeout", "3600"],
+    { encoding: "utf8" }
+  ) as ChildProcess;
+
+  // Defense-in-depth: a missing udid here would crash the process —
+  // throwing inside an async listener bypasses promise rejection and
+  // bubbles up as `uncaughtException`, which the tool-server treats as
+  // fatal. Tag with "?" instead of dereferencing.
+  const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
+  proc.stderr?.on("data", (data: string) => {
+    process.stderr.write(`[ax-service ${udidTag}] ${data}`);
+  });
+
+  return proc;
+}
+
+// Wait for either the daemon's TCP/UDS connection or an early exit.
+// Resolves with the connected socket; rejects on timeout or daemon failure.
+function waitForDaemonConnection(
+  server: net.Server,
+  proc: ChildProcess,
+  timeoutMs: number
+): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
     let settled = false;
-    const proc = execFile(
-      "xcrun",
-      ["simctl", "spawn", udid, binaryPath, "--socket", socketPath, "--timeout", "3600"],
-      { encoding: "utf8" }
-    ) as ChildProcess;
+
+    const onConnection = (socket: net.Socket) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(socket);
+    };
+
+    const onExit = (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`ax-service exited with code ${code} before connecting`));
+    };
+
+    const onError = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
 
     const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        proc.kill();
-        reject(new Error("Timed out waiting for ax-service to become ready"));
-      }
-    }, 10_000);
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("Timed out waiting for ax-service to connect"));
+    }, timeoutMs);
 
-    let stdoutBuf = "";
-    proc.stdout?.on("data", (chunk: string) => {
-      stdoutBuf += chunk;
-      const lines = stdoutBuf.split("\n");
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line.trim());
-          if (msg.status === "ready" && !settled) {
-            settled = true;
-            clearTimeout(timer);
-            resolve(proc);
-            return;
-          }
-        } catch {
-          // not JSON yet — accumulate
-        }
-      }
-    });
+    const cleanup = () => {
+      clearTimeout(timer);
+      server.off("connection", onConnection);
+      proc.off("exit", onExit);
+      proc.off("error", onError);
+    };
 
-    // Defense-in-depth: a missing udid here would crash the process —
-    // throwing inside an async listener bypasses promise rejection and
-    // bubbles up as `uncaughtException`, which the tool-server treats as
-    // fatal. Tag with "?" instead of dereferencing.
-    const udidTag = typeof udid === "string" && udid.length > 0 ? udid.slice(0, 8) : "?";
-    proc.stderr?.on("data", (data: string) => {
-      process.stderr.write(`[ax-service ${udidTag}] ${data}`);
-    });
-
-    proc.on("exit", (code) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        reject(new Error(`ax-service exited with code ${code} before becoming ready`));
-      }
-    });
-
-    proc.on("error", (err) => {
-      if (!settled) {
-        settled = true;
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
+    server.on("connection", onConnection);
+    proc.on("exit", onExit);
+    proc.on("error", onError);
   });
 }
 
@@ -325,40 +320,127 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     }
 
     const udid = device.id;
-    const socketPath = getSocketPath(udid);
+    const transport: AXServiceTransport = opts.transport ?? "unix";
+    const endpoint: AXEndpoint =
+      transport === "tcp"
+        ? { transport: "tcp", port: AX_SERVICE_TCP_PORT }
+        : { transport: "unix", socketPath: getSocketPath(udid) };
     const events = new TypedEventEmitter<ServiceEvents>();
+
+    const pendingRpc = new Map<number, PendingRpc>();
+    let nextRpcId = 1;
+    let daemonSocket: net.Socket | null = null;
+    let disposed = false;
+
+    const failPending = (err: Error): void => {
+      for (const { reject, timer } of pendingRpc.values()) {
+        clearTimeout(timer);
+        reject(err);
+      }
+      pendingRpc.clear();
+    };
 
     await ensureAutomationEnabled(udid);
     const entitlementBypassActive = await isEntitlementBypassActive(udid);
-    await killExistingDaemon(socketPath);
 
-    const proc = await spawnDaemon(udid, socketPath);
+    // Host listens first, then we spawn the daemon and wait for it to dial in.
+    const server = await startListener(endpoint, (socket) => {
+      if (daemonSocket && !daemonSocket.destroyed) {
+        // A second connection (e.g. respawned daemon) replaces the previous one.
+        daemonSocket.destroy();
+      }
+      daemonSocket = socket;
+
+      const rl = readline.createInterface({ input: socket });
+      rl.on("line", (raw) => {
+        let msg: { id?: number; result?: unknown; error?: unknown };
+        try {
+          msg = JSON.parse(raw);
+        } catch {
+          return;
+        }
+        if (typeof msg.id !== "number") return;
+        const pending = pendingRpc.get(msg.id);
+        if (!pending) return;
+        pendingRpc.delete(msg.id);
+        clearTimeout(pending.timer);
+        if (msg.error !== undefined && msg.error !== null) {
+          pending.reject(
+            new Error(typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error))
+          );
+        } else {
+          pending.resolve(msg.result);
+        }
+      });
+
+      socket.on("close", () => {
+        rl.close();
+        if (daemonSocket === socket) {
+          daemonSocket = null;
+          if (!disposed) {
+            const err = new Error("ax-service daemon disconnected");
+            failPending(err);
+            events.emit("terminated", err);
+          }
+        }
+      });
+
+      socket.on("error", () => {
+        // close handler does the cleanup
+      });
+    });
+
+    const proc = spawnDaemon(udid, endpoint);
 
     proc.on("exit", (code) => {
-      events.emit("terminated", new Error(`ax-service exited with code ${code}`));
+      if (disposed) return;
+      const err = new Error(`ax-service exited with code ${code}`);
+      failPending(err);
+      events.emit("terminated", err);
     });
     proc.on("error", (err) => {
+      if (disposed) return;
+      failPending(err);
       events.emit("terminated", err);
     });
 
-    async function query(command: string): Promise<unknown> {
-      try {
-        const raw = await querySocket(socketPath, command);
-        return JSON.parse(raw);
-      } catch (err) {
-        events.emit("terminated", err instanceof Error ? err : new Error(String(err)));
-        throw err;
+    try {
+      daemonSocket = await waitForDaemonConnection(server, proc, 10_000);
+    } catch (err) {
+      // Tear down whatever started so we don't leak a server or process.
+      if (!proc.killed) proc.kill("SIGTERM");
+      server.close();
+      if (endpoint.transport === "unix") {
+        try {
+          fs.unlinkSync(endpoint.socketPath);
+        } catch {}
       }
+      throw err;
+    }
+
+    function query(command: string, timeoutMs = 5000): Promise<unknown> {
+      return new Promise((resolve, reject) => {
+        if (!daemonSocket || daemonSocket.destroyed) {
+          reject(new Error("ax-service not connected"));
+          return;
+        }
+        const id = nextRpcId++;
+        const timer = setTimeout(() => {
+          if (pendingRpc.has(id)) {
+            pendingRpc.delete(id);
+            reject(new Error(`ax-service query timed out: ${command}`));
+          }
+        }, timeoutMs);
+        pendingRpc.set(id, { resolve, reject, timer });
+        daemonSocket.write(JSON.stringify({ id, command }) + "\n");
+      });
     }
 
     const api: AXServiceApi = {
       degraded: !entitlementBypassActive,
 
       async describe(): Promise<AXDescribeResponse> {
-        const result = (await query("describe")) as AXDescribeResponse & {
-          error?: string;
-        };
-        if (result.error) throw new Error(`ax-service describe error: ${result.error}`);
+        const result = (await query("describe", 10_000)) as AXDescribeResponse;
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
@@ -372,19 +454,32 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       },
 
       async ping(): Promise<boolean> {
-        return pingDaemon(socketPath);
+        try {
+          const result = (await query("ping", 2000)) as { status?: string };
+          return result.status === "ok";
+        } catch {
+          return false;
+        }
       },
     };
 
     const instance: ServiceInstance<AXServiceApi> = {
       api,
       dispose: async () => {
+        disposed = true;
+        failPending(new Error("ax-service disposed"));
+        if (daemonSocket && !daemonSocket.destroyed) {
+          daemonSocket.destroy();
+        }
         if (proc && !proc.killed) {
           proc.kill("SIGTERM");
         }
-        try {
-          fs.unlinkSync(socketPath);
-        } catch {}
+        server.close();
+        if (endpoint.transport === "unix") {
+          try {
+            fs.unlinkSync(endpoint.socketPath);
+          } catch {}
+        }
       },
       events,
     };

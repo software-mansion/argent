@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import * as path from "node:path";
 import {
   serializeFlow,
   parseFlow,
@@ -6,6 +7,9 @@ import {
   getActiveFlow,
   getActiveFlowOrNull,
   clearActiveFlow,
+  setActiveProjectRoot,
+  clearActiveProjectRoot,
+  getFlowPath,
   type FlowFile,
 } from "../../src/tools/flows/flow-utils";
 
@@ -178,5 +182,57 @@ describe("active flow state", () => {
     setActiveFlow("my-flow");
     clearActiveFlow();
     expect(getActiveFlowOrNull()).toBeNull();
+  });
+});
+
+// ── getFlowPath name validation ──────────────────────────────────────
+
+describe("getFlowPath name validation", () => {
+  beforeEach(() => {
+    clearActiveProjectRoot();
+    setActiveProjectRoot("/tmp/argent-flow-name-test");
+  });
+
+  it("accepts plain alphanumeric names", () => {
+    expect(getFlowPath("my-flow_1")).toBe(
+      path.join("/tmp/argent-flow-name-test", ".argent", "flows", "my-flow_1.yaml")
+    );
+  });
+
+  it("rejects path-traversal segments", () => {
+    expect(() => getFlowPath("../../etc/passwd")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("../foo")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects path separators", () => {
+    expect(() => getFlowPath("foo/bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("/abs/path")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects names with spaces or shell metacharacters", () => {
+    expect(() => getFlowPath("foo bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("foo;bar")).toThrow(/Invalid flow name/);
+    expect(() => getFlowPath("foo$(id)")).toThrow(/Invalid flow name/);
+  });
+
+  it("rejects empty names", () => {
+    expect(() => getFlowPath("")).toThrow(/Invalid flow name/);
+  });
+});
+
+// PR #194 follow-up C: project_root must be absolute AND free of ".."
+// segments (path.join collapses ".." and would relocate the flows dir).
+describe("setActiveProjectRoot validation", () => {
+  it("rejects a relative project_root", () => {
+    expect(() => setActiveProjectRoot("relative/path")).toThrow(/absolute path/);
+  });
+
+  it('rejects an absolute project_root containing ".." segments', () => {
+    expect(() => setActiveProjectRoot("/a/../../../etc")).toThrow(/must not contain "\.\."/);
+    expect(() => setActiveProjectRoot("/home/user/../../root")).toThrow(/must not contain "\.\."/);
+  });
+
+  it("accepts a clean absolute project_root", () => {
+    expect(() => setActiveProjectRoot("/tmp/argent-pr194-c-test")).not.toThrow();
   });
 });

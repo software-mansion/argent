@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { spawn } from "node:child_process";
 import {
   killToolServer,
@@ -14,20 +14,15 @@ import {
   writeToolsServerStateSync,
   clearToolsServerState,
   formatToolsServerUrl,
+  formatLinkUrl,
+  generateAuthToken,
   type ToolsServerPaths,
+  type ToolsServerState,
 } from "@argent/tools-client";
 
 const STATE_DIR = path.join(homedir(), ".argent");
 const STATE_FILE = path.join(STATE_DIR, "tool-server.json");
 const LOG_FILE = path.join(STATE_DIR, "tool-server.log");
-
-interface ToolsServerState {
-  port: number;
-  pid: number;
-  startedAt: string;
-  bundlePath: string;
-  host?: string;
-}
 
 function readState(): ToolsServerState | null {
   try {
@@ -49,9 +44,18 @@ async function statusCmd(json: boolean): Promise<void> {
   }
   const host = state.host ?? "127.0.0.1";
   const alive = isToolsServerProcessAlive(state.pid);
-  const healthy = alive ? await isToolsServerHealthy(state.port, host) : false;
+  const healthy = alive ? await isToolsServerHealthy(state.port, host, 2000, state.token) : false;
   if (json) {
-    console.log(JSON.stringify({ running: alive && healthy, ...state, alive, healthy }, null, 2));
+    // Hide the token from JSON output — it's a secret. Surface its presence
+    // without leaking the value.
+    const { token, ...publicState } = state;
+    console.log(
+      JSON.stringify(
+        { running: alive && healthy, ...publicState, hasToken: !!token, alive, healthy },
+        null,
+        2
+      )
+    );
     return;
   }
   console.log(`tool-server:`);
@@ -96,6 +100,8 @@ export interface StartFlags {
   idleTimeoutMinutes: number;
   detach: boolean;
   force: boolean;
+  /** Disable auth (no token minted). Server accepts unauthenticated requests. */
+  noAuth: boolean;
   help: boolean;
 }
 
@@ -108,6 +114,7 @@ export function parseStartFlags(argv: string[]): StartFlags {
     idleTimeoutMinutes: 0,
     detach: false,
     force: false,
+    noAuth: false,
     help: false,
   };
 
@@ -129,6 +136,10 @@ export function parseStartFlags(argv: string[]): StartFlags {
     }
     if (tok === "--force") {
       flags.force = true;
+      continue;
+    }
+    if (tok === "--no-auth") {
+      flags.noAuth = true;
       continue;
     }
     if (tok === "--port" || tok === "-p") {
@@ -194,18 +205,70 @@ Flags:
                           Default: 0 (never auto-shutdown).
   --detach, -d            Run as a detached background process and return.
   --force                 If a tool-server is already running, kill it first.
+  --no-auth               Disable authentication (no token). Anyone who can
+                          reach the port can drive the server. Dev/trusted only.
   --help, -h              Show this help.
+
+Auth:
+  By default the server mints a bearer token and prints a one-line connection
+  string. Pair a client by pasting it into \`argent link\`:
+      argent link argent://<token>@<host>:<port>
+  Pass --no-auth to run without a token (unauthenticated).
 
 Examples:
   argent server start
   argent server start --port 4000
   argent server start --host 0.0.0.0 --port 4000
   argent server start --detach
+  argent server start --host 0.0.0.0 --no-auth
 `);
 }
 
 function isLoopback(host: string): boolean {
   return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+function isWildcard(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "::0" || host === "";
+}
+
+/** First non-internal IPv4 address, for suggesting a reachable host when bound
+ * to a wildcard address. Null when none is found (e.g. offline). */
+function primaryLanIPv4(): string | null {
+  const ifaces = networkInterfaces();
+  for (const addrs of Object.values(ifaces)) {
+    for (const ni of addrs ?? []) {
+      if (ni.family === "IPv4" && !ni.internal) return ni.address;
+    }
+  }
+  return null;
+}
+
+/** Host a client should connect to, given what the server bound to. */
+function resolveConnectHost(bindHost: string): string {
+  if (isWildcard(bindHost)) return primaryLanIPv4() ?? "127.0.0.1";
+  return bindHost;
+}
+
+/**
+ * Print the copy-pasteable pairing block: the `argent://` connection string
+ * (headline) plus the explicit-flags fallback for scripting.
+ */
+function printConnectionInfo(bindHost: string, port: number, token?: string): void {
+  const connectHost = resolveConnectHost(bindHost);
+  console.log("");
+  console.log("  Connect a client:");
+  console.log(`      argent link ${formatLinkUrl({ host: connectHost, port, token })}`);
+  const flagsForm = token
+    ? `argent link --host ${connectHost} --port ${port} --token ${token}`
+    : `argent link --host ${connectHost} --port ${port}`;
+  console.log(`      (or: ${flagsForm})${token ? "" : "   [unauthenticated]"}`);
+  if (isWildcard(bindHost)) {
+    console.log(
+      `  note: bound to ${bindHost}; ${connectHost} is a best guess — replace it ` +
+        `with the address clients actually reach this machine on.`
+    );
+  }
 }
 
 async function ensureNoExistingServer(force: boolean): Promise<void> {
@@ -269,30 +332,44 @@ async function startCmd(argv: string[], paths: ToolsServerPaths | undefined): Pr
 
   const port = await resolvePort(flags.port);
 
+  // Auth on by default; --no-auth opts out (token stays undefined → the
+  // tool-server runs unauthenticated and prints its own warning).
+  const token = flags.noAuth ? undefined : generateAuthToken();
+
   if (!isLoopback(flags.host)) {
-    process.stderr.write(
-      `WARNING: tool-server will be reachable on ${flags.host}:${port} — ` +
-        `do not expose to untrusted networks (no auth is enforced).\n`
-    );
+    if (token) {
+      process.stderr.write(
+        `Note: tool-server will be reachable on ${flags.host}:${port} over plain HTTP ` +
+          `(bearer-token auth, no TLS). Keep it to a trusted network or VPN.\n`
+      );
+    } else {
+      process.stderr.write(
+        `WARNING: tool-server will be reachable on ${flags.host}:${port} with NO auth ` +
+          `(--no-auth) — anyone who can reach the port can drive it. Do not expose ` +
+          `to untrusted networks.\n`
+      );
+    }
   }
 
   if (flags.detach) {
-    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes);
+    await runDetached(paths, port, flags.host, flags.idleTimeoutMinutes, token);
     return;
   }
 
-  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes);
+  await runForeground(paths, port, flags.host, flags.idleTimeoutMinutes, token);
 }
 
 async function runDetached(
   paths: ToolsServerPaths,
   port: number,
   host: string,
-  idleTimeoutMinutes: number
+  idleTimeoutMinutes: number,
+  token?: string
 ): Promise<void> {
   const { port: actualPort, pid } = await spawnToolsServer(paths, port, {
     host,
     idleTimeoutMinutes,
+    token,
   });
   await writeToolsServerState({
     port: actualPort,
@@ -300,9 +377,12 @@ async function runDetached(
     startedAt: new Date().toISOString(),
     bundlePath: paths.bundlePath,
     host,
+    ...(token ? { token } : {}),
   });
   const url = formatToolsServerUrl(host, actualPort);
   console.log(`tool-server started: ${url} (pid ${pid})`);
+  printConnectionInfo(host, actualPort, token);
+  console.log("");
   console.log(`  logs:   ${LOG_FILE}`);
   console.log(`  status: argent server status`);
   console.log(`  stop:   argent server stop`);
@@ -312,11 +392,13 @@ async function runForeground(
   paths: ToolsServerPaths,
   port: number,
   host: string,
-  idleTimeoutMinutes: number
+  idleTimeoutMinutes: number,
+  token?: string
 ): Promise<void> {
   const env = buildToolsServerEnv(paths, port, process.env, {
     host,
     idleTimeoutMinutes,
+    token,
   });
 
   const child = spawn("node", [paths.bundlePath, "start"], {
@@ -350,12 +432,17 @@ async function runForeground(
         startedAt: new Date().toISOString(),
         bundlePath: paths.bundlePath,
         host,
+        ...(token ? { token } : {}),
       });
       stateWritten = true;
     } catch {
       /* non-fatal: foreground run still works without the state file */
     }
   }
+
+  // Print the pairing block now, before the child's inherited stdout starts
+  // streaming its own "listening on…" banner and log lines.
+  printConnectionInfo(host, port, token);
 
   await new Promise<void>(() => {
     const cleanup = () => {
