@@ -12,9 +12,9 @@ Mirrors `utils/ios-profiler/IOS_PROFILER_REFERENCE.md` for the iOS branch.
 | `perfetto` (device-side)    | Recording daemon, built into the Android system image. Spawned via `adb shell perfetto`.         | Driven from `utils/android-profiler/capture.ts`                   |
 | `traced` (device-side)      | Privileged trace muxer. Writes the output `.pftrace` under `/data/misc/perfetto-traces/`.        | Implicit — owned by Android                                       |
 | `argent.tracecfg.pbtxt`     | TraceConfig (textproto) — names the data sources, buffer sizes, and per-target filters.          | `@argent/native-devtools-android` → `argent.tracecfg.pbtxt`       |
-| `trace_processor_shell`     | On-host binary that runs PerfettoSQL queries against a `.pftrace`.                               | `@argent/native-devtools-android` → `bin/trace_processor_shell`   |
+| Perfetto WASM engine        | In-process trace-processor (Perfetto compiled to WebAssembly) that runs PerfettoSQL against a `.pftrace`. No subprocess, no per-platform binary. | `@argent/native-devtools-android` → `src/wasm-trace-processor.ts` (`queryWarm`); wasm under `assets/trace-processor/` |
 | `queries/*.sql`             | PerfettoSQL files — one per signal, with parameter placeholders substituted at runtime.          | `@argent/native-devtools-android` → `queries/`                    |
-| `pipeline/index.ts`         | Drives `trace_processor_shell`, runs queries, folds rows into the shared `Bottleneck` shape.     | `utils/android-profiler/pipeline/index.ts`                        |
+| `pipeline/index.ts`         | Drives the in-process WASM engine through `pipeline/run-tp.ts` (`runTpQuery`/`runTpInline` → `queryWarm`), runs queries, folds rows into the shared `Bottleneck` shape. | `utils/android-profiler/pipeline/index.ts`                        |
 
 ---
 
@@ -52,7 +52,7 @@ Per-query docs and the shared SQL conventions (`_argent_args` parameters,
 `{{NAME}}` tokens, CLOCK_MONOTONIC timestamps, the batched-fold pattern) are the
 source of truth in `queries/README.md`. Don't re-list them here.
 
-PerfettoSQL stdlib column-name drift is the main risk: when `trace_processor_shell` changes versions, column names in `android_anrs` / `actual_frame_timeline_slice` / `memory_oom_score_with_rss_and_swap_per_process` can rename. Pin the binary version in `scripts/download-native-binaries.sh` and add a fixture test on bumps.
+PerfettoSQL stdlib column-name drift is the main risk: when the bundled Perfetto WASM engine changes versions, column names in `android_anrs` / `actual_frame_timeline_slice` / `memory_oom_score_with_rss_and_swap_per_process` can rename. The version is pinned in the `argent-private` submodule (`PERFETTO_VERSION` / `PERFETTO_WASM_TAG`), stamped into `bundled-meta.ts` at pack time, and the bundle is fetched + sha256-verified by `scripts/download-trace-processor.sh` — see `ANDROID_PERFETTO.md` for the bump procedure. Add a fixture test on bumps.
 
 ---
 
