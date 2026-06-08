@@ -52,10 +52,8 @@ export {
   isArtifactHandle,
   getDeviceIdFromArgs,
   artifactsRoot,
-  artifactDir,
   ARTIFACT_MARKER,
   type ArtifactHandle,
   type MaterializeContext,
-  type MaterializeResult,
   type MaterializedImage,
 } from "./artifacts.js";
