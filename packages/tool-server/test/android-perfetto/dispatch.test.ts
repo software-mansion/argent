@@ -55,12 +55,14 @@ import { nativeProfilerAnalyzeTool } from "../../src/tools/profiler/native-profi
 import { startNativeProfilerIos } from "../../src/tools/profiler/native-profiler/platforms/ios";
 import { startNativeProfilerAndroid } from "../../src/tools/profiler/native-profiler/platforms/android";
 
-async function buildSession(
-  platform: "ios" | "android"
-): Promise<NativeProfilerSessionApi> {
+async function buildSession(platform: "ios" | "android"): Promise<NativeProfilerSessionApi> {
   const device =
     platform === "ios"
-      ? { id: "11111111-2222-3333-4444-555555555555", platform: "ios" as const, kind: "simulator" as const }
+      ? {
+          id: "11111111-2222-3333-4444-555555555555",
+          platform: "ios" as const,
+          kind: "simulator" as const,
+        }
       : { id: "emulator-5554", platform: "android" as const, kind: "emulator" as const };
   const instance = await nativeProfilerSessionBlueprint.factory({}, device, { device });
   return instance.api;
@@ -92,10 +94,9 @@ describe("native-profiler-* dispatch by session platform", () => {
       device_id: "emulator-5554",
     });
     expect(stop.traceFile).toBe("/android.pftrace");
-    const analyze = await nativeProfilerAnalyzeTool.execute(
-      { session: androidApi } as never,
-      { device_id: "emulator-5554" }
-    );
+    const analyze = await nativeProfilerAnalyzeTool.execute({ session: androidApi } as never, {
+      device_id: "emulator-5554",
+    });
     expect(analyze.report).toBe("android");
   });
 });

@@ -7,14 +7,14 @@ Mirrors `utils/ios-profiler/IOS_PROFILER_REFERENCE.md` for the iOS branch.
 
 ## 1. Stack
 
-| Layer                       | What it is                                                                                       | Where in this repo                                                |
-| --------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| `perfetto` (device-side)    | Recording daemon, built into the Android system image. Spawned via `adb shell perfetto`.         | Driven from `utils/android-profiler/capture.ts`                   |
-| `traced` (device-side)      | Privileged trace muxer. Writes the output `.pftrace` under `/data/misc/perfetto-traces/`.        | Implicit — owned by Android                                       |
-| `argent.tracecfg.pbtxt`     | TraceConfig (textproto) — names the data sources, buffer sizes, and per-target filters.          | `@argent/native-devtools-android` → `argent.tracecfg.pbtxt`       |
-| Perfetto WASM engine        | In-process trace-processor (Perfetto compiled to WebAssembly) that runs PerfettoSQL against a `.pftrace`. No subprocess, no per-platform binary. | `@argent/native-devtools-android` → `src/wasm-trace-processor.ts` (`queryWarm`); wasm under `assets/trace-processor/` |
-| `queries/*.sql`             | PerfettoSQL files — one per signal, with parameter placeholders substituted at runtime.          | `@argent/native-devtools-android` → `queries/`                    |
-| `pipeline/index.ts`         | Drives the in-process WASM engine through `pipeline/run-tp.ts` (`runTpQuery`/`runTpInline` → `queryWarm`), runs queries, folds rows into the shared `Bottleneck` shape. | `utils/android-profiler/pipeline/index.ts`                        |
+| Layer                    | What it is                                                                                                                                                              | Where in this repo                                                                                                    |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `perfetto` (device-side) | Recording daemon, built into the Android system image. Spawned via `adb shell perfetto`.                                                                                | Driven from `utils/android-profiler/capture.ts`                                                                       |
+| `traced` (device-side)   | Privileged trace muxer. Writes the output `.pftrace` under `/data/misc/perfetto-traces/`.                                                                               | Implicit — owned by Android                                                                                           |
+| `argent.tracecfg.pbtxt`  | TraceConfig (textproto) — names the data sources, buffer sizes, and per-target filters.                                                                                 | `@argent/native-devtools-android` → `argent.tracecfg.pbtxt`                                                           |
+| Perfetto WASM engine     | In-process trace-processor (Perfetto compiled to WebAssembly) that runs PerfettoSQL against a `.pftrace`. No subprocess, no per-platform binary.                        | `@argent/native-devtools-android` → `src/wasm-trace-processor.ts` (`queryWarm`); wasm under `assets/trace-processor/` |
+| `queries/*.sql`          | PerfettoSQL files — one per signal, with parameter placeholders substituted at runtime.                                                                                 | `@argent/native-devtools-android` → `queries/`                                                                        |
+| `pipeline/index.ts`      | Drives the in-process WASM engine through `pipeline/run-tp.ts` (`runTpQuery`/`runTpInline` → `queryWarm`), runs queries, folds rows into the shared `Bottleneck` shape. | `utils/android-profiler/pipeline/index.ts`                                                                            |
 
 ---
 
@@ -42,7 +42,7 @@ ADB shell                                 device
 Two live constraints to remember:
 
 - `/data/misc/perfetto-traces/` is `drwxrwx-wx` but SELinux denies `shell:s0` writes. The config CANNOT be staged via `cat > <path>` — it has to be piped to `perfetto` on stdin (`-c -`). `traced` writes the output as a privileged daemon, so the `.pftrace` lands fine.
-- `--background-wait` prints the PID on stdout once all data sources are running. Tolerate warnings preceding the PID by taking the *last* non-empty stdout line.
+- `--background-wait` prints the PID on stdout once all data sources are running. Tolerate warnings preceding the PID by taking the _last_ non-empty stdout line.
 
 ---
 

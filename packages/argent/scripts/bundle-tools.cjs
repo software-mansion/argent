@@ -88,10 +88,7 @@ const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
 const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
 const AGENTS_DEST = path.resolve(__dirname, "../agents");
-const QUERIES_SRC = path.resolve(
-  WORKSPACE_ROOT,
-  "packages/native-devtools-android/assets/queries"
-);
+const QUERIES_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android/assets/queries");
 const QUERIES_DEST = path.resolve(__dirname, "../assets/queries");
 const TRACE_PROCESSOR_SRC = path.resolve(
   WORKSPACE_ROOT,
@@ -489,9 +486,7 @@ const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
 const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
 if (fs.existsSync(apkSrc)) {
   fs.copyFileSync(apkSrc, path.join(BIN_DIR, apkName));
-  console.log(
-    `✓ Copied Android helper APK → ${path.relative(process.cwd(), BIN_DIR)}/${apkName}`
-  );
+  console.log(`✓ Copied Android helper APK → ${path.relative(process.cwd(), BIN_DIR)}/${apkName}`);
 } else {
   throw new Error(
     `Android helper APK not found at ${apkSrc}.\n` +

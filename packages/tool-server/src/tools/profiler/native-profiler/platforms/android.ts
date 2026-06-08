@@ -87,9 +87,7 @@ export async function stopNativeProfilerAndroid(
 ): Promise<AndroidStopResult> {
   const recoveringPartialTrace = api.recordingTimedOut || api.recordingExitedUnexpectedly;
   if (!api.profilingActive && !recoveringPartialTrace) {
-    throw new Error(
-      "No active native profiling session found. Call native-profiler-start first."
-    );
+    throw new Error("No active native profiling session found. Call native-profiler-start first.");
   }
 
   if (!api.traceFile || !api.androidOnDeviceTracePath || !api.capturePid) {
@@ -99,9 +97,7 @@ export async function stopNativeProfilerAndroid(
           "Call native-profiler-start again."
       );
     }
-    throw new Error(
-      "No active native profiling session found. Call native-profiler-start first."
-    );
+    throw new Error("No active native profiling session found. Call native-profiler-start first.");
   }
 
   if (api.recordingTimeout) {

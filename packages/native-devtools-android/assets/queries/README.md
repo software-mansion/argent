@@ -15,17 +15,17 @@ conventions live here so they aren't repeated nine times.
 
 ## What each file is for
 
-| File | Consumed by | Purpose |
-|---|---|---|
-| `trace-bounds.sql` | every analyze run | Trace start timestamp anchor (see *Timestamps*). |
-| `ui-hangs.sql` | analyze | ANRs + app-jank frames → one hang per frame. |
-| `cpu-hotspots.sql` | analyze | Per-thread hottest leaf functions + burst windows. |
-| `thread-breakdown.sql` | profiler-stack-query `mode=thread_breakdown` | Per-thread sample share. |
-| `hang-folds-batched.sql` | batched analyze | State breakdown + GC overlap for ALL hangs in one batched query. |
-| `hang-state-breakdown.sql` | drill-down (single hang) | Main-thread state breakdown for one hang window. |
-| `hang-main-thread-samples.sql` | profiler-stack-query `mode=hang_stacks` | Main-thread CPU samples inside one hang window. |
-| `function-callers.sql` | profiler-stack-query `mode=function_callers` | Callsites that hit one hot function. |
-| `memory-rss.sql` | analyze | RSS-growth weak signal (not leak detection). |
+| File                           | Consumed by                                  | Purpose                                                          |
+| ------------------------------ | -------------------------------------------- | ---------------------------------------------------------------- |
+| `trace-bounds.sql`             | every analyze run                            | Trace start timestamp anchor (see _Timestamps_).                 |
+| `ui-hangs.sql`                 | analyze                                      | ANRs + app-jank frames → one hang per frame.                     |
+| `cpu-hotspots.sql`             | analyze                                      | Per-thread hottest leaf functions + burst windows.               |
+| `thread-breakdown.sql`         | profiler-stack-query `mode=thread_breakdown` | Per-thread sample share.                                         |
+| `hang-folds-batched.sql`       | batched analyze                              | State breakdown + GC overlap for ALL hangs in one batched query. |
+| `hang-state-breakdown.sql`     | drill-down (single hang)                     | Main-thread state breakdown for one hang window.                 |
+| `hang-main-thread-samples.sql` | profiler-stack-query `mode=hang_stacks`      | Main-thread CPU samples inside one hang window.                  |
+| `function-callers.sql`         | profiler-stack-query `mode=function_callers` | Callsites that hit one hot function.                             |
+| `memory-rss.sql`               | analyze                                      | RSS-growth weak signal (not leak detection).                     |
 
 ## Conventions
 

@@ -63,10 +63,7 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
       if (!nativeApi.traceFile) {
         throw new Error("No native profiler data. Run native-profiler-analyze first.");
       }
-      const data = await loadAndroidCombinedData(
-        nativeApi.traceFile,
-        nativeApi.appProcess ?? ""
-      );
+      const data = await loadAndroidCombinedData(nativeApi.traceFile, nativeApi.appProcess ?? "");
       uiHangs = data.uiHangs;
       memoryLeaks = [];
     } else {

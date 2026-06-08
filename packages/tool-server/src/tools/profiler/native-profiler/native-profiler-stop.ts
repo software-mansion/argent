@@ -7,14 +7,8 @@ import {
 import { resolveDevice } from "../../../utils/device-info";
 import { assertSupported } from "../../../utils/capability";
 import { ensureDeps } from "../../../utils/check-deps";
-import {
-  stopNativeProfilerIos,
-  type IosStopResult,
-} from "./platforms/ios";
-import {
-  stopNativeProfilerAndroid,
-  type AndroidStopResult,
-} from "./platforms/android";
+import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
+import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/android";
 
 const zodSchema = z.object({
   device_id: z

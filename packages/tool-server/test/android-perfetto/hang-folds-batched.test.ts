@@ -79,9 +79,7 @@ describe("runBatchedHangFolds", () => {
     expect(sql).not.toContain("TARGET_PROCESS");
     // Point 4: state durations are clipped to the hang window (overlap test +
     // MIN(end,end)-MAX(start,start)), not a raw SUM(ts.dur) over BETWEEN.
-    expect(sql).toContain(
-      "SUM(MIN(ts.ts + ts.dur, hw.end_ns) - MAX(ts.ts, hw.start_ns))"
-    );
+    expect(sql).toContain("SUM(MIN(ts.ts + ts.dur, hw.end_ns) - MAX(ts.ts, hw.start_ns))");
     expect(sql).toContain("ts.ts < hw.end_ns AND ts.ts + ts.dur > hw.start_ns");
   });
 
@@ -166,7 +164,12 @@ describe("runBatchedHangFolds", () => {
     });
 
     expect(result.state.get(0)).toEqual([
-      { state: "Sleeping", blocked_function: "futex_wait", total_dur_ns: 400_000_000, occurrences: 1 },
+      {
+        state: "Sleeping",
+        blocked_function: "futex_wait",
+        total_dur_ns: 400_000_000,
+        occurrences: 1,
+      },
       { state: "Running", blocked_function: null, total_dur_ns: 100_000_000, occurrences: 3 },
     ]);
     expect(result.state.get(1)).toEqual([

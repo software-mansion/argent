@@ -46,17 +46,12 @@ export async function runTpQuery<Row = Record<string, unknown>>(
  * NOT treated as `String.replace` special patterns.
  * rationale: queries/README.md "`{{NAME}}` template tokens"
  */
-export function renderSqlTemplate(
-  template: string,
-  substitutions: Record<string, string>
-): string {
+export function renderSqlTemplate(template: string, substitutions: Record<string, string>): string {
   const used = new Set<string>();
   const rendered = template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => {
     const value = substitutions[name];
     if (value === undefined) {
-      throw new Error(
-        `SQL template references {{${name}}} but no substitution was provided`
-      );
+      throw new Error(`SQL template references {{${name}}} but no substitution was provided`);
     }
     used.add(name);
     return value;

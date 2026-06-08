@@ -24,7 +24,12 @@ describe("foldHangAnnotations", () => {
     const result = foldHangAnnotations(
       hang,
       [
-        { state: "Sleeping", blocked_function: "futex_wait", total_dur_ns: 400_000_000, occurrences: 1 },
+        {
+          state: "Sleeping",
+          blocked_function: "futex_wait",
+          total_dur_ns: 400_000_000,
+          occurrences: 1,
+        },
         { state: "Running", blocked_function: null, total_dur_ns: 100_000_000, occurrences: 1 },
       ],
       []
@@ -37,12 +42,16 @@ describe("foldHangAnnotations", () => {
 
   it("computes gcOverlapMs by intersecting GC slices with the hang window", () => {
     const hang = buildHang();
-    const result = foldHangAnnotations(hang, [], [
-      // 200ms fully inside the window
-      { gc_reason: "GC: concurrent copying", ts_ns: 1_100_000_000, dur_ns: 200_000_000 },
-      // 100ms overlap on the left (slice starts before window)
-      { gc_reason: "GC: kGcCauseExplicit", ts_ns: 900_000_000, dur_ns: 200_000_000 },
-    ]);
+    const result = foldHangAnnotations(
+      hang,
+      [],
+      [
+        // 200ms fully inside the window
+        { gc_reason: "GC: concurrent copying", ts_ns: 1_100_000_000, dur_ns: 200_000_000 },
+        // 100ms overlap on the left (slice starts before window)
+        { gc_reason: "GC: kGcCauseExplicit", ts_ns: 900_000_000, dur_ns: 200_000_000 },
+      ]
+    );
     // 200 + 100 = 300ms total
     expect(result.gcOverlapMs).toBe(300);
   });

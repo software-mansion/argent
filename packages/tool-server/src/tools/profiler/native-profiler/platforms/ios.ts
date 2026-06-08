@@ -4,7 +4,10 @@ import { existsSync } from "node:fs";
 import * as path from "path";
 import type { NativeProfilerSessionApi } from "../../../../blueprints/native-profiler-session";
 import { getDebugDir } from "../../../../utils/react-profiler/debug/dump";
-import { listenForDarwinNotification, type NotifyHandle } from "../../../../utils/ios-profiler/notify";
+import {
+  listenForDarwinNotification,
+  type NotifyHandle,
+} from "../../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../../utils/ios-profiler/startup";
 import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
@@ -21,7 +24,16 @@ import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 function resolveDefaultTemplatePath(): string {
   const candidates = [
     path.resolve(__dirname, "..", "assets", "Argent.tracetemplate"),
-    path.resolve(__dirname, "..", "..", "..", "..", "utils", "ios-profiler", "Argent.tracetemplate"),
+    path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "..",
+      "..",
+      "utils",
+      "ios-profiler",
+      "Argent.tracetemplate"
+    ),
   ];
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
@@ -335,9 +347,7 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   }
 
   if (!api.profilingActive || !api.captureProcess || !api.traceFile) {
-    throw new Error(
-      "No active native profiling session found. Call native-profiler-start first."
-    );
+    throw new Error("No active native profiling session found. Call native-profiler-start first.");
   }
 
   if (api.recordingTimeout) {

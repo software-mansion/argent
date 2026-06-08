@@ -1,9 +1,4 @@
-import type {
-  Bottleneck,
-  CpuHotspot,
-  UiHang,
-  MemoryRssGrowth,
-} from "../../profiler-shared/types";
+import type { Bottleneck, CpuHotspot, UiHang, MemoryRssGrowth } from "../../profiler-shared/types";
 import {
   aggregateCpuHotspots,
   BURST_GAP_MS,
@@ -130,10 +125,9 @@ export async function runAndroidProfilerPipeline(
       `and rebuild, or run a debug variant of the app.`;
   }
 
-  const cpuHotspots = aggregateCpuHotspots(
-    cpuRowsToAggregatorRows(cpuRows, traceStartNs),
-    { platform: "android" }
-  );
+  const cpuHotspots = aggregateCpuHotspots(cpuRowsToAggregatorRows(cpuRows, traceStartNs), {
+    platform: "android",
+  });
 
   const uiHangsBase = hangRowsToBottlenecks(hangRows, traceStartNs);
 
@@ -377,9 +371,7 @@ async function renderFunctionCallersAndroid(
     lines.push("```");
     // In all-threads mode the same callstack can appear on several threads, so
     // tag each block with its owning thread (raw name — copy it back as a filter).
-    const tag = allThreads
-      ? ` [${row.thread_name}${row.is_main_thread ? " (main)" : ""}]`
-      : "";
+    const tag = allThreads ? ` [${row.thread_name}${row.is_main_thread ? " (main)" : ""}]` : "";
     lines.push(`(${row.occurrences}×)${tag}`);
     lines.push(row.callstack_text ?? "<no callstack>");
     lines.push("```");

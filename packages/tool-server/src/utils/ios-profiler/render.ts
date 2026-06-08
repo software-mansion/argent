@@ -178,13 +178,9 @@ function renderFullReport(
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
 
-  const cpuHotspots = payload.bottlenecks.filter(
-    (b): b is CpuHotspot => b.type === "cpu_hotspot"
-  );
+  const cpuHotspots = payload.bottlenecks.filter((b): b is CpuHotspot => b.type === "cpu_hotspot");
   const uiHangs = payload.bottlenecks.filter((b): b is UiHang => b.type === "ui_hang");
-  const memoryLeaks = payload.bottlenecks.filter(
-    (b): b is MemoryLeak => b.type === "memory_leak"
-  );
+  const memoryLeaks = payload.bottlenecks.filter((b): b is MemoryLeak => b.type === "memory_leak");
   const rssGrowths = payload.bottlenecks.filter(
     (b): b is MemoryRssGrowth => b.type === "memory_rss_growth"
   );

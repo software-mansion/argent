@@ -54,9 +54,7 @@ export interface StartPerfettoResult {
  * non-empty stdout line (warnings may precede it).
  * rationale: utils/android-profiler/ANDROID_PROFILER_REFERENCE.md "2. Capture"
  */
-export async function startPerfetto(
-  opts: StartPerfettoOptions
-): Promise<StartPerfettoResult> {
+export async function startPerfetto(opts: StartPerfettoOptions): Promise<StartPerfettoResult> {
   const adbPath = await resolveAndroidBinary("adb");
   if (!adbPath) {
     throw new Error(
@@ -148,7 +146,11 @@ export async function startPerfetto(
       // unstoppable.
       if (!final && !stdout.endsWith("\n")) return;
       // Take the LAST non-empty line — perfetto may print warnings before the PID.
-      const lastLine = trimmed.split("\n").map((l) => l.trim()).filter(Boolean).pop();
+      const lastLine = trimmed
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .pop();
       if (!lastLine) return;
       const parsed = parseInt(lastLine, 10);
       if (!Number.isFinite(parsed) || parsed <= 0) return;
@@ -224,11 +226,9 @@ export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfe
   // whatever's on disk.
   let aliveBeforeSignal = false;
   try {
-    const out = await adbShell(
-      opts.serial,
-      `[ -d /proc/${opts.pid} ] && echo alive || echo gone`,
-      { timeoutMs: STOP_PROBE_TIMEOUT_MS }
-    );
+    const out = await adbShell(opts.serial, `[ -d /proc/${opts.pid} ] && echo alive || echo gone`, {
+      timeoutMs: STOP_PROBE_TIMEOUT_MS,
+    });
     aliveBeforeSignal = out.trim() === "alive";
   } catch {
     // probe failed; assume alive so we still try SIGTERM

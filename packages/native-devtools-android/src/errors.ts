@@ -51,10 +51,7 @@ export class TraceProcessorUnavailableError extends Error {
   readonly path?: string;
   override readonly cause?: unknown;
 
-  constructor(
-    kind: TraceProcessorUnavailableKind,
-    details: TraceProcessorUnavailableDetails = {}
-  ) {
+  constructor(kind: TraceProcessorUnavailableKind, details: TraceProcessorUnavailableDetails = {}) {
     super(buildMessage(kind, details));
     this.name = "TraceProcessorUnavailableError";
     this.kind = kind;

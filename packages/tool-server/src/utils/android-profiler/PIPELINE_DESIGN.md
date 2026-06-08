@@ -107,13 +107,13 @@ Two constraints drive the exact SQL shape:
   Per-hang state and GC queries cannot be two separate top-level SELECTs
   — they must be materialised as VIEWs and unioned in one terminal
   SELECT. (Historical note: when the pipeline used `trace_processor_shell
-  -q` subprocesses, this constraint was the error "Result rows were
+-q` subprocesses, this constraint was the error "Result rows were
   returned for multiples queries. Ensure that only the final statement
   is a SELECT statement." The WASM engine has the same behaviour.)
 - **Perfetto SQL does not accept `VALUES (...) AS t(col1, col2)`** — the
   column-alias form. The script uses
   `SELECT column1 AS hang_index, column2 AS start_ns, column3 AS end_ns
-  FROM (VALUES ...)`, leaning on SQLite's implicit `columnN` naming.
+FROM (VALUES ...)`, leaning on SQLite's implicit `columnN` naming.
 
 End-to-end against a 76 MB trace with 1013 jank rows: **6.3 s** total
 (was: ~47 minutes projected when the pipeline forked one subprocess per
