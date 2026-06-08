@@ -21,6 +21,7 @@ vi.mock("../../src/utils/check-deps", () => ({
 
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
 import { nativeProfilerStopTool } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
+import type { IosStopResult } from "../../src/tools/profiler/native-profiler/platforms/ios";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
 
 const mockedExport = vi.mocked(exportIosTraceData);
@@ -120,9 +121,9 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 0, signal: null };
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
+    const result = (await nativeProfilerStopTool.execute({ session: api } as never, {
       device_id: "DEVICE-UDID",
-    });
+    })) as IosStopResult;
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
     expect(result.traceFile).toBe(FAKE_TRACE);
