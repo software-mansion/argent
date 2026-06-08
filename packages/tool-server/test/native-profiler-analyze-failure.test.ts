@@ -21,33 +21,32 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 // entry; resolved rows feed into the bottleneck transformers.
 vi.mock("../src/utils/android-profiler/pipeline/run-tp", () => ({
   runTpQuery: vi.fn(),
-  parseTpCsvOutput: vi.fn(),
 }));
 
-// The Android pipeline probes trace_processor_shell up front via
-// ensureTraceProcessorRunnable(). Keep every real export (notably the
+// The Android pipeline pre-warms the in-process WASM engine up front via
+// ensureTraceProcessorReady(). Keep every real export (notably the
 // TraceProcessorUnavailableError class the analyze path branches on with
-// `instanceof`) but stub the probe so it doesn't try to exec a real binary —
-// individual tests then drive it to resolve (binary present) or reject
-// (missing / wrong-arch) the banner branch.
+// `instanceof`) but stub the probe so it doesn't boot a real engine —
+// individual tests then drive it to resolve (engine ready) or reject
+// (wasm-load failure) the banner branch.
 vi.mock("@argent/native-devtools-android", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@argent/native-devtools-android")>();
   return {
     ...actual,
-    ensureTraceProcessorRunnable: vi.fn().mockResolvedValue("/fake/trace_processor_shell"),
+    ensureTraceProcessorReady: vi.fn().mockResolvedValue(undefined),
   };
 });
 
 import { runTpQuery } from "../src/utils/android-profiler/pipeline/run-tp";
 import {
-  ensureTraceProcessorRunnable,
+  ensureTraceProcessorReady,
   TraceProcessorUnavailableError,
 } from "@argent/native-devtools-android";
 import { nativeProfilerAnalyzeTool } from "../src/tools/profiler/native-profiler/native-profiler-analyze";
 import type { NativeProfilerSessionApi } from "../src/blueprints/native-profiler-session";
 
 const runTpQueryMock = runTpQuery as unknown as ReturnType<typeof vi.fn>;
-const ensureRunnableMock = ensureTraceProcessorRunnable as unknown as ReturnType<typeof vi.fn>;
+const ensureReadyMock = ensureTraceProcessorReady as unknown as ReturnType<typeof vi.fn>;
 
 interface RunTpQueryOpts {
   tracePath: string;
@@ -109,9 +108,9 @@ async function buildSessionWithTrace(): Promise<{
 describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () => {
   beforeEach(() => {
     runTpQueryMock.mockReset();
-    // Default: the binary is present and runnable. The banner test overrides this.
-    ensureRunnableMock.mockReset();
-    ensureRunnableMock.mockResolvedValue("/fake/trace_processor_shell");
+    // Default: the engine loads fine. The banner test overrides this.
+    ensureReadyMock.mockReset();
+    ensureReadyMock.mockResolvedValue(undefined);
   });
 
   it("status=ok with empty exportErrors when all queries succeed and find nothing", async () => {
@@ -248,15 +247,14 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
     }
   });
 
-  it("renders the download-dependencies banner when trace_processor_shell is unavailable", async () => {
+  it("renders the engine-load banner when the bundled WASM engine fails to load", async () => {
     const { session, cleanup } = await buildSessionWithTrace();
     try {
-      // Probe fails: the binary is missing / wrong-arch. This is a SEPARATE
-      // branch from per-query failures — it must surface as a prominent banner,
-      // NOT folded into exportErrors / "Export warnings".
-      ensureRunnableMock.mockRejectedValue(
-        new TraceProcessorUnavailableError("wrong_arch", {
-          platform: "linux-amd64",
+      // Probe fails: the bundled trace_processor.wasm couldn't load. This is a
+      // SEPARATE branch from per-query failures — it must surface as a prominent
+      // banner, NOT folded into exportErrors / "Export warnings".
+      ensureReadyMock.mockRejectedValue(
+        new TraceProcessorUnavailableError("wasm_load_failed", {
           version: "v55.3",
         })
       );
@@ -270,10 +268,9 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
       expect(result.bottlenecksTotal).toBe(0);
       // Empty exportErrors → the banner is the whole story, no per-query noise.
       expect(result.exportErrors).toEqual({});
-      // The actionable recovery command must appear front-and-centre…
-      expect(result.report).toContain("argent init --download-dependencies");
+      // The actionable recovery guidance must appear front-and-centre…
       expect(result.report).toContain("Cannot Run");
-      expect(result.report).toContain("ARGENT_TRACE_PROCESSOR_PATH");
+      expect(result.report).toContain("ARGENT_TRACE_PROCESSOR_WASM");
       // …and the per-query "Export warnings" block must NOT.
       expect(result.report).not.toContain("Export warnings");
       // The queries are never even attempted once the probe rejects.

@@ -3,9 +3,13 @@ set -euo pipefail
 
 # Downloads signed native binaries from argent-private-releases:
 #   - iOS dylibs + ax-service
-#   - Android trace_processor_shell (host-side Perfetto trace processor)
 #   - Android argent-android-devtools.apk (helper APK consumed by
 #     packages/native-devtools-android)
+#
+# The host-side Perfetto trace processor is no longer a native binary: it ships
+# as a single ~13 MB `trace_processor.wasm` vendored into the repo
+# (packages/native-devtools-android/assets/trace-processor/), so there is nothing
+# to download for it here.
 #
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
@@ -29,24 +33,7 @@ BIN_DIR="packages/native-devtools-ios/bin"
 ANDROID_BIN_DIR="packages/native-devtools-android/bin"
 ANDROID_MANIFEST_FILE="packages/native-devtools-android/assets/manifest.json"
 
-# Map `uname -s -m` to the platform suffix used by argent-private's
-# build-native-binaries.yml workflow. Keep this case-switch in sync with the
-# `for PLATFORM in …` loop in that workflow.
-UNAME_S="$(uname -s)"
-UNAME_M="$(uname -m)"
-case "${UNAME_S}-${UNAME_M}" in
-  Darwin-arm64)              HOST_PLATFORM="mac-arm64" ;;
-  Darwin-x86_64)             HOST_PLATFORM="mac-amd64" ;;
-  Linux-x86_64)              HOST_PLATFORM="linux-amd64" ;;
-  Linux-aarch64|Linux-arm64) HOST_PLATFORM="linux-arm64" ;;
-  *)
-    echo "Error: unsupported host platform '${UNAME_S} ${UNAME_M}'." >&2
-    echo "argent ships trace_processor_shell for: mac-arm64, mac-amd64, linux-amd64, linux-arm64." >&2
-    exit 1
-    ;;
-esac
-
-echo "Downloading native binaries from ${REPO} (tag: ${TAG}, host: ${HOST_PLATFORM})..."
+echo "Downloading native binaries from ${REPO} (tag: ${TAG})..."
 
 mkdir -p "${DYLIBS_DIR}" "${BIN_DIR}" "${ANDROID_BIN_DIR}"
 
@@ -66,26 +53,6 @@ gh release download "${TAG}" \
   --dir "${BIN_DIR}" \
   --clobber
 chmod +x "${BIN_DIR}/ax-service"
-
-# Pull the trace_processor_shell variant and rename it to the canonical
-# bundler-expected filename. The release publishes one binary per supported host
-# (see argent-private/.github/workflows/build-native-binaries.yml).
-#
-# By default we fetch the *host* binary (dev convenience: pack on a Mac, run on a
-# Mac). At publish/pack time TP_TARGET_PLATFORM is forced to mac-arm64 (the
-# always-bundled majority platform) regardless of the packer's host — non-mac-arm64
-# users fetch their own binary on demand via `argent init --download-dependencies`.
-# Keep this in lockstep with ARGENT_BUNDLED_TP_PLATFORM (bundle-tools.cjs).
-TP_PLATFORM="${TP_TARGET_PLATFORM:-$HOST_PLATFORM}"
-TP_ASSET="trace_processor_shell-${TP_PLATFORM}"
-echo "  Downloading ${TP_ASSET}..."
-gh release download "${TAG}" \
-  --repo "${REPO}" \
-  --pattern "${TP_ASSET}" \
-  --dir "${ANDROID_BIN_DIR}" \
-  --clobber
-mv "${ANDROID_BIN_DIR}/${TP_ASSET}" "${ANDROID_BIN_DIR}/trace_processor_shell"
-chmod +x "${ANDROID_BIN_DIR}/trace_processor_shell"
 
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the

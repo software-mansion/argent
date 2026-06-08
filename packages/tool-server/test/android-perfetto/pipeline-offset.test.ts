@@ -13,9 +13,8 @@ let inlineResponse: unknown[] = [];
 vi.mock("@argent/native-devtools-android", () => {
   const path = require("node:path");
   return {
-    traceProcessorShellPath: () => "/fake/tp",
-    // The pipeline probes the binary up front; pretend it's present + runnable.
-    ensureTraceProcessorRunnable: vi.fn(async () => "/fake/tp"),
+    // The pipeline pre-warms the in-process WASM engine up front; pretend it's ready.
+    ensureTraceProcessorReady: vi.fn(async () => {}),
     // Real queries dir — runBatchedHangFolds loads hang-folds-batched.sql from
     // here and substitutes the windows/target before calling runTpInline.
     traceProcessorQueriesDir: () =>

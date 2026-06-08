@@ -9,7 +9,7 @@ import {
   BURST_GAP_MS,
   type AggregatorInputRow,
 } from "../../profiler-shared/aggregate";
-import { ensureTraceProcessorRunnable } from "@argent/native-devtools-android";
+import { ensureTraceProcessorReady } from "@argent/native-devtools-android";
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
 import { runBatchedHangFolds, type HangWindowInput } from "./hang-folds-batched";
@@ -77,13 +77,13 @@ export async function runAndroidProfilerPipeline(
   tracePath: string,
   appPackage: string
 ): Promise<AndroidPipelineResult> {
-  // Probe presence + architecture of trace_processor_shell up front. A
-  // TraceProcessorUnavailableError propagates to the analyze handler (which
-  // renders the actionable download banner) — deliberately NOT folded into
-  // exportErrors, where a missing binary would read as three identical per-query
-  // "Export warnings" instead of one clear "run `argent init
-  // --download-dependencies`" message.
-  await ensureTraceProcessorRunnable();
+  // Boot the in-process WASM engine and load the trace up front. A
+  // TraceProcessorUnavailableError (the rare wasm-load failure) propagates to the
+  // analyze handler (which renders the actionable banner) — deliberately NOT
+  // folded into exportErrors, where it would read as three identical per-query
+  // "Export warnings". This also pre-warms the engine so the queries below reuse
+  // it (load the trace once).
+  await ensureTraceProcessorReady(tracePath);
 
   const target = sanitizeProcessName(appPackage);
   const exportErrors: Record<string, string> = {};

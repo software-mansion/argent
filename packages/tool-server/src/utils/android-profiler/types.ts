@@ -1,7 +1,8 @@
 /**
  * Android-specific raw row shapes emitted by the `queries/*.sql` files and
- * parsed out of trace_processor_shell's CSV output. The Android pipeline maps
- * them into the platform-agnostic Bottleneck shape in profiler-shared/types.ts.
+ * decoded from the in-process Perfetto engine's QueryResult (integers come back
+ * as JS numbers when safe, else bigint). The Android pipeline maps them into the
+ * platform-agnostic Bottleneck shape in profiler-shared/types.ts.
  */
 
 export interface AndroidCpuHotspotRow {

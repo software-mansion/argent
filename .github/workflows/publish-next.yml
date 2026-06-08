@@ -46,33 +46,35 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download signed native binaries (dylibs, ax-service, trace_processor_shell, Android helper APK)
-        # Force mac-arm64 (the always-bundled majority) even on ubuntu-latest;
-        # other platforms download on demand via `argent init --download-dependencies`.
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
         run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TP_TARGET_PLATFORM: mac-arm64
+
+      - name: Download Perfetto trace-processor WASM artifacts
+        run: bash scripts/download-trace-processor.sh "${{ steps.binaries_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: npm ci
 
       - run: npx tsc --build
 
       - run: npm run build -w @swmansion/argent
-        env:
-          ARGENT_BUNDLED_TP_PLATFORM: mac-arm64
 
       - run: test -x packages/argent/bin/simulator-server
       - run: test -x packages/argent/bin/ax-service
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
-      - run: test -x packages/argent/bin/trace_processor_shell
-      # Guard against a Linux-ELF regression: we must ship the mac-arm64 binary.
-      - run: file packages/argent/bin/trace_processor_shell | grep -q 'Mach-O.*arm64'
-      - run: test -f packages/argent/argent.tracecfg.pbtxt
-      - run: test -d packages/argent/queries
-      - run: test -f packages/argent/manifest.json
+      - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
+      - run: test -d packages/argent/assets/queries
+      - run: test -f packages/argent/assets/manifest.json
+      - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
+      - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
+      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test -f packages/argent/assets/trace-processor/LICENSE
+      - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/dist/argent-android-devtools-*.apk
       - run: npm pack --dry-run -w @swmansion/argent
 
