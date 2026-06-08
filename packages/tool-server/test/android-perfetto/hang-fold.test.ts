@@ -14,7 +14,7 @@ function buildHang(): UiHang {
     suspectedFunctions: [],
     appCallChains: [],
     severity: "RED",
-    jankReason: "AppDeadlineMissed",
+    jankReason: "App Deadline Missed",
   };
 }
 
@@ -67,7 +67,7 @@ describe("foldHangAnnotations", () => {
       []
     );
     expect(result.hangType).toBe("jank");
-    expect(result.jankReason).toBe("AppDeadlineMissed");
+    expect(result.jankReason).toBe("App Deadline Missed");
     expect(result.startNs).toBe(1_000_000_000);
     expect(hang.stateBreakdown).toBeUndefined(); // original not mutated
   });

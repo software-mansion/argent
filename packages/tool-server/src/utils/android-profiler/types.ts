@@ -58,6 +58,12 @@ export interface AndroidThreadRow {
 }
 
 export interface AndroidFunctionCallersRow {
+  thread_name: string;
+  is_main_thread: 0 | 1 | null;
+  /** The real (mangled) leaf frame name that matched — may differ from the query. */
+  matched_function: string;
+  /** 1 when matched_function equals the query verbatim, 0 for a substring match. */
+  is_exact: 0 | 1;
   callstack_text: string;
   occurrences: number;
 }
