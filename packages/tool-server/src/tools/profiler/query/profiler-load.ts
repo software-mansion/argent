@@ -16,6 +16,20 @@ import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/ind
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { readAndroidNativeProfilerMetadata } from "../../../utils/android-profiler/session-metadata";
 
+// session_id is interpolated into on-disk file paths
+// (`react-profiler-${id}_cpu.json`, `native-profiler-${id}_raw_cpu.xml`, …).
+// Restrict it to a safe token so it can't traverse out of the debug dir.
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+function assertSafeSessionId(sessionId: string): void {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    throw new Error(
+      `Invalid session_id "${sessionId}". Allowed: letters, digits, '_' and '-' ` +
+        `(no path separators, no "..").`
+    );
+  }
+}
+
 const zodSchema = z.object({
   mode: z
     .enum(["list", "load_react", "load_native"])
@@ -26,6 +40,7 @@ const zodSchema = z.object({
     ),
   session_id: z
     .string()
+    .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
     .optional()
     .describe(
       "Timestamp-based session identifier (e.g. '20250313-143022') from the list output. " +
@@ -167,6 +182,7 @@ async function loadReactSession(
   port: number,
   deviceId: string
 ): Promise<string> {
+  assertSafeSessionId(sessionId);
   const cpuPath = path.join(debugDir, `react-profiler-${sessionId}_cpu.json`);
   const commitsPath = path.join(debugDir, `react-profiler-${sessionId}_commits.json`);
   const cpuIndexPath = path.join(debugDir, `react-profiler-${sessionId}_cpu-index.json`);
@@ -278,6 +294,7 @@ async function loadNativeSession(
   api: NativeProfilerSessionApi,
   appProcessOverride?: string
 ): Promise<string> {
+  assertSafeSessionId(sessionId);
   // Android .pftrace first — the platform field on the resolved session API
   // tells us which shape to load. If the platform is android but the .pftrace
   // is missing we fall through to the iOS XML path so the user gets the

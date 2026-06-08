@@ -1,4 +1,5 @@
-import { ensureToolsServer, type ToolsServerPaths } from "./launcher.js";
+import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
+import { getResolvedToolsUrl } from "./link-config.js";
 
 export interface ToolMeta {
   name: string;
@@ -24,8 +25,8 @@ export interface ToolsClient {
   fetchTools(): Promise<ToolMeta[]>;
   fetchTool(name: string): Promise<ToolMeta | null>;
   callTool(name: string, args: unknown): Promise<ToolInvocationResult>;
-  /** Returns the tool-server base URL, spawning it if not yet running. */
-  baseUrl(): Promise<string>;
+  /** Returns the tool-server base URL + auth token, spawning if needed. */
+  baseUrl(): Promise<ToolsServerHandle>;
 }
 
 export interface CreateToolsClientOptions {
@@ -33,11 +34,24 @@ export interface CreateToolsClientOptions {
   paths?: ToolsServerPaths;
 }
 
-export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
-  let cached: string | null = null;
+function authHeaders(token: string | undefined): Record<string, string> {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
-  async function baseUrl(): Promise<string> {
-    if (process.env.ARGENT_TOOLS_URL) return process.env.ARGENT_TOOLS_URL;
+export function createToolsClient(options: CreateToolsClientOptions = {}): ToolsClient {
+  let cached: ToolsServerHandle | null = null;
+
+  async function baseUrl(): Promise<ToolsServerHandle> {
+    // Resolution precedence (ARGENT_TOOLS_URL env > ~/.argent/link.json > none)
+    // lives in getResolvedToolsUrl. When a remote target is configured, the
+    // matching auth token comes from ARGENT_AUTH_TOKEN — empty/unset means the
+    // caller owns an unauthenticated server (legacy / dev). With no override
+    // (the default when the user never ran `argent link`), fall through to a
+    // locally auto-spawned, token-authenticated tool-server.
+    const resolved = await getResolvedToolsUrl();
+    if (resolved.url) {
+      return { url: resolved.url, token: resolved.token ?? "" };
+    }
     if (cached) return cached;
     if (!options.paths) {
       throw new Error(
@@ -49,8 +63,8 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   }
 
   async function fetchTools(): Promise<ToolMeta[]> {
-    const url = await baseUrl();
-    const res = await fetch(`${url}/tools`);
+    const { url, token } = await baseUrl();
+    const res = await fetch(`${url}/tools`, { headers: authHeaders(token) });
     if (!res.ok) throw new Error(`GET /tools failed: ${res.status} ${res.statusText}`);
     const json = (await res.json()) as { tools: ToolMeta[] };
     return json.tools;
@@ -62,10 +76,10 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   }
 
   async function callTool(name: string, args: unknown): Promise<ToolInvocationResult> {
-    const url = await baseUrl();
+    const { url, token } = await baseUrl();
     const res = await fetch(`${url}/tools/${encodeURIComponent(name)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders(token) },
       body: JSON.stringify(args ?? {}),
     });
     const json = (await res.json().catch(() => ({}))) as {

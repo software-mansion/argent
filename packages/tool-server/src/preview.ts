@@ -80,6 +80,23 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/simulator-server/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
     try {
+      // This endpoint is reachable without the auth token (the preview UI is
+      // browser-loaded and tokenless). Bind the spawn to an actually-present
+      // device so an unauthenticated caller can't (a) spawn an unbounded
+      // number of simulator-server processes with arbitrary distinct ids
+      // (DoS), nor (b) inject argv into the binary via a crafted id. The UI
+      // only ever requests ids returned by /preview/simulators — no
+      // regression.
+      const data = await registry.invokeTool<{
+        devices: Array<{ platform: "ios"; udid: string } | { platform: "android"; serial: string }>;
+      }>(listDevicesTool.id);
+      const known = data.devices.some((d) => (d.platform === "ios" ? d.udid : d.serial) === udid);
+      if (!known) {
+        res
+          .status(400)
+          .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
+        return;
+      }
       const { urn, options } = simulatorServerRef(resolveDevice(udid));
       const api = await registry.resolveService<SimulatorServerApi>(urn, options);
       res.json({

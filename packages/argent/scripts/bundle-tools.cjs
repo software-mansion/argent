@@ -58,11 +58,17 @@ const ESM_REQUIRE_BANNER = {
 };
 
 // ── Asset source/destination paths ─────────────────────────────────────────
+// Source layout mirrors what `scripts/download-simulator-server.sh` writes:
+// platform-keyed subdirectories of bin/, each containing one simulator-server
+// binary. ax-service is macOS-only (it spawns inside an iOS Simulator), so it
+// only lives under darwin/.
+const BIN_SRC_ROOT = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin");
+const AX_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/ax-service");
+const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
-const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/simulator-server");
-const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
-const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
-const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
+const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
+const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux"];
 // Generated module pinning the Perfetto version that stamps the bundled
 // trace_processor.wasm. esbuild inlines it into every bundle via the
 // @argent/native-devtools-android alias.
@@ -139,18 +145,7 @@ const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt")
  */
 /** @type {Asset[]} */
 const ASSETS = [
-  // iOS simulator-server binary (downloaded via scripts/download-simulator-server.sh).
-  {
-    kind: "file",
-    src: BIN_SRC,
-    dest: BIN_DEST,
-    mode: 0o755,
-    required: true,
-    copiedLabel: "simulator-server binary",
-    missLabel: "simulator-server binary",
-    hint: "Run: bash scripts/download-simulator-server.sh",
-  },
-  // iOS ax-service binary.
+  // iOS ax-service binary (macOS-only — runs inside an iOS Simulator).
   {
     kind: "file",
     src: AX_BIN_SRC,
@@ -159,6 +154,16 @@ const ASSETS = [
     required: false,
     copiedLabel: "ax-service binary",
     missLabel: "ax-service binary",
+  },
+  // iOS ax-service TCP variant. Best-effort: only present when the TCP transport was built.
+  {
+    kind: "file",
+    src: AX_TCP_BIN_SRC,
+    dest: AX_TCP_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "ax-service (tcp) binary",
+    missLabel: "ax-service (tcp) binary",
   },
   // Android host-side Perfetto trace processor: the third-party WASM engine
   // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).
@@ -410,6 +415,29 @@ for (const dir of PURGE_DIRS) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// Copy the hand-written `argent-simulator-server` dispatcher into bin/.
+// It's the file npm's `bin` field publishes; its job is to pick the right
+// per-platform binary at invocation time. Source lives in scripts/ so it
+// isn't entangled with the gitignored bundle output under bin/.
+const DISPATCHER_SRC = path.resolve(__dirname, "argent-simulator-server.cjs");
+const DISPATCHER_DEST = path.resolve(BIN_DIR, "argent-simulator-server.cjs");
+fs.copyFileSync(DISPATCHER_SRC, DISPATCHER_DEST);
+fs.chmodSync(DISPATCHER_DEST, 0o755);
+
+// The Android helper artifacts live alongside the bundles (manifest at the
+// package root, APK inside the shared dist/ folder) so they aren't covered
+// by the per-directory purge above. Removing them explicitly keeps a
+// missing-APK rebuild from leaving a stale manifest behind that would later
+// fool helperManifest() into pointing at an APK that's no longer present.
+fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
+if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
+  for (const entry of fs.readdirSync(ANDROID_APK_DEST_DIR)) {
+    if (/^argent-android-devtools-.*\.apk$/.test(entry)) {
+      fs.rmSync(path.join(ANDROID_APK_DEST_DIR, entry), { force: true });
+    }
+  }
+}
+
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
@@ -433,6 +461,29 @@ for (const b of ESM_BUNDLES) {
 // Copy all declared assets.
 for (const a of ASSETS) {
   copyAsset(a);
+}
+
+// Copy simulator-server for every supported host platform that's present in
+// the staging area. Require the darwin binary only when bundling ON darwin
+// (the publish pipeline) — a Linux contributor running `npm run pack` locally
+// can't produce the macOS binary, so don't block them on its absence.
+for (const platform of SUPPORTED_HOST_PLATFORMS) {
+  const src = path.join(BIN_SRC_ROOT, platform, "simulator-server");
+  const destDir = path.join(BIN_DIR, platform);
+  const dest = path.join(destDir, "simulator-server");
+  if (fs.existsSync(src)) {
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.copyFileSync(src, dest);
+    fs.chmodSync(dest, 0o755);
+    console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
+  } else if (platform === "darwin" && process.platform === "darwin") {
+    throw new Error(
+      `simulator-server binary not found at ${src}.\n` +
+        `Run: bash scripts/download-simulator-server.sh`
+    );
+  } else {
+    console.warn(`⚠ simulator-server (${platform}) not found at ${src} — skipping`);
+  }
 }
 
 // Copy the Android helper APK into bin/ (the only Android native artifact left —

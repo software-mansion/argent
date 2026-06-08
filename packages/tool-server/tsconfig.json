@@ -8,6 +8,7 @@
   },
   "references": [
     { "path": "../registry" },
+    { "path": "../update-core" },
     { "path": "../native-devtools-ios" },
     { "path": "../native-devtools-android" }
   ],

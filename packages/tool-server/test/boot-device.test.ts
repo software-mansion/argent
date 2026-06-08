@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Registry } from "@argent/registry";
 
 type ExecFileCallback = (error: Error | null, stdout?: string, stderr?: string) => void;
@@ -44,7 +44,16 @@ import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
 describe("boot-device — iOS path", () => {
+  // The iOS path is only reachable on darwin (boot-device now refuses iOS
+  // udids on non-darwin hosts so a Linux user gets a clear "iOS requires
+  // macOS" message instead of a misleading xcode-select hint). These tests
+  // exercise the post-gate code path, so override process.platform for the
+  // duration of the suite — restored after each test to avoid leaking the
+  // override into other test files run in the same vitest worker.
+  const originalPlatform = process.platform;
+
   beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     vi.clearAllMocks();
     // Pre-warm the dep cache so `ensureDep('xcrun')` doesn't probe PATH and
     // add an extra first `command -v xcrun` call to mockExecFile.
@@ -64,6 +73,10 @@ describe("boot-device — iOS path", () => {
     setAccessibilityPrefsPreBootMock.mockReset().mockResolvedValue(undefined);
     ensureAutomationEnabledMock.mockReset().mockResolvedValue(undefined);
     isEntitlementBypassActiveMock.mockReset().mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
   });
 
   it("pre-boots AX prefs on a Shutdown sim then waits for boot completion and native-devtools init", async () => {
@@ -113,7 +126,10 @@ describe("boot-device — iOS path", () => {
     ]);
     expect(resolveService).toHaveBeenCalledWith(
       "NativeDevtools:11111111-1111-1111-1111-111111111111",
-      { device: { id: "11111111-1111-1111-1111-111111111111", platform: "ios", kind: "simulator" } }
+      {
+        device: { id: "11111111-1111-1111-1111-111111111111", platform: "ios", kind: "simulator" },
+        transport: "unix",
+      }
     );
     // NativeDevtools must be primed AFTER bootstatus returns (launchd env is
     // only reachable once the simulator is fully up) and BEFORE `open`, so
@@ -232,7 +248,10 @@ describe("boot-device — iOS path", () => {
     ]);
     expect(resolveService).toHaveBeenCalledWith(
       "NativeDevtools:22222222-2222-2222-2222-222222222222",
-      { device: { id: "22222222-2222-2222-2222-222222222222", platform: "ios", kind: "simulator" } }
+      {
+        device: { id: "22222222-2222-2222-2222-222222222222", platform: "ios", kind: "simulator" },
+        transport: "unix",
+      }
     );
   });
 
@@ -309,5 +328,36 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
     expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 29_999 }).success).toBe(false);
     expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 900_001 }).success).toBe(false);
     expect(tool.zodSchema!.safeParse({ avdName: "x", bootTimeoutMs: 60_000 }).success).toBe(true);
+  });
+});
+
+// Non-darwin hosts that receive an iOS udid must get a clear "iOS requires
+// macOS" error — NOT the legacy "install xcode-select" hint, which would send
+// a Linux user chasing a tool that has no Linux build. This regression test
+// pins that branch so a future refactor of bootIos doesn't quietly drop the
+// platform check.
+describe("boot-device — iOS udid on non-darwin", () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    vi.clearAllMocks();
+    __resetDepCacheForTests();
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
+
+  it("rejects with a platform-specific message that names the correct fix", async () => {
+    const tool = createBootDeviceTool({ resolveService: async () => ({}) } as unknown as Registry);
+    await expect(
+      tool.execute!({}, { udid: "deadbeef-dead-beef-dead-beefdeadbeef" })
+    ).rejects.toThrow(/iOS Simulator is unavailable on linux.*requires a macOS host/);
+    // The misleading legacy hint must NOT appear: a Linux user shouldn't be
+    // told to install xcode-select, which has no Linux build.
+    await expect(
+      tool.execute!({}, { udid: "deadbeef-dead-beef-dead-beefdeadbeef" })
+    ).rejects.not.toThrow(/xcode-select/);
   });
 });

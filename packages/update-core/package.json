@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "name": "@argent/update-core",
+  "version": "0.10.0",
+  "description": "Shared npm release-age detection and installable-target resolution for argent updates",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "semver": "^7.7.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.0",
+    "@types/semver": "^7.7.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
