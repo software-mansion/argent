@@ -203,8 +203,10 @@ Examples:
     // Resolve any artifact handles to local files (using the file already on
     // disk when the tool-server is co-located, downloading otherwise). After
     // this the result holds real local paths, so rendering is location-agnostic.
+    const { url, token } = await baseUrl();
     const materialized = await materializeArtifacts(resp.data, {
-      toolsUrl: await baseUrl(),
+      toolsUrl: url,
+      authToken: token,
       deviceId: getDeviceIdFromArgs(payload),
     });
     result = materialized.result;

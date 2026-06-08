@@ -116,6 +116,13 @@ export interface MaterializedImage {
 export interface MaterializeContext {
   toolsUrl: string;
   deviceId?: string;
+  /**
+   * Bearer token for the tool-server. Required when the server is remote and
+   * authenticated (`argent link`); the `/artifacts/:id` route sits behind the
+   * same auth gate as `/tools`, so a token-less download would 401 and the
+   * artifact would read as missing. Empty/unset ⇒ unauthenticated server.
+   */
+  authToken?: string;
   /** Injectable for tests; defaults to global fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -202,6 +209,9 @@ export async function materializeArtifacts(
 ): Promise<MaterializeResult> {
   const images: MaterializedImage[] = [];
   const fetchFn = ctx.fetchImpl ?? fetch;
+  const authHeaders: Record<string, string> = ctx.authToken
+    ? { Authorization: `Bearer ${ctx.authToken}` }
+    : {};
   const dir = artifactDir(ctx.deviceId);
   let dirReady = false;
 
@@ -223,7 +233,9 @@ export async function materializeArtifacts(
         return localPath;
       }
       try {
-        const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`);
+        const res = await fetchFn(`${ctx.toolsUrl}/artifacts/${value.id}`, {
+          headers: authHeaders,
+        });
         if (!res.ok) return null;
         const data = Buffer.from(await res.arrayBuffer());
         await ensureDir();

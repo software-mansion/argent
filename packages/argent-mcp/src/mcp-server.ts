@@ -228,6 +228,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
       const ctx: ContentContext = {
         toolsUrl: TOOLS_URL,
+        authToken: AUTH_TOKEN,
         deviceId: getDeviceIdFromArgs(params.arguments),
       };
 
@@ -255,6 +256,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
           const screenshotResult = await callTool("screenshot", { udid });
           const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
             toolsUrl: TOOLS_URL,
+            authToken: AUTH_TOKEN,
             deviceId: udid,
           });
           const hasImage = screenshotContent.some((b) => b.type === "image");

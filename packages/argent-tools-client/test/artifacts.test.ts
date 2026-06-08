@@ -77,6 +77,37 @@ describe("materializeArtifacts", () => {
     expect(images[0]!.localPath).toBe(localPath);
   });
 
+  it("sends the auth token as a Bearer header when downloading (remote authenticated server)", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    const recordingFetch = (async (_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return { ok: true, arrayBuffer: async () => new Uint8Array(PNG).buffer };
+    }) as unknown as typeof fetch;
+
+    await materializeArtifacts(
+      { image: handle("img1", "shot.png", "image/png") },
+      { toolsUrl: "http://remote:3001", authToken: "secret-token", fetchImpl: recordingFetch }
+    );
+
+    expect(seen).toHaveLength(1);
+    expect((seen[0]!.headers as Record<string, string>).Authorization).toBe("Bearer secret-token");
+  });
+
+  it("omits the Authorization header when no auth token is present", async () => {
+    const seen: Array<RequestInit | undefined> = [];
+    const recordingFetch = (async (_url: string, init?: RequestInit) => {
+      seen.push(init);
+      return { ok: true, arrayBuffer: async () => new Uint8Array(PNG).buffer };
+    }) as unknown as typeof fetch;
+
+    await materializeArtifacts(
+      { image: handle("img1", "shot.png", "image/png") },
+      { toolsUrl: "http://remote:3001", fetchImpl: recordingFetch }
+    );
+
+    expect((seen[0]!.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
   it("walks nested handles (e.g. exportedFiles) and leaves non-handles untouched", async () => {
     const result = {
       exportedFiles: {
