@@ -13,7 +13,6 @@ const STOP_TOTAL_TIMEOUT_MS = 30_000;
 // several `adb shell` round-trips back-to-back, so the default makes a single
 // stop block well over a minute before failing. A tight timeout (matching the
 // device-enrichment probes in adb.ts) lets a dead device fail fast instead.
-// See research/stability_analysis.md #3.
 const STOP_PROBE_TIMEOUT_MS = 5_000;
 
 /**
@@ -130,7 +129,7 @@ export async function startPerfetto(
     // the child emit 'error', and writing to a broken stdin emits 'error' on
     // the stream. An 'error' event with no listener THROWS as an uncaught
     // exception that can take down the whole server — so reject the start
-    // promise instead. See research/stability_analysis.md #1.
+    // promise instead.
     child.on("error", (err) =>
       fail(new Error(`Failed to launch adb for perfetto: ${err.message}`))
     );
@@ -146,7 +145,7 @@ export async function startPerfetto(
       // While streaming, only parse once the buffer ends in a newline — i.e.
       // the last line is complete. A chunk split mid-number (`…\n123`) would
       // otherwise resolve a truncated PID, leaving the real daemon orphaned and
-      // unstoppable. See research/stability_analysis.md #4.
+      // unstoppable.
       if (!final && !stdout.endsWith("\n")) return;
       // Take the LAST non-empty line — perfetto may print warnings before the PID.
       const lastLine = trimmed.split("\n").map((l) => l.trim()).filter(Boolean).pop();

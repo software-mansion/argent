@@ -123,8 +123,7 @@ export async function stopNativeProfilerAndroid(
     // `adb pull` failed (device unplugged mid-stop, on-device file gone, host
     // disk full). Otherwise a transient stop error leaves profilingActive=true,
     // which rejects the next start with "a session is already running" and
-    // wedges the user until they happen to re-stop. See
-    // research/stability_analysis.md #2.
+    // wedges the user until they happen to re-stop.
     api.profilingActive = false;
     api.capturePid = null;
     api.captureProcess = null;
