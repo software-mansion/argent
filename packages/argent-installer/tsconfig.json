@@ -11,6 +11,5 @@
     "declaration": true,
     "sourceMap": true
   },
-  "references": [{ "path": "../native-devtools-android" }],
   "include": ["src/**/*"]
 }
