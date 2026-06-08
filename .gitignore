@@ -31,6 +31,15 @@ packages/native-devtools-ios/bin/simulator-server
 packages/native-devtools-ios/bin/ax-service
 packages/native-devtools-ios/dylibs/
 
+# Third-party Perfetto trace-processor WASM artifacts (fetched + verified via
+# scripts/download-trace-processor.sh). Ignore the generated files, not the dir,
+# so a future tracked README/.gitkeep isn't masked.
+packages/native-devtools-android/assets/trace-processor/trace_processor.wasm
+packages/native-devtools-android/assets/trace-processor/engine_bundle.node.js
+packages/native-devtools-android/assets/trace-processor/engine.mjs
+packages/native-devtools-android/assets/trace-processor/LICENSE
+packages/native-devtools-android/assets/trace-processor/SHA256SUMS
+
 # Argent package generated assets (copied/bundled at build time)
 packages/argent/bin/
 packages/argent/dylibs/

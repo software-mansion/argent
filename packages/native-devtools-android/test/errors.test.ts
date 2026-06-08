@@ -1,54 +1,39 @@
 import { describe, it, expect } from "vitest";
-import { TraceProcessorUnavailableError, isExecFormatError } from "../src/errors";
+import { TraceProcessorUnavailableError } from "../src/errors.js";
 
 describe("TraceProcessorUnavailableError", () => {
-  it("missing/wrong_arch messages point at the download command", () => {
-    for (const kind of ["missing", "wrong_arch"] as const) {
-      const err = new TraceProcessorUnavailableError(kind, {
-        platform: "linux-amd64",
-        version: "v55.3",
-      });
-      expect(err.kind).toBe(kind);
-      expect(err.message).toContain("argent init --download-dependencies");
-      expect(err.message).toContain("linux-amd64");
-    }
+  it("wasm_load_failed describes the engine-load failure and embeds the cause", () => {
+    const cause = new Error("LinkError: instantiate failed");
+    const err = new TraceProcessorUnavailableError("wasm_load_failed", {
+      version: "v55.3",
+      cause,
+    });
+    expect(err.kind).toBe("wasm_load_failed");
+    expect(err.version).toBe("v55.3");
+    expect(err.cause).toBe(cause);
+    expect(err.message).toContain("Perfetto v55.3");
+    expect(err.message).toContain("WASM engine");
+    // Surfaces the underlying cause message so the failure isn't opaque.
+    expect(err.message).toContain("instantiate failed");
+    // Points at the escape hatch instead of a download command.
+    expect(err.message).toContain("ARGENT_TRACE_PROCESSOR_WASM");
   });
 
-  it("env_path_invalid embeds the offending path and stays instanceof", () => {
-    const err = new TraceProcessorUnavailableError("env_path_invalid", { path: "/bad/path" });
-    expect(err.kind).toBe("env_path_invalid");
-    expect(err.path).toBe("/bad/path");
-    expect(err.message).toContain("/bad/path");
+  it("wasm_path_invalid embeds the offending override path and stays instanceof", () => {
+    const err = new TraceProcessorUnavailableError("wasm_path_invalid", {
+      path: "/bad/path/trace_processor.wasm",
+    });
+    expect(err.kind).toBe("wasm_path_invalid");
+    expect(err.path).toBe("/bad/path/trace_processor.wasm");
+    expect(err.message).toContain("/bad/path/trace_processor.wasm");
+    expect(err.message).toContain("ARGENT_TRACE_PROCESSOR_WASM");
     expect(err).toBeInstanceOf(TraceProcessorUnavailableError);
     expect(err).toBeInstanceOf(Error);
   });
 
-  it("unsupported_platform lists the supported platforms", () => {
-    const err = new TraceProcessorUnavailableError("unsupported_platform", { platform: "win32-x64" });
-    expect(err.message).toContain("mac-arm64");
-    expect(err.message).toContain("linux-arm64");
-  });
-
-  it("carries the underlying cause", () => {
-    const cause = new Error("boom");
-    const err = new TraceProcessorUnavailableError("wrong_arch", { cause });
-    expect(err.cause).toBe(cause);
-  });
-});
-
-describe("isExecFormatError", () => {
-  it("detects ENOEXEC by code", () => {
-    expect(isExecFormatError(Object.assign(new Error("nope"), { code: "ENOEXEC" }))).toBe(true);
-  });
-
-  it("detects 'exec format error' by message", () => {
-    expect(isExecFormatError(new Error("spawn ... exec format error"))).toBe(true);
-  });
-
-  it("returns false for unrelated errors and non-errors", () => {
-    expect(isExecFormatError(new Error("ETIMEDOUT"))).toBe(false);
-    expect(isExecFormatError(Object.assign(new Error("x"), { code: "ENOENT" }))).toBe(false);
-    expect(isExecFormatError(null)).toBe(false);
-    expect(isExecFormatError("exec format error")).toBe(false);
+  it("wasm_load_failed reads cleanly with no version and no cause", () => {
+    const err = new TraceProcessorUnavailableError("wasm_load_failed");
+    expect(err.message).toContain("WASM engine");
+    expect(err.message).not.toContain("Perfetto undefined");
   });
 });

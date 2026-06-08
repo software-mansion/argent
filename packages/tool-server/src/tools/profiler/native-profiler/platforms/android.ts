@@ -166,9 +166,9 @@ export async function analyzeNativeProfilerAndroid(
   try {
     pipelineResult = await runAndroidProfilerPipeline(hostTracePath, appPackage);
   } catch (err) {
-    // Missing / wrong-arch trace_processor_shell: return a prominent banner
+    // Bundled WASM engine failed to load: return a prominent banner
     // (analysis_failed, empty exportErrors so it never renders as a "> Export
-    // warnings" list) pointing at `argent init --download-dependencies`.
+    // warnings" list) pointing at the reinstall / ARGENT_TRACE_PROCESSOR_WASM fix.
     if (err instanceof TraceProcessorUnavailableError) {
       api.parsedData = null;
       return {

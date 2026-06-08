@@ -5,9 +5,8 @@ const queryResponses: Array<{ name: string; rows: unknown[] }> = [];
 vi.mock("@argent/native-devtools-android", () => {
   const path = require("node:path");
   return {
-    traceProcessorShellPath: () => "/fake/tp",
-    // The pipeline probes the binary up front; pretend it's present + runnable.
-    ensureTraceProcessorRunnable: vi.fn(async () => "/fake/tp"),
+    // The pipeline pre-warms the in-process WASM engine up front; pretend it's ready.
+    ensureTraceProcessorReady: vi.fn(async () => {}),
     // Real queries dir so the batched-fold path can load hang-folds-batched.sql.
     traceProcessorQueriesDir: () =>
       path.resolve(__dirname, "../../../native-devtools-android/assets/queries"),
@@ -22,7 +21,6 @@ vi.mock("../../src/utils/android-profiler/pipeline/run-tp", () => ({
   // Batched hang folds go through runTpInline — return no rows so every hang
   // gets an empty fold (this test only cares about the manifest-hint logic).
   runTpInline: vi.fn(async () => []),
-  parseTpJsonOutput: vi.fn(),
 }));
 
 import { runAndroidProfilerPipeline } from "../../src/utils/android-profiler/pipeline/index";

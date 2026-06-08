@@ -13,9 +13,8 @@ let inlineResponse: unknown[] = [];
 vi.mock("@argent/native-devtools-android", () => {
   const path = require("node:path");
   return {
-    traceProcessorShellPath: () => "/fake/tp",
-    // The pipeline probes the binary up front; pretend it's present + runnable.
-    ensureTraceProcessorRunnable: vi.fn(async () => "/fake/tp"),
+    // The pipeline pre-warms the in-process WASM engine up front; pretend it's ready.
+    ensureTraceProcessorReady: vi.fn(async () => {}),
     // Real queries dir — runBatchedHangFolds loads hang-folds-batched.sql from
     // here and substitutes the windows/target before calling runTpInline.
     traceProcessorQueriesDir: () =>
@@ -24,7 +23,7 @@ vi.mock("@argent/native-devtools-android", () => {
 });
 vi.mock("../../src/utils/android-profiler/pipeline/run-tp", async (importActual) => ({
   // Keep the real renderSqlTemplate so the batched hang-fold path renders the
-  // on-disk template; only the trace_processor_shell calls are stubbed.
+  // on-disk template; only the WASM engine query calls are stubbed.
   ...(await importActual<typeof import("../../src/utils/android-profiler/pipeline/run-tp")>()),
   runTpQuery: vi.fn(async (opts: { query: string; substitutions: Record<string, string> }) => {
     const next = queryResponses.shift();
@@ -68,7 +67,7 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
             ts_ns: HANG_START_NATIVE,
             dur_ns: HANG_DUR_NS,
             process_name: "com.example.app",
-            reason: "AppDeadlineMissed",
+            reason: "App Deadline Missed",
             error_id: null,
           },
         ],
@@ -97,7 +96,7 @@ describe("runAndroidProfilerPipeline timestamp normalisation", () => {
             ts_ns: HANG_START_NATIVE,
             dur_ns: HANG_DUR_NS,
             process_name: "com.example.app",
-            reason: "AppDeadlineMissed",
+            reason: "App Deadline Missed",
             error_id: null,
           },
         ],

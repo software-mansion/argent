@@ -1,9 +1,9 @@
 -- Argent — batched per-hang annotation (state breakdown + GC overlap).
 --
 -- Computes the main-thread state breakdown AND ART GC overlap for EVERY hang
--- window in ONE trace_processor_shell invocation, via a JOIN over the
--- runtime-built `argent_hang_windows` table instead of looping one invocation
--- per hang. See README.md, "One trace-load per shell invocation → batch".
+-- window in ONE batched trace-processor query, via a JOIN over the
+-- runtime-built `argent_hang_windows` table instead of looping one query
+-- per hang. See README.md, "One trace parse per warm engine → batch".
 --
 -- Single source of truth for the batched analyze path. The `argent_hang_state`
 -- view below mirrors the standalone, single-window `hang-state-breakdown.sql`

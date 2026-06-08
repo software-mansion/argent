@@ -32,9 +32,8 @@ export interface RunBatchedHangFoldsOptions {
 
 /**
  * Compute main-thread state breakdown + GC overlap for ALL hang windows in one
- * trace_processor_shell invocation, replacing the legacy per-hang loop (the
- * per-hang work moves into a JOIN over a runtime-built `argent_hang_windows`
- * table). On failure the promise rejects and the pipeline degrades every hang
+ * batched query, replacing the legacy per-hang loop (the per-hang work moves
+ * into a JOIN over a runtime-built `argent_hang_windows` table). On failure the promise rejects and the pipeline degrades every hang
  * to empty folds.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  *

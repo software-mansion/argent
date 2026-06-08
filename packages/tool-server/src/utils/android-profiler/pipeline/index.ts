@@ -9,7 +9,7 @@ import {
   BURST_GAP_MS,
   type AggregatorInputRow,
 } from "../../profiler-shared/aggregate";
-import { ensureTraceProcessorRunnable } from "@argent/native-devtools-android";
+import { ensureTraceProcessorReady } from "@argent/native-devtools-android";
 import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
 import { runBatchedHangFolds, type HangWindowInput } from "./hang-folds-batched";
@@ -49,7 +49,7 @@ async function getTraceStartNs(tracePath: string): Promise<number> {
     });
     // Coerce-then-validate: `Number.isFinite("5000000000000")` returns false
     // because it checks the input *type*, not the value. A future
-    // trace_processor_shell that emits start_ts as a JSON string would
+    // trace-processor engine that emits start_ts as a JSON string would
     // silently disable the normalisation if we validated first.
     const startTs = Number(rows[0]?.start_ts);
     return Number.isFinite(startTs) ? startTs : 0;
@@ -67,23 +67,23 @@ export interface AndroidPipelineResult {
 }
 
 /**
- * Drive trace_processor_shell against an Android .pftrace and produce the
- * platform-agnostic Bottleneck[] the render layer consumes. CPU + hangs + RSS
- * run as parallel top-level queries; all per-hang folds are batched into one
- * more invocation, so the worst case is fixed-cost (~4 invocations end-to-end).
+ * Drive the in-process Perfetto WASM engine against an Android .pftrace and
+ * produce the platform-agnostic Bottleneck[] the render layer consumes. CPU +
+ * hangs + RSS run as parallel top-level queries; all per-hang folds are batched
+ * into one more query, so the worst case is fixed-cost (~4 queries end-to-end).
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "4. The per-hang fold: batched, not looped"
  */
 export async function runAndroidProfilerPipeline(
   tracePath: string,
   appPackage: string
 ): Promise<AndroidPipelineResult> {
-  // Probe presence + architecture of trace_processor_shell up front. A
-  // TraceProcessorUnavailableError propagates to the analyze handler (which
-  // renders the actionable download banner) — deliberately NOT folded into
-  // exportErrors, where a missing binary would read as three identical per-query
-  // "Export warnings" instead of one clear "run `argent init
-  // --download-dependencies`" message.
-  await ensureTraceProcessorRunnable();
+  // Boot the in-process WASM engine and load the trace up front. A
+  // TraceProcessorUnavailableError (the rare wasm-load failure) propagates to the
+  // analyze handler (which renders the actionable banner) — deliberately NOT
+  // folded into exportErrors, where it would read as three identical per-query
+  // "Export warnings". This also pre-warms the engine so the queries below reuse
+  // it (load the trace once).
+  await ensureTraceProcessorReady(tracePath);
 
   const target = sanitizeProcessName(appPackage);
   const exportErrors: Record<string, string> = {};
@@ -212,7 +212,8 @@ export interface AndroidStackQueryOptions {
 /**
  * Drill-down entry point for the Android branch of profiler-stack-query.
  * Re-queries the .pftrace per call instead of caching parsed data in memory —
- * trace_processor_shell is fast enough (~30 ms/query) that caching isn't worth it.
+ * the warm WASM engine makes per-query drill-down fast enough that caching isn't
+ * worth it.
  * rationale: utils/android-profiler/PIPELINE_DESIGN.md "3. Drill-down: re-query, don't cache"
  */
 export async function runAndroidStackQuery(opts: AndroidStackQueryOptions): Promise<string> {
@@ -312,6 +313,29 @@ async function renderHangStacksAndroid(
   return lines.join("\n");
 }
 
+/**
+ * Resolve the user-facing `thread` argument to the sentinel/raw token that
+ * function-callers.sql understands. The Android main thread's raw perf `comm`
+ * is the truncated package, not "main", so the common aliases map to the
+ * `__MAIN__` sentinel (matched via thread.is_main_thread). An absent thread
+ * means "search every thread" (`__ALL__`) rather than guessing one.
+ */
+function resolveFunctionCallersThread(thread: string | undefined): {
+  token: string;
+  label: string;
+  allThreads: boolean;
+} {
+  if (!thread || thread.trim() === "") {
+    return { token: "__ALL__", label: "all threads", allThreads: true };
+  }
+  const norm = thread.trim().toLowerCase();
+  if (norm === "main" || norm === "main thread" || norm === "ui" || norm === "ui thread") {
+    return { token: "__MAIN__", label: "main thread", allThreads: false };
+  }
+  const raw = thread.trim();
+  return { token: raw, label: raw, allThreads: false };
+}
+
 async function renderFunctionCallersAndroid(
   opts: AndroidStackQueryOptions,
   target: string
@@ -319,30 +343,77 @@ async function renderFunctionCallersAndroid(
   if (!opts.functionName) {
     throw new Error("function_callers mode requires the function_name parameter.");
   }
-  const thread = opts.thread ?? "main";
+  const { token, label, allThreads } = resolveFunctionCallersThread(opts.thread);
   const rows = await runTpQuery<AndroidFunctionCallersRow>({
     tracePath: opts.tracePath,
     query: "function-callers.sql",
     substitutions: {
       TARGET_PROCESS: target,
-      THREAD_NAME: sanitizeIdentifier(thread),
+      THREAD_NAME: sanitizeIdentifier(token),
       FUNCTION_NAME: sanitizeIdentifier(opts.functionName),
     },
   });
   if (rows.length === 0) {
-    return `_Function \`${opts.functionName}\` not found on thread \`${thread}\`._`;
+    return renderFunctionCallersMiss(opts, target, label);
   }
   const lines: string[] = [
-    `## Callers of \`${opts.functionName}\` on \`${thread}\``,
-    "",
-    `**Unique callsites:** ${rows.length}`,
+    `## Callers of \`${opts.functionName}\` on ${allThreads ? "all threads" : `\`${label}\``}`,
     "",
   ];
+  // Frame names are stored mangled, so the query is matched as a substring.
+  // When nothing matched verbatim, spell out the real leaf symbols that did, so
+  // an unexpected (or over-broad) match is obvious rather than silent.
+  const distinctMatched = [...new Set(rows.map((r) => r.matched_function))];
+  if (!rows.some((r) => r.is_exact) || distinctMatched.length > 1) {
+    lines.push(
+      `_Substring match: \`${opts.functionName}\` hit ${distinctMatched.length} leaf symbol(s):_`,
+      ...distinctMatched.slice(0, 10).map((m) => `- \`${m}\``),
+      ...(distinctMatched.length > 10 ? [`- …and ${distinctMatched.length - 10} more`] : []),
+      ""
+    );
+  }
+  lines.push(`**Unique callsites:** ${rows.length}`, "");
   for (const row of rows.slice(0, opts.topN)) {
     lines.push("```");
-    lines.push(`(${row.occurrences}×)`);
+    // In all-threads mode the same callstack can appear on several threads, so
+    // tag each block with its owning thread (raw name — copy it back as a filter).
+    const tag = allThreads
+      ? ` [${row.thread_name}${row.is_main_thread ? " (main)" : ""}]`
+      : "";
+    lines.push(`(${row.occurrences}×)${tag}`);
     lines.push(row.callstack_text ?? "<no callstack>");
     lines.push("```");
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Zero-result fallback for function_callers: list the process's threads so a
+ * wrong/empty filter is self-correcting (the raw names are what the SQL matches
+ * on, and aren't discoverable from the normalised analyze output).
+ */
+async function renderFunctionCallersMiss(
+  opts: AndroidStackQueryOptions,
+  target: string,
+  label: string
+): Promise<string> {
+  const lines = [`_Function \`${opts.functionName}\` not found on ${label}._`];
+  const threads = await runTpQuery<AndroidThreadRow>({
+    tracePath: opts.tracePath,
+    query: "thread-breakdown.sql",
+    substitutions: { TARGET_PROCESS: target },
+  }).catch(() => [] as AndroidThreadRow[]);
+  if (threads.length > 0) {
+    lines.push(
+      "",
+      "Available threads (pass the exact name as `thread`, or omit `thread` to search all):",
+      ""
+    );
+    for (const t of threads.slice(0, 20)) {
+      lines.push(
+        `- \`${t.thread_name}\`${t.is_main_thread ? " (main)" : ""} — ${t.sample_count} samples`
+      );
+    }
   }
   return lines.join("\n");
 }
@@ -492,9 +563,17 @@ function formatTraceTime(ns: number): string {
 
 function classifyAndroidHangSeverity(row: AndroidJankRow): "RED" | "YELLOW" {
   if (row.kind === "anr") return "RED";
-  // BufferStuffing / SfCpuDeadlineMissed / PredictionError → YELLOW (rendering pipeline)
-  // AppDeadlineMissed → RED (the app's own work missed the frame)
-  if (row.reason === "AppDeadlineMissed") return "RED";
+  // ui-hangs.sql only emits frames whose jank_type GLOB-matches "App Deadline
+  // Missed", so every jank row here is app-relevant. The reason string is
+  // Perfetto's space-separated jank_type (e.g. "App Deadline Missed" or the
+  // comma-combined "Prediction Error, App Deadline Missed").
+  //
+  // A *pure* "App Deadline Missed" means the app's own work alone blew the
+  // frame budget → RED. Combined forms share blame with the scheduler /
+  // SurfaceFlinger pipeline, so they stay RED only when the stall is long
+  // enough to be user-perceptible (duration check below). Exact === is
+  // deliberate — it isolates the standalone case from the combined ones.
+  if (row.reason === "App Deadline Missed") return "RED";
   const durationMs = row.dur_ns / 1_000_000;
   if (durationMs > 500) return "RED";
   return "YELLOW";

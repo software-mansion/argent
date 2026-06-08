@@ -14,7 +14,6 @@
  *   argent update                 Check for updates, refresh configuration
  *   argent uninstall              Remove argent from a workspace
  *   argent remove                 Alias for uninstall
- *   argent download-deps          Download native profiler binary for this host
  *   argent tools                  List tools exposed by the tool-server
  *   argent tools describe <name>  Show one tool's flags
  *   argent run <tool> [flags]     Invoke a tool by name
@@ -62,7 +61,6 @@ Commands:
   update      Check for updates and refresh configuration
   uninstall   Remove argent configuration from the workspace
   remove      Alias for uninstall
-  download-deps  Download the native profiler binary (trace_processor_shell) for this host
   tools       List tools exposed by the tool-server
   run         Invoke a tool by name (use \`argent run <tool> --help\` for flags)
   server      Manage the shared tool-server (status / stop / logs)
@@ -105,8 +103,6 @@ async function main(): Promise<void> {
     case "uninstall":
     case "remove":
       return (await loadInstaller()).uninstall(rest);
-    case "download-deps":
-      return (await loadInstaller()).downloadDependencies();
     case "tools":
       return (await loadCli()).tools(rest, { paths: BUNDLED_RUNTIME_PATHS });
     case "run":

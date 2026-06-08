@@ -31,7 +31,15 @@ const zodSchema = z.object({
     .optional()
     .describe("0-based index into the hang list for hang_stacks mode"),
   function_name: z.string().optional().describe("Function name for function_callers mode"),
-  thread: z.string().optional().describe("Thread name filter for thread_breakdown mode"),
+  thread: z
+    .string()
+    .optional()
+    .describe(
+      "Thread filter. thread_breakdown: case-insensitive substring match. " +
+        'function_callers: exact raw thread name (e.g. ".blueskyweb.app"), or "main" for ' +
+        "the UI thread; omit to search ALL threads (each result is tagged with its thread). " +
+        "Run thread_breakdown first to see the exact raw names."
+    ),
   object_type: z.string().optional().describe("Object type filter for leak_stacks mode"),
   top_n: z.coerce
     .number()

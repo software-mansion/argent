@@ -80,19 +80,20 @@ export async function renderNativeProfilerReport(
 
 /**
  * Render the prominent, actionable banner shown when Android analysis cannot run
- * because `trace_processor_shell` is missing or the wrong architecture. This is
- * a *top-level* report body (not a "> Export warnings" line) so the user/agent
- * sees the recovery command — `argent init --download-dependencies` — front and
- * centre. The caller pairs this with an empty `exportErrors` and
+ * because the bundled Perfetto trace-processor WASM engine failed to load. The
+ * engine ships as a single committed `.wasm` (no per-platform binary, no
+ * download), so this is rare — a corrupt/missing vendored asset, or a bad
+ * `ARGENT_TRACE_PROCESSOR_WASM` override. This is a *top-level* report body (not
+ * a "> Export warnings" line) so the user/agent sees the recovery steps front
+ * and centre. The caller pairs this with an empty `exportErrors` and
  * `status: "analysis_failed"`.
  */
 export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableError): string {
-  const platform = err.platform ? ` (\`${err.platform}\`)` : "";
   const lines = [
     `# Android Perfetto Analysis — Cannot Run`,
     ``,
-    `> ⚠️ **The Perfetto \`trace_processor_shell\` binary needed to analyze Android ` +
-      `traces is not available on this machine${platform}.**`,
+    `> ⚠️ **The bundled Perfetto trace-processor WASM engine needed to analyze ` +
+      `Android traces failed to load on this machine.**`,
     ``,
     err.message,
     ``,
@@ -100,20 +101,19 @@ export function renderTraceProcessorUnavailable(err: TraceProcessorUnavailableEr
     ``,
     `## How to fix`,
     ``,
-    `Run this once to fetch the correct binary for your OS/CPU into the \`~/.argent\` cache:`,
+    `The engine ships as a single \`trace_processor.wasm\` bundled inside Argent — ` +
+      `there's nothing to download. A load failure almost always means the bundled ` +
+      `file is missing or corrupt, so reinstall Argent:`,
     ``,
     "```bash",
-    `argent init --download-dependencies`,
+    `npm install -g @swmansion/argent`,
     "```",
     ``,
-    `(or the equivalent \`argent download-deps\`). It's a one-time ~12 MB download; ` +
-      `iOS-only and offline users never need it.`,
-    ``,
-    `**Offline / air-gapped, or behind a proxy that blocks GitHub?** Stage a ` +
-      `\`trace_processor_shell\` binary for your platform yourself and point Argent at it:`,
+    `**Air-gapped, or want to pin a known-good engine?** Point Argent at a ` +
+      `\`trace_processor.wasm\` you stage yourself:`,
     ``,
     "```bash",
-    `export ARGENT_TRACE_PROCESSOR_PATH=/absolute/path/to/trace_processor_shell`,
+    `export ARGENT_TRACE_PROCESSOR_WASM=/absolute/path/to/trace_processor.wasm`,
     "```",
     ``,
     `Then re-run \`native-profiler-analyze\`.`,

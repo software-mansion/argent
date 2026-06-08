@@ -9,6 +9,7 @@ import type { ChildProcess } from "child_process";
 import type { CpuSample, UiHang, MemoryLeak, CpuHotspot } from "../utils/ios-profiler/types";
 import { waitForChildExit } from "../utils/profiler-shared/lifecycle";
 import { adbShell } from "../utils/adb";
+import { disposeWarmEngine } from "@argent/native-devtools-android";
 
 // Cross-platform session for the `native-profiler-*` tools: iOS uses an xctrace
 // child, Android an `adb shell perfetto` child. Both sit behind platform-agnostic
@@ -139,6 +140,9 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
         }
 
         const onDeviceTracePath = state.androidOnDeviceTracePath;
+        // ANDROID: The warm-engine cache keys on api.traceFile (analyze/drill-down/load);
+        // clearLiveState leaves it set, so grab it now for the release below.
+        const hostTracePath = state.traceFile;
         try {
           if (state.profilingActive && state.capturePid) {
             await adbShell(state.deviceId, `kill -KILL ${state.capturePid}`, {
@@ -152,6 +156,15 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
           }
         } finally {
           clearLiveState(state);
+        }
+
+        // ANDROID: Free this trace's warm Perfetto engine (trace memory + wasm heap) now
+        // rather than waiting out the idle-timer / LRU reclaim — teardown is
+        // end-of-life. Independent of profilingActive: the engine is booted by
+        // analyze/drill-down, after the daemon stops. No-op when unwarmed;
+        // best-effort, never throws. iOS returned above, so this is Android-only.
+        if (hostTracePath) {
+          await disposeWarmEngine(hostTracePath);
         }
       },
       events,

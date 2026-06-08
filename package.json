@@ -10,11 +10,12 @@
     "start:tool-server": "npm run build -w @argent/registry && npm run dev -w @argent/tool-server",
     "download:simulator-server": "bash scripts/download-simulator-server.sh",
     "download:native-binaries": "bash scripts/download-native-binaries.sh",
+    "download:trace-processor": "bash scripts/download-trace-processor.sh",
     "build:ios-binaries": "bash packages/native-devtools-ios/scripts/build.sh dev",
     "build:android-binaries": "bash packages/native-devtools-android/scripts/build.sh",
     "pack": "node scripts/pack-mcp.cjs",
     "pack:mcp": "node scripts/pack-mcp.cjs",
-    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
+    "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run download:trace-processor && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write .",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"

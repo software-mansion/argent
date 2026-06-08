@@ -63,15 +63,9 @@ const BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/s
 const BIN_DEST = path.resolve(__dirname, "../bin/simulator-server");
 const AX_BIN_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/bin/ax-service");
 const AX_BIN_DEST = path.resolve(__dirname, "../bin/ax-service");
-const TP_BIN_SRC = path.resolve(
-  WORKSPACE_ROOT,
-  "packages/native-devtools-android/bin/trace_processor_shell"
-);
-const TP_BIN_DEST = path.resolve(__dirname, "../bin/trace_processor_shell");
-// Generated module telling the resolver which platform's trace_processor_shell
-// got bundled (so it never hands a mac-arm64 binary to a Linux host) and the
-// pinned Perfetto version (the ~/.argent cache key). esbuild inlines it into
-// every bundle via the @argent/native-devtools-android alias.
+// Generated module pinning the Perfetto version that stamps the bundled
+// trace_processor.wasm. esbuild inlines it into every bundle via the
+// @argent/native-devtools-android alias.
 const BUNDLED_META_DEST = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-android/src/bundled-meta.ts"
@@ -93,6 +87,11 @@ const QUERIES_SRC = path.resolve(
   "packages/native-devtools-android/assets/queries"
 );
 const QUERIES_DEST = path.resolve(__dirname, "../assets/queries");
+const TRACE_PROCESSOR_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/assets/trace-processor"
+);
+const TRACE_PROCESSOR_DEST = path.resolve(__dirname, "../assets/trace-processor");
 const ANDROID_PKG_DIR = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android");
 const ANDROID_MANIFEST_SRC = path.join(ANDROID_PKG_DIR, "assets/manifest.json");
 const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../assets/manifest.json");
@@ -161,18 +160,21 @@ const ASSETS = [
     copiedLabel: "ax-service binary",
     missLabel: "ax-service binary",
   },
-  // Android host-side Perfetto trace processor.
+  // Android host-side Perfetto trace processor: the third-party WASM engine
+  // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).
+  // wasm-trace-processor.ts resolves these via
+  // `path.join(__dirname, "..", "assets", "trace-processor")` — in the bundled
+  // tool-server.cjs that is `<pkg>/assets/trace-processor/`, i.e. this exact
+  // destination. Not committed; fetched + sha256-verified at pack time by
+  // scripts/download-trace-processor.sh, so this copy is purely local.
   {
-    kind: "file",
-    src: TP_BIN_SRC,
-    dest: TP_BIN_DEST,
-    mode: 0o755,
+    kind: "dir",
+    src: TRACE_PROCESSOR_SRC,
+    dest: TRACE_PROCESSOR_DEST,
     required: true,
-    copiedLabel: "trace_processor_shell binary",
-    missLabel: "trace_processor_shell binary",
-    hint:
-      "Run: npm run pack:mcp (fetches from argent-private-releases)\n" +
-      "or: bash scripts/download-native-binaries.sh",
+    copiedLabel: "trace-processor WASM asset(s)",
+    missLabel: "trace-processor WASM assets directory",
+    hint: "Run: bash scripts/download-trace-processor.sh (fetches from argent-private-releases)",
   },
   // iOS native devtools dylibs so the packaged tool-server can inject them at runtime.
   {
@@ -349,10 +351,10 @@ function copyAsset(a) {
 
 /**
  * Read the pinned Perfetto version from argent-private's PERFETTO_VERSION (the
- * same file CI builds the binaries against), falling back to the committed
+ * same file CI builds the engine against), falling back to the committed
  * constant in bundled-meta.ts when the submodule isn't checked out (dev/source
- * builds). Keeps the bundled-marker, the cache key, and the JS the columns
- * expect all agreeing.
+ * builds). Stamps the bundled trace_processor.wasm so the marker and the engine
+ * always agree.
  */
 function readPerfettoVersion() {
   try {
@@ -372,31 +374,28 @@ function readPerfettoVersion() {
 }
 
 /**
- * Regenerate bundled-meta.ts so the resolver learns the actually-bundled
- * platform and pinned Perfetto version. The platform is derived from the SAME
- * env (ARGENT_BUNDLED_TP_PLATFORM) that scripts/pack-mcp.cjs passes to
- * download-native-binaries.sh's TP_TARGET_PLATFORM, so the marker can't disagree
- * with which binary was copied. Defaults to mac-arm64 (the Mac-arm64 majority).
+ * Regenerate bundled-meta.ts so it pins the Perfetto version that stamps the
+ * bundled trace_processor.wasm. The version comes from argent-private's
+ * PERFETTO_VERSION (or the committed fallback). Since the engine is now a single
+ * cross-platform WASM artifact, there is no per-platform marker to emit.
  */
 function generateBundledMeta() {
-  const platform = process.env.ARGENT_BUNDLED_TP_PLATFORM || "mac-arm64";
   const version = readPerfettoVersion();
   const content = `// GENERATED at pack time by packages/argent/scripts/bundle-tools.cjs.
 //
-// Committed with sane fallback values so dev / source builds (and the
+// Committed with a sane fallback value so dev / source builds (and the
 // submodule-less checkout) still compile; the pack step overwrites this file
-// with the platform whose trace_processor_shell was actually bundled and the
-// Perfetto version pinned in argent-private's PERFETTO_VERSION. esbuild inlines
-// it into every published bundle, so the resolver always knows the bundled
-// platform (and never hands a mac-arm64 binary to a Linux host) and the cache
-// key always matches the version the shipped JS was built against.
-import type { TraceProcessorPlatform } from "./platform";
+// with the Perfetto version pinned in argent-private's PERFETTO_VERSION. esbuild
+// inlines it into every published bundle. The trace-processor engine is now a
+// single cross-platform WASM artifact (no per-platform binary), fetched +
+// sha256-verified at pack time, so this version is purely informational — it
+// stamps the bundled \`trace_processor.wasm\` — and JS<->engine version skew is
+// structurally impossible.
 
-export const BUNDLED_TRACE_PROCESSOR_PLATFORM: TraceProcessorPlatform = "${platform}";
 export const PERFETTO_VERSION = "${version}";
 `;
   fs.writeFileSync(BUNDLED_META_DEST, content);
-  console.log(`✓ Generated bundled-meta.ts (platform=${platform}, perfetto=${version})`);
+  console.log(`✓ Generated bundled-meta.ts (perfetto=${version})`);
 }
 
 // Generate the bundled marker BEFORE esbuild runs, so the constants get inlined
@@ -436,11 +435,12 @@ for (const a of ASSETS) {
   copyAsset(a);
 }
 
-// Copy the Android helper APK into bin/ (alongside trace_processor_shell — both
-// are downloaded native artifacts). Runs after the copy loop, so dropping into
-// the already-purged-and-repopulated BIN_DIR is safe. Its filename is
-// version-stamped from manifest.json's versionName (see bundledHelperApkPath());
-// the APK is required at runtime, so a missing one throws.
+// Copy the Android helper APK into bin/ (the only Android native artifact left —
+// the trace processor now ships as WASM under assets/trace-processor/). Runs
+// after the copy loop, so dropping into the already-purged-and-repopulated
+// BIN_DIR is safe. Its filename is version-stamped from manifest.json's
+// versionName (see bundledHelperApkPath()); the APK is required at runtime, so a
+// missing one throws.
 const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
 const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
 const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
