@@ -236,6 +236,9 @@ describe("native-profiler-start fresh-start reset", () => {
     vi.doMock("child_process", () => ({
       spawn: vi.fn(() => fakeChild),
       execSync: vi.fn(() => ""), // detectRunningApp is bypassed via app_process
+      // Present so the physical-device util's top-level promisify(execFile)
+      // doesn't throw on import; never called because app_process is passed.
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),

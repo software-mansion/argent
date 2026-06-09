@@ -10,6 +10,10 @@ import { resolveDevice } from "../../../utils/device-info";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 import { listenForDarwinNotification, type NotifyHandle } from "../../../utils/ios-profiler/notify";
 import { waitForXctraceReady } from "../../../utils/ios-profiler/startup";
+import {
+  checkIsSimulator,
+  detectRunningAppOnDevice,
+} from "../../../utils/ios-physical-device";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
 const STARTUP_TIMEOUT_MS = 10_000;
@@ -28,7 +32,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running)."
+      "The exact CFBundleExecutable of the app to profile. If omitted, auto-detects the currently running foreground app on the simulator or device. Only provide this if auto-detection picks the wrong app (e.g. multiple apps running)."
     ),
   template_path: z
     .string()
@@ -208,7 +212,16 @@ Fails if no app is running on the device, the platform is not supported yet, or 
     }
 
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
-    const appProcess = params.app_process ?? detectRunningApp(params.device_id);
+
+    // Auto-detect the running app when not explicitly provided. Simulators are
+    // queried via simctl; physical devices via devicectl (a different code path).
+    let appProcess = params.app_process;
+    if (!appProcess) {
+      const isSimulator = await checkIsSimulator(params.device_id);
+      appProcess = isSimulator
+        ? detectRunningApp(params.device_id)
+        : await detectRunningAppOnDevice(params.device_id);
+    }
 
     const debugDir = await getDebugDir();
     const timestamp = new Date()

@@ -50,6 +50,9 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
       execSync: vi.fn(() => ""),
+      // Present so the physical-device util's top-level promisify(execFile)
+      // doesn't throw on import; never called because app_process is passed.
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -91,6 +94,9 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
       execSync: vi.fn(() => ""),
+      // Present so the physical-device util's top-level promisify(execFile)
+      // doesn't throw on import; never called because app_process is passed.
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
@@ -137,6 +143,9 @@ describe("native-profiler-start cold-start retry", () => {
     vi.doMock("child_process", () => ({
       spawn: spawnFn,
       execSync: vi.fn(() => ""),
+      // Present so the physical-device util's top-level promisify(execFile)
+      // doesn't throw on import; never called because app_process is passed.
+      execFile: vi.fn(),
     }));
     vi.doMock("../../src/utils/react-profiler/debug/dump", () => ({
       getDebugDir: vi.fn(async () => "/tmp/argent-profiler-cwd"),
