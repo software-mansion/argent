@@ -1,3 +1,21 @@
+/**
+ * iOS-specific raw row types (`StackFrame`, `CpuSample`, `RawHang`, `RawLeak`)
+ * plus re-exports of the shared `Bottleneck` family. The cross-platform types
+ * live in profiler-shared/types.ts (the iOS/Android symmetry home).
+ */
+
+export type {
+  CpuHotspot,
+  UiHang,
+  MemoryLeak,
+  MemoryRssGrowth,
+  Bottleneck,
+  ProfilerPayload,
+  UiHangStateBreakdownEntry,
+  NativeProfilerAnalyzeResult,
+  NativeProfilerAnalyzeResult as IosProfilerAnalyzeResult,
+} from "../profiler-shared/types";
+
 export interface ProfilerStartStatus {
   status: "recording";
   pid: number;
@@ -5,7 +23,7 @@ export interface ProfilerStartStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Pipeline internal types
+// iOS pipeline-internal raw types (xctrace XML parser output)
 // ---------------------------------------------------------------------------
 
 export interface StackFrame {
@@ -33,66 +51,4 @@ export interface RawLeak {
   responsibleFrame: string;
   responsibleLibrary: string;
   count: number;
-}
-
-// ---------------------------------------------------------------------------
-// Output types (bottlenecks)
-// ---------------------------------------------------------------------------
-
-export interface CpuHotspot {
-  type: "ios_cpu_hotspot";
-  dominantFunction: string;
-  totalWeightMs: number;
-  weightPercentage: number;
-  sampleCount: number;
-  thread: string;
-  severity: "RED" | "YELLOW";
-  /** Representative app call chain for this hotspot */
-  topCallChain: string[];
-  /** Top 3 most frequent app call chains */
-  topCallChains: { chain: string[]; count: number }[];
-  /** Whether this function was also seen during a UI hang window */
-  duringHang: boolean;
-  /** Time range of samples in this hotspot (ms from trace start) */
-  timeRangeMs: { first: number; last: number };
-  /** Burst windows: clusters of activity separated by >500ms gaps */
-  burstWindows: { startMs: number; endMs: number; sampleCount: number }[];
-}
-
-export interface UiHang {
-  type: "ios_ui_hang";
-  hangType: string;
-  durationMs: number;
-  startTimeFormatted: string;
-  suspectedFunctions: string[];
-  /** Top app call chains found during the hang window, with sample counts */
-  appCallChains: { chain: string[]; sampleCount: number }[];
-  severity: "RED" | "YELLOW";
-}
-
-export interface MemoryLeak {
-  type: "ios_memory_leak";
-  objectType: string;
-  totalSizeBytes: number;
-  count: number;
-  responsibleFrame: string;
-  responsibleLibrary: string;
-  severity: "RED";
-}
-
-export type Bottleneck = CpuHotspot | UiHang | MemoryLeak;
-
-export interface ProfilerPayload {
-  metadata: {
-    traceFile: string | null;
-    platform: string;
-    timestamp: string;
-  };
-  bottlenecks: Bottleneck[];
-}
-
-export interface IosProfilerAnalyzeResult {
-  report: string;
-  reportFile: string | null;
-  bottlenecksTotal: number;
 }

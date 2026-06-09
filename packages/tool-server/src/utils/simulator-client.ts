@@ -112,6 +112,15 @@ export async function httpScreenshot(
     );
   }
   if (resBody.url == null || resBody.path == null) {
+    // Some capture failures come back as HTTP 200 with an `error` field rather
+    // than a non-2xx status (e.g. Android full-resolution requests that exceed
+    // what the emulator framebuffer can stream: "wrong data size, expected X
+    // got Y"). Surface that message instead of the misleading generic hint so
+    // the real cause is visible rather than sending callers to restart a
+    // perfectly healthy server.
+    if (resBody.error) {
+      throw new Error(`Screenshot failed: ${resBody.error}.`);
+    }
     throw new Error(
       "Screenshot failed: server response missing url or path. " +
         "The simulator-server may be misconfigured. Try restarting it."

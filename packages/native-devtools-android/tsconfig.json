@@ -4,7 +4,15 @@
     "composite": true,
     "declaration": true,
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    // nodenext (not the base's commonjs) so tsc PRESERVES the native dynamic
+    // `import()` in wasm-trace-processor.ts instead of downleveling it to
+    // `require()` — required to load the ESM `engine.mjs` decoder by file:// URL.
+    // The package has no `"type": "module"`, so emit stays CommonJS (consumers
+    // `require()` it); only the dynamic import is kept native. Relative imports
+    // therefore carry explicit `.js` extensions.
+    "module": "nodenext",
+    "moduleResolution": "nodenext"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

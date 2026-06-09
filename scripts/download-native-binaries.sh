@@ -6,6 +6,11 @@ set -euo pipefail
 #   - Android argent-android-devtools.apk (helper APK consumed by
 #     packages/native-devtools-android)
 #
+# The host-side Perfetto trace processor is no longer a native binary: it ships
+# as a single ~13 MB `trace_processor.wasm` vendored into the repo
+# (packages/native-devtools-android/assets/trace-processor/), so there is nothing
+# to download for it here.
+#
 # Usage: ./scripts/download-native-binaries.sh [release-tag]
 #   release-tag  Tag to download from (e.g. argent-v0.5.3). Defaults to argent-main.
 #
@@ -34,12 +39,12 @@ BIN_DIR="packages/native-devtools-ios/bin"
 # and skips the copy, so describe's ax-service path is unusable (regressed in
 # the Linux-support layout migration, #249).
 IOS_BIN_DIR="${BIN_DIR}/darwin"
-ANDROID_DIST_DIR="packages/native-devtools-android/dist"
-ANDROID_MANIFEST_FILE="packages/native-devtools-android/manifest.json"
+ANDROID_BIN_DIR="packages/native-devtools-android/bin"
+ANDROID_MANIFEST_FILE="packages/native-devtools-android/assets/manifest.json"
 
 echo "Downloading native binaries from ${REPO} (tag: ${TAG})..."
 
-mkdir -p "${DYLIBS_DIR}" "${BIN_DIR}" "${IOS_BIN_DIR}" "${ANDROID_DIST_DIR}"
+mkdir -p "${DYLIBS_DIR}" "${BIN_DIR}" "${IOS_BIN_DIR}" "${ANDROID_BIN_DIR}"
 
 for DYLIB in libNativeDevtoolsIos.dylib libKeyboardPatch.dylib libArgentInjectionBootstrap.dylib; do
   echo "  Downloading ${DYLIB}..."
@@ -73,11 +78,11 @@ gh release download "${TAG}" \
 # Read the versionName from the local manifest so the filename matches
 # bundledHelperApkPath()'s expectation.
 ANDROID_VERSION_NAME="$(node -p "require('$PWD/${ANDROID_MANIFEST_FILE}').versionName")"
-ANDROID_TARGET="${ANDROID_DIST_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
+ANDROID_TARGET="${ANDROID_BIN_DIR}/argent-android-devtools-${ANDROID_VERSION_NAME}.apk"
 mv -f "${TMP_APK}" "${ANDROID_TARGET}"
 trap - EXIT
 
-echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_DIST_DIR}/"
+echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
 if command -v codesign &>/dev/null; then
   for f in "${DYLIBS_DIR}"/*.dylib "${IOS_BIN_DIR}/ax-service"; do

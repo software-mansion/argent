@@ -176,7 +176,19 @@ async function captureLiveInput(params: {
     throw new Error("Live screenshot capture requires a simulatorServer service.");
   }
 
-  const capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
+  // Prefer a full-resolution capture for maximum diff fidelity. Some Android
+  // emulator configurations cannot stream a full-res frame — the simulator-server
+  // rejects it with a "wrong data size" framebuffer mismatch — which previously
+  // made the entire baselinePath + captureCurrent flow unusable on Android. Fall
+  // back to the server's default scale, which captures reliably; same-aspect
+  // normalization in diffPngFiles keeps a scaled capture diff-compatible with a
+  // baseline saved at any scale. Full-res is preserved wherever it works (iOS).
+  let capture: Awaited<ReturnType<CaptureScreenshot>>;
+  try {
+    capture = await params.captureScreenshot(params.api, params.rotation, params.signal, 1.0);
+  } catch {
+    capture = await params.captureScreenshot(params.api, params.rotation, params.signal);
+  }
   const suffix = crypto.randomBytes(4).toString("hex");
   const destination = path.join(params.outputDir, `${params.name}-${suffix}.live.png`);
   await fs.mkdir(params.outputDir, { recursive: true });
