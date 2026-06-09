@@ -78,6 +78,13 @@ const UPDATE_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
+const UPDATE_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_UNCLASSIFIED_FAILED,
+  failure_stage: "installer_update_unclassified",
+  failure_area: "installer",
+  error_kind: "unknown",
+};
+
 const INSTALL_SKILLS_REFRESH_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
   failure_stage: "installer_update_skills_refresh",
@@ -394,7 +401,7 @@ export async function update(args: string[]): Promise<void> {
 
     p.outro(pc.green("Update complete."));
   } catch (err) {
-    await failUpdateTelemetry();
+    await failUpdateTelemetry(UPDATE_UNCLASSIFIED_FAILED);
     throw err;
   }
 }
