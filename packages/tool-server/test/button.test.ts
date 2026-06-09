@@ -34,10 +34,17 @@ describe("button tool — per-platform validation", () => {
   });
 
   it("accepts every iOS-valid button", async () => {
-    for (const button of ["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"] as const) {
-      await expect(
-        buttonTool.execute(services, { udid: iosUdid, button })
-      ).resolves.toEqual({ pressed: button });
+    for (const button of [
+      "home",
+      "power",
+      "volumeUp",
+      "volumeDown",
+      "appSwitch",
+      "actionButton",
+    ] as const) {
+      await expect(buttonTool.execute(services, { udid: iosUdid, button })).resolves.toEqual({
+        pressed: button,
+      });
     }
   });
 });
