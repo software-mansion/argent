@@ -340,16 +340,62 @@ describe("Registry -- Tool Tests", () => {
     registry.registerBlueprint(sBlueprint);
     registry.registerTool(createMockToolDef("T", () => ({ S: staticUrn("S") })));
 
-    const invokedEvents: string[] = [];
-    const completedEvents: string[] = [];
+    const invokedEvents: Array<{ id: string; toolInvocationId: string }> = [];
+    const completedEvents: Array<{ id: string; toolInvocationId: string; durationMs: number }> = [];
 
-    registry.events.on("toolInvoked", (id) => invokedEvents.push(id));
-    registry.events.on("toolCompleted", (id) => completedEvents.push(id));
+    registry.events.on("toolInvoked", (id, toolInvocationId) =>
+      invokedEvents.push({ id, toolInvocationId })
+    );
+    registry.events.on("toolCompleted", (id, toolInvocationId, durationMs) =>
+      completedEvents.push({ id, toolInvocationId, durationMs })
+    );
 
     await registry.invokeTool("T");
 
-    expect(invokedEvents).toEqual(["T"]);
-    expect(completedEvents).toEqual(["T"]);
+    expect(invokedEvents).toHaveLength(1);
+    expect(completedEvents).toHaveLength(1);
+    expect(invokedEvents[0]).toMatchObject({ id: "T" });
+    expect(completedEvents[0]).toMatchObject({ id: "T", durationMs: expect.any(Number) });
+    expect(invokedEvents[0]!.toolInvocationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    expect(completedEvents[0]!.toolInvocationId).toBe(invokedEvents[0]!.toolInvocationId);
+  });
+
+  it("emits toolFailed with real invocation duration", async () => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "fail-duration",
+      services: () => ({}),
+      async execute() {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        throw new Error("tool failed");
+      },
+    });
+
+    const invokedEvents: Array<{ id: string; toolInvocationId: string }> = [];
+    const failedEvents: Array<{
+      id: string;
+      toolInvocationId: string;
+      error: Error;
+      durationMs?: number;
+    }> = [];
+    registry.events.on("toolInvoked", (id, toolInvocationId) => {
+      invokedEvents.push({ id, toolInvocationId });
+    });
+    registry.events.on("toolFailed", (id, toolInvocationId, error, durationMs) => {
+      failedEvents.push({ id, toolInvocationId, error, durationMs });
+    });
+
+    await expect(registry.invokeTool("fail-duration")).rejects.toThrow(ToolExecutionError);
+
+    expect(invokedEvents).toHaveLength(1);
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]).toMatchObject({ id: "fail-duration" });
+    expect(failedEvents[0]!.toolInvocationId).toBe(invokedEvents[0]!.toolInvocationId);
+    expect(failedEvents[0]!.error).toBeInstanceOf(ToolExecutionError);
+    expect(failedEvents[0]!.durationMs).toEqual(expect.any(Number));
+    expect(failedEvents[0]!.durationMs!).toBeGreaterThan(0);
   });
 });
 

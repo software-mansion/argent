@@ -18,7 +18,7 @@ function stubRegistry(): Registry {
     getSnapshot: vi.fn(() => ({
       services: new Map(),
       namespaces: [],
-      tools: ["always-tool", "hinted-tool", "plain-tool"],
+      tools: ["always-tool", "hinted-tool", "plain-tool", "device-tool", "boot-tool"],
     })),
     getTool: vi.fn((name: string) => {
       if (name === "always-tool") {
@@ -47,6 +47,26 @@ function stubRegistry(): Registry {
           id: "plain-tool",
           description: "Plain tool",
           inputSchema: { type: "object", properties: {} },
+          services: () => ({}),
+          execute: async () => ({}),
+        };
+      }
+      if (name === "device-tool") {
+        return {
+          id: "device-tool",
+          description: "Device tool",
+          inputSchema: { type: "object", properties: {} },
+          capability: { apple: { simulator: true }, android: { emulator: true } },
+          services: () => ({}),
+          execute: async () => ({}),
+        };
+      }
+      if (name === "boot-tool") {
+        return {
+          id: "boot-tool",
+          description: "Boot tool",
+          inputSchema: { type: "object", properties: {} },
+          capability: { apple: { simulator: true }, android: { emulator: true } },
           services: () => ({}),
           execute: async () => ({}),
         };
@@ -86,5 +106,66 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(byName.get("hinted-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("alwaysLoad");
     expect(byName.get("plain-tool")).not.toHaveProperty("searchHint");
+  });
+
+  it("does not pass bundleId into telemetry invocation metadata", async () => {
+    const release = vi.fn();
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_toolInvocationId: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return release;
+    });
+    const registry = stubRegistry();
+    handle.dispose();
+    handle = createHttpApp(registry, { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .send({
+        udid: "11111111-1111-1111-1111-111111111111",
+        bundleId: "com.example.app",
+      })
+      .expect(200);
+
+    expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), {
+      platform: "ios",
+    });
+    expect(seenMeta).not.toHaveProperty("bundleId");
+    expect(seenMeta).not.toHaveProperty("deviceId");
+    expect(release).toHaveBeenCalledOnce();
+    expect(registry.invokeTool).toHaveBeenCalledWith(
+      "device-tool",
+      expect.any(Object),
+      expect.objectContaining({ toolInvocationId: recordInvocation.mock.calls[0]![0] })
+    );
+  });
+
+  it("does not record platform metadata for non-device tools", async () => {
+    const recordInvocation = vi.fn(() => vi.fn());
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/plain-tool")
+      .send({
+        udid: "11111111-1111-1111-1111-111111111111",
+        bundleId: "com.example.app",
+      })
+      .expect(200);
+
+    expect(recordInvocation).not.toHaveBeenCalled();
+  });
+
+  it("records Android platform for avdName device-management calls without a device hash", async () => {
+    const recordInvocation = vi.fn((_toolInvocationId: string, meta: Record<string, unknown>) => {
+      expect(meta).toEqual({ platform: "android" });
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app).post("/tools/boot-tool").send({ avdName: "Pixel_9" }).expect(200);
+
+    expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), { platform: "android" });
   });
 });

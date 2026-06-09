@@ -75,6 +75,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
 
 Options:
   --help, -h     Show this help message
@@ -130,6 +131,8 @@ async function main(): Promise<void> {
       return (await loadCli()).disable(rest);
     case "flags":
       return (await loadCli()).flags(rest);
+    case "telemetry":
+      return (await loadCli()).telemetry(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

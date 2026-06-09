@@ -12,3 +12,4 @@ export {
   type FlagScope,
   type FlagDefinition,
 } from "./flags.js";
+export { telemetry } from "./telemetry.js";
