@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { spawn, execFileSync, type ChildProcess } from "child_process";
+import { rmSync } from "fs";
 import * as path from "path";
 import type { ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
+  type NativeProfilerRecordingMode,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
@@ -12,6 +14,12 @@ import { listenForDarwinNotification, type NotifyHandle } from "../../../utils/i
 import { waitForXctraceReady } from "../../../utils/ios-profiler/startup";
 
 const DEFAULT_TEMPLATE_PATH = path.resolve(__dirname, "Argent.tracetemplate");
+// Built-in Instruments template used for the host-all-processes fallback. The
+// bundled Argent template includes Leaks/Allocations instruments, which xctrace
+// refuses to run against an "All Processes" target ("Leaks cannot handle a
+// target type of 'All Processes'"). Time Profiler is the only CPU instrument
+// that records host-wide, so the fallback is CPU-only by construction.
+const HOST_FALLBACK_TEMPLATE = "Time Profiler";
 const STARTUP_TIMEOUT_MS = 10_000;
 const DETECT_RUNNING_APP_TIMEOUT_MS = 10_000;
 const NOTIFY_REGISTER_TIMEOUT_MS = 2_000;
@@ -43,7 +51,25 @@ interface AppInfo {
   ApplicationType: string;
 }
 
-function detectRunningApp(udid: string): string {
+/** The profiled app's executable name (for `--attach`) and its host PID. */
+export interface DetectedApp {
+  /** CFBundleExecutable — what xctrace `--attach` expects. */
+  executable: string;
+  /**
+   * Host process id of the running app, parsed from `launchctl list`. On a
+   * simulator the launchd PID equals the host PID that appears in a host
+   * `--all-processes` trace, so it doubles as the `pid: N` filter for the
+   * host-all-processes fallback. Null when the app is not currently running
+   * (e.g. an explicit `app_process` that hasn't launched yet).
+   */
+  pid: string | null;
+}
+
+/**
+ * Map every running `UIKitApplication:` entry in `launchctl list` to its host
+ * PID. Format is `<pid>\t<status>\tUIKitApplication:<bundleId>[token][...]`.
+ */
+function readRunningBundlePids(udid: string): Map<string, string> {
   let launchctlOutput: string;
   try {
     launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
@@ -58,20 +84,16 @@ function detectRunningApp(udid: string): string {
     );
   }
 
-  const runningBundleIds = new Set<string>();
+  const pids = new Map<string, string>();
   for (const line of launchctlOutput.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
-    if (match) {
-      runningBundleIds.add(match[1]);
-    }
+    // `52533\t0\tUIKitApplication:com.apple.mobilesafari[3658][rb-legacy]`
+    const match = line.match(/^\s*(\d+)\s+\S+\s+UIKitApplication:([^[\s]+)/);
+    if (match) pids.set(match[2], match[1]);
   }
+  return pids;
+}
 
-  if (runningBundleIds.size === 0) {
-    throw new Error(
-      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
-    );
-  }
-
+function listInstalledApps(udid: string): Record<string, AppInfo> {
   let listAppsOutput: string;
   try {
     // Two stages, piped in code rather than by /bin/sh, so the udid is never
@@ -93,12 +115,29 @@ function detectRunningApp(udid: string): string {
         `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
     );
   }
+  return JSON.parse(listAppsOutput);
+}
 
-  const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
+/**
+ * Auto-detect the single running user app to profile, plus its host PID.
+ * Errors if zero or many user apps are running — same contract as before, now
+ * also returning the PID (used to scope a host-all-processes fallback trace).
+ * Only called when `app_process` was not pinned, so the simulator enumeration
+ * stays off the explicit-target path.
+ */
+function resolveRunningApp(udid: string): DetectedApp {
+  const runningPids = readRunningBundlePids(udid);
 
+  if (runningPids.size === 0) {
+    throw new Error(
+      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
+    );
+  }
+
+  const installedApps = listInstalledApps(udid);
   const runningUserApps: AppInfo[] = [];
-  for (const [, appInfo] of Object.entries(installedApps)) {
-    if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
+  for (const appInfo of Object.values(installedApps)) {
+    if (appInfo.ApplicationType === "User" && runningPids.has(appInfo.CFBundleIdentifier)) {
       runningUserApps.push(appInfo);
     }
   }
@@ -121,7 +160,31 @@ function detectRunningApp(udid: string): string {
     );
   }
 
-  return runningUserApps[0].CFBundleExecutable;
+  const app = runningUserApps[0];
+  return {
+    executable: app.CFBundleExecutable,
+    pid: runningPids.get(app.CFBundleIdentifier) ?? null,
+  };
+}
+
+/**
+ * Best-effort host PID for an explicitly-pinned executable. Used lazily in the
+ * host-all-processes fallback (the happy/explicit path never enumerates).
+ * Returns null if the app isn't currently running or enumeration fails.
+ */
+function resolveAppPid(udid: string, executable: string): string | null {
+  try {
+    const runningPids = readRunningBundlePids(udid);
+    const installedApps = listInstalledApps(udid);
+    for (const app of Object.values(installedApps)) {
+      if (app.ApplicationType === "User" && app.CFBundleExecutable === executable) {
+        return runningPids.get(app.CFBundleIdentifier) ?? null;
+      }
+    }
+  } catch {
+    // fall through — fallback will report it could not resolve the PID
+  }
+  return null;
 }
 
 /**
@@ -183,18 +246,28 @@ export function handleXctraceExit(
   api.lastExitInfo = { code, signal };
 }
 
-export const nativeProfilerStartTool: ToolDefinition<
-  z.infer<typeof zodSchema>,
-  { status: "recording"; pid: number; traceFile: string }
-> = {
+interface StartResult {
+  status: "recording";
+  pid: number;
+  traceFile: string;
+  /** Which capture path was used (see NativeProfilerRecordingMode). */
+  mode: NativeProfilerRecordingMode;
+  /** App host PID used to scope a host-all-processes trace; null otherwise. */
+  processFilterPid: string | null;
+}
+
+export const nativeProfilerStartTool: ToolDefinition<z.infer<typeof zodSchema>, StartResult> = {
   id: "native-profiler-start",
   requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true } },
+  longRunning: true,
   description: `Start native profiling on a booted device. iOS: Instruments via xctrace (CPU, hangs, memory). Android: not yet supported.
 Auto-detects the running app process unless app_process is explicitly provided.
 After starting, let the user interact with the app, then call native-profiler-stop.
 Use when you want to capture native CPU, hang, and memory data for a running app.
-Returns { status, pid, traceFile } confirming the recording has started.
+Returns { status, pid, traceFile, mode } confirming the recording has started.
+On simulators where the Instruments device tap is broken (Xcode 26.x cannot package --device traces),
+it transparently falls back to a host all-processes Time Profiler recording scoped to the app's PID — CPU-only (no hangs/leaks); mode is then "host-all-processes".
 Fails if no app is running on the device, the platform is not supported yet, or the profiler cannot attach to the process.`,
   zodSchema,
   services: (params) => ({
@@ -208,7 +281,12 @@ Fails if no app is running on the device, the platform is not supported yet, or 
     }
 
     const templatePath = params.template_path ?? DEFAULT_TEMPLATE_PATH;
-    const appProcess = params.app_process ?? detectRunningApp(params.device_id);
+    // Pinned target: trust it, don't enumerate the simulator (PID is resolved
+    // lazily only if the host fallback is actually needed). Otherwise auto-detect.
+    const detected: DetectedApp = params.app_process
+      ? { executable: params.app_process, pid: null }
+      : resolveRunningApp(params.device_id);
+    const appProcess = detected.executable;
 
     const debugDir = await getDebugDir();
     const timestamp = new Date()
@@ -220,26 +298,33 @@ Fails if no app is running on the device, the platform is not supported yet, or 
     api.recordingTimedOut = false;
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
+    api.recordingMode = null;
+    api.processFilterPid = null;
 
-    const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
-      api.appProcess = appProcess;
+    // Generic spawn + ready-wait, shared by the device-attach and host
+    // all-processes paths. `baseArgs` is the full xctrace argv minus the
+    // optional `--notify-tracing-started` pair, which we add here.
+    const attemptStart = async (
+      baseArgs: string[]
+    ): Promise<{ child: ChildProcess; pid: number }> => {
       api.traceFile = outputFile;
+
+      // A previous failed attempt (a hung device-attach recording that had to be
+      // killed, or a partial bundle from a cold-start miss) can leave the .trace
+      // bundle on disk. xctrace refuses to record into an existing path
+      // ("Trace file already exists"), so clear it before each attempt — the
+      // path is uniquely timestamped per call, so this only ever removes our own
+      // stale output, never a real prior recording.
+      try {
+        rmSync(outputFile, { recursive: true, force: true });
+      } catch {
+        // best-effort — if it can't be removed, xctrace will surface the error
+      }
 
       const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
       const notify = await registerStartupNotify(notifyName);
 
-      const xctraceArgs = [
-        "record",
-        "--template",
-        templatePath,
-        "--device",
-        params.device_id,
-        "--attach",
-        appProcess,
-        "--output",
-        outputFile,
-        "--no-prompt",
-      ];
+      const xctraceArgs = [...baseArgs];
       if (notify) {
         xctraceArgs.push("--notify-tracing-started", notifyName);
       }
@@ -272,14 +357,27 @@ Fails if no app is running on the device, the platform is not supported yet, or 
       return { child: xctraceProcess, pid: xctraceProcess.pid };
     };
 
-    // Bounded retry scoped to this single call: xctrace's process resolver can
-    // miss a freshly cold-launched app even after launchd has registered it.
-    // Same shape as fetchWithReconnect in packages/argent-mcp/src/mcp-server.ts.
+    // Preferred path: attach to the app on the simulator/device tap (full
+    // fidelity — CPU, hangs, leaks). Bounded retry scoped to this single call:
+    // xctrace's process resolver can miss a freshly cold-launched app even
+    // after launchd has registered it.
+    const deviceArgs = [
+      "record",
+      "--template",
+      templatePath,
+      "--device",
+      params.device_id,
+      "--attach",
+      appProcess,
+      "--output",
+      outputFile,
+      "--no-prompt",
+    ];
     const startMs = Date.now();
-    const startWithRetry = async (): Promise<{ child: ChildProcess; pid: number }> => {
+    const startDeviceAttach = async (): Promise<{ child: ChildProcess; pid: number }> => {
       for (let attempt = 1; attempt <= MAX_START_ATTEMPTS; attempt++) {
         try {
-          return await attemptStart();
+          return await attemptStart(deviceArgs);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const isColdStart = msg.includes(COLD_START_SIGNATURE);
@@ -301,8 +399,71 @@ Fails if no app is running on the device, the platform is not supported yet, or 
       );
     };
 
-    const { child: xctraceProcess, pid: xctracePid } = await startWithRetry();
+    let xctraceProcess: ChildProcess;
+    let xctracePid: number;
+    let mode: NativeProfilerRecordingMode;
 
+    try {
+      ({ child: xctraceProcess, pid: xctracePid } = await startDeviceAttach());
+      mode = "device-attach";
+    } catch (deviceErr) {
+      const deviceMsg = deviceErr instanceof Error ? deviceErr.message : String(deviceErr);
+      const isSimulator = resolveDevice(params.device_id).kind === "simulator";
+
+      // The host all-processes fallback only makes sense for simulators: their
+      // processes run on the host, so a host Time Profiler can see them. A
+      // physical device's processes are not host processes — nothing to fall
+      // back to. Surface the original error there.
+      if (!isSimulator) throw deviceErr;
+
+      // Resolve the app's host PID (needed to scope the host trace). Auto-detect
+      // already has it; an explicit app_process resolves it lazily here.
+      const appPid = detected.pid ?? resolveAppPid(params.device_id, appProcess);
+      if (!appPid) {
+        throw new Error(
+          `${deviceMsg}\n\nThe simulator-targeted Instruments tap also could not be used, and the host ` +
+            `all-processes fallback needs the app's host PID, which could not be resolved (is "${appProcess}" actually running?). ` +
+            `Launch the app with launch-app and retry.`
+        );
+      }
+
+      process.stderr.write(
+        `[native-profiler] device-attach recording failed (${deviceMsg.split("\n")[0]}); ` +
+          `falling back to host all-processes Time Profiler scoped to ${appProcess} (pid ${appPid}). ` +
+          `This captures CPU only — hangs and leaks are unavailable in this mode.\n`
+      );
+
+      // Reset the flags the failed device attempts may have left set so the
+      // host recording starts from a clean session state.
+      api.recordingTimedOut = false;
+      api.recordingExitedUnexpectedly = false;
+      api.lastExitInfo = null;
+
+      const hostArgs = [
+        "record",
+        "--template",
+        HOST_FALLBACK_TEMPLATE,
+        "--all-processes",
+        "--output",
+        outputFile,
+        "--no-prompt",
+      ];
+      try {
+        ({ child: xctraceProcess, pid: xctracePid } = await attemptStart(hostArgs));
+      } catch (hostErr) {
+        const hostMsg = hostErr instanceof Error ? hostErr.message : String(hostErr);
+        throw new Error(
+          `Native profiling could not start.\n` +
+            `Device-attach failed: ${deviceMsg.split("\n")[0]}\n` +
+            `Host all-processes fallback also failed: ${hostMsg}`
+        );
+      }
+      mode = "host-all-processes";
+      api.processFilterPid = appPid;
+    }
+
+    api.appProcess = appProcess;
+    api.recordingMode = mode;
     api.profilingActive = true;
     api.wallClockStartMs = Date.now();
     api.recordingTimeout = setTimeout(() => {
@@ -324,6 +485,8 @@ Fails if no app is running on the device, the platform is not supported yet, or 
       status: "recording",
       pid: xctracePid,
       traceFile: outputFile,
+      mode,
+      processFilterPid: api.processFilterPid,
     };
   },
 };

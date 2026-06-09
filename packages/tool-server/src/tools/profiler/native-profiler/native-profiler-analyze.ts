@@ -40,6 +40,7 @@ export const nativeProfilerAnalyzeTool: ToolDefinition<
   id: "native-profiler-analyze",
   requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true } },
+  longRunning: true,
   description: `Analyze exported native trace data and return an LLM-optimized markdown report.
 iOS: parses CPU time profile, UI hangs, and memory leaks from the exported XML files.
 Returns a structured markdown report with severity indicators, tables, and actionable suggestions.
@@ -59,6 +60,12 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
       throw new Error("No exported trace data found. Call native-profiler-stop first.");
     }
 
+    // The host all-processes fallback (used when the simulator Instruments tap
+    // is broken) is CPU-only: Leaks/Allocations cannot target "All Processes",
+    // so hangs/leaks are *expected* to be absent and must not be reported as
+    // failures. CPU is the sole data source in that mode.
+    const isHostFallback = api.recordingMode === "host-all-processes";
+
     // Pre-flight every set path: if the file is missing/unreadable the parsers
     // silently produce [], which would otherwise render as "All clear".
     const [cpuMissing, hangsMissing, leaksMissing] = await Promise.all([
@@ -68,11 +75,12 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
     ]);
 
     const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
-      await runIosProfilerPipeline(api.exportedFiles);
+      await runIosProfilerPipeline(api.exportedFiles, api.processFilterPid ?? null);
 
     api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
 
     const exportErrors: Record<string, string> = {};
+    const cpuOk = !!api.exportedFiles.cpu && !cpuMissing;
     if (!api.exportedFiles.cpu) {
       exportErrors.cpu =
         "CPU time-profile export failed — xctrace could not export CPU data from this trace. " +
@@ -84,17 +92,58 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
         `CPU time-profile export ${cpuMissing} — the trace export claims it succeeded but the ` +
         `file is gone or unreadable, so no CPU data could be analyzed. Re-run native-profiler-stop.`;
     }
-    if (!api.exportedFiles.hangs) {
-      exportErrors.hangs = "Hangs export failed — no potential-hangs table found in trace.";
-    } else if (hangsMissing) {
-      exportErrors.hangs =
-        `Hangs export ${hangsMissing} — the trace export claims it succeeded but the file is gone ` +
-        `or unreadable, so no hang data could be analyzed. Re-run native-profiler-stop.`;
+    // In host-fallback mode, hangs/leaks are intentionally not captured — skip
+    // the "export failed" warnings that would otherwise be noise.
+    if (!isHostFallback) {
+      if (!api.exportedFiles.hangs) {
+        exportErrors.hangs = "Hangs export failed — no potential-hangs table found in trace.";
+      } else if (hangsMissing) {
+        exportErrors.hangs =
+          `Hangs export ${hangsMissing} — the trace export claims it succeeded but the file is gone ` +
+          `or unreadable, so no hang data could be analyzed. Re-run native-profiler-stop.`;
+      }
+      if (api.exportedFiles.leaks && leaksMissing) {
+        exportErrors.leaks =
+          `Leaks export ${leaksMissing} — the trace export claims it succeeded but the file is gone ` +
+          `or unreadable, so no leak data could be analyzed. Re-run native-profiler-stop.`;
+      }
     }
-    if (api.exportedFiles.leaks && leaksMissing) {
-      exportErrors.leaks =
-        `Leaks export ${leaksMissing} — the trace export claims it succeeded but the file is gone ` +
-        `or unreadable, so no leak data could be analyzed. Re-run native-profiler-stop.`;
+
+    const modeNote = isHostFallback
+      ? `Captured via host all-processes fallback (the simulator Instruments tap could not package a ` +
+        `\`--device\` trace). CPU-only and scoped to ${api.appProcess ?? "the app"} (pid: ${api.processFilterPid}) — hangs and leaks are unavailable in this mode.`
+      : undefined;
+
+    // Decide whether the analysis is inconclusive: no data source could be
+    // read at all, or (host mode) the CPU file read but nothing matched the
+    // app PID. Either way, zero findings is meaningless and must not render as
+    // "All clear".
+    let inconclusive: { reason: string } | undefined;
+    if (isHostFallback) {
+      if (!cpuOk) {
+        inconclusive = {
+          reason:
+            "The host all-processes Time Profiler trace produced no readable CPU export, so there was " +
+            "nothing to analyze for the app.",
+        };
+      } else if (cpuSamples.length === 0) {
+        inconclusive = {
+          reason:
+            `The host all-processes trace exported CPU data, but no samples matched ${api.appProcess ?? "the app"} ` +
+            `(pid: ${api.processFilterPid}). The app may have been idle during the recording, or it was not the ` +
+            `running process. Interact with the app while recording, then stop.`,
+        };
+      }
+    } else {
+      const hangsOk = !!api.exportedFiles.hangs && !hangsMissing;
+      const leaksOk = !!api.exportedFiles.leaks && !leaksMissing;
+      if (!cpuOk && !hangsOk && !leaksOk) {
+        inconclusive = {
+          reason:
+            "None of the CPU, hangs, or leaks exports could be read, so there was no trace data to analyze. " +
+            "The recording likely failed to package (see native-profiler-stop exportDiagnostics).",
+        };
+      }
     }
 
     const payload = {
@@ -110,6 +159,9 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
       payload,
       traceFile: api.traceFile,
       exportErrors,
+      inconclusive,
+      mode: api.recordingMode ?? undefined,
+      modeNote,
     });
   },
 };

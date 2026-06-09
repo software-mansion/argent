@@ -47,6 +47,8 @@ describe("native-profiler-analyze: missing trace file", () => {
         recordingTimedOut: false,
         recordingExitedUnexpectedly: false,
         lastExitInfo: null,
+        recordingMode: null,
+        processFilterPid: null,
       };
 
       const result = await nativeProfilerAnalyzeTool.execute(

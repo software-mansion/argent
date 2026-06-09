@@ -95,4 +95,13 @@ export interface IosProfilerAnalyzeResult {
   report: string;
   reportFile: string | null;
   bottlenecksTotal: number;
+  /**
+   * `inconclusive` when no trace data could actually be analyzed (the export(s)
+   * the analysis depends on failed or produced no app samples). Distinguishes a
+   * genuine clean run from "the profiler had nothing to read" — the latter must
+   * never be reported as "All clear".
+   */
+  status: "ok" | "inconclusive";
+  /** Capture mode of the underlying recording, when known. */
+  mode?: "device-attach" | "host-all-processes";
 }

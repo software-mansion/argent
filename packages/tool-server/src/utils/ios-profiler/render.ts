@@ -16,6 +16,16 @@ interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
   exportErrors?: Record<string, string>;
+  /**
+   * Set when the analysis could not actually be performed (the data it depends
+   * on never exported). Renders an "Analysis Inconclusive" report instead of
+   * "All clear" and marks the structured result `status: "inconclusive"`.
+   */
+  inconclusive?: { reason: string };
+  /** Mode of the underlying recording — adds a short note + structured field. */
+  mode?: "device-attach" | "host-all-processes";
+  /** Optional one-line note about the capture mode (e.g. CPU-only fallback). */
+  modeNote?: string;
 }
 
 interface InlineCap {
@@ -32,24 +42,48 @@ export async function renderIosProfilerReport(
   const cpuHotspotsCount = payload.bottlenecks.filter((b) => b.type === "ios_cpu_hotspot").length;
   const uiHangsCount = payload.bottlenecks.filter((b) => b.type === "ios_ui_hang").length;
 
+  // Inconclusive overrides everything: there is nothing to report on because
+  // the underlying data never made it out of xctrace.
+  if (input.inconclusive) {
+    const inconclusiveReport = renderInconclusive(
+      payload,
+      input.inconclusive.reason,
+      input.exportErrors,
+      input.modeNote
+    );
+    const reportFile = traceFile ? deriveReportPath(traceFile) : null;
+    const wroteFile = reportFile ? await writeReport(reportFile, inconclusiveReport) : false;
+    return {
+      report: inconclusiveReport,
+      reportFile: wroteFile ? reportFile : null,
+      bottlenecksTotal: 0,
+      status: "inconclusive",
+      mode: input.mode,
+    };
+  }
+
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, input.exportErrors)
-      : renderFullReport(payload, input.exportErrors, {
-          hotspotLimit: Infinity,
-          hangLimit: Infinity,
-        });
+      ? renderAllClear(payload, input.exportErrors, input.modeNote)
+      : renderFullReport(
+          payload,
+          input.exportErrors,
+          { hotspotLimit: Infinity, hangLimit: Infinity },
+          input.modeNote
+        );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
   const wroteFile = reportFile ? await writeReport(reportFile, fullReport) : false;
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, input.exportErrors)
-      : renderFullReport(payload, input.exportErrors, {
-          hotspotLimit: MAX_INLINE_HOTSPOTS,
-          hangLimit: MAX_INLINE_HANGS,
-        });
+      ? renderAllClear(payload, input.exportErrors, input.modeNote)
+      : renderFullReport(
+          payload,
+          input.exportErrors,
+          { hotspotLimit: MAX_INLINE_HOTSPOTS, hangLimit: MAX_INLINE_HANGS },
+          input.modeNote
+        );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
@@ -59,14 +93,21 @@ export async function renderIosProfilerReport(
         `\n\n> Full report: \`${reportFile}\` — ${bottlenecksTotal} bottleneck(s) total, showing top ${shownHotspots} CPU hotspots and top ${shownHangs} hangs inline. Use the Read tool to view all details.`
       : inlineReport;
 
-  return { report, reportFile: wroteFile ? reportFile : null, bottlenecksTotal };
+  return {
+    report,
+    reportFile: wroteFile ? reportFile : null,
+    bottlenecksTotal,
+    status: "ok",
+    mode: input.mode,
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Report builders
-// ---------------------------------------------------------------------------
-
-function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, string>): string {
+function renderInconclusive(
+  payload: ProfilerPayload,
+  reason: string,
+  exportErrors?: Record<string, string>,
+  modeNote?: string
+): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
@@ -76,6 +117,45 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
   ];
+  if (modeNote) lines.push(`> ${modeNote}`, ``);
+
+  const errorLines = renderExportErrors(exportErrors);
+  if (errorLines.length > 0) lines.push(...errorLines, ``);
+
+  lines.push(
+    `---`,
+    ``,
+    `## ⚠️ Analysis Inconclusive`,
+    ``,
+    reason,
+    ``,
+    `This is **not** a clean result — the profiler had no trace data to analyze, so the absence ` +
+      `of findings means nothing. Re-run \`native-profiler-stop\` (check its \`exportDiagnostics\`), ` +
+      `or start a fresh \`native-profiler-start\` recording and interact with the app before stopping.`
+  );
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// Report builders
+// ---------------------------------------------------------------------------
+
+function renderAllClear(
+  payload: ProfilerPayload,
+  exportErrors?: Record<string, string>,
+  modeNote?: string
+): string {
+  const traceName = payload.metadata.traceFile
+    ? `\`${path.basename(payload.metadata.traceFile)}\``
+    : "unknown";
+  const lines = [
+    `# iOS Instruments Analysis`,
+    ``,
+    `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
+    ``,
+  ];
+
+  if (modeNote) lines.push(`> ${modeNote}`, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -95,7 +175,8 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
 function renderFullReport(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
-  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity }
+  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
+  modeNote?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -115,6 +196,8 @@ function renderFullReport(
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
   ];
+
+  if (modeNote) lines.push(`> ${modeNote}`, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {

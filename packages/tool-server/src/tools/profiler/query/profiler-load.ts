@@ -13,6 +13,10 @@ import {
 import { resolveDevice } from "../../../utils/device-info";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
+import {
+  metadataPathForSession,
+  readNativeProfilerMetadata,
+} from "../../../utils/ios-profiler/metadata";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
 // session_id is interpolated into on-disk file paths
@@ -302,10 +306,29 @@ async function loadNativeSession(
     );
   }
 
-  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(files);
+  // Recover host-all-processes scoping from the sidecar written at stop time.
+  // Without it, a host-fallback trace reloaded on a fresh process would parse
+  // host-wide instead of app-scoped. Falls back to any live session state.
+  const meta = await readNativeProfilerMetadata(metadataPathForSession(debugDir, sessionId));
+  const processFilterPid = meta?.processFilterPid ?? api.processFilterPid ?? null;
+
+  const { cpuSamples, uiHangs, cpuHotspots, memoryLeaks } = await runIosProfilerPipeline(
+    files,
+    processFilterPid
+  );
 
   api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
   api.exportedFiles = files;
+  if (meta) {
+    api.recordingMode = meta.mode;
+    api.processFilterPid = meta.processFilterPid;
+    if (meta.appProcess) api.appProcess = meta.appProcess;
+  }
+
+  const scopeNote =
+    meta?.mode === "host-all-processes"
+      ? `\n- Mode: host all-processes fallback, scoped to ${meta.appProcess ?? "app"} (pid: ${meta.processFilterPid})`
+      : "";
 
   const lines: string[] = [
     `Loaded native profiler session \`${sessionId}\`.`,
@@ -313,7 +336,7 @@ async function loadNativeSession(
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
     `- CPU hotspots: ${cpuHotspots.length}`,
-    `- Memory leaks: ${memoryLeaks.length}`,
+    `- Memory leaks: ${memoryLeaks.length}${scopeNote}`,
     "",
     "Query tools (`profiler-stack-query`) are now ready to use against this data.",
   ];
