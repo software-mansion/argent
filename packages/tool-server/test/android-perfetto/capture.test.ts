@@ -60,9 +60,19 @@ vi.mock("../../src/utils/adb", () => ({
 
 import { startPerfetto, buildTraceConfig } from "../../src/utils/android-profiler/capture";
 
+// Poll on a wall-clock deadline rather than a fixed tick budget: startPerfetto
+// does real async work (resolveAndroidBinary + buildTraceConfig's fs.readFile)
+// before it calls spawn. A fixed setImmediate count can elapse before that I/O
+// lands on a loaded/cold-cache CI box, leaving lastSpawn null and the test
+// dereferencing it (TypeError reading 'child') or hanging to the 5s timeout. A
+// timed poll waits for the actual spawn regardless of host speed.
 async function waitForSpawn(): Promise<void> {
-  for (let i = 0; i < 100 && !lastSpawnRef(); i++) {
-    await new Promise((r) => setImmediate(r));
+  const deadline = Date.now() + 4000;
+  while (!lastSpawnRef() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  if (!lastSpawnRef()) {
+    throw new Error("waitForSpawn: spawn was never called within 4s");
   }
 }
 
