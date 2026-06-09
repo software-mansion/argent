@@ -18,20 +18,36 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
 });
 
-interface StopResult {
+/**
+ * iOS stop result with files exposed as downloadable artifacts. Mirrors
+ * {@link IosStopResult}, but `traceFile`/`exportedFiles` are artifact handles
+ * the MCP client materializes locally instead of raw host paths.
+ */
+interface IosStopArtifacts {
   /**
-   * The raw trace bundle as an artifact handle. On iOS it's the Instruments
-   * `.trace` directory (delivered as a gzipped tar when a remote client
-   * downloads it; local clients use the bundle in place); on Android it's the
-   * pulled `.pftrace` file.
+   * The Instruments `.trace` bundle as an artifact handle. It's a directory, so
+   * it's delivered as a gzipped tar when a remote client downloads it; local
+   * clients use the bundle in place.
    */
   traceFile: ArtifactHandle;
-  /** Exported data as artifact handles the MCP client materializes locally. */
   exportedFiles: Record<string, ArtifactHandle | null>;
-  /** Present for iOS; describes how each XML export was produced. */
-  exportDiagnostics?: ExportDiagnostics;
+  exportDiagnostics: ExportDiagnostics;
   warning?: string;
 }
+
+/**
+ * Android stop result with files exposed as downloadable artifacts. Mirrors
+ * {@link AndroidStopResult}; unlike iOS there's no `exportDiagnostics` (the
+ * `.pftrace` is pulled whole, not exported per-schema).
+ */
+interface AndroidStopArtifacts {
+  /** The pulled `.pftrace` file as a downloadable artifact handle. */
+  traceFile: ArtifactHandle;
+  exportedFiles: Record<string, ArtifactHandle | null>;
+  warning?: string;
+}
+
+type StopResult = IosStopArtifacts | AndroidStopArtifacts;
 
 const capability = {
   apple: { simulator: true, device: true },
@@ -78,23 +94,29 @@ Fails if no active native-profiler-start session exists for the given device_id.
     const device = resolveDevice(params.device_id);
     assertSupported("native-profiler-stop", capability, device);
 
-    let platformResult: IosStopResult | AndroidStopResult;
+    // Wrap each platform's raw host paths as downloadable artifacts. Kept per
+    // branch (rather than one merged object) so the return type preserves the
+    // iOS/Android distinction: iOS always carries exportDiagnostics, Android
+    // never does.
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
-      platformResult = await stopNativeProfilerIos(api);
-    } else {
-      await ensureDeps(["adb"]);
-      platformResult = await stopNativeProfilerAndroid(api);
+      const ios: IosStopResult = await stopNativeProfilerIos(api);
+      const result: IosStopArtifacts = {
+        traceFile: await registerTrace(ios.traceFile),
+        exportedFiles: await exportedFilesToArtifacts(ios.exportedFiles),
+        exportDiagnostics: ios.exportDiagnostics,
+      };
+      if (ios.warning) result.warning = ios.warning;
+      return result;
     }
 
-    const stopResult: StopResult = {
-      traceFile: await registerTrace(platformResult.traceFile),
-      exportedFiles: await exportedFilesToArtifacts(platformResult.exportedFiles),
+    await ensureDeps(["adb"]);
+    const android: AndroidStopResult = await stopNativeProfilerAndroid(api);
+    const result: AndroidStopArtifacts = {
+      traceFile: await registerTrace(android.traceFile),
+      exportedFiles: await exportedFilesToArtifacts(android.exportedFiles),
     };
-    if ("exportDiagnostics" in platformResult) {
-      stopResult.exportDiagnostics = platformResult.exportDiagnostics;
-    }
-    if (platformResult.warning) stopResult.warning = platformResult.warning;
-    return stopResult;
+    if (android.warning) result.warning = android.warning;
+    return result;
   },
 };
