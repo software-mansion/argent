@@ -20,8 +20,10 @@ vi.mock("../../src/utils/check-deps", () => ({
 }));
 
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
-import { nativeProfilerStopTool } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
-import type { IosStopResult } from "../../src/tools/profiler/native-profiler/platforms/ios";
+import {
+  nativeProfilerStopTool,
+  type IosStopArtifacts,
+} from "../../src/tools/profiler/native-profiler/native-profiler-stop";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
 
 const mockedExport = vi.mocked(exportIosTraceData);
@@ -123,7 +125,7 @@ describe("native-profiler-stop recovery branch", () => {
 
     const result = (await nativeProfilerStopTool.execute({ session: api } as never, {
       device_id: "DEVICE-UDID",
-    })) as IosStopResult;
+    })) as IosStopArtifacts;
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
     // exportedFiles are now artifact handles (materialized client-side), not raw paths.

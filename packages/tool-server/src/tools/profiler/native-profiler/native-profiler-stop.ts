@@ -23,7 +23,7 @@ const zodSchema = z.object({
  * {@link IosStopResult}, but `traceFile`/`exportedFiles` are artifact handles
  * the MCP client materializes locally instead of raw host paths.
  */
-interface IosStopArtifacts {
+export interface IosStopArtifacts {
   /**
    * The Instruments `.trace` bundle as an artifact handle. It's a directory, so
    * it's delivered as a gzipped tar when a remote client downloads it; local
