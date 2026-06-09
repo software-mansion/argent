@@ -16,11 +16,19 @@ const MAX_COMPONENT_ENTRIES = 15; // cap cascade display; store total count sepa
 
 export function buildHotCommitSummaries(
   commits: DevToolsFiberCommit[],
-  hotCommitIndices: number[]
+  hotCommitIndices: number[],
+  unattributedByCommit?: Array<[number, number, number]>
 ): HotCommitSummary[] {
   if (commits.length === 0) return [];
 
   const hotSet = new Set(hotCommitIndices);
+
+  const unattributedMap = new Map<number, { count: number; ms: number }>();
+  if (unattributedByCommit) {
+    for (const [commitIndex, count, ms] of unattributedByCommit) {
+      unattributedMap.set(commitIndex, { count, ms });
+    }
+  }
 
   // Group commits by commitIndex (includes both hot and margin entries)
   const byCommit = new Map<number, DevToolsFiberCommit[]>();
@@ -63,6 +71,7 @@ export function buildHotCommitSummaries(
       string,
       {
         totalSelf: number;
+        totalActual: number;
         count: number;
         firstEntry: DevToolsFiberCommit;
         isFirstMount: boolean;
@@ -74,12 +83,14 @@ export function buildHotCommitSummaries(
       const existing = componentMap.get(e.componentName);
       if (existing) {
         existing.totalSelf += e.selfDuration ?? 0;
+        existing.totalActual += e.actualDuration ?? 0;
         existing.count++;
         // If any instance is a re-render, mark as not first-mount
         if (!isFirstMount) existing.isFirstMount = false;
       } else {
         componentMap.set(e.componentName, {
           totalSelf: e.selfDuration ?? 0,
+          totalActual: e.actualDuration ?? 0,
           count: 1,
           firstEntry: e,
           isFirstMount,
@@ -93,7 +104,7 @@ export function buildHotCommitSummaries(
     const componentEntries: HotCommitComponentEntry[] = Array.from(componentMap.entries())
       .sort((a, b) => b[1].totalSelf - a[1].totalSelf)
       .slice(0, MAX_COMPONENT_ENTRIES)
-      .map(([name, { totalSelf, count, firstEntry, isFirstMount }]) => {
+      .map(([name, { totalSelf, totalActual, count, firstEntry, isFirstMount }]) => {
         const cd = firstEntry.changeDescription;
         const reason = !isFirstMount && cd ? deriveReason(cd, firstEntry.hookTypes) : undefined;
 
@@ -115,6 +126,7 @@ export function buildHotCommitSummaries(
         const entry: HotCommitComponentEntry = {
           name,
           selfDurationMs: Math.round(totalSelf * 100) / 100,
+          actualDurationMs: Math.round(totalActual * 100) / 100,
           count,
           ...(isFirstMount && { isFirstMount: true }),
           ...(reason !== undefined && { reason }),
@@ -179,6 +191,8 @@ export function buildHotCommitSummaries(
       }
     }
 
+    const unattributed = unattributedMap.get(commitIndex);
+
     summaries.push({
       commitIndex,
       timestampMs,
@@ -193,6 +207,11 @@ export function buildHotCommitSummaries(
         rootCauseChangedHookNames.length > 0 && { rootCauseChangedHookNames }),
       components: componentEntries,
       totalComponentCount,
+      ...(unattributed &&
+        unattributed.count > 0 && {
+          unattributedMs: unattributed.ms,
+          unattributedFiberCount: unattributed.count,
+        }),
     });
   }
 

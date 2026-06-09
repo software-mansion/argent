@@ -1,7 +1,13 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi, NetworkEvent } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import {
+  nativeDevtoolsRef,
+  precheckNativeDevtools,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+  type NetworkEvent,
+} from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 
 const zodSchema = z.object({
   udid: z.string().describe("Simulator UDID"),
@@ -16,11 +22,14 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 type Result =
+  | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string }
   | { status: "ok"; count: number; events: NetworkEvent[] };
 
 export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
   id: "native-network-logs",
+  requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Retrieve network requests captured at the native NSURLProtocol level. 
 Unlike the JS-level network inspector (view-network-logs), this captures ALL network traffic from the app including native modules, Swift/Objective-C networking, and background transfers that bypass JS fetch. 
 Use when you need to inspect native-level HTTP traffic that is invisible to JS fetch interception. 
@@ -28,19 +37,13 @@ Returns { status, count, events } where each event contains URL, method, status 
 Fails if native devtools are not connected or the app is not running.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    if (await api.requiresAppRestart(params.bundleId)) {
-      return {
-        status: "restart_required",
-        message:
-          "Native devtools are not injected into the running app. " +
-          "Call restart-app then retry.",
-      };
-    }
+    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+    if (blocked) return blocked;
 
     api.activateNetworkInspection(params.bundleId);
 

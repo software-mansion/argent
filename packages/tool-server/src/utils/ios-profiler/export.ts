@@ -1,5 +1,5 @@
-import { execSync } from "child_process";
 import * as path from "path";
+import { execSyncWithTimeout } from "./run-with-timeout";
 
 /**
  * Known xctrace schema names that contain CPU time-profile data.
@@ -31,9 +31,9 @@ export interface ExportDiagnostics {
 
 function getXctraceVersion(): number {
   try {
-    const output = execSync("xctrace version 2>&1 || true", {
+    const output = execSyncWithTimeout("xctrace version 2>&1 || true", {
       encoding: "utf-8",
-    });
+    }) as string;
     const match = output.match(/(\d+)\./);
     return match ? parseInt(match[1]!, 10) : 0;
   } catch {
@@ -47,10 +47,10 @@ function getXctraceVersion(): number {
  */
 function discoverTraceSchemas(traceFile: string): string[] {
   try {
-    const toc = execSync(`xctrace export --input "${traceFile}" --toc`, {
+    const toc = execSyncWithTimeout(`xctrace export --input "${traceFile}" --toc`, {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
-    });
+    }) as string;
     const schemas: string[] = [];
     const schemaRe = /schema="([^"]+)"/g;
     let m;
@@ -100,9 +100,12 @@ function tryCpuExportFallback(
   for (const candidate of CPU_SCHEMA_CANDIDATES) {
     const xpath = `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
     try {
-      execSync(`xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`, {
-        stdio: "pipe",
-      });
+      execSyncWithTimeout(
+        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`,
+        {
+          stdio: "pipe",
+        }
+      );
       diagnostics.cpuSchemaUsed = candidate;
       return true;
     } catch {
@@ -137,7 +140,7 @@ export function exportIosTraceData(traceFile: string): {
 
       if (resolvedXpath) {
         try {
-          execSync(
+          execSyncWithTimeout(
             `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`,
             { stdio: "pipe" }
           );
@@ -163,7 +166,7 @@ export function exportIosTraceData(traceFile: string): {
       const xcVersion = getXctraceVersion();
       const halFlag = xcVersion >= 15 ? " --hal" : "";
       try {
-        execSync(
+        execSyncWithTimeout(
           `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'${halFlag}`,
           { stdio: "pipe" }
         );
@@ -171,7 +174,7 @@ export function exportIosTraceData(traceFile: string): {
       } catch {
         if (halFlag) {
           try {
-            execSync(
+            execSyncWithTimeout(
               `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
               { stdio: "pipe" }
             );
@@ -190,7 +193,7 @@ export function exportIosTraceData(traceFile: string): {
 
     // Default export (hangs, etc.)
     try {
-      execSync(
+      execSyncWithTimeout(
         `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
         { stdio: "pipe" }
       );

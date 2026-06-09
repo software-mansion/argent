@@ -2,6 +2,27 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// Stub child_process.execFile so tool-version detection does not spawn
+// 8 real subprocesses per snapshot — that was the dominant per-test cost
+// (~250ms × 18 tests). The returned string is shaped like `node --version`
+// output so downstream parsing (strip leading "v") stays exercised.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (
+      _cmd: string,
+      _args: readonly string[] | undefined,
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string, stderr: string) => void
+    ) => {
+      queueMicrotask(() => cb(null, "v0.0.0\n", ""));
+      return { on: () => {} } as unknown as ReturnType<typeof actual.execFile>;
+    },
+  };
+});
+
 import {
   readWorkspaceSnapshot,
   extractMetroPort,
@@ -166,7 +187,7 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.metro_config_raw).toContain("getDefaultConfig");
     expect(snap.has_ios_dir).toBe(true);
     expect(snap.has_android_dir).toBe(true);
-    expect(snap.has_podfile).toBe(true);
+    expect(snap.ios_has_podfile).toBe(true);
     expect(snap.lockfile).toBe("yarn.lock");
     expect(snap.config_files_found).toContain("metro.config.js");
   });
@@ -203,7 +224,8 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.has_ios_dir).toBe(false);
     expect(snap.has_android_dir).toBe(false);
     expect(snap.ios_workspace).toBeNull();
-    expect(snap.has_podfile).toBe(false);
+    expect(snap.ios_has_podfile).toBe(false);
+    expect(snap.android_has_gradle).toBe(false);
     expect(snap.lockfile).toBeNull();
     expect(snap.env_files).toEqual([]);
     expect(snap.scripts_dir_entries).toBeNull();
@@ -212,6 +234,25 @@ module.exports = getDefaultConfig(__dirname);`
     expect(snap.makefile_targets).toBeNull();
     expect(snap.lint_staged_config).toBeNull();
     expect(snap.config_files_found).toEqual([]);
+  });
+
+  it("detects android/gradlew wrapper presence", async () => {
+    await writeJson(tempDir, "package.json", { name: "AndroidApp" });
+    await mkdirIn(tempDir, "android");
+    await writeFile(join(tempDir, "android", "gradlew"), "#!/usr/bin/env sh\n");
+
+    const snap = await readWorkspaceSnapshot(tempDir);
+    expect(snap.has_android_dir).toBe(true);
+    expect(snap.android_has_gradle).toBe(true);
+  });
+
+  it("reports android_has_gradle=false when gradlew is missing", async () => {
+    await writeJson(tempDir, "package.json", { name: "AndroidNoGradle" });
+    await mkdirIn(tempDir, "android/app");
+
+    const snap = await readWorkspaceSnapshot(tempDir);
+    expect(snap.has_android_dir).toBe(true);
+    expect(snap.android_has_gradle).toBe(false);
   });
 
   it("extracts metro port from config", async () => {

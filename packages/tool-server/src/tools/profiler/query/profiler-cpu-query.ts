@@ -22,7 +22,11 @@ const timeWindowSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
   mode: z
     .enum(["top_functions", "time_window", "call_tree", "component_cpu"])
     .describe(
@@ -168,7 +172,7 @@ function renderCallTree(
       const child = nodeMap.get(childId);
       if (!child) continue;
       const name = child.callFrame.functionName;
-      if (!name || name === "(idle)") continue;
+      if (!name || name === "(idle)" || name === "[idle]" || name === "[root]") continue;
       if (isArgentProfilerFunction(name)) continue;
       const existing = calleeHits.get(name);
       if (existing) {
@@ -210,7 +214,7 @@ function renderCallTree(
       const parent = nodeMap.get(parentId);
       if (!parent) continue;
       const name = parent.callFrame.functionName;
-      if (!name || name === "(root)") continue;
+      if (!name || name === "(root)" || name === "[root]" || name === "[idle]") continue;
       if (isArgentProfilerFunction(name)) continue;
       const existing = callerHits.get(name);
       if (existing) {

@@ -25,7 +25,11 @@ export async function runPipeline(
   // Stage 00-hot-commits: Build HotCommitSummary[] from preprocessed commits
   // Uses hotCommitIndices from sessionMeta (pre-computed in react-profiler-stop)
   const hotCommitIndices = input.sessionMeta.hotCommitIndices ?? [];
-  const rawHotCommitSummaries = buildHotCommitSummaries(preprocessed, hotCommitIndices);
+  const rawHotCommitSummaries = buildHotCommitSummaries(
+    preprocessed,
+    hotCommitIndices,
+    input.sessionMeta.unattributedByCommit
+  );
 
   // Stage 00-cpu-correlate: Map Hermes CPU samples to hot commit time windows
   const firstCommitTs = preprocessed.length > 0 ? preprocessed[0]!.timestamp : null;

@@ -1,7 +1,12 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import type { NativeDevtoolsApi } from "../../blueprints/native-devtools";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import {
+  nativeDevtoolsRef,
+  precheckNativeDevtools,
+  type NativeDevtoolsApi,
+  type NativeDevtoolsInitFailedResult,
+} from "../../blueprints/native-devtools";
+import { resolveDevice } from "../../utils/device-info";
 import {
   parseNativeDescribeScreenResult,
   type NativeDescribeScreenResult,
@@ -29,11 +34,14 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 type Result =
+  | NativeDevtoolsInitFailedResult
   | { status: "restart_required"; message: string }
   | ({ status: "ok" } & NativeDescribeScreenResult);
 
 export const nativeDescribeScreenTool: ToolDefinition<Params, Result> = {
   id: "native-describe-screen",
+  requires: ["xcrun"],
+  capability: { apple: { simulator: true, device: true } },
   description: `Read the running app's native accessibility screen description via injected native devtools.
 
 Returns a flat list of accessibility leaf elements with:
@@ -50,19 +58,13 @@ Useful for evaluating or debugging the lower-level native data that powers the p
 If status is restart_required: call restart-app then retry.`,
   zodSchema,
   services: (params) => ({
-    nativeDevtools: `${NATIVE_DEVTOOLS_NAMESPACE}:${params.udid}`,
+    nativeDevtools: nativeDevtoolsRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const api = services.nativeDevtools as NativeDevtoolsApi;
 
-    if (await api.requiresAppRestart(params.bundleId)) {
-      return {
-        status: "restart_required",
-        message:
-          "Native devtools are not injected into the running app. " +
-          "Call restart-app then retry.",
-      };
-    }
+    const blocked = await precheckNativeDevtools(api, params.udid, params.bundleId);
+    if (blocked) return blocked;
 
     const rpcParams: Record<string, unknown> = {};
     if (params.skipClasses !== undefined) rpcParams.skipClasses = params.skipClasses;

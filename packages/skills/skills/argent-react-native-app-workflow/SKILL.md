@@ -1,6 +1,6 @@
 ---
 name: argent-react-native-app-workflow
-description: Step-by-step workflows for developing or debugging React Native apps with iOS simulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
+description: Step-by-step workflows for developing or debugging React Native apps on iOS simulator or Android emulator. Use when starting the app, debugging Metro, fixing builds, diagnosing runtime errors, or running tests.
 ---
 
 ## 1. Starting the React Native App
@@ -39,23 +39,27 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 1. **Projects with flavors or custom configs**: Use project-specific start script if present (e.g. `npm run start:local`), and start Metro **before** running the app.
 
-### 1.3 Run the iOS App
+### 1.3 Run the App
 
 In a **separate** terminal (Metro keeps running in the first):
 
-**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `yarn ios:debug`). Only fall back to the default if no custom scripts are defined:
+**Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`). Only fall back to the defaults below if no custom scripts are defined.
+
+**Pass the target device explicitly** — derive it from `list-devices` (see `<device_selection_rule>`):
 
 ```bash
-npx react-native run-ios
+npx react-native run-ios --simulator="<name>"        # iOS (or --udid <UDID>)
+npx react-native run-android --deviceId=<adb-serial> # Android
 ```
 
-Optional: specify device or simulator, e.g. `npx react-native run-ios --simulator="iPhone 16"`.
+**Android only**: after install, run `adb -s <serial> reverse tcp:8081 tcp:8081` so the emulator/device can reach Metro on your host. Repeat if the device restarts or adb drops.
 
 **Agent checklist:**
 
 - [ ] Metro is already running and shows "ready"
 - [ ] Command run from project root
-- [ ] If simulator not booted: use the `boot-simulator` tool with proper UDID. Refer to the `argent-simulator-setup` skill.
+- [ ] If the device isn't booted yet: use `boot-device` with the iOS `udid` or Android `avdName`. Refer to the `argent-ios-simulator-setup` / `argent-android-emulator-setup` skill.
+- [ ] Android: `adb -s <serial> reverse tcp:8081 tcp:8081` done.
 
 ---
 
@@ -131,20 +135,21 @@ Once you discover the correct build/run workflow for a project, **save it to pro
 | App needs reinstalling from .app path                 | Use `reinstall-app` tool with UDID, bundle ID, and .app path.                         |
 | Persistent native build errors                        | Full clean + reinstall (step 2 above).                                                |
 
-### 3.5 iOS Simulator Control
+### 3.5 Device Control
 
-| Action                     | Tool / Command                                     |
-| -------------------------- | -------------------------------------------------- |
-| List devices               | `list-devices` tool                                |
-| Boot a simulator           | `boot-simulator` tool (pass UDID)                  |
-| Launch an app              | `launch-app` tool (pass UDID + bundle ID)          |
-| Restart an app             | `restart-app` tool (pass UDID + bundle ID)         |
-| Open a URL / deep link     | `open-url` tool (pass UDID + URL)                  |
-| Rotate simulator           | `rotate` tool                                      |
-| Stop simulator server      | `stop-simulator-server` tool (for a specific UDID) |
-| Stop all simulator servers | `stop-all-simulator-servers` tool                  |
+| Action                     | Tool / Command                                                         |
+| -------------------------- | ---------------------------------------------------------------------- |
+| List devices               | `list-devices` tool (iOS + Android)                                    |
+| Boot an iOS simulator      | `boot-device` tool with `udid`                                         |
+| Boot an Android emulator   | `boot-device` tool with `avdName`                                      |
+| Launch an app              | `launch-app` tool (pass device id + bundle id / package name)          |
+| Restart an app             | `restart-app` tool (pass device id + bundle id / package name)         |
+| Open a URL / deep link     | `open-url` tool (pass device id + URL)                                 |
+| Rotate device              | `rotate` tool                                                          |
+| Stop simulator server      | `stop-simulator-server` tool (iOS UDID or Android serial — one device) |
+| Stop all simulator servers | `stop-all-simulator-servers` tool (iOS + Android)                      |
 
-For full simulator setup workflow, refer to the `argent-simulator-setup` skill.
+For full simulator setup workflow, refer to the `argent-ios-simulator-setup` skill.
 
 ---
 
@@ -181,6 +186,7 @@ Check the `argent-environment-inspector` result for test commands. For interacti
 
 - **Unit tests**: Look for Jest in `package.json` (`"test": "jest"`, `jest` config). Run: `npm test` or `yarn test`.
 - **E2E**: Look for Detox (`.detoxrc.js` or similar), or other E2E config. Dependencies: `detox`, `detox-cli`, and for iOS often `applesimutils`.
+- **Visible UI changes**: Use `argent-test-ui-flow` for manual QA. For `screenshot-diff` rules and parameters, follow the `argent-screenshot-diff` skill. Use it when stable before/after screenshots add meaningful pixel-visible evidence.
 - **UI flow testing**: For interactive UI testing with automatic screenshot verification, refer to the `argent-test-ui-flow` skill.
 
 ### 5.2 Running Tests (Typical)
@@ -210,9 +216,11 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Start Metro                  | `npx react-native start`                                                                                                                 |
 | Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
 | Run iOS app                  | `npx react-native run-ios`                                                                                                               |
-| List devices                 | `list-devices` tool                                                                                                                      |
-| Boot simulator               | `boot-simulator` tool                                                                                                                    |
+| Run Android app              | `npx react-native run-android`                                                                                                           |
+| List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |
+| Boot a device                | `boot-device` tool (pass `udid` for iOS or `avdName` for Android)                                                                        |
 | Take screenshot              | `screenshot` tool                                                                                                                        |
+| Compare visible UI changes   | `screenshot-diff` tool; follow the `argent-screenshot-diff` skill for baseline/current capture choices                                   |
 | Describe screen (a11y tree)  | `describe` tool for normal app screens and in-app modals; use `screenshot` only when permission/system overlays are not exposed reliably |
 | Read JS console logs         | `debugger-log-registry` tool                                                                                                             |
 | Reload JS bundle             | `debugger-reload-metro` tool                                                                                                             |
@@ -220,18 +228,20 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | Inspect React component tree | `debugger-component-tree` tool                                                                                                           |
 | Run JS in app                | `debugger-evaluate` tool                                                                                                                 |
 | iOS native logs              | `npx react-native log-ios`                                                                                                               |
+| Android native logs          | `npx react-native log-android` or `adb -s <serial> logcat`                                                                               |
 | Clean + reinstall (nuclear)  | See §3.1 step 3                                                                                                                          |
 
 ---
 
 ## Related Skills
 
-| Skill                          | When to use                                                                     |
-| ------------------------------ | ------------------------------------------------------------------------------- |
-| `argent-simulator-setup`       | Initial simulator boot and connection setup                                     |
-| `argent-simulator-interact`    | Tapping, swiping, typing, hardware buttons, gestures on the simulator           |
-| `argent-metro-debugger`        | Full Metro CDP debugging: component inspection, console logs, JS evaluation     |
-| `argent-react-native-profiler` | Profiling performance, finding re-render issues, CPU hotspots                   |
-| `argent-test-ui-flow`          | Interactive UI testing with automatic screenshot verification after each action |
+| Skill                           | When to use                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------- |
+| `argent-ios-simulator-setup`    | Initial iOS simulator boot and connection setup                                 |
+| `argent-android-emulator-setup` | Initial Android emulator boot and connection setup                              |
+| `argent-device-interact`        | Tapping, swiping, typing, hardware buttons, gestures on the simulator/emulator  |
+| `argent-metro-debugger`         | Full Metro CDP debugging: component inspection, console logs, JS evaluation     |
+| `argent-react-native-profiler`  | Profiling performance, finding re-render issues, CPU hotspots                   |
+| `argent-test-ui-flow`           | Interactive UI testing with automatic screenshot verification after each action |
 
 Ask the user before running tests: confirm which test suite (unit, E2E, or both), whether to use existing CI commands, and whether they want you to run existing tests, write new ones, or explore test cases yourself.

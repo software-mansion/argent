@@ -1,7 +1,26 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+
+// Stub child_process.execFile so tool-version detection does not spawn
+// 8 real subprocesses during snapshot gathering (dominant test cost).
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (
+      _cmd: string,
+      _args: readonly string[] | undefined,
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string, stderr: string) => void
+    ) => {
+      queueMicrotask(() => cb(null, "v0.0.0\n", ""));
+      return { on: () => {} } as unknown as ReturnType<typeof actual.execFile>;
+    },
+  };
+});
+
 import { gatherWorkspaceDataTool } from "../src/tools/workspace/gather-workspace-data";
 
 let tempDir: string;

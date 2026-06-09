@@ -10,6 +10,9 @@ export type ReRenderReason =
 export interface HotCommitComponentEntry {
   name: string;
   selfDurationMs: number; // total across all instances in this commit
+  // Inclusive render time: self + entire subtree owned by this component.
+  // Do NOT sum this column across siblings — parent time already includes children.
+  actualDurationMs: number;
   count: number; // number of fiber instances (>1 = list items etc.)
   isFirstMount?: boolean; // true = initial render (mount), not a re-render
   reason?: ReRenderReason;
@@ -28,7 +31,9 @@ export interface CpuCommitHotspot {
 
 export interface HotCommitSummary {
   commitIndex: number;
-  timestampMs: number; // performance.now() from device (absolute)
+  // ms since profile-start (React DevTools sets this as
+  // `performance.now() - profilingStartTime`, NOT absolute perf.now).
+  timestampMs: number;
   totalRenderMs: number;
   isMargin: boolean;
   tier: "hot" | "warm" | null; // null = margin; hot = >50ms, warm = 16-50ms
@@ -40,6 +45,11 @@ export interface HotCommitSummary {
   components: HotCommitComponentEntry[]; // grouped by name, sorted by selfDurationMs DESC (capped at 15)
   totalComponentCount: number; // total before cap (for "... and N more" display)
   cpuHotspots?: CpuCommitHotspot[]; // top JS functions by self-time during this commit's time window
+  // ms of actualDuration from fibers whose display name could not be resolved at stop time
+  // (transient components unmounted before react-profiler-stop ran). When non-zero, the
+  // per-component breakdown is incomplete — this is the size of the hole.
+  unattributedMs?: number;
+  unattributedFiberCount?: number;
 }
 
 export interface ComponentFinding {

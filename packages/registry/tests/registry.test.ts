@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { Registry } from "../src/registry";
 import { TypedEventEmitter } from "../src/event-emitter";
 import { ServiceState } from "../src/types";
@@ -538,5 +539,79 @@ describe("Registry -- getTool and extensions", () => {
     await registry.invokeTool("T");
     expect(capturedOptions.length).toBe(1);
     expect(capturedOptions[0]).toEqual({ token: "xyz" });
+  });
+});
+
+describe("Registry -- invokeTool zod enforcement (PR #194 injection root cause)", () => {
+  it("rejects params that fail the tool's zodSchema, without calling execute", async () => {
+    const registry = new Registry();
+    let executed = false;
+    registry.registerTool({
+      id: "T",
+      zodSchema: z.object({ port: z.number() }),
+      services: () => ({}),
+      async execute() {
+        executed = true;
+        return null;
+      },
+    });
+
+    // A flow-execute / run-sequence style call with a string where the schema
+    // says number — previously this reached execute() raw (→ shell injection).
+    await expect(registry.invokeTool("T", { port: "0; touch /tmp/pwn; #" })).rejects.toThrow(
+      /Invalid params for tool "T"/
+    );
+    expect(executed).toBe(false);
+  });
+
+  it("passes zod-parsed data (defaults applied) to execute on valid input", async () => {
+    const registry = new Registry();
+    let received: unknown;
+    registry.registerTool({
+      id: "T",
+      zodSchema: z.object({ port: z.coerce.number().default(8081) }),
+      services: () => ({}),
+      async execute(_s, params) {
+        received = params;
+        return null;
+      },
+    });
+
+    await registry.invokeTool("T", { port: "1234" });
+    expect(received).toEqual({ port: 1234 }); // coerced, not the raw string
+  });
+
+  it("treats missing params as {} so no-arg tools (z.object({})) still invoke", async () => {
+    const registry = new Registry();
+    let executed = false;
+    registry.registerTool({
+      id: "T",
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        executed = true;
+        return "ok";
+      },
+    });
+
+    const result = await registry.invokeTool("T");
+    expect(result).toBe("ok");
+    expect(executed).toBe(true);
+  });
+
+  it("leaves schema-less tools untouched (params passed through)", async () => {
+    const registry = new Registry();
+    let received: unknown;
+    registry.registerTool({
+      id: "T",
+      services: () => ({}),
+      async execute(_s, params) {
+        received = params;
+        return null;
+      },
+    });
+
+    await registry.invokeTool("T", { anything: "goes" });
+    expect(received).toEqual({ anything: "goes" });
   });
 });

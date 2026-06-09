@@ -1,33 +1,49 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
 import * as path from "path";
-import type { ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import {
   cacheProfilerPaths,
   type ProfilerSessionPaths,
 } from "../../../blueprints/react-profiler-session";
 import {
-  IOS_PROFILER_SESSION_NAMESPACE,
-  type IosProfilerSessionApi,
-} from "../../../blueprints/ios-profiler-session";
+  nativeProfilerSessionRef,
+  type NativeProfilerSessionApi,
+} from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import { readCommitTree } from "../../../utils/react-profiler/debug/dump";
 import { runIosProfilerPipeline } from "../../../utils/ios-profiler/pipeline/index";
 import { getDebugDir } from "../../../utils/react-profiler/debug/dump";
 
+// session_id is interpolated into on-disk file paths
+// (`react-profiler-${id}_cpu.json`, `native-profiler-${id}_raw_cpu.xml`, …).
+// Restrict it to a safe token so it can't traverse out of the debug dir.
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+function assertSafeSessionId(sessionId: string): void {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    throw new Error(
+      `Invalid session_id "${sessionId}". Allowed: letters, digits, '_' and '-' ` +
+        `(no path separators, no "..").`
+    );
+  }
+}
+
 const zodSchema = z.object({
   mode: z
-    .enum(["list", "load_react", "load_instruments"])
+    .enum(["list", "load_react", "load_native"])
     .describe(
       "list: show available sessions on disk. " +
         "load_react: load a React profiler session into memory for query tools. " +
-        "load_instruments: re-parse iOS Instruments XML files into memory for query tools."
+        "load_native: re-parse native profiler XML files (xctrace on iOS) into memory for query tools."
     ),
   session_id: z
     .string()
+    .regex(SESSION_ID_PATTERN, "session_id may only contain letters, digits, '_' and '-'")
     .optional()
     .describe(
       "Timestamp-based session identifier (e.g. '20250313-143022') from the list output. " +
-        "Required for load_react and load_instruments modes."
+        "Required for load_react and load_native modes."
     ),
   port: z.coerce
     .number()
@@ -38,7 +54,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "iOS Simulator UDID (logicalDeviceId). Used to cache the loaded React session under the correct port+device key, and required to resolve the iOS session for load_instruments."
+      "Target device id from `list-devices`. Used to cache the loaded React session under the correct port+device key, and required to resolve the native profiler session for load_native."
     ),
 });
 
@@ -51,7 +67,7 @@ async function listSessions(debugDir: string): Promise<string> {
   }
 
   const reactSessions = new Map<string, string[]>();
-  const instrumentsSessions = new Map<string, string[]>();
+  const nativeSessions = new Map<string, string[]>();
 
   for (const entry of entries) {
     const reactMatch = entry.match(/^react-profiler-(\d{8}-\d{6})_/);
@@ -62,15 +78,15 @@ async function listSessions(debugDir: string): Promise<string> {
       continue;
     }
 
-    const instrMatch = entry.match(/^ios-profiler-(\d{8}-?\d{6})/);
-    if (instrMatch) {
-      const sid = instrMatch[1];
-      if (!instrumentsSessions.has(sid)) instrumentsSessions.set(sid, []);
-      instrumentsSessions.get(sid)!.push(entry);
+    const nativeMatch = entry.match(/^native-profiler-(\d{8}-?\d{6})/);
+    if (nativeMatch) {
+      const sid = nativeMatch[1];
+      if (!nativeSessions.has(sid)) nativeSessions.set(sid, []);
+      nativeSessions.get(sid)!.push(entry);
     }
   }
 
-  if (reactSessions.size === 0 && instrumentsSessions.size === 0) {
+  if (reactSessions.size === 0 && nativeSessions.size === 0) {
     return "_No profiling sessions found in the debug directory._";
   }
 
@@ -103,11 +119,11 @@ async function listSessions(debugDir: string): Promise<string> {
     lines.push("");
   }
 
-  if (instrumentsSessions.size > 0) {
-    lines.push("### iOS Instruments Sessions", "");
+  if (nativeSessions.size > 0) {
+    lines.push("### Native Profiler Sessions", "");
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
-    for (const [sid, files] of [...instrumentsSessions.entries()].sort().reverse()) {
+    for (const [sid, files] of [...nativeSessions.entries()].sort().reverse()) {
       const hasCpu = files.some((f) => f.includes("_raw_cpu.xml"));
       const hasHangs = files.some((f) => f.includes("_raw_hangs.xml"));
       const hasLeaks = files.some((f) => f.includes("_raw_leaks.xml"));
@@ -123,7 +139,7 @@ async function listSessions(debugDir: string): Promise<string> {
   }
 
   lines.push(
-    "_Use `load_react` or `load_instruments` with the session_id to load data for query tools._"
+    "_Use `load_react` or `load_native` with the session_id to load data for query tools._"
   );
 
   return lines.join("\n");
@@ -135,6 +151,7 @@ async function loadReactSession(
   port: number,
   deviceId: string
 ): Promise<string> {
+  assertSafeSessionId(sessionId);
   const cpuPath = path.join(debugDir, `react-profiler-${sessionId}_cpu.json`);
   const commitsPath = path.join(debugDir, `react-profiler-${sessionId}_commits.json`);
   const cpuIndexPath = path.join(debugDir, `react-profiler-${sessionId}_cpu-index.json`);
@@ -240,15 +257,16 @@ async function loadReactSession(
   return lines.join("\n");
 }
 
-async function loadInstrumentsSession(
+async function loadNativeSession(
   debugDir: string,
   sessionId: string,
-  api: IosProfilerSessionApi
+  api: NativeProfilerSessionApi
 ): Promise<string> {
+  assertSafeSessionId(sessionId);
   // Find exported XML files for this session
-  const cpuXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_cpu.xml`);
-  const hangsXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_hangs.xml`);
-  const leaksXml = path.join(debugDir, `ios-profiler-${sessionId}_raw_leaks.xml`);
+  const cpuXml = path.join(debugDir, `native-profiler-${sessionId}_raw_cpu.xml`);
+  const hangsXml = path.join(debugDir, `native-profiler-${sessionId}_raw_hangs.xml`);
+  const leaksXml = path.join(debugDir, `native-profiler-${sessionId}_raw_leaks.xml`);
 
   const files: Record<string, string | null> = {
     cpu: null,
@@ -279,8 +297,8 @@ async function loadInstrumentsSession(
 
   if (!files.cpu && !files.hangs && !files.leaks) {
     throw new Error(
-      `No iOS Instruments XML files found for session "${sessionId}". ` +
-        `Expected files matching ios-profiler-${sessionId}_raw_*.xml in ${debugDir}`
+      `No native profiler XML files found for session "${sessionId}". ` +
+        `Expected files matching native-profiler-${sessionId}_raw_*.xml in ${debugDir}`
     );
   }
 
@@ -290,7 +308,7 @@ async function loadInstrumentsSession(
   api.exportedFiles = files;
 
   const lines: string[] = [
-    `Loaded iOS Instruments session \`${sessionId}\`.`,
+    `Loaded native profiler session \`${sessionId}\`.`,
     "",
     `- CPU samples: ${cpuSamples.length}`,
     `- UI hangs: ${uiHangs.length}`,
@@ -306,19 +324,19 @@ async function loadInstrumentsSession(
 export const profilerLoadTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-load",
   description: `Fetch and restore a previously captured profiling session from disk into memory so query tools can operate on it.
-This is the disk-restore counterpart to react-profiler-stop/ios-profiler-stop, which write data, and to the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query), which read it.
+This is the disk-restore counterpart to react-profiler-stop/native-profiler-stop, which write data, and to the query tools (profiler-cpu-query, profiler-commit-query, profiler-stack-query), which read it.
 Use when you need to revisit past session data without capturing a new recording.
 Modes:
 - list: Show all available profiling sessions in the project's debug directory.
 - load_react: Load a React profiler session (CPU profile + commit tree) into memory. Requires session_id.
-- load_instruments: Re-parse iOS Instruments XML files into memory. Requires session_id and device_id.
+- load_native: Re-parse native profiler XML files into memory. Requires session_id and device_id.
 Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or required XML files are missing from disk.`,
   zodSchema,
   services: (params) => {
-    const svcs: Record<string, string> = {};
-    if (params.mode === "load_instruments") {
-      svcs.session = `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`;
+    const svcs: Record<string, ServiceRef> = {};
+    if (params.mode === "load_native") {
+      svcs.session = nativeProfilerSessionRef(resolveDevice(params.device_id));
     }
     return svcs;
   },
@@ -338,14 +356,14 @@ Fails if the session_id is not found or required XML files are missing from disk
         return loadReactSession(debugDir, params.session_id, params.port, params.device_id);
       }
 
-      case "load_instruments": {
+      case "load_native": {
         if (!params.session_id) {
           throw new Error(
-            "load_instruments mode requires the session_id parameter. Use list mode first."
+            "load_native mode requires the session_id parameter. Use list mode first."
           );
         }
-        const api = services.session as IosProfilerSessionApi;
-        return loadInstrumentsSession(debugDir, params.session_id, api);
+        const api = services.session as NativeProfilerSessionApi;
+        return loadNativeSession(debugDir, params.session_id, api);
       }
 
       default:

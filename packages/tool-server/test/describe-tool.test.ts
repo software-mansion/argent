@@ -1,10 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-service";
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
-import { createDescribeTool } from "../src/tools/interactions/describe";
+import { createDescribeTool } from "../src/tools/describe";
+import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
 
-function makeAXServiceApi(response: AXDescribeResponse): AXServiceApi {
+// The describe tool no longer surfaces the JSON tree — `result.description`
+// is the text rendering produced by format-tree.ts. `elementLineCount` counts
+// the per-element lines (everything indented under a section header), which
+// is what the old `tree.children.length` was effectively measuring once you
+// ignore the root AXGroup wrapper.
+function elementLineCount(description: string): number {
+  return description.split("\n").filter((l) => /^ {2}AX/.test(l)).length;
+}
+
+function makeAXServiceApi(
+  response: AXDescribeResponse,
+  options?: { degraded?: boolean }
+): AXServiceApi {
   return {
+    degraded: options?.degraded ?? false,
     describe: async () => response,
     alertCheck: async () => response.alertVisible,
     ping: async () => true,
@@ -21,6 +35,7 @@ function makeNativeDevtoolsApi(options: {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
+    getInitFailure: () => null,
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,
     listConnectedBundleIds: () => [...connected],
@@ -66,6 +81,15 @@ function makeMockRegistry(options: {
 }
 
 describe("describe tool", () => {
+  beforeEach(() => {
+    // `describe` dispatches by udid shape (classifyDevice). The tests pass
+    // iOS-shape udids that route to the iOS branch, whose `requires:["xcrun"]`
+    // would shell out to probe PATH on Linux CI without xcrun. Prime the dep
+    // cache so neither branch probes — handlers run with mock services.
+    __resetDepCacheForTests();
+    __primeDepCacheForTests(["xcrun", "adb"]);
+  });
+
   it("returns elements from ax-service daemon", async () => {
     const axApi = makeAXServiceApi({
       alertVisible: false,
@@ -82,11 +106,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.role).toBe("AXGroup");
-    expect(result.tree.children[0]?.label).toBe("General");
-    expect(result.tree.children[0]?.role).toBe("AXButton");
+    expect(result.description).toContain("ROOT  AXGroup");
+    expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
   it("returns dialog elements when alertVisible is true", async () => {
@@ -110,12 +133,11 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(2);
-    expect(result.tree.children[0]?.label).toBe("Allow Once");
-    expect(result.tree.children[0]?.role).toBe("AXButton");
-    expect(result.tree.children[1]?.label).toBe("Don\u2019t Allow");
+    expect(elementLineCount(result.description)).toBe(2);
+    expect(result.description).toMatch(/AXButton\s+"Allow Once"/);
+    expect(result.description).toMatch(/AXButton\s+"Don\u2019t Allow"/);
   });
 
   it("returns empty root when no elements and no native fallback", async () => {
@@ -127,10 +149,10 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.role).toBe("AXGroup");
-    expect(result.tree.children).toHaveLength(0);
+    expect(result.description).toContain("ROOT  AXGroup");
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("uses bundleId for native-devtools fallback when AX returns empty", async () => {
@@ -159,10 +181,12 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.apple.Preferences" });
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.apple.Preferences" }
+    );
     expect(result.source).toBe("native-devtools");
-    expect(result.tree.children[0]?.label).toBe("General");
-    expect(result.tree.children[0]?.role).toBe("AXButton");
+    expect(result.description).toMatch(/AXButton\s+"General"/);
   });
 
   it("falls back to native-devtools with auto-target when AX returns empty", async () => {
@@ -191,9 +215,9 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("native-devtools");
-    expect(result.tree.children[0]?.label).toBe("Hello World");
+    expect(result.description).toContain('"Hello World"');
     expect(result.should_restart).toBeUndefined();
   });
 
@@ -211,10 +235,13 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.example.app" });
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
     expect(result.source).toBe("ax-service");
     expect(result.should_restart).toBe(true);
-    expect(result.tree.children).toHaveLength(0);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("returns empty AX result when native-devtools is unavailable", async () => {
@@ -227,17 +254,20 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(0);
+    expect(elementLineCount(result.description)).toBe(0);
     expect(result.should_restart).toBeUndefined();
   });
 
-  it("throws when ax-service is unavailable", async () => {
+  it("returns degraded result with hint when ax-service is unavailable", async () => {
     const registry = makeMockRegistry({});
     const tool = createDescribeTool(registry);
 
-    await expect(tool.execute({}, { udid: "SIM-1" })).rejects.toThrow("ax-service not available");
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.source).toBe("ax-service");
+    expect(result.hint).toMatch(/boot-device/);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 
   it("returns multiple elements with correct roles", async () => {
@@ -267,13 +297,14 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1" });
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(3);
-    expect(result.tree.children[0]?.role).toBe("AXTextField");
-    expect(result.tree.children[0]?.value).toBe("Search");
-    expect(result.tree.children[1]?.role).toBe("AXButton");
-    expect(result.tree.children[2]?.label).toBe("Accessibility");
+    expect(elementLineCount(result.description)).toBe(3);
+    // value is dropped when it duplicates label — see format-tree.ts hasContent comment
+    expect(result.description).toMatch(/AXTextField\s+"Search"\s+\(/);
+    expect(result.description).not.toMatch(/value="Search"/);
+    expect(result.description).toMatch(/AXButton\s+"General"/);
+    expect(result.description).toMatch(/AXButton\s+"Accessibility"/);
   });
 
   it("resolves ax-service with the correct URN", async () => {
@@ -292,8 +323,59 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi });
     const tool = createDescribeTool(registry);
 
-    await tool.execute({}, { udid: "ABC-12345" });
-    expect(registry.resolveService).toHaveBeenCalledWith("AXService:ABC-12345");
+    await tool.execute({}, { udid: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB" });
+    expect(registry.resolveService).toHaveBeenCalledWith(
+      "AXService:BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB",
+      {
+        device: { id: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", platform: "ios", kind: "simulator" },
+        transport: "unix",
+      }
+    );
+  });
+
+  it("includes hint when ax-service is degraded (sim booted outside argent)", async () => {
+    const axApi = makeAXServiceApi(
+      {
+        alertVisible: false,
+        screenFrame: { width: 440, height: 956 },
+        elements: [
+          {
+            label: "General",
+            frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+            traits: ["button"],
+          },
+        ],
+      },
+      { degraded: true }
+    );
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.source).toBe("ax-service");
+    expect(result.hint).toMatch(/boot-device/);
+    expect(result.hint).toMatch(/system dialogs/i);
+  });
+
+  it("omits hint when ax-service is not degraded", async () => {
+    const axApi = makeAXServiceApi({
+      alertVisible: false,
+      screenFrame: { width: 440, height: 956 },
+      elements: [
+        {
+          label: "General",
+          frame: { x: 0.045, y: 0.337, width: 0.909, height: 0.046 },
+          traits: ["button"],
+        },
+      ],
+    });
+
+    const registry = makeMockRegistry({ axService: axApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA" });
+    expect(result.hint).toBeUndefined();
   });
 
   it("returns empty AX result when native queryViewHierarchy returns an error", async () => {
@@ -310,8 +392,11 @@ describe("describe tool", () => {
     const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
     const tool = createDescribeTool(registry);
 
-    const result = await tool.execute({}, { udid: "SIM-1", bundleId: "com.example.app" });
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
     expect(result.source).toBe("ax-service");
-    expect(result.tree.children).toHaveLength(0);
+    expect(elementLineCount(result.description)).toBe(0);
   });
 });

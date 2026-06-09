@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
-  IOS_PROFILER_SESSION_NAMESPACE,
-  type IosProfilerSessionApi,
-} from "../../../blueprints/ios-profiler-session";
+  nativeProfilerSessionRef,
+  type NativeProfilerSessionApi,
+} from "../../../blueprints/native-profiler-session";
+import { resolveDevice } from "../../../utils/device-info";
 import type { CpuSample, UiHang, CpuHotspot, MemoryLeak } from "../../../utils/ios-profiler/types";
 import {
   findDominantFunction,
@@ -34,9 +35,11 @@ const zodSchema = z.object({
     .describe("Max results to return (default 15)"),
 });
 
-function getParsedData(api: IosProfilerSessionApi) {
+function getParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
-    throw new Error("No parsed trace data. Run ios-profiler-stop → ios-profiler-analyze first.");
+    throw new Error(
+      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first."
+    );
   }
   return api.parsedData;
 }
@@ -312,22 +315,22 @@ function formatBytes(bytes: number): string {
 
 export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "profiler-stack-query",
-  description: `Query iOS Instruments trace data for iterative investigation of native performance.
-Requires ios-profiler-stop → ios-profiler-analyze to have been called first.
+  description: `Query native profiler trace data for iterative investigation of native performance.
+Requires native-profiler-stop → native-profiler-analyze to have been called first.
 Modes:
 - hang_stacks: Full CPU context during a specific hang (by hang_index).
 - function_callers: Who calls a specific native function and what it calls.
 - thread_breakdown: CPU time split by thread, optionally filtered.
 - leak_stacks: Memory leak details, optionally filtered by object_type.
-Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after ios-profiler-analyze.
+Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks after native-profiler-analyze.
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
-Fails if ios-profiler-analyze has not been run or no parsed trace data is in memory.`,
+Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
   services: (params) => ({
-    session: `${IOS_PROFILER_SESSION_NAMESPACE}:${params.device_id}`,
+    session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
   async execute(services, params) {
-    const api = services.session as IosProfilerSessionApi;
+    const api = services.session as NativeProfilerSessionApi;
     const data = getParsedData(api);
 
     switch (params.mode) {

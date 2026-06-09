@@ -2,15 +2,20 @@ import { ServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
+import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
 
-const PREFIXES = [`${SIMULATOR_SERVER_NAMESPACE}:`, `${NATIVE_DEVTOOLS_NAMESPACE}:`];
+const PREFIXES = [
+  `${SIMULATOR_SERVER_NAMESPACE}:`,
+  `${NATIVE_DEVTOOLS_NAMESPACE}:`,
+  `${ANDROID_DEVTOOLS_NAMESPACE}:`,
+];
 
 export function createStopAllSimulatorServersTool(
   registry: Registry
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
-    description: `Stop all running simulator-server processes and native devtools services and free their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
+    description: `Stop all running simulator-server processes (iOS + Android) and native devtools services and free their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
     services: () => ({}),
     async execute() {
       const snapshot = registry.getSnapshot();

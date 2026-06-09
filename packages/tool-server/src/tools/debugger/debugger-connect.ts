@@ -7,7 +7,7 @@ const zodSchema = z.object({
   device_id: z
     .string()
     .describe(
-      "iOS Simulator UDID (logicalDeviceId). The returned logicalDeviceId must be forwarded as device_id to all subsequent debugger-* and profiler-* calls to pin them to this device."
+      "Device logicalDeviceId (iOS simulator UDID or Android logicalDeviceId returned by Metro). The returned logicalDeviceId must be forwarded as device_id to all subsequent debugger-* and profiler-* calls to pin them to this device."
     ),
 });
 

@@ -3,7 +3,7 @@ import {
   describeNodeSchema,
   getDescribeTapPoint,
   parseDescribeResult,
-} from "../src/tools/interactions/describe-contract";
+} from "../src/tools/describe/contract";
 
 const settingsDescribeSample = {
   role: "AXGroup",

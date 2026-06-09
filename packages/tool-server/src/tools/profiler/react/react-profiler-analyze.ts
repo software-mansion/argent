@@ -31,7 +31,11 @@ const annotationSchema = z.object({
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
   project_root: z
     .string()
     .describe("Absolute path to the RN project root for session context detection"),
@@ -86,9 +90,13 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     }
 
     let commitTree: DevToolsCommitTree;
+    let unattributedByCommit: Array<[number, number, number]> | undefined;
     if (sessionPaths.commitsPath) {
       const onDisk = await readCommitTree(sessionPaths.commitsPath);
       commitTree = { commits: onDisk.commits, hookNames: new Map() };
+      if (onDisk.meta?.unattributedByCommit) {
+        unattributedByCommit = onDisk.meta.unattributedByCommit;
+      }
     } else {
       commitTree = { commits: [], hookNames: new Map() };
     }
@@ -119,6 +127,7 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
         ...(totalReactCommits !== null && {
           totalReactCommits,
         }),
+        ...(unattributedByCommit && { unattributedByCommit }),
       },
     };
 

@@ -1,40 +1,52 @@
 ---
-description: Argent iOS Simulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
+description: Argent iOS Simulator and Android Emulator Agent — always-on guidance for methodology and tools for working with, interacting, testing and profiling mobile app work
 alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator control. Argent MCP tools are the preferred form of interaction with the application.
+Argent MCP tools are available in this project for iOS simulator and Android emulator control. Argent MCP tools are the preferred form of interaction with the application.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
 Use cases:
 
-- User mentions iOS simulator, device, or app interaction
-- The app user is working with is a mobile application which can be run in the simulator
+- User mentions iOS simulator, Android emulator, device, or app interaction
+- The app user is working with is a mobile application which can be run in a simulator/emulator
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
-- Running, debugging, or testing a React Native app
-- Profiling performance or diagnosing re-renders in a React Native app
+- Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
+- Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
+- Running, debugging, or testing a React Native app (iOS or Android)
+- Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
   </description>
 
 <tapping_rule>
 <important>**Never** derive tap coordinates from a screenshot</important>
 Before **every** tap, you MUST call a discovery tool and extract coordinates from the result. This is not optional. Preferred tools are, in order:
 
-- `describe` - native app-level components and safely targetable foreground apps.
-- `native-describe-screen` - accessibility screen description via injected native devtools
+- `describe` - native app-level components and safely targetable foreground apps (iOS and Android).
+- `native-describe-screen` - accessibility screen description via injected native devtools (iOS only)
 - `debugger-component-tree` - react-native specific components
 
-`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point.
+`native-user-interactable-view-at-point` / `native-view-at-point` are follow-up diagnostics once you already have a candidate point (iOS only).
 
 Whenever something changed YOU MUST first call `describe`, or another appropriate discovery tool so you do not hallucinate element positions. Do not guess coordinates if you can use discovery tool. Do not tap if you have not called a discovery tool in the current step. Screenshots alone are never sufficient for coordinates.
 
 If a **tap fails twice** at the same coordinates, **stop retrying**. Re-run the discovery tool.
 
-If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-simulator-interact` to choose the correct next action.
+If `describe` fails, **read the exact error before reacting**, follow the recovery guidance in `argent-device-interact` to choose the correct next action.
 
-Before starting to interact with the app, read the `argent-simulator-interact` skill first.
+Before starting to interact with the app, read the `argent-device-interact` skill first.
 </tapping_rule>
+
+<device_selection_rule>
+Before booting, running, or interacting with any app, call `list-devices` first - prefer running devices.
+
+Decision order:
+
+1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`.
+3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
+   </device_selection_rule>
 
 <skill_reading_rule>
 <important>Always read relevant skills for guidance before executing argent-mcp tool - read skill_routing reference</important>
@@ -42,16 +54,16 @@ Before starting to interact with the app, read the `argent-simulator-interact` s
 
 <general_rules>
 
-- All simulator interactions go through argent MCP tools — never use `xcrun simctl`,
+- All simulator/emulator interactions go through argent MCP tools — never use `xcrun simctl`,
   raw `curl` to simulator ports, or the simulator-server binary directly.
 - Before calling any gesture tool for the first time, use ToolSearch to load its schema.
 - Interaction tools (`gesture-tap`, `gesture-swipe`, `gesture-pinch`, `gesture-rotate`, `gesture-custom`, `launch-app`, etc.) return a screenshot automatically.
   Call `screenshot` separately only for a baseline before any action or after a delay.
 - Always open apps with `launch-app` or `open-url` — never tap home screen icons.
-- Always use `run-sequence` when performing multiple sequential simulator actions where you don't need to observe the screen between steps. More in `simulator-interact` skill.
+- Always use `run-sequence` when performing multiple sequential device actions where you don't need to observe the screen between steps. More in `argent-device-interact` skill.
 - When the session ends or the user says they are done: call `stop-all-simulator-servers`.
   If the user started Metro separately, ask whether to call `stop-metro` (specify the port if not 8081).
-- If tools provided by mcp-server are not sufficient and action can be done using `xcrun` or other commands, use the command. Examples: changing simulator options, performing simulator action such as lock, shake, etc.
+- If tools provided by mcp-server are not sufficient and action can be done using `xcrun`, `adb`, or other commands, use the command. Examples: changing device options, performing a device action such as lock, shake, etc.
 - When waiting for an action, do not call `screenshot` repeatedly without a proper wait mechanism. For example, six consecutive `screenshot` calls with no adequate delay between them will cause context bloat.
   </general_rules>
 
@@ -69,17 +81,28 @@ When `is_react_native` is true: load `argent-react-native-app-workflow` skill. U
 Load the matching skill before starting work and executing tools from argent-mcp — skills contain the full step-by-step
 procedure and edge-case handling for each workflow.
 
-SIMULATOR SETUP
-Skill: `argent-simulator-setup`
-When: Beginning a task that involves the simulator, no simulator booted yet, need UDID or simulator-server.
+PLATFORM DETECTION
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS.
+
+iOS SIMULATOR SETUP
+Skill: `argent-ios-simulator-setup`
+When: Beginning a task that involves the iOS simulator, no simulator booted yet, need UDID or simulator-server.
+
+ANDROID EMULATOR SETUP
+Skill: `argent-android-emulator-setup`
+When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
-Skill: `argent-simulator-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, or taking standalone screenshots.
+Skill: `argent-device-interact`
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change.
+
+SCREENSHOT DIFF & VISUAL REGRESSION
+Skill: `argent-screenshot-diff`
+When: Explicit visual regression, screenshot diff, compare screenshots, before/after visual comparison requests, or visible UI changes where stable pixel comparison would add useful evidence.
 
 RUNNING / BUILDING / DEBUGGING REACT NATIVE APP
 Skill: `argent-react-native-app-workflow`
-When: Project is react-native, starting Metro or running iOS app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
+When: Project is react-native, starting Metro or running the iOS or Android app, build failures, pod issues, lost Metro connection, reading logs, reloading JS bundle, reinstalling app.
 
 JS EVALUATION, METRO CONNECTION, REACT NATIVE
 Skill: `argent-metro-debugger`
@@ -89,9 +112,9 @@ REACT APP & COMPONENT PROFILING
 Use skill: `argent-react-native-profiler`
 When: To measure performance of specific components, to find app-wide bottlenecks. Investigating re-renders or CPU hotspots, producing ranked performance reports.
 
-NATIVE iOS PROFILING
-Use skill: `argent-ios-profiler`
-When: Profiling native iOS performance (CPU hotspots, UI hangs, memory leaks via Instruments). Useful as a reference for iOS-specific investigation when running dual profiling via `argent-react-native-profiler`.
+NATIVE PROFILING
+Use skill: `argent-native-profiler`
+When: Profiling native performance (CPU hotspots, UI hangs, memory leaks). iOS only today; Android on the roadmap. Useful as a reference for platform-specific investigation when running dual profiling via `argent-react-native-profiler`.
 
 PERFORMANCE OPTIMIZATION
 Use skill: `argent-react-native-optimization`
@@ -99,7 +122,7 @@ When: App feels slow, user asks to optimize, reducing bundle size, improving sta
 
 END-TO-END UI TESTING
 Skill: `argent-test-ui-flow`
-When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app.
+When: Verifying complete user flows, running interact → screenshot → verify loops, testing features by using the app, executing manual QA steps, or validating visible UI changes or visual behavior after implementation.
 
 RECORDING & REPLAYING FLOWS
 Use skill: `argent-create-flow`

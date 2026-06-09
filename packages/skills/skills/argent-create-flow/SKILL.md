@@ -1,6 +1,6 @@
 ---
 name: argent-create-flow
-description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of simulator actions.
+description: Record a reusable flow (scripted sequence of MCP tool calls) that can be replayed later with a single command. Use when the user asks to create, record, or build a flow, or to script a sequence of device actions.
 ---
 
 ## 1. Overview
@@ -99,7 +99,7 @@ flow-execute   { name: "open-settings", project_root: "/Users/dev/MyApp", prereq
 Flow files use YAML. The top-level is an object with `executionPrerequisite` (describes required state) and `steps` (array of actions):
 
 - `- echo: <message>` — a label
-- `- tool: <name>` with optional `args:` — a tool call
+- `- tool: <name>` with optional `args:` — a tool call. Add `delayMs: <ms>` to sleep that long before the step runs (use sparingly — only when the app needs a fixed wait between actions).
 
 Example `.yaml` file:
 
@@ -129,7 +129,7 @@ steps:
 
 You do not need the user to ask for a flow. Record one proactively when you recognize any of these patterns:
 
-- **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `argent-react-native-profiler` and `argent-ios-profiler` skills).
+- **About to re-profile**: You completed a profiling session and are about to apply a fix and re-profile. Record the interaction steps now so the re-profile replays them identically (see `argent-react-native-profiler` and `argent-native-profiler` skills).
 - **Repeating steps**: You have already performed a multi-step interaction sequence once and the task requires doing it again (comparison, retry, re-test).
 - **Complex path discovered**: You worked through a non-trivial sequence of taps/swipes/navigation to reach a desired app state. Capture it before it is lost.
 - **User says "again" / "one more time"**: Any request to redo what you just did is a signal to record first, then replay.

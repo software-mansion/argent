@@ -235,7 +235,7 @@ describe("workspace-reader integration (realistic RN project)", () => {
     expect(snap.has_ios_dir).toBe(true);
     expect(snap.has_android_dir).toBe(true);
     expect(snap.ios_workspace).toBe("IntegrationTestApp.xcworkspace");
-    expect(snap.has_podfile).toBe(true);
+    expect(snap.ios_has_podfile).toBe(true);
 
     // Lockfile
     expect(snap.lockfile).toBe("yarn.lock");

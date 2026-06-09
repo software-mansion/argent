@@ -79,6 +79,9 @@ export interface CommitTreeOnDisk {
     port?: number | null;
     appName?: string | null;
     deviceName?: string | null;
+    // Per-commit tuples [commitIndex, droppedFiberCount, droppedActualDurationMs]
+    // for fibers whose display name could not be resolved at stop time (transient/unmounted).
+    unattributedByCommit?: Array<[number, number, number]> | null;
   };
 }
 

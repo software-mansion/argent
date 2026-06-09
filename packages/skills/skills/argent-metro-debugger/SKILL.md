@@ -7,11 +7,21 @@ description: Debug a React Native app via Metro CDP using argent debugger tools.
 
 The debugger requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
 
+### Android: reverse port for Metro
+
+Android emulators and physical devices do not resolve the host's `localhost` by default. Before the RN app can reach Metro, forward port 8081 (or whichever port Metro is on) from the device back to the host:
+
+```bash
+adb -s <serial> reverse tcp:8081 tcp:8081
+```
+
+`<serial>` is the Android `serial` from `list-devices`. Once reversed, the app on the device connects to Metro just like an iOS simulator does, and all `debugger-*` / `network-*` / `react-profiler-*` tools work unchanged. If the device restarts or adb drops, re-run the command. A failing Metro connection on Android almost always means `adb reverse` has not been done or has been lost.
+
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, a.k.a. `logicalDeviceId`). Always make sure you target the correct app on the correct device.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID or Android serial, a.k.a. `logicalDeviceId` — the CDP-reported id that matches the device). Always make sure you target the correct app on the correct device.
 
-One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
+One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 
 ### Connect & diagnostics
 
@@ -22,10 +32,10 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 
 ### Reload & recovery
 
-| Tool                    | Purpose                                                                                  |
-| ----------------------- | ---------------------------------------------------------------------------------------- |
-| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.     |
-| `restart-app`           | Terminate and relaunch the app by UDID and bundleId. Use when app lost Metro connection. |
+| Tool                    | Purpose                                                                                       |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `debugger-reload-metro` | Reload all connected apps (like pressing "r" in Metro terminal). Needs a CDP target.          |
+| `restart-app`           | Terminate and relaunch the app by device id and bundleId. Use when app lost Metro connection. |
 
 ### Inspection & console
 
@@ -60,7 +70,7 @@ Applies to both `debugger-component-tree` and `debugger-inspect-element`. Set to
 ## 4. Golden Rules
 
 1. **`debugger-status` first when something fails** — it runs discovery, connection, and returns diagnostics.
-2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on simulator, then retry `debugger-status`.
+2. **"No CDP targets" → get the app to connect to Metro** — use `restart-app` on the device, then retry `debugger-status`.
 3. **Never assume one failure is permanent** — follow recovery steps before asking the user. For starting Metro and full failure recovery, see `argent-react-native-app-workflow` and `references/failure-scenarios.md`.
 
 ---
@@ -110,7 +120,7 @@ When reading from the log file:
 | Diagnose / check connection   | `debugger-status`                                                   |
 | Connect to Metro CDP          | `debugger-connect`                                                  |
 | Reload JS (already connected) | `debugger-reload-metro`                                             |
-| Relaunch app on simulator     | `restart-app`                                                       |
+| Relaunch app on device        | `restart-app`                                                       |
 | Inspect component at point    | `debugger-inspect-element`                                          |
 | Full component tree           | `debugger-component-tree`                                           |
 | Console log overview          | `debugger-log-registry` (summary + log file path for `Grep`/`Read`) |

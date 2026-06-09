@@ -1,7 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { Registry } from "@argent/registry";
-import { NATIVE_DEVTOOLS_NAMESPACE } from "../blueprints/native-devtools";
+import {
+  NATIVE_DEVTOOLS_NAMESPACE,
+  nativeDevtoolsRef,
+  type NativeDevtoolsApi,
+} from "../blueprints/native-devtools";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,20 +25,17 @@ async function getBootedUdids(): Promise<Set<string>> {
   return udids;
 }
 
-async function initSimulator(
+async function initUdid(
   registry: Registry,
-  watchedUdids: Set<string>,
-  udid: string
+  udid: string,
+  trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
-  watchedUdids.add(udid);
+  const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   try {
-    await registry.resolveService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`);
-  } catch (err) {
-    // Service failed to start (e.g. simulator shut down mid-init); retry next tick
-    watchedUdids.delete(udid);
-    process.stderr.write(
-      `[simulator-watcher] initSimulator failed for ${udid}: ${err instanceof Error ? err.message : err}\n`
-    );
+    const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+    trackedServices.set(udid, service);
+  } catch {
+    // Factory tolerates env-init failure; a throw here is structural.
   }
 }
 
@@ -42,9 +43,9 @@ export function startSimulatorWatcher(registry: Registry): {
   stop: () => void;
   ready: Promise<void>;
 } {
-  const watchedUdids = new Set<string>();
+  const trackedServices = new Map<string, NativeDevtoolsApi>();
 
-  async function poll(awaitInit: boolean): Promise<void> {
+  async function poll(shouldBlockUntilSettled: boolean): Promise<void> {
     let booted: Set<string>;
     try {
       booted = await getBootedUdids();
@@ -53,33 +54,35 @@ export function startSimulatorWatcher(registry: Registry): {
       return;
     }
 
-    // New simulators: start NativeDevtools service (sets launchd env + opens socket)
-    const newUdids = [...booted].filter((udid) => !watchedUdids.has(udid));
-    if (awaitInit) {
-      // First poll: await all ensureEnv completions so the server is only marked
-      // ready after injection is guaranteed for all currently-booted simulators.
-      await Promise.all(newUdids.map((udid) => initSimulator(registry, watchedUdids, udid)));
-    } else {
-      // Subsequent polls: fire-and-forget to avoid blocking the interval tick.
-      newUdids.forEach((udid) => {
-        initSimulator(registry, watchedUdids, udid).catch(() => {});
-      });
+    const newUdids = [...booted].filter((udid) => !trackedServices.has(udid));
+    const pendingAttempts: Promise<unknown>[] = newUdids.map((udid) =>
+      initUdid(registry, udid, trackedServices)
+    );
+
+    for (const [udid, service] of trackedServices) {
+      if (!booted.has(udid)) continue;
+      const failure = service.getInitFailure();
+      if (failure && !failure.givenUp) {
+        pendingAttempts.push(service.ensureEnvReady().catch(() => {}));
+      }
     }
 
-    // Simulators that shut down: dispose service and clean up
-    for (const udid of watchedUdids) {
+    if (shouldBlockUntilSettled) await Promise.all(pendingAttempts);
+    else pendingAttempts.forEach((p) => p.catch(() => {}));
+
+    for (const udid of [...trackedServices.keys()]) {
       if (!booted.has(udid)) {
-        watchedUdids.delete(udid);
+        trackedServices.delete(udid);
         registry.disposeService(`${NATIVE_DEVTOOLS_NAMESPACE}:${udid}`).catch(() => {});
       }
     }
   }
 
-  // First poll is awaited — server startup blocks until ensureEnv completes for
-  // all booted simulators, eliminating the race with launch-app.
+  // First poll is awaited so server startup blocks until ensureEnv has been
+  // attempted for all currently-booted simulators — eliminates the launch-app
+  // race on the success path.
   const ready = poll(true);
 
-  // Subsequent polls are fire-and-forget.
   const interval = setInterval(() => poll(false).catch(() => {}), POLL_INTERVAL_MS);
 
   return { stop: () => clearInterval(interval), ready };

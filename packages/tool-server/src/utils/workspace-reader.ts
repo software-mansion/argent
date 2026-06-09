@@ -1,5 +1,5 @@
 import { readFile, readdir, stat, access } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { join } from "node:path";
 import { execFile } from "node:child_process";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -24,7 +24,8 @@ export interface WorkspaceSnapshot {
   has_ios_dir: boolean;
   has_android_dir: boolean;
   ios_workspace: string | null;
-  has_podfile: boolean;
+  ios_has_podfile: boolean;
+  android_has_gradle: boolean;
 
   lockfile: "yarn.lock" | "package-lock.json" | "pnpm-lock.yaml" | "bun.lockb" | "bun.lock" | null;
 
@@ -366,12 +367,15 @@ export async function readWorkspaceSnapshot(workspacePath: string): Promise<Work
   ]);
 
   const iosDir = join(workspacePath, "ios");
-  const [iosWorkspace, hasPodfile, makefileText, lintStagedConfig] = await Promise.all([
-    hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
-    exists(join(workspacePath, "ios", "Podfile")),
-    readTextFile(join(workspacePath, "Makefile")),
-    detectLintStagedConfig(workspacePath, packageJson),
-  ]);
+  const androidDir = join(workspacePath, "android");
+  const [iosWorkspace, iosHasPodfile, makefileText, lintStagedConfig, androidHasGradle] =
+    await Promise.all([
+      hasIosDir ? findIosWorkspace(iosDir) : Promise.resolve(null),
+      exists(join(workspacePath, "ios", "Podfile")),
+      readTextFile(join(workspacePath, "Makefile")),
+      detectLintStagedConfig(workspacePath, packageJson),
+      hasAndroidDir ? exists(join(androidDir, "gradlew")) : Promise.resolve(false),
+    ]);
 
   const metroPort = metroConfigRaw ? extractMetroPort(metroConfigRaw) : null;
 
@@ -389,7 +393,8 @@ export async function readWorkspaceSnapshot(workspacePath: string): Promise<Work
     has_ios_dir: hasIosDir,
     has_android_dir: hasAndroidDir,
     ios_workspace: iosWorkspace,
-    has_podfile: hasPodfile,
+    ios_has_podfile: iosHasPodfile,
+    android_has_gradle: androidHasGradle,
     lockfile,
     env_files: envFiles,
     tool_versions: toolVersions,

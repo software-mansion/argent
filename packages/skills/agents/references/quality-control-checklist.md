@@ -41,5 +41,5 @@ Look for these beyond the obvious lint/test configs, regardless of project type:
 - `lint-staged` config — what runs on commit
 - CI config files — the CI steps are ground truth for what "passing" means
 - `Podfile` / `Package.swift` — iOS dependency management
-- `build.gradle` / `settings.gradle` — Android build config and flavor definitions
+- `build.gradle` / `build.gradle.kts` / `settings.gradle` / `settings.gradle.kts` — Android build config and flavor definitions (Groovy or Kotlin DSL)
 - `pubspec.yaml` / `analysis_options.yaml` — Flutter project config and lint rules

@@ -1,0 +1,92 @@
+name: Publish prerelease to npm (next)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to publish (e.g. v0.6.0-next.0)"
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@swmansion"
+
+      - name: Verify package version is a prerelease
+        run: |
+          VERSION=$(node -p "require('./packages/argent/package.json').version")
+          echo "Resolved version: $VERSION"
+          if [[ "$VERSION" != *-* ]]; then
+            echo "::error::Version '$VERSION' is not a SemVer prerelease (no '-IDENTIFIER' suffix). Refusing to publish under the 'next' dist-tag." >&2
+            echo "Bump the version in packages/argent/package.json to e.g. ${VERSION}-next.0 before running this workflow." >&2
+            exit 1
+          fi
+
+      - name: Resolve native binaries tag
+        id: binaries_tag
+        run: |
+          REF="${{ inputs.ref }}"
+          echo "tag=argent-${REF//\//-}" >> $GITHUB_OUTPUT
+
+      - name: Download signed simulator-server binary
+        run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download signed native binaries (dylibs + ax-service)
+        run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+
+      - run: npx tsc --build
+
+      - run: npm run build -w @swmansion/argent
+
+      # Per-platform bundle layout (commit 80e724a). darwin is always required;
+      # Linux is gated by ARGENT_REQUIRE_LINUX_BINARY so the existing release
+      # pipeline keeps working until radon's Linux artifact is reliably present
+      # — flip the env var to "1" once that lands. The inventory always logs
+      # what shipped so a silently-missing Linux binary shows up in the run.
+      - name: Verify per-platform simulator-server binaries
+        env:
+          ARGENT_REQUIRE_LINUX_BINARY: "0"
+        run: |
+          set -e
+          missing=0
+          echo "simulator-server inventory:"
+          for plat in darwin linux; do
+            p="packages/argent/bin/${plat}/simulator-server"
+            if [[ -x "$p" ]]; then
+              size=$(wc -c <"$p")
+              echo "  ✓ ${plat}: ${p} (${size} bytes)"
+            else
+              echo "  ✗ ${plat}: ${p} — missing"
+              if [[ "$plat" == "darwin" ]]; then missing=1; fi
+              if [[ "$plat" == "linux" && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+            fi
+          done
+          [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }
+      - run: test -x packages/argent/bin/darwin/ax-service
+      - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      - run: npm pack --dry-run -w @swmansion/argent
+
+      - run: npm publish -w @swmansion/argent --tag next
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

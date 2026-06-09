@@ -26,20 +26,23 @@ packages/*/node_modules/
 *.log
 1export
 
-# Downloaded signed binaries (fetched via scripts/download-*.sh)
-packages/native-devtools-ios/bin/simulator-server
-packages/native-devtools-ios/bin/ax-service
+# Downloaded signed binaries (fetched via scripts/download-*.sh). Layout is
+# per-platform under bin/<process.platform>/ since commit 80e724a; ignore
+# the whole bin/ tree rather than enumerating every host subdir.
+packages/native-devtools-ios/bin/
 packages/native-devtools-ios/dylibs/
 
-# MCP package generated assets (copied/bundled at build time)
-packages/mcp/bin/
-packages/mcp/dylibs/
-packages/mcp/skills/
-packages/mcp/agents/
-packages/mcp/rules/
-packages/mcp/README.md
+# Argent package generated assets (copied/bundled at build time)
+packages/argent/bin/
+packages/argent/dylibs/
+packages/argent/skills/
+packages/argent/agents/
+packages/argent/rules/
+packages/argent/manifest.json
+packages/argent/README.md
 
 # We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
 .claude/
 .cursor/
+.vscode/
 .mcp.json

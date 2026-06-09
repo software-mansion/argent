@@ -145,7 +145,15 @@ export function queryCpuWindow(
     const node = nodeMap.get(nodeId);
     if (!node) continue;
     const name = node.callFrame.functionName;
-    if (!name || name === "(idle)" || name === "(program)" || name === "(root)") continue;
+    if (
+      !name ||
+      name === "(idle)" ||
+      name === "(program)" ||
+      name === "(root)" ||
+      name === "[idle]" ||
+      name === "[root]"
+    )
+      continue;
     if (isArgentProfilerFunction(name)) continue;
 
     const selfMs = Math.round(hits * avgIntervalMs * 100) / 100;

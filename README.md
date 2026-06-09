@@ -1,16 +1,12 @@
 <br/>
 <p align="center">
   <a href="https://argent.swmansion.com">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png">
-      <source media="(prefers-color-scheme: light)" srcset="https://github.com/software-mansion/argent/blob/main/assets/banner_white_mode.png">
-      <img alt="banner" src="https://github.com/software-mansion/argent/blob/main/assets/banner_dark_mode.png" width="80%">
-    </picture>
+    <img width="1100" height="382" alt="argent-header" src="https://github.com/user-attachments/assets/6cec01d5-da3c-4b6c-97c3-0374a63c213c" />
   </a>
 </p>
 <br/>
 
-**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
+**[Argent](https://argent.swmansion.com)** is an **agentic toolkit** that gives your AI assistant direct access to iOS Simulators and Android Emulators. Ask it to tap a button, run a profiler or reproduce an issue manually - all from within your CLI, without switching context.
 
 ```bash
 npx @swmansion/argent init
@@ -18,11 +14,11 @@ npx @swmansion/argent init
 
 ## Capabilities
 
-- **Autonomous iOS development** - Allow your agent to work with iOS apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
+- **Autonomous iOS and Android development** - Allow your agent to work with iOS and Android apps on its own - let it build, open, interact with the app and debug it. Ask for reproducing issues, testing features manually, profiling your app and much more, without ever interrupting your work.
 - **UI interaction** - Give your agent full control toolkit - tapping, swiping, pinching, typing, gestures, hardware buttons and all other gears included. Let it navigate your app exactly as a user would, without lifting a finger.
 - **Profiling with batteries included** - Argent can perform and analyze both React-Native and Xcode Instruments profiling sessions. Get comprehensive summaries and ask to optimise your app where you find fit.
 - **Debugging and diagnostics** - Let your agent inspect logs, capture crash reports, and reproduce failing states on the simulator, so you can jump straight to the fix.
-- **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any iOS app - no extra setup required.
+- **React Native out of the box** - Argent works with React Native apps natively, so your agent can build, launch, and iterate on your RN project the same way it would any native app - no extra setup required.
 
 > **Tip:** Once installed, ask your assistant _"What can Argent do?"_ - it will walk you through all capabilities available.
 
@@ -37,8 +33,46 @@ npx @swmansion/argent init
 
 #### Prerequisites
 
-- macOS with **Xcode** installed
 - **Node.js 18** or later
+- For iOS: macOS with **Xcode** installed
+- For Android: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
+
+##### Linux host: extra prerequisites for Android emulators
+
+Argent runs Android emulators on Linux but the default install can be slow if a few host-side knobs aren't right. Cover these once and the experience matches macOS:
+
+- **KVM access.** The emulator falls back to slow software emulation (TCG) without `/dev/kvm`. Make sure virtualization is enabled in BIOS/UEFI (`vmx` for Intel, `svm` for AMD in `/proc/cpuinfo`) and that your user can read/write `/dev/kvm` — on most distros that means joining the `kvm` group:
+
+  ```bash
+  sudo usermod -aG kvm "$USER"
+  # log out and back in so the new group takes effect
+  ```
+
+- **GPU mode (`-gpu swiftshader` on Linux, override available).** The Android emulator's Linux GPU story is messy: `-gpu auto` frequently resolves to lavapipe (slow software Vulkan via host libvulkan, ~10× cold-boot regression on flagship hardware), and `-gpu host` silently produces a corrupted or black emulator window on hosts with non-trivial GL stacks — dual-GPU / Optimus laptops, NVIDIA + Mesa coexistence via libglvnd, Wayland sessions on hybrid graphics, headless / containerized hosts. The failure mode is invisible to argent's framebuffer-based screenshot tool, so an agent reports success while the developer sees a black window.
+
+  Argent picks `-gpu swiftshader` on Linux for universal compatibility: it sidesteps the host GL stack entirely and renders via the emulator's bundled SwiftShader. On modern multi-core machines this is indistinguishably smooth from hardware-accelerated `-gpu host` (and far faster than lavapipe).
+
+  Override with the `ARGENT_EMULATOR_GPU_MODE` env var if you've verified `-gpu host` works on your machine (typical single-GPU Mesa box with a healthy X session):
+
+  ```bash
+  ARGENT_EMULATOR_GPU_MODE=host argent ...
+  ```
+
+  Argent's boot-device preflight prints a warning if `/dev/kvm` isn't usable — the condition that causes a 10–50× TCG-vs-KVM slowdown.
+
+- **System image.** Prefer the `default` or `google_apis` variants of `x86_64` system images for headless agent workflows; `google_apis_playstore` adds noticeable boot-time CPU churn from Play services. Always pick `x86_64` on Intel/AMD hosts — ARM images run via QEMU translation and are dramatically slower.
+
+- **AVD config.** AVDs created via `avdmanager create avd` default to `hw.gpu.enabled=no`. Argent overrides this with an explicit `-gpu` arg at launch (so the on-disk config doesn't need editing). For the smoothest experience under heavy native builds (gradle compilations alongside the AVD), bump the AVD's RAM and CPU count — edit `~/.android/avd/<name>.avd/config.ini`:
+
+  ```
+  hw.ramSize = 8192
+  hw.cpu.ncore = 6
+  vm.heapSize = 512
+  ```
+
+  Stock 2 GB / 4 vCPU AVDs can be CPU-starved into wedged-system_server states by a concurrent gradle/Kotlin compile.
+
+- **Headless / CI mode (`ARGENT_EMULATOR_NO_WINDOW=1`).** Argent shows the emulator window by default so a local developer can see the AVD UI. In a headless context — CI runner, container, or a Wayland-only session where the emulator's bundled Qt has no `wayland` platform plugin and SIGABRTs on the crash-consent dialog — opt out by exporting `ARGENT_EMULATOR_NO_WINDOW=1` before starting the tool-server. This appends `-no-window` to the spawn args, selecting `qemu-system-x86_64-headless` which doesn't need a Qt window. Argent's screencap-based screenshot tool reads the in-memory framebuffer correctly without a visible window.
 
 #### Run `init` in your project
 
@@ -63,36 +97,49 @@ argent init
 
 ## CLI Reference
 
-| Command            | Description                                                 |
-| ------------------ | ----------------------------------------------------------- |
-| `argent init`      | Install globally and configure MCP in the current workspace |
-| `argent install`   | Alias for `init` command                                    |
-| `argent update`    | Pull the latest version and refresh workspace configuration |
-| `argent remove`    | Unregister the MCP server and uninstall the package         |
-| `argent uninstall` | Alias for `remove` command                                  |
-| `argent mcp`       | Start MCP server instance, used internally by agent         |
+| Command            | Description                                                            |
+| ------------------ | ---------------------------------------------------------------------- |
+| `argent init`      | Install globally and configure MCP in the current workspace            |
+| `argent install`   | Alias for `init` command                                               |
+| `argent update`    | Pull the latest version and refresh workspace configuration            |
+| `argent remove`    | Unregister the MCP server and uninstall the package                    |
+| `argent uninstall` | Alias for `remove` command                                             |
+| `argent mcp`       | Start MCP server instance, used internally by agent                    |
+| `argent enable`    | Enable a predefined feature flag (`--scope project` for project-local) |
+| `argent disable`   | Disable a feature flag (`--scope project` for project-local)           |
+| `argent flags`     | List available feature flags and their state                           |
 
 ## Supported Editors
 
 `argent init` auto-detects and configures MCP for:
 
-| Editor      | Config location                                               |
-| ----------- | ------------------------------------------------------------- |
-| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)            |
-| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global) |
-| VS Code     | `.vscode/mcp.json`                                            |
-| Windsurf    | `.windsurf/mcp.json`                                          |
-| Zed         | `.zed/settings.json`                                          |
-| Gemini CLI  | `.gemini/settings.json`                                       |
-| Codex CLI   | `.codex/config.yaml`                                          |
+| Editor      | Config location                                                          |
+| ----------- | ------------------------------------------------------------------------ |
+| Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                       |
+| Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)            |
+| VS Code     | `.vscode/mcp.json`                                                       |
+| Windsurf    | `.windsurf/mcp.json`                                                     |
+| Zed         | `.zed/settings.json`                                                     |
+| Gemini CLI  | `.gemini/settings.json`                                                  |
+| Codex CLI   | `.codex/config.yaml`                                                     |
+| opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
+
+## Privacy
+
+Argent does not collect or transmit any user data.
+No telemetry, no analytics, no crash reporting.
+
+- Argent integrates with your agent locally over MCP stdio.
+- Its internal tools are not reachable from outside your machine.
+- The only outbound network call we make is the version check against our public npm package, which sends no user data and fails gracefully if blocked.
 
 ## License
 
 Argent uses a mixed licensing model.
 
-**Source code** is released under the [Apache License 2.0](LICENSE).
+**Source code** is released under the [Apache License 2.0](LICENSE.txt).
 
-**Proprietary binaries** (the `bin/simulator-server` and `bin/ax-service` executables and the `.dylib` files in `native-devtools-ios`) are the intellectual property of Software Mansion S.A. and are licensed solely for use within this project. Decompiling, reverse-engineering, or redistributing them without explicit written permission is prohibited.
+**Proprietary binaries** (the per-platform `bin/<platform>/simulator-server` and `bin/darwin/ax-service` executables and the `.dylib` files in `native-devtools-ios`) are the intellectual property of Software Mansion S.A. and are licensed solely for use within this project. Decompiling, reverse-engineering, or redistributing them without explicit written permission is prohibited.
 
 By using Argent, you acknowledge and agree to this structure. See [LICENSE](https://github.com/software-mansion/argent/blob/main/LICENSE.txt) for full details.
 

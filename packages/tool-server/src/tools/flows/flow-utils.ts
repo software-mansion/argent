@@ -19,6 +19,13 @@ export function setActiveProjectRoot(root: string): void {
         `the calling agent is working in.`
     );
   }
+  // Reject ".." segments: getFlowsDir()/getFlowPath() join the flows dir under
+  // this root, and path.join collapses "..", so a root like
+  // "/a/../../../etc" would relocate the flows dir (and the validated flow
+  // file) outside the intended project.
+  if (root.split(/[\\/]+/).includes("..")) {
+    throw new Error(`project_root must not contain ".." segments (got "${root}").`);
+  }
   activeProjectRoot = root;
 }
 
@@ -39,8 +46,27 @@ export function getFlowsDir(): string {
   return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
 }
 
+const FLOW_NAME_PATTERN = /^[A-Za-z0-9_\-]+$/;
+
+export function assertSafeFlowName(name: string): void {
+  if (!FLOW_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `Invalid flow name "${name}". Flow names must match ${FLOW_NAME_PATTERN} ` +
+        `(letters, digits, underscore, hyphen — no path separators, no "..", no spaces).`
+    );
+  }
+}
+
 export function getFlowPath(name: string): string {
-  return path.join(getFlowsDir(), `${name}.yaml`);
+  assertSafeFlowName(name);
+  const filePath = path.join(getFlowsDir(), `${name}.yaml`);
+  // Defense-in-depth: ensure the resolved path stays inside the flows
+  // directory even if the regex above is ever weakened.
+  const rel = path.relative(getFlowsDir(), filePath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Invalid flow name "${name}": resolves outside the flows directory.`);
+  }
+  return filePath;
 }
 
 export function setActiveFlow(name: string): void {
@@ -66,7 +92,7 @@ export function clearActiveFlow(): void {
 // ── Types ────────────────────────────────────────────────────────────
 
 export type FlowStep =
-  | { kind: "tool"; name: string; args: Record<string, unknown> }
+  | { kind: "tool"; name: string; args: Record<string, unknown>; delayMs?: number }
   | { kind: "echo"; message: string };
 
 export type FlowFile = {
@@ -74,7 +100,9 @@ export type FlowFile = {
   steps: FlowStep[];
 };
 
-type YamlStep = { echo: string } | { tool: string; args?: Record<string, unknown> };
+type YamlStep =
+  | { echo: string }
+  | { tool: string; args?: Record<string, unknown>; delayMs?: number };
 
 type YamlFlowFile = {
   executionPrerequisite: string;
@@ -87,15 +115,21 @@ function toYamlStep(step: FlowStep): YamlStep {
   if (step.kind === "echo") {
     return { echo: step.message };
   }
-  const hasArgs = Object.keys(step.args).length > 0;
-  return hasArgs ? { tool: step.name, args: step.args } : { tool: step.name };
+  const yaml: { tool: string; args?: Record<string, unknown>; delayMs?: number } = {
+    tool: step.name,
+  };
+  if (Object.keys(step.args).length > 0) yaml.args = step.args;
+  if (step.delayMs !== undefined) yaml.delayMs = step.delayMs;
+  return yaml;
 }
 
 function fromYamlStep(raw: YamlStep): FlowStep {
   if ("echo" in raw) {
     return { kind: "echo", message: raw.echo };
   }
-  return { kind: "tool", name: raw.tool, args: raw.args ?? {} };
+  const step: FlowStep = { kind: "tool", name: raw.tool, args: raw.args ?? {} };
+  if (raw.delayMs !== undefined) step.delayMs = raw.delayMs;
+  return step;
 }
 
 // ── Serialisation ────────────────────────────────────────────────────

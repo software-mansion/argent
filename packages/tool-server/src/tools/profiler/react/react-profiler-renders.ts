@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
-  FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
+import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
 
 const COLLECT_RENDERS_SCRIPT = `
 (function() {
@@ -91,7 +91,11 @@ function renderMarkdownTable(entries: RenderEntry[]): string {
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
   top_n: z.coerce
     .number()
     .int()
@@ -113,6 +117,10 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
+
+    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    }
 
     type EvalResult = {
       result?: { value?: string };

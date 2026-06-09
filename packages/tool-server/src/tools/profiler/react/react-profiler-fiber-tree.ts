@@ -2,9 +2,9 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
-  FIBER_ROOT_TRACKER_SCRIPT,
   type ReactProfilerSessionApi,
 } from "../../../blueprints/react-profiler-session";
+import { HEARTBEAT_SCRIPT, FIBER_ROOT_TRACKER_SCRIPT } from "../../../utils/react-profiler/scripts";
 
 const HOOK_NOT_PRESENT_ERRORS = new Set([
   "no __REACT_DEVTOOLS_GLOBAL_HOOK__",
@@ -90,7 +90,11 @@ function buildFiberTreeScript(maxDepth: number, filter: string): string {
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator UDID (logicalDeviceId)."),
+  device_id: z
+    .string()
+    .describe(
+      "Device logicalDeviceId from debugger-connect (iOS simulator UDID or Android logicalDeviceId)."
+    ),
   max_depth: z.coerce
     .number()
     .int()
@@ -113,6 +117,12 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
   async execute(services, params) {
     const api = services.profilerSession as ReactProfilerSessionApi;
     const cdp = api.cdp;
+
+    // Bump owner heartbeat only when this tool-server owns the active session.
+    if (api.profilingActive && api.ownerToolServerPid === process.pid) {
+      await cdp.evaluate(HEARTBEAT_SCRIPT).catch(() => {});
+    }
+
     const script = buildFiberTreeScript(params.max_depth, params.filter ?? "");
 
     type FiberEvalResult = {

@@ -4,7 +4,7 @@ Living document tracking the reasoning behind pipeline architecture decisions.
 
 ## Architecture Overview
 
-**3-tool flow**: `ios-profiler-start` → `ios-profiler-stop` → `ios-profiler-analyze`
+**3-tool flow**: `native-profiler-start` → `native-profiler-stop` → `native-profiler-analyze`
 
 1. **Start** — Detects the running app process on the simulator, spawns `xctrace record` attached to it.
 2. **Stop** — Sends SIGINT to xctrace, waits for process exit, exports the `.trace` bundle to 3 XML files (CPU time-profile, potential-hangs, leaks).
