@@ -12,18 +12,25 @@ import { vegaDevice, vegaShellQuote } from "./vega-cli";
  */
 
 // TV-remote button → Linux input KEY_ name accepted by `inputd-cli button_press`.
+// Names verified against a known-good Vega navigation script: select is
+// KEY_ENTER (KEY_SELECT is a no-op), home is KEY_HOME (not KEY_HOMEPAGE).
 export const REMOTE_KEYCODES = {
   up: "KEY_UP",
   down: "KEY_DOWN",
   left: "KEY_LEFT",
   right: "KEY_RIGHT",
-  select: "KEY_SELECT",
+  select: "KEY_ENTER",
   back: "KEY_BACK",
-  home: "KEY_HOMEPAGE",
+  home: "KEY_HOME",
   menu: "KEY_MENU",
   playPause: "KEY_PLAYPAUSE",
   rewind: "KEY_REWIND",
   fastForward: "KEY_FASTFORWARD",
+  next: "KEY_NEXTSONG",
+  previous: "KEY_PREVIOUSSONG",
+  volumeUp: "KEY_VOLUMEUP",
+  volumeDown: "KEY_VOLUMEDOWN",
+  mute: "KEY_MUTE",
 } as const;
 
 export type RemoteButton = keyof typeof REMOTE_KEYCODES;
@@ -59,7 +66,8 @@ export const NAMED_KEYCODES: Record<string, string> = {
   "arrow-down": "KEY_DOWN",
   "arrow-left": "KEY_LEFT",
   "arrow-right": "KEY_RIGHT",
-  ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`f${i + 1}`, `KEY_F${i + 1}`])),
+  // Vega names function keys KEY_FN_F<n> (not KEY_F<n>); F1–F11 exist.
+  ...Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`f${i + 1}`, `KEY_FN_F${i + 1}`])),
 };
 
 /** Press a single named key (enter/arrows/f1…/back) via `inputd-cli button_press`. */

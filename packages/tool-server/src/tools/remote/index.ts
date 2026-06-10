@@ -12,7 +12,7 @@ const zodSchema = z.object({
     .enum(BUTTONS)
     .describe(
       "TV remote button: up/down/left/right (D-pad), select (OK), back, home, menu, " +
-        "playPause, rewind, fastForward."
+        "playPause, rewind, fastForward, next, previous, volumeUp, volumeDown, mute."
     ),
   repeat: z
     .number()
@@ -37,7 +37,7 @@ const capability: ToolCapability = {
 export const remoteTool: ToolDefinition<Params, Result> = {
   id: "remote",
   description: `Press a TV remote / D-pad button on a Vega (Fire TV) device.
-Vega apps are navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on Vega). Move focus with up/down/left/right, confirm with select, go back with back, and use home/menu/playPause/rewind/fastForward for the corresponding remote keys.
+Vega apps are navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on Vega). Move focus with up/down/left/right, confirm with select, go back with back, and use home/menu/playPause/rewind/fastForward/next/previous/volumeUp/volumeDown/mute for the corresponding remote keys.
 Pass repeat to step the D-pad multiple times (e.g. { button: "down", repeat: 3 }).
 Returns { pressed, count }. Keys are injected on-device via inputd-cli so the focused app's focus engine moves (real remote/navigation events).`,
   alwaysLoad: true,
