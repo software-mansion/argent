@@ -93,18 +93,6 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
   },
   "installation:allowlist_decision": {
     is_enabled: bool,
-    applicable_adapter_count: COUNT,
-  },
-  "installation:skill_install": {
-    method: oneOf(["default", "interactive", "manual"] as const),
-    is_online: bool,
-    has_offline_cache: bool,
-  },
-  "installation:skill_install_result": {
-    is_success: bool,
-  },
-  "installation:rules_agents_copy": {
-    copied_count: COUNT,
   },
   "installation:package_action": {
     trigger: PACKAGE_ACTION_TRIGGER,

@@ -480,7 +480,6 @@ export async function init(args: string[]): Promise<void> {
 
     track("installation:allowlist_decision", {
       is_enabled: allowlistEnabled,
-      applicable_adapter_count: adaptersWithAllowlist.length,
     });
 
     if (allowlistEnabled) {
@@ -569,12 +568,6 @@ export async function init(args: string[]): Promise<void> {
       skillsMethod = choice as SkillsMethod;
     }
 
-    track("installation:skill_install", {
-      method: skillsMethod,
-      is_online: online,
-      has_offline_cache: offlineWithCache,
-    });
-
     // Prefer the GitHub-pinned source. SKILLS_DIR as a fallback.
     const useGitHubSource = online && !fromTar && version !== "unknown";
     const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
@@ -628,16 +621,12 @@ export async function init(args: string[]): Promise<void> {
         if (skillsMethod === "default") {
           spinner.stop("Skills installed.");
         }
-        track("installation:skill_install_result", { is_success: true });
       } catch (err) {
         if (skillsMethod === "default") {
           spinner.stop(pc.red("Skills installation failed."));
         }
         p.log.error(`Failed to run npx skills: ${err}`);
         p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
-        track("installation:skill_install_result", {
-          is_success: false,
-        });
       }
     }
 
@@ -658,8 +647,6 @@ export async function init(args: string[]): Promise<void> {
     } else {
       p.log.info(pc.dim("No rules or agents to copy for selected editors."));
     }
-
-    track("installation:rules_agents_copy", { copied_count: copyResults.length });
 
     // ── Summary ─────────────────────────────────────────────────────────────────
 
