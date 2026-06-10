@@ -111,7 +111,33 @@ tv-navigate { direction: "home" }     → exit to the tvOS home screen
 
 ---
 
-## 5. Troubleshooting
+## 5. Batching Known Paths with `run-sequence`
+
+When a navigation path is known in advance and you don't need to inspect the
+screen between steps, batch it in a single `run-sequence` call. It accepts the
+tvOS tools `tv-navigate`, `tv-set-focus`, and `tv-type` (the `gesture-*`
+tools are iOS/Android-only and don't apply to tvOS). The `udid` is shared and
+auto-injected — don't repeat it per step.
+
+```json
+{
+  "udid": "<TVOS-UDID>",
+  "steps": [
+    { "tool": "tv-navigate", "args": { "direction": "right" } },
+    { "tool": "tv-navigate", "args": { "direction": "right" } },
+    { "tool": "tv-navigate", "args": { "direction": "select" } }
+  ]
+}
+```
+
+Only use this when every step is known up front. If a step depends on where
+focus actually landed, call `tv-describe` between individual `tv-navigate`
+calls instead — `run-sequence` captures no screenshot and does no inspection
+between steps.
+
+---
+
+## 6. Troubleshooting
 
 | Problem | Solution |
 |---------|----------|

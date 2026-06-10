@@ -1,8 +1,5 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import type { ServiceRef } from "@argent/registry";
-import { simulatorServerRef } from "../../blueprints/simulator-server";
-import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
@@ -18,6 +15,12 @@ const ALLOWED_TOOLS = new Set([
   "button",
   "keyboard",
   "rotate",
+  // TV targets (Apple TV / Android TV) — focus-driven interaction has no
+  // coordinates, so the gesture tools don't apply; these are the batchable
+  // TV equivalents.
+  "tv-navigate",
+  "tv-set-focus",
+  "tv-type",
 ]);
 
 const zodSchema = z.object({
@@ -32,7 +35,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate (iOS/Android/Chromium), or tv-navigate, tv-set-focus, tv-type (Apple TV / Android TV)"
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -75,7 +78,7 @@ export function createRunSequenceTool(
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, or Chromium app).
+    description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, Apple TV / Android TV, or Chromium app).
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
@@ -98,6 +101,12 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   keyboard:       { text?: string, key?: string, delayMs?: number }                                                     [ios/android/chromium]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
 
+TV-only (Apple TV / Android TV — focus-driven, no coordinates):
+
+  tv-navigate:    { direction: "up"|"down"|"left"|"right"|"select"|"menu"|"home"|"playpause" }
+  tv-set-focus:   { label: string }
+  tv-type:        { text: string }
+
 Example — scroll down three times (use gesture-scroll with positive deltaY on Chromium):
   { "udid": "<UDID>", "steps": [
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
@@ -111,22 +120,25 @@ Example — type text and submit:
     { "tool": "keyboard", "args": { "key": "enter" } }
   ]}
 
+Example — TV: move focus right twice then activate:
+  { "udid": "<TV-TARGET-ID>", "steps": [
+    { "tool": "tv-navigate", "args": { "direction": "right" } },
+    { "tool": "tv-navigate", "args": { "direction": "right" } },
+    { "tool": "tv-navigate", "args": { "direction": "select" } }
+  ]}
+
 Stops on the first error and returns partial results.`,
     alwaysLoad: true,
     longRunning: true,
     searchHint: "batch sequence multiple gesture steps sequentially",
     zodSchema,
     capability,
-    // Eagerly hold a reference to the device's transport service so the
-    // sub-tool invocations don't pay the spawn / connect cost on the first
-    // step. iOS / Android use simulator-server; Chromium uses CDP.
-    services: (params): Record<string, ServiceRef> => {
-      const device = resolveDevice(params.udid);
-      if (device.platform === "chromium") {
-        return { chromium: chromiumCdpRef(device) };
-      }
-      return { simulatorServer: simulatorServerRef(device) };
-    },
+    // No eagerly-declared service: each step resolves its own services through
+    // `registry.invokeTool` below (simulator-server for iOS/Android, CDP for
+    // Chromium), so run-sequence itself needs none. Declaring simulator-server
+    // here would also spawn it for a tvOS udid (which it can't drive) and hang
+    // on the ready timeout before any tv-* step could run.
+    services: () => ({}),
     async execute(_services, params) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
