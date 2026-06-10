@@ -6,6 +6,7 @@ import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
 import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
 import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
+import { tvControlBlueprint } from "../blueprints/tv-control";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -79,6 +80,10 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
+import { tvDescribeTool } from "../tools/tv/tv-describe";
+import { tvNavigateTool } from "../tools/tv/tv-navigate";
+import { tvSetFocusTool } from "../tools/tv/tv-set-focus";
+import { tvTypeTool } from "../tools/tv/tv-type";
 
 export function createRegistry(): Registry {
   // Inject the real feature-flag check so the gate is enforced for EVERY
@@ -97,6 +102,7 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(axServiceBlueprint);
   registry.registerBlueprint(chromiumCdpBlueprint);
   registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
+  registry.registerBlueprint(tvControlBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -154,6 +160,12 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeDescribeScreenTool);
   registry.registerTool(nativeViewAtPointTool);
   registry.registerTool(nativeUserInteractableViewAtPointTool);
+
+  // tvOS (Apple TV) control tools — focus-driven, backed by the tvOS daemons.
+  registry.registerTool(tvDescribeTool);
+  registry.registerTool(tvNavigateTool);
+  registry.registerTool(tvSetFocusTool);
+  registry.registerTool(tvTypeTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));
