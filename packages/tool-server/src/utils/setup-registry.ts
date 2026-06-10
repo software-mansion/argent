@@ -23,7 +23,7 @@ import { launchAppTool } from "../tools/launch-app";
 import { restartAppTool } from "../tools/restart-app";
 import { reinstallAppTool } from "../tools/reinstall-app";
 import { openUrlTool } from "../tools/open-url";
-import { screenshotTool } from "../tools/screenshot";
+import { createScreenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
 import { gestureScrollTool } from "../tools/gesture-scroll";
@@ -110,7 +110,7 @@ export function createRegistry(): Registry {
   registry.registerTool(restartAppTool);
   registry.registerTool(reinstallAppTool);
   registry.registerTool(openUrlTool);
-  registry.registerTool(screenshotTool);
+  registry.registerTool(createScreenshotTool(registry));
   registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
