@@ -5,8 +5,8 @@ import path from "path";
 import { z } from "zod";
 import type {
   FileInputSpec,
-  InvokeToolOptions,
   ServiceRef,
+  ToolContext,
   ToolCapability,
   ToolDefinition,
 } from "@argent/registry";
@@ -116,7 +116,7 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
 export async function executeScreenshotDiffTool(
   services: Record<string, unknown>,
   params: Params,
-  options?: InvokeToolOptions,
+  options?: Partial<ToolContext>,
   captureScreenshot: CaptureScreenshot = httpScreenshot
 ): Promise<ScreenshotDiffResult> {
   const outputDir = await resolveOutputDir(params, options);
@@ -158,7 +158,7 @@ export async function executeScreenshotDiffTool(
  * Everything else gets a per-call temp dir; the diff images travel back as
  * artifacts, so the directory's location no longer matters to the agent.
  */
-async function resolveOutputDir(params: Params, options?: InvokeToolOptions): Promise<string> {
+async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
   const probe = options?.fileInputs?.outputDir;
   if (params.outputDir && (probe === undefined || probe.presentOnHost)) {
     return params.outputDir;
@@ -176,7 +176,7 @@ async function resolveInputPaths(
   services: Record<string, unknown>,
   params: Params,
   outputDir: string,
-  options: InvokeToolOptions | undefined,
+  options: Partial<ToolContext> | undefined,
   captureScreenshot: CaptureScreenshot
 ): Promise<{ baselinePath: string; currentPath: string }> {
   validateInputSources(params);
