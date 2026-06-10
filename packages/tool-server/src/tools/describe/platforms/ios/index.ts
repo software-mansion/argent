@@ -2,6 +2,7 @@ import type { DeviceInfo, Registry, ToolDependency } from "@argent/registry";
 import { axServiceRef, AXServiceApi } from "../../../../blueprints/ax-service";
 import { nativeDevtoolsRef, NativeDevtoolsApi } from "../../../../blueprints/native-devtools";
 import { resolveNativeTargetApp } from "../../../../utils/native-target-app";
+import { isTvOsSimulator } from "../../../../utils/ios-devices";
 import { parseNativeDescribeScreenResult } from "../../../native-devtools/native-describe-contract";
 import { DescribeTreeData, parseDescribeResult, type DescribeNode } from "../../contract";
 import { adaptAXDescribeToDescribeResult } from "./ios-ax-adapter";
@@ -9,6 +10,15 @@ import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
+
+// tvOS classifies as platform "ios" by UDID shape, so describe dispatches here.
+// The iOS ax-service can't read the Apple TV focus engine — surface the right
+// tool instead of spawning a daemon that times out and degrades with the
+// misleading boot-device hint.
+const TVOS_HINT =
+  "This is an Apple TV (tvOS) simulator, which the iOS accessibility service does not support. " +
+  "Use the `tv-describe` tool to read the focused and focusable elements, and `tv-navigate` / " +
+  "`tv-set-focus` / `tv-type` to interact. See the argent-tvos-interact skill.";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({
@@ -35,6 +45,14 @@ export async function describeIos(
   device: DeviceInfo,
   params: DescribeIosParams
 ): Promise<DescribeTreeData> {
+  // tvOS short-circuit: the focus-engine accessibility tree is served by the
+  // tv-control daemons, not the iOS ax-service. Without this, describe would
+  // try to spawn ax-service inside the Apple TV sim, time out on the daemon
+  // connection, and degrade with the wrong (boot-device) hint.
+  if (await isTvOsSimulator(device.id)) {
+    return { tree: emptyTree(), source: "ax-service", hint: TVOS_HINT };
+  }
+
   let tree: DescribeNode;
   let hint: string | undefined;
 

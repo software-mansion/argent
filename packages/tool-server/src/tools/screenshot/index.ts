@@ -8,7 +8,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
-import { listIosSimulators } from "../../utils/ios-devices";
+import { isTvOsSimulator } from "../../utils/ios-devices";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 const execFileAsync = promisify(execFile);
@@ -127,15 +127,12 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         return { image };
       }
 
-      if (device.platform === "ios") {
-        // Distinguish tvOS from iOS by simulator runtime — shape alone can't.
-        const sims = await listIosSimulators();
-        const match = sims.find((s) => s.udid === params.udid);
-        if (match?.runtimeKind === "tv") {
-          const pngPath = await tvScreenshot(params.udid, scale, signal);
-          const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
-          return { image };
-        }
+      // Distinguish tvOS from iOS by simulator runtime — shape alone can't.
+      // tvOS has no simulator-server backend, so capture via xcrun instead.
+      if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
+        const pngPath = await tvScreenshot(params.udid, scale, signal);
+        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        return { image };
       }
 
       const ref = simulatorServerRef(device);

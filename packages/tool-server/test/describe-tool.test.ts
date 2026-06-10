@@ -3,6 +3,15 @@ import type { AXServiceApi, AXDescribeResponse } from "../src/blueprints/ax-serv
 import type { NativeDevtoolsApi } from "../src/blueprints/native-devtools";
 import { createDescribeTool } from "../src/tools/describe";
 import { __primeDepCacheForTests, __resetDepCacheForTests } from "../src/utils/check-deps";
+import { isTvOsSimulator } from "../src/utils/ios-devices";
+
+// describeIos probes the runtime kind to short-circuit tvOS. Mock it so these
+// unit tests stay hermetic (no real `simctl`) and default to the iOS path; the
+// dedicated tvOS test below overrides it per-call.
+vi.mock("../src/utils/ios-devices", () => ({
+  isTvOsSimulator: vi.fn(async () => false),
+}));
+const mockIsTvOsSimulator = vi.mocked(isTvOsSimulator);
 
 // The describe tool no longer surfaces the JSON tree — `result.description`
 // is the text rendering produced by format-tree.ts. `elementLineCount` counts
@@ -89,6 +98,7 @@ describe("describe tool", () => {
     // cache so neither branch probes — handlers run with mock services.
     __resetDepCacheForTests();
     __primeDepCacheForTests(["xcrun", "adb"]);
+    mockIsTvOsSimulator.mockResolvedValue(false);
   });
 
   it("returns elements from ax-service daemon", async () => {
@@ -398,6 +408,24 @@ describe("describe tool", () => {
       { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
     );
     expect(result.source).toBe("ax-service");
+    expect(elementLineCount(result.description)).toBe(0);
+  });
+
+  it("short-circuits tvOS with a tv-describe hint instead of degrading on ax-service", async () => {
+    mockIsTvOsSimulator.mockResolvedValue(true);
+    // ax-service intentionally unavailable: a tvOS device must never reach it.
+    const registry = makeMockRegistry({});
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute({}, { udid: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD" });
+
+    expect(result.source).toBe("ax-service");
+    expect(result.hint).toMatch(/tvOS|Apple TV/);
+    expect(result.hint).toMatch(/tv-describe/);
+    // Did not fall back to the misleading boot-device hint…
+    expect(result.hint).not.toMatch(/boot-device/);
+    // …and never tried to resolve the iOS ax-service for an Apple TV device.
+    expect(registry.resolveService).not.toHaveBeenCalled();
     expect(elementLineCount(result.description)).toBe(0);
   });
 });
