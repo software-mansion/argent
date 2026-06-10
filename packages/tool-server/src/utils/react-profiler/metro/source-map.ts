@@ -7,6 +7,8 @@
  *
  * Usage: call resolvePosition() per anonymous callFrame after stop_profiling.
  */
+import { isAllowedSourceMapURL, readCappedJson } from "../../debugger/source-maps";
+
 interface OriginalPosition {
   source: string | null;
   line: number | null;
@@ -66,12 +68,18 @@ export async function resolvePosition(
     ? entry.sourceMapURL
     : `${metroBaseUrl}${entry.sourceMapURL}`;
 
+  // Same SSRF gate as the debugger source-map registry: the sourceMapURL
+  // originates from a CDP Debugger.scriptParsed event, i.e. attacker-
+  // controllable. Only loopback `.map` URLs, and never follow a redirect
+  // onto an internal/metadata host.
+  if (!isAllowedSourceMapURL(mapUrl)) return null;
+
   let consumer = consumerCache.get(mapUrl);
   if (!consumer) {
     try {
-      const resp = await fetch(mapUrl);
+      const resp = await fetch(mapUrl, { redirect: "error" });
       if (!resp.ok) return null;
-      const raw: unknown = await resp.json();
+      const raw: unknown = await readCappedJson(resp);
       if (typeof raw !== "object" || raw === null) return null;
       consumer = new loaded.SourceMapConsumer(raw as object);
       consumerCache.set(mapUrl, consumer);

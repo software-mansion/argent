@@ -19,6 +19,22 @@ import {
   writeDumpCompact,
 } from "../../../utils/react-profiler/debug/dump";
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
+import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
+import type { ArtifactStore } from "@argent/registry";
+
+/**
+ * Register a server-side file path as a downloadable artifact (or pass through
+ * null/undefined). Lets the client materialize the raw profiler dumps (CPU
+ * profile, commit tree) and the rendered report to local files — in place when
+ * co-located, downloaded when remote — instead of receiving a dangling host
+ * path it can't open.
+ */
+async function fileArtifact(
+  store: ArtifactStore,
+  p: string | null | undefined
+): Promise<ArtifactHandle | null> {
+  return p ? store.register(p) : null;
+}
 
 const annotationSchema = z.object({
   offsetMs: z.coerce
@@ -71,7 +87,7 @@ Use when the profiling session is complete and you need to interpret the collect
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
   services: () => ({}),
-  async execute(_services, params) {
+  async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
       params.port,
       params.device_id
@@ -198,15 +214,16 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       maxCommitMs: pipelineOutput.maxCommitMs,
     });
 
+    const artifacts = requireArtifacts(ctx);
     const result: Record<string, unknown> = {
       report,
-      reportFile,
+      reportFile: await fileArtifact(artifacts, reportFile),
       hotCommitsTotal,
       hotCommitsShown,
       sessionFiles: {
         sessionId: sessionPaths.sessionId,
-        cpuProfile: sessionPaths.cpuProfilePath,
-        commits: sessionPaths.commitsPath,
+        cpuProfile: await fileArtifact(artifacts, sessionPaths.cpuProfilePath),
+        commits: await fileArtifact(artifacts, sessionPaths.commitsPath),
       },
     };
 

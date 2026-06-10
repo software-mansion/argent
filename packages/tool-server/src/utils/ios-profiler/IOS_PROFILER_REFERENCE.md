@@ -136,7 +136,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 
 ## 6. What the report contains
 
-`renderIosProfilerReport` produces a markdown document with these sections:
+`renderNativeProfilerReport` produces a markdown document with these sections:
 
 1. **Header** — trace filename, platform, timestamp, any export warnings.
 2. **Summary table** — counts and severity rollup per category (CPU Hotspots / UI Hangs / Memory Leaks).

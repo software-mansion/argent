@@ -7,6 +7,7 @@ import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
+import { makeArtifactRoute } from "./artifacts";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -15,6 +16,27 @@ import {
 import { resolveDevice } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
+
+const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
+const BEARER_PREFIX = "Bearer ";
+
+// Constant-time comparison so a leaked token can't be recovered byte-by-byte
+// via response-timing measurements. Both strings must be the same length to
+// avoid leaking length information either; we pad/truncate to a fixed compare
+// width of the expected token's length.
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function extractBearerToken(authHeader: string | undefined): string | null {
+  if (!authHeader || !authHeader.startsWith(BEARER_PREFIX)) return null;
+  return authHeader.slice(BEARER_PREFIX.length).trim() || null;
+}
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
   let current: unknown = err;
@@ -32,6 +54,16 @@ export interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;
+  /**
+   * Address the server is bound to (the launcher's `ARGENT_HOST`). Defaults to
+   * loopback. When the operator deliberately binds to a routable address
+   * (`argent server start --host <ip>`), that host is added to the Host-header
+   * allow-list so legitimate remote clients aren't mistaken for DNS-rebinding.
+   * A wildcard bind (0.0.0.0 / ::) disables the guard entirely — the machine is
+   * reachable by addresses we can't enumerate, and the operator has explicitly
+   * opted into network exposure (and is warned at startup).
+   */
+  bindHost?: string;
 }
 
 export interface HttpAppHandle {
@@ -42,18 +74,117 @@ export interface HttpAppHandle {
   getLastActivityAt: () => number;
 }
 
+// Loopback hostnames the browser is allowed to address us by. The
+// tool-server binds to 127.0.0.1 by default, but a public attacker page that
+// briefly DNS-rebinds its own hostname to 127.0.0.1 can still reach us
+// — the Host header is the only signal that distinguishes that traffic
+// from a legitimate same-origin request, so we gate on it.
+const LOOPBACK_HOSTNAMES = ["127.0.0.1", "localhost", "::1"];
+
+function isLoopbackHost(host: string): boolean {
+  return host === "" || LOOPBACK_HOSTNAMES.includes(host);
+}
+
+// Wildcard binds accept connections on every interface; a client can reach
+// them via any of the machine's addresses, which we can't enumerate — so the
+// Host guard can't be applied meaningfully and is disabled for this case.
+function isWildcardHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "::0";
+}
+
+function extractHostname(host: string): string {
+  // IPv6 literals are bracketed: "[::1]:8080" → "::1"
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    return end === -1 ? host : host.slice(1, end);
+  }
+  const colon = host.indexOf(":");
+  return colon === -1 ? host : host.slice(0, colon);
+}
+
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
   app.use(express.json());
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
-  app.use((_req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    if (_req.method === "OPTIONS") {
-      res.sendStatus(204);
+  // Hostnames a client is allowed to address us by. Always includes loopback;
+  // a non-loopback bind host (`argent server start --host <ip>`) is added so
+  // its legitimate clients pass the guard. A wildcard bind disables the guard.
+  const bindHost = options?.bindHost ?? "127.0.0.1";
+  const hostGuardDisabled = isWildcardHost(bindHost);
+  const allowedHostnames = new Set<string>(LOOPBACK_HOSTNAMES);
+  if (!isLoopbackHost(bindHost) && !isWildcardHost(bindHost)) {
+    allowedHostnames.add(bindHost);
+  }
+
+  // Reject requests whose Host header points to anything other than an
+  // allowed hostname. Closes the DNS-rebinding bypass, where a public
+  // origin's hostname briefly resolves to 127.0.0.1 and the browser dutifully
+  // forwards the rebound origin's cookies/CSRF state to us. Runs before the
+  // auth gate so a rebound public origin doesn't even reach the token check.
+  app.use((req, res, next) => {
+    // Server explicitly bound to all interfaces — the guard is moot (see
+    // isWildcardHost) and the operator opted into network exposure.
+    if (hostGuardDisabled) {
+      next();
+      return;
+    }
+    const host = req.headers.host;
+    if (!host) {
+      res.status(400).json({ error: "Missing Host header" });
+      return;
+    }
+    const hostname = extractHostname(host);
+    if (!allowedHostnames.has(hostname)) {
+      res.status(403).json({
+        error:
+          `Refusing request with Host "${host}". The tool-server accepts ` +
+          `loopback hostnames (127.0.0.1, localhost, ::1)` +
+          (isLoopbackHost(bindHost) ? "" : ` and its bind host (${bindHost})`) +
+          ` to defend against DNS-rebinding. If you are reaching this from ` +
+          `your own client, use one of those instead of a public hostname.`,
+      });
+      return;
+    }
+    next();
+  });
+
+  // Auth token snapshotted at startup. The launcher generates this and passes
+  // it in via env (see ensureToolsServer). Empty string ⇒ auth disabled, which
+  // is supported only for local dev (`npm run dev`); in that case stderr gets
+  // a one-shot warning so the operator notices.
+  const expectedToken = process.env[AUTH_TOKEN_ENV] ?? "";
+  if (!expectedToken) {
+    process.stderr.write(
+      `[tool-server] WARNING: ${AUTH_TOKEN_ENV} is not set; running with authentication disabled. ` +
+        `Any local process can drive the tool-server. This is only safe for development.\n`
+    );
+  }
+
+  // Authorization gate. Runs after Host validation and before any handler.
+  // The /preview subtree is exempt because it is the browser-loaded in-process
+  // UI (no token available client-side); fully authenticating it needs an
+  // out-of-band UI session and is a deliberate follow-up. The exemption is an
+  // exact `/preview` or `/preview/`-prefixed match so a future top-level route
+  // like `/preview-status` can't be silently un-gated by a bare startsWith.
+  app.use((req, res, next) => {
+    if (!expectedToken) {
+      next();
+      return;
+    }
+    if (req.path === "/preview" || req.path.startsWith("/preview/")) {
+      next();
+      return;
+    }
+    const provided = extractBearerToken(req.headers.authorization);
+    if (!provided || !constantTimeEqual(provided, expectedToken)) {
+      res.status(401).json({
+        error:
+          "Missing or invalid Authorization header. Tool-server requires " +
+          "`Authorization: Bearer <token>` where <token> matches the value in " +
+          "~/.argent/tool-server.json.",
+      });
       return;
     }
     next();
@@ -62,6 +193,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Hidden (not MCP-exposed) preview UI + stream discovery endpoints.
   // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
   app.use("/preview", createPreviewRouter(registry));
+
+  // Artifact retrieval: streams files produced by tools (screenshots, profiler
+  // exports) over the remote-aware HTTP boundary so the MCP client can fetch
+  // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  app.get("/artifacts/:id", makeArtifactRoute(registry));
 
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();

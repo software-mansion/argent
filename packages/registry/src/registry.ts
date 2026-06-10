@@ -9,7 +9,9 @@ import {
   RegistryEvents,
   URN,
   InvokeToolOptions,
+  ToolContext,
 } from "./types";
+import { ArtifactStore } from "./artifacts";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -24,6 +26,12 @@ export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
+  /**
+   * Host files produced by tools, registered during `execute` and served by the
+   * `/artifacts/:id` route. Owned here (one per registry/process) so the tool
+   * path and the HTTP route resolve the same instance — no module singleton.
+   */
+  public readonly artifacts = new ArtifactStore();
   public readonly events = new TypedEventEmitter<RegistryEvents>();
 
   registerBlueprint<T, C>(blueprint: ServiceBlueprint<T, C>): void {
@@ -77,7 +85,23 @@ export class Registry {
     this.events.emit("toolInvoked", id);
 
     try {
-      const aliasToRef = definition.services(params);
+      // Validate params against the tool's zod schema for EVERY dispatch path,
+      // not just the HTTP layer. Internal callers (flow-execute, flow-add-step,
+      // run-sequence) previously reached `execute` with raw, unvalidated args,
+      // which let a flow YAML smuggle a string into a `z.number()` port or
+      // shell metacharacters past a tool's regex (→ injection at the sink).
+      // `params ?? {}` mirrors the HTTP layer (express.json yields {} for an
+      // empty body) so no-arg internal invokes still validate cleanly.
+      let effectiveParams = params;
+      if (definition.zodSchema) {
+        const parsed = definition.zodSchema.safeParse(params ?? {});
+        if (!parsed.success) {
+          throw new Error(`Invalid params for tool "${id}": ${parsed.error.message}`);
+        }
+        effectiveParams = parsed.data;
+      }
+
+      const aliasToRef = definition.services(effectiveParams);
       const resolvedServices: Record<string, unknown> = {};
       for (const [alias, ref] of Object.entries(aliasToRef)) {
         const urn = typeof ref === "string" ? ref : ref.urn;
@@ -85,7 +109,11 @@ export class Registry {
         resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
       }
 
-      const result = await definition.execute(resolvedServices, params, options);
+      // Build the per-invocation context: caller options (e.g. signal) plus the
+      // registry-owned artifact store, so any tool can register host files via
+      // `ctx.artifacts` without declaring a per-tool service.
+      const ctx: ToolContext = { ...options, artifacts: this.artifacts };
+      const result = await definition.execute(resolvedServices, effectiveParams, ctx);
 
       const duration = performance.now() - startTime;
       this.events.emit("toolCompleted", id, duration);

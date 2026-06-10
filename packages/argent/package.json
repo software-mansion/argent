@@ -1,6 +1,6 @@
 {
   "name": "@swmansion/argent",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "MCP server for iOS Simulator and Android Emulator control",
   "license": "Apache-2.0",
   "repository": {
@@ -10,7 +10,7 @@
   "type": "module",
   "bin": {
     "argent": "dist/cli.js",
-    "argent-simulator-server": "bin/simulator-server"
+    "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
   "scripts": {
     "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
@@ -37,7 +37,7 @@
     "skills/",
     "agents/",
     "rules/",
-    "manifest.json",
+    "assets/",
     "scripts/postinstall.cjs"
   ],
   "dependencies": {

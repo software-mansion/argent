@@ -1,12 +1,15 @@
 import type { CpuSample, CpuHotspot, StackFrame } from "../types";
 import { RN_FRAMEWORK_SIGNATURES } from "../config";
-
-const MIN_WEIGHT_PERCENTAGE = 3;
+import {
+  aggregateCpuHotspots as aggregateCpuHotspotsShared,
+  type AggregatorInputRow,
+} from "../../profiler-shared/aggregate";
+import { normalizeThreadName } from "../../profiler-shared/thread";
 
 /**
- * Find the dominant (most actionable) function in a stack.
- * Walks the stack from top (leaf) looking for user/third-party frames first,
- * then RN framework internals, skipping system library frames entirely.
+ * Find the dominant (most actionable) function in a stack: walk from the leaf,
+ * preferring user/third-party frames, then RN framework internals, skipping
+ * system libraries. iOS-only pre-pass — Android SQL returns the leaf pre-picked.
  */
 export function findDominantFunction(stack: StackFrame[]): string | null {
   if (!stack || stack.length === 0) return null;
@@ -45,143 +48,34 @@ export function extractAppCallChain(stack: StackFrame[]): string[] {
   return stack.filter((f) => !f.isSystemLibrary && !isHexAddress(f.name)).map((f) => f.name);
 }
 
-// ---------------------------------------------------------------------------
-// CPU hotspot aggregation
-// ---------------------------------------------------------------------------
-
-interface HotspotAccumulator {
-  sampleCount: number;
-  totalWeightNs: number;
-  /** Track timestamps to check hang overlap */
-  timestamps: number[];
-  /** Track call chains to find the most common one */
-  chainCounts: Map<string, { chain: string[]; count: number }>;
-}
-
+/**
+ * iOS CPU hotspot aggregation: pre-pass raw CpuSample[] into the shared
+ * AggregatorInputRow[] shape (one row per sample, dominant function picked,
+ * thread normalised), then delegate to the shared aggregator.
+ */
 export function aggregateCpuHotspots(
   samples: CpuSample[],
   hangSampleTimestamps: Set<number> = new Set()
 ): CpuHotspot[] {
   if (samples.length === 0) return [];
 
-  // Group by (dominantFunction, thread)
-  const groups = new Map<string, HotspotAccumulator>();
-  const threadMap = new Map<string, string>(); // key -> threadFmt
-  let totalWeightNs = 0;
-
+  const rows: AggregatorInputRow[] = [];
   for (const sample of samples) {
     const dominant = findDominantFunction(sample.stack);
     if (!dominant) continue;
-
-    const thread = normalizeThread(sample.threadFmt);
-    const key = `${dominant}|||${thread}`;
-
+    const thread = normalizeThreadName(sample.threadFmt);
     const chain = extractAppCallChain(sample.stack);
-    const chainKey = chain.join(" > ");
-
-    const existing = groups.get(key);
-    if (existing) {
-      existing.sampleCount++;
-      existing.totalWeightNs += sample.weightNs;
-      existing.timestamps.push(sample.timestampNs);
-      const chainEntry = existing.chainCounts.get(chainKey);
-      if (chainEntry) {
-        chainEntry.count++;
-      } else {
-        existing.chainCounts.set(chainKey, { chain, count: 1 });
-      }
-    } else {
-      const chainCounts = new Map<string, { chain: string[]; count: number }>();
-      chainCounts.set(chainKey, { chain, count: 1 });
-      groups.set(key, {
-        sampleCount: 1,
-        totalWeightNs: sample.weightNs,
-        timestamps: [sample.timestampNs],
-        chainCounts,
-      });
-      threadMap.set(key, thread);
-    }
-    totalWeightNs += sample.weightNs;
-  }
-
-  if (totalWeightNs === 0) return [];
-
-  const results: CpuHotspot[] = [];
-  for (const [key, acc] of groups) {
-    const weightPercentage = (acc.totalWeightNs / totalWeightNs) * 100;
-    if (weightPercentage < MIN_WEIGHT_PERCENTAGE) continue;
-
-    const [dominantFunction, thread] = key.split("|||");
-
-    // Find top 3 most common call chains
-    const sortedChains = [...acc.chainCounts.values()]
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 3);
-    const topCallChain = sortedChains[0]?.chain ?? [];
-    const topCallChains = sortedChains.map(({ chain, count }) => ({ chain, count }));
-
-    // Check if any sample in this group occurred during a hang
-    const duringHang = acc.timestamps.some((ts) => hangSampleTimestamps.has(ts));
-
-    // Compute time range and burst windows from timestamps
-    const sortedTs = [...acc.timestamps].sort((a, b) => a - b);
-    const firstMs = sortedTs.length > 0 ? Math.round(sortedTs[0]! / 1_000_000) : 0;
-    const lastMs = sortedTs.length > 0 ? Math.round(sortedTs[sortedTs.length - 1]! / 1_000_000) : 0;
-
-    const BURST_GAP_MS = 500;
-    const burstWindows: { startMs: number; endMs: number; sampleCount: number }[] = [];
-    if (sortedTs.length > 0) {
-      let burstStartNs = sortedTs[0]!;
-      let burstEndNs = sortedTs[0]!;
-      let burstCount = 1;
-
-      for (let i = 1; i < sortedTs.length; i++) {
-        const gapMs = (sortedTs[i]! - burstEndNs) / 1_000_000;
-        if (gapMs > BURST_GAP_MS) {
-          burstWindows.push({
-            startMs: Math.round(burstStartNs / 1_000_000),
-            endMs: Math.round(burstEndNs / 1_000_000),
-            sampleCount: burstCount,
-          });
-          burstStartNs = sortedTs[i]!;
-          burstEndNs = sortedTs[i]!;
-          burstCount = 1;
-        } else {
-          burstEndNs = sortedTs[i]!;
-          burstCount++;
-        }
-      }
-      burstWindows.push({
-        startMs: Math.round(burstStartNs / 1_000_000),
-        endMs: Math.round(burstEndNs / 1_000_000),
-        sampleCount: burstCount,
-      });
-    }
-
-    results.push({
-      type: "ios_cpu_hotspot",
-      dominantFunction: dominantFunction!,
-      totalWeightMs: Math.round(acc.totalWeightNs / 1_000_000),
-      weightPercentage: parseFloat(weightPercentage.toFixed(2)),
-      sampleCount: acc.sampleCount,
-      thread: thread!,
-      severity: weightPercentage > 15 ? "RED" : "YELLOW",
-      topCallChain,
-      topCallChains,
-      duringHang,
-      timeRangeMs: { first: firstMs, last: lastMs },
-      burstWindows,
+    rows.push({
+      dominantFunction: dominant,
+      thread,
+      weightNs: sample.weightNs,
+      timestampsNs: [sample.timestampNs],
+      callChains: chain.length > 0 ? [{ chain, count: 1 }] : [],
     });
   }
 
-  return results.sort((a, b) => b.weightPercentage - a.weightPercentage);
-}
-
-function normalizeThread(threadFmt: string): string {
-  if (/main\s*thread/i.test(threadFmt)) return "Main Thread";
-  if (/hermes/i.test(threadFmt) || /jsthread/i.test(threadFmt)) return "JS/Hermes";
-  // Strip hex thread id and pid info: "AppName 0x1e4715 (AppName, pid: 55746)" -> "AppName"
-  const shortMatch = threadFmt.match(/^(.+?)\s+0x/);
-  if (shortMatch) return shortMatch[1];
-  return threadFmt;
+  return aggregateCpuHotspotsShared(rows, {
+    platform: "ios",
+    hangSampleTimestamps,
+  });
 }
