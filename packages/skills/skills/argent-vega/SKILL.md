@@ -39,20 +39,32 @@ Vega tools require the Vega SDK on PATH (`source ~/vega/env`, or `~/vega/bin`). 
 
 `read-device-logs { udid, durationMs?, filter?, maxLines? }` captures the on-device log stream for a window (default 5s) and returns the text + a file artifact. Use `filter` (case-insensitive substring) to focus — e.g. `filter: "ERROR"`, an app id, or `filter: "KB key"` to confirm remote/keyboard input reached the app.
 
-## 6. JS debugger (connect + evaluate)
+## 6. Live development (Fast Refresh)
 
-argent's CDP debugger works on Vega for **connect and evaluate** (verified on RN 0.72). Prerequisites: a **Debug** build installed, Metro running (`npm start` in the app, port 8081), and the port reverse-forwarded (`vega device start-port-forwarding --port 8081 --forward false`).
+Fast Refresh (hot-reload of `.tsx` edits without restarting the app) works on Vega. The one hard requirement: a **Debug** build — the debug shell loads its JS from Metro live; a Release build runs its bundled JS and silently ignores Metro.
+
+Setup (each step in its own terminal):
+1. **Debug build & install** (once, or after native changes): `npm run build:debug`, then `vega device install-app -p build/aarch64-debug/vega_aarch64.vpkg`.
+2. **Metro:** `npm start` (serves the JS bundle on port 8081). Use `npm start`, not `npx react-native start` — npx may resolve the wrong CLI.
+3. **Reverse port-forward:** `vega device start-port-forwarding --port 8081 --forward false` (the device dials back to your local Metro). Verify with `vega device is-port-forwarded --port 8081 --forward false` → `true`.
+4. **Launch:** `vega device launch-app -a <appId>` (or `--dir .`). The app connects to Metro and loads the current source.
+
+Order matters: Metro up **before** launching, and keep port-forwarding in its own terminal (don't reuse Metro's). Confirm the app connected by checking that `http://localhost:8081/json/list` lists a `Hermes React Native` target. After that, editing a `.tsx` pushes a live update (state preserved) within a few seconds — drive `screenshot` before/after to see it land. If a change doesn't appear, open the dev menu (press `d` in the Metro terminal) → Reload / ensure Fast Refresh is on.
+
+## 7. JS debugger (connect + evaluate)
+
+argent's CDP debugger works on Vega for **connect and evaluate** (verified on RN 0.72). Prerequisites are the same as Fast Refresh above (Debug build, Metro on 8081, reverse port-forward).
 
 - `debugger-connect { port: 8081, device_id: "0" }` → connects to the `Hermes React Native` target.
 - `debugger-evaluate { port: 8081, device_id: "0", expression: "…" }` → runs JS in the app. **Use `globalThis`, not the bare `global`** (Vega's Hermes does not expose `global` in the eval scope) — e.g. `globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__`.
 
 Not yet supported on Vega: `debugger-component-tree`, `debugger-inspect-element`, and the logbox-disable step — their injected scripts use constructs (bare `global`, certain iterators) that Vega's Hermes rejects. Use `debugger-evaluate` to read state directly instead.
 
-## 7. Profiling & crashes
+## 8. Profiling & crashes
 
 Do **not** use argent's native profiler for Vega. Vega performance traces, hot-function analysis, KPI metrics, and crash (ACR) symbolication are handled by the official **`amazon-devices-buildertools-mcp`** server (`analyze_perfetto_traces`, `get_app_hot_functions`, `symbolicate_acr`). argent's React profiler (CDP-based) may work where `debugger-evaluate` does, but native profiling is out of scope.
 
-## 8. Not supported on Vega
+## 9. Not supported on Vega
 
 - `gesture-tap` / `gesture-swipe` / `gesture-pinch` / `gesture-rotate` / `gesture-custom` — touch model doesn't apply; use `remote`.
 - `describe` (no accessibility tree) and `open-url` (deep-link mechanism not wired) — return unsupported on Vega.
