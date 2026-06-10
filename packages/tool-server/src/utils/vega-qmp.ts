@@ -133,6 +133,22 @@ export async function discoverQmpSocket(): Promise<string> {
   return socket;
 }
 
+/**
+ * Derive the VVD's emulator console port from its QMP socket name
+ * (`qmp-socket-<consolePort>.sock`). The VVD is an Android-emulator-derived
+ * QEMU, so this port is the standard emulator console (5554, 5556, …) and the
+ * device appears to adb as `emulator-<consolePort>` — used for host-side
+ * screen capture via the emulator console.
+ */
+export async function discoverVegaConsolePort(): Promise<number> {
+  const socket = await discoverQmpSocket();
+  const m = socket.match(/qmp-socket-(\d+)\.sock$/);
+  if (!m) {
+    throw new Error(`Could not derive emulator console port from QMP socket name: ${socket}`);
+  }
+  return parseInt(m[1]!, 10);
+}
+
 // QMP qcodes for the TV remote, per the VVD's keyboard→remote mapping.
 export const REMOTE_QCODES = {
   up: "up",
@@ -308,7 +324,7 @@ export async function typeTextVega(
  * 1920×1080 framebuffer so the attached image stays small, matching the
  * iOS/Android screenshot tool's server-side scaling.
  */
-export async function captureVegaScreenshotPng(opts: { scale?: number } = {}): Promise<string> {
+export async function captureVegaScreenshotViaQmp(opts: { scale?: number } = {}): Promise<string> {
   const socketPath = await discoverQmpSocket();
   const stamp = process.hrtime.bigint().toString();
   const ppmPath = join(tmpdir(), `vega-screenshot-${stamp}.ppm`);

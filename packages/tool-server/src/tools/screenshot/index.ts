@@ -4,7 +4,8 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
-import { captureVegaScreenshotPng } from "../../utils/vega-qmp";
+import { captureVegaScreenshotPng } from "../../utils/vega-screen";
+import { ensureDep } from "../../utils/check-deps";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 const zodSchema = z.object({
@@ -64,7 +65,7 @@ export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
   description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, Chromium app, or Vega Virtual Device). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device. On Vega the screen is captured from the Virtual Device via QMP; rotation is ignored (the TV framebuffer is fixed landscape).`,
+Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device. On Vega the screen is captured from the Virtual Device via the Android emulator console (host-side, requires adb); rotation is ignored (the TV framebuffer is fixed landscape).`,
   alwaysLoad: true,
   searchHint: "device simulator emulator chromium vega fire tv screen image capture baseline",
   zodSchema,
@@ -93,8 +94,9 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       return { image };
     }
     if (device.platform === "vega") {
-      // Capture is host-side via the VVD's QMP socket — no `vega` binary needed;
-      // discoverQmpSocket() surfaces a clear error when no VVD is running.
+      // Primary capture is the Android emulator console via `adb emu` (the VVD
+      // is emulator-derived); it falls back to QMP screendump internally.
+      await ensureDep("adb");
       const path = await captureVegaScreenshotPng({ scale: params.scale });
       const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
       return { image };
