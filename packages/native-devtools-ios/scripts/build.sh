@@ -179,6 +179,41 @@ else
     -o "${AX_DEST}" "${AX_SRC_DIR}/ax_service.m"
 fi
 
+# tvOS control binaries. Unix-socket only (no TCP variant), so only build them
+# for the default transport. tvos-ax-service runs inside an appletvsimulator;
+# tvos-hid-daemon runs on the macOS host and injects HID via SimulatorKit.
+if [[ "$TRANSPORT" == "unix" ]]; then
+  echo "Building tvos-ax-service..."
+  TVOS_SRC_DIR="${SUBMODULE_DIR}/Sources/TvosServices"
+  TVOS_AX_DEST="${BIN_DIR}/tvos-ax-service"
+  TVOS_HID_DEST="${BIN_DIR}/tvos-hid-daemon"
+
+  if [[ -n "${PREBUILT_TVOS_AX_SERVICE:-}" ]]; then
+    cp "$PREBUILT_TVOS_AX_SERVICE" "$TVOS_AX_DEST"
+  else
+    TVOS_SDK_PATH="$(xcrun --sdk appletvsimulator --show-sdk-path)"
+    xcrun --sdk appletvsimulator clang \
+      -fobjc-arc \
+      ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -isysroot "${TVOS_SDK_PATH}" \
+      -target arm64-apple-tvos17.0-simulator \
+      -framework Foundation -framework UIKit -framework CoreGraphics \
+      -lobjc \
+      -o "${TVOS_AX_DEST}" "${TVOS_SRC_DIR}/tvos_ax_service.m"
+  fi
+
+  echo "Building tvos-hid-daemon..."
+  if [[ -n "${PREBUILT_TVOS_HID_DAEMON:-}" ]]; then
+    cp "$PREBUILT_TVOS_HID_DAEMON" "$TVOS_HID_DEST"
+  else
+    clang \
+      -fobjc-arc \
+      ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -framework Foundation -framework AppKit -framework CoreGraphics \
+      -o "${TVOS_HID_DEST}" "${TVOS_SRC_DIR}/tvos_hid_daemon.m"
+  fi
+fi
+
 if [[ "$MODE" == "release" ]]; then
   IDENTITY="${CODESIGN_IDENTITY:-${IDENTITY:-}}"
   if [[ -n "$IDENTITY" ]]; then
@@ -188,6 +223,12 @@ if [[ "$MODE" == "release" ]]; then
     codesign --verify --verbose "${DEST_FILE_KB}"
     codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_BS}"
     codesign --verify --verbose "${DEST_FILE_BS}"
+    if [[ "$TRANSPORT" == "unix" ]]; then
+      codesign --force --options runtime --sign "$IDENTITY" "${TVOS_AX_DEST}"
+      codesign --verify --verbose "${TVOS_AX_DEST}"
+      codesign --force --options runtime --sign "$IDENTITY" "${TVOS_HID_DEST}"
+      codesign --verify --verbose "${TVOS_HID_DEST}"
+    fi
   fi
 fi
 

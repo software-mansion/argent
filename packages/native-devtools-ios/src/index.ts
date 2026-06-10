@@ -115,3 +115,16 @@ export function axServiceBinaryPathTcp(): string {
   requireDarwin("ax-service (tcp)");
   return requireBinIn(platformTcpBinDir(), "ax-service");
 }
+
+// tvOS control binaries. tvos-ax-service is `simctl spawn`d into an
+// appletvsimulator to read the focus-engine AX state; tvos-hid-daemon runs on
+// the host and injects Siri-remote HID via SimulatorKit. Both are darwin-only.
+export function tvosAxServiceBinaryPath(): string {
+  requireDarwin("tvos-ax-service");
+  return requireBinIn(platformBinDir(), "tvos-ax-service");
+}
+
+export function tvosHidDaemonBinaryPath(): string {
+  requireDarwin("tvos-hid-daemon");
+  return requireBinIn(platformBinDir(), "tvos-hid-daemon");
+}
