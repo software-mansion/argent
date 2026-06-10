@@ -150,16 +150,33 @@ export const REMOTE_QCODES = {
 
 export type RemoteButton = keyof typeof REMOTE_QCODES;
 
-/** Press (and release) one remote button via QMP `send-key`. */
-export async function sendRemoteKey(socketPath: string, button: RemoteButton): Promise<void> {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Press a remote button `repeat` times over a single QMP connection, with
+ * `delayMs` between presses (default 120ms — enough for the app's focus engine
+ * to settle between D-pad steps). `send-key` presses and releases automatically.
+ * Returns the number of presses sent.
+ */
+export async function pressRemoteButton(
+  socketPath: string,
+  button: RemoteButton,
+  opts: { repeat?: number; delayMs?: number } = {}
+): Promise<number> {
+  const repeat = Math.max(1, Math.floor(opts.repeat ?? 1));
+  const delayMs = opts.delayMs ?? 120;
   const client = await QmpClient.connect(socketPath);
   try {
-    await client.execute("send-key", {
-      keys: [{ type: "qcode", data: REMOTE_QCODES[button] }],
-    });
+    for (let i = 0; i < repeat; i++) {
+      await client.execute("send-key", {
+        keys: [{ type: "qcode", data: REMOTE_QCODES[button] }],
+      });
+      if (i < repeat - 1) await sleep(delayMs);
+    }
   } finally {
     client.close();
   }
+  return repeat;
 }
 
 /** Press (and release) one raw qcode via QMP `send-key` (text-entry helper). */
@@ -167,6 +184,116 @@ export async function sendQcode(socketPath: string, qcode: string): Promise<void
   const client = await QmpClient.connect(socketPath);
   try {
     await client.execute("send-key", { keys: [{ type: "qcode", data: qcode }] });
+  } finally {
+    client.close();
+  }
+}
+
+// Named keys (matching the keyboard tool's `key` vocabulary) → QEMU qcodes.
+export const NAMED_QCODES: Record<string, string> = {
+  enter: "ret",
+  escape: "esc",
+  backspace: "backspace",
+  delete: "delete",
+  tab: "tab",
+  space: "spc",
+  "arrow-up": "up",
+  "arrow-down": "down",
+  "arrow-left": "left",
+  "arrow-right": "right",
+  ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`f${i + 1}`, `f${i + 1}`])),
+};
+
+// Direct (unshifted) printable-char → qcode mappings beyond a–z / 0–9.
+const PUNCT_QCODES: Record<string, string> = {
+  " ": "spc",
+  "-": "minus",
+  "=": "equal",
+  "[": "bracket_left",
+  "]": "bracket_right",
+  "\\": "backslash",
+  ";": "semicolon",
+  "'": "apostrophe",
+  "`": "grave_accent",
+  ",": "comma",
+  ".": "dot",
+  "/": "slash",
+};
+
+// Shifted-symbol → base qcode (typed as shift + base).
+const SHIFTED_QCODES: Record<string, string> = {
+  "!": "1",
+  "@": "2",
+  "#": "3",
+  $: "4",
+  "%": "5",
+  "^": "6",
+  "&": "7",
+  "*": "8",
+  "(": "9",
+  ")": "0",
+  _: "minus",
+  "+": "equal",
+  ":": "semicolon",
+  '"': "apostrophe",
+  "<": "comma",
+  ">": "dot",
+  "?": "slash",
+  "~": "grave_accent",
+  "{": "bracket_left",
+  "}": "bracket_right",
+  "|": "backslash",
+};
+
+/** Map a single character to a qcode plus whether shift must be held. */
+export function charToQcode(ch: string): { qcode: string; shift: boolean } | null {
+  if (ch >= "a" && ch <= "z") return { qcode: ch, shift: false };
+  if (ch >= "A" && ch <= "Z") return { qcode: ch.toLowerCase(), shift: true };
+  if (ch >= "0" && ch <= "9") return { qcode: ch, shift: false };
+  if (PUNCT_QCODES[ch]) return { qcode: PUNCT_QCODES[ch], shift: false };
+  if (SHIFTED_QCODES[ch]) return { qcode: SHIFTED_QCODES[ch], shift: true };
+  return null;
+}
+
+/** Press a named key (enter/arrows/f1…) by qcode. Throws on unknown name. */
+export async function pressNamedKeyVega(socketPath: string, name: string): Promise<void> {
+  const qcode = NAMED_QCODES[name.toLowerCase()];
+  if (!qcode) {
+    throw new Error(
+      `Unknown key "${name}" for Vega. Supported: ${Object.keys(NAMED_QCODES).join(", ")}`
+    );
+  }
+  await sendQcode(socketPath, qcode);
+}
+
+/**
+ * Type text on the VVD over a single QMP connection, mapping each character to a
+ * qcode (uppercase/symbols sent as shift + base via a key chord). Throws on a
+ * character with no mapping. Returns the number of characters typed.
+ */
+export async function typeTextVega(
+  socketPath: string,
+  text: string,
+  opts: { delayMs?: number } = {}
+): Promise<number> {
+  const delayMs = opts.delayMs ?? 50;
+  const client = await QmpClient.connect(socketPath);
+  try {
+    let i = 0;
+    for (const ch of text) {
+      const m = charToQcode(ch);
+      if (!m) throw new Error(`No Vega qcode for character "${ch}"`);
+      const keys = m.shift
+        ? [
+            { type: "qcode", data: "shift" },
+            { type: "qcode", data: m.qcode },
+          ]
+        : [{ type: "qcode", data: m.qcode }];
+      await client.execute("send-key", { keys });
+      await sleep(delayMs);
+      i++;
+    }
+    return i;
   } finally {
     client.close();
   }

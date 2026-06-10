@@ -33,6 +33,7 @@ import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { keyboardTool } from "../tools/keyboard";
 import { rotateTool } from "../tools/rotate";
+import { remoteTool } from "../tools/remote";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
 import { debuggerStatusTool } from "../tools/debugger/debugger-status";
@@ -119,6 +120,7 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
   registry.registerTool(rotateTool);
+  registry.registerTool(remoteTool);
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
   registry.registerTool(debuggerStatusTool);
