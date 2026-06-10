@@ -2,14 +2,9 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
-import {
-  discoverQmpSocket,
-  pressRemoteButton,
-  REMOTE_QCODES,
-  type RemoteButton,
-} from "../../utils/vega-qmp";
+import { pressRemoteButton, REMOTE_KEYCODES, type RemoteButton } from "../../utils/vega-input";
 
-const BUTTONS = Object.keys(REMOTE_QCODES) as [RemoteButton, ...RemoteButton[]];
+const BUTTONS = Object.keys(REMOTE_KEYCODES) as [RemoteButton, ...RemoteButton[]];
 
 const zodSchema = z.object({
   udid: z.string().describe("Target Vega device id from `list-devices`."),
@@ -26,13 +21,6 @@ const zodSchema = z.object({
     .max(50)
     .optional()
     .describe("Press the button this many times in a row (default 1). Useful for D-pad navigation."),
-  delayMs: z
-    .number()
-    .int()
-    .min(0)
-    .max(2000)
-    .optional()
-    .describe("Delay in ms between repeated presses (default 120)."),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -51,7 +39,7 @@ export const remoteTool: ToolDefinition<Params, Result> = {
   description: `Press a TV remote / D-pad button on a Vega (Fire TV) device.
 Vega apps are navigated with a directional remote, not touch — use this instead of gesture-tap/swipe (which do not apply on Vega). Move focus with up/down/left/right, confirm with select, go back with back, and use home/menu/playPause/rewind/fastForward for the corresponding remote keys.
 Pass repeat to step the D-pad multiple times (e.g. { button: "down", repeat: 3 }).
-Returns { pressed, count }. Keys are injected into the Virtual Device over QMP and delivered to the focused app as hardware key events.`,
+Returns { pressed, count }. Keys are injected on-device via inputd-cli so the focused app's focus engine moves (real remote/navigation events).`,
   alwaysLoad: true,
   searchHint:
     "vega fire tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward",
@@ -65,10 +53,8 @@ Returns { pressed, count }. Keys are injected into the Virtual Device over QMP a
     if (device.platform !== "vega") {
       throw new UnsupportedOperationError("remote", device, "remote is Vega-only");
     }
-    const socketPath = await discoverQmpSocket();
-    const count = await pressRemoteButton(socketPath, params.button, {
+    const count = await pressRemoteButton(params.udid, params.button, {
       repeat: params.repeat,
-      delayMs: params.delayMs,
     });
     return { pressed: params.button, count };
   },
