@@ -29,11 +29,11 @@ Vega tools require the Vega SDK on PATH (`source ~/vega/env`, or `~/vega/bin`). 
 
 `keyboard { udid, text }` / `keyboard { udid, key: "enter" }` types into a focused field (e.g. a search box). On a TV, focus a text field with the D-pad first, then type.
 
-## 4. See what's on screen — important limitation
+## 4. See what's on screen
 
-**Screenshots do not work on the Virtual Device.** The VVD renders through host GPU acceleration that QEMU's capture path cannot read on macOS (you get a blank frame), and the on-device screenshooter is non-functional on the VVD — so `screenshot` returns an actionable error rather than a black image. (It would work on a physical Fire TV or a Linux `--no-gl-accel` VVD.)
+`screenshot { udid, scale? }` works on the VVD. The VVD is an Android-emulator-derived QEMU, so capture goes host-side through the **Android emulator console** (`adb emu screenrecord screenshot` against the auto-discovered `emulator-<consolePort>`) — this grabs the composited GL display. It **requires `adb`** on PATH (the same dependency as Android). Do not run `adb connect` against the VVD's adb port — adb already auto-discovers the emulator console, and an explicit connect changes what `vega device list` reports.
 
-Because of this, on Vega prefer **`read-device-logs`** and the **JS debugger** (below) to understand state, and rely on app behavior in logs to confirm navigation. Since auto-screenshot can't produce an image on the VVD, enable the **`disable-auto-screenshot`** flag while working on Vega to avoid the post-action delay (`argent disable disable-auto-screenshot` is the opposite — use the flag to turn auto-screenshot off).
+(Note: a direct QMP `screendump` returns a black frame on macOS because the GL surface isn't in the QEMU console; the emulator-console path avoids that. QMP remains an internal fallback for a Linux `--no-gl-accel` VVD.)
 
 ## 5. Read device logs
 
@@ -55,5 +55,4 @@ Do **not** use argent's native profiler for Vega. Vega performance traces, hot-f
 ## 8. Not supported on Vega
 
 - `gesture-tap` / `gesture-swipe` / `gesture-pinch` / `gesture-rotate` / `gesture-custom` — touch model doesn't apply; use `remote`.
-- `screenshot` on the VVD (blank-frame limitation above).
 - `describe` (no accessibility tree) and `open-url` (deep-link mechanism not wired) — return unsupported on Vega.

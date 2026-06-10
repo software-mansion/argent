@@ -32,27 +32,33 @@ interface VegaInfo {
 }
 
 /**
- * Parse `vega device list`. The listing prints a human banner then one line per
- * device of the shape:
+ * Parse `vega device list`. A device row is:
  *
  *   VirtualDevice : tv - aarch64 - OS - amazon-4a27df03c9777152
  *
- * The trailing ` - `-separated token is the serial; the leading `<type> :` tells
- * virtual vs physical. We parse defensively (the banner wording is not API) and
- * keep only lines that actually carry a serial.
+ * `<DeviceType> : … - <serial>` — the leading token is an alphabetic device type
+ * (VirtualDevice, FireTV, …) and the trailing ` - `-separated token is the
+ * serial we drive via the `vega` CLI.
+ *
+ * NOTE: if something has run `adb connect` against the VVD's adb transport, the
+ * CLI instead lists it in adb form (`emulator-5554 : <idme>` /
+ * `127.0.0.1:5555 : <idme>`). Those rows are deliberately skipped — argent
+ * always drives Vega through the device-type serial, and adb is only used
+ * out-of-band for host-side screen capture. Requiring an alphabetic type both
+ * rejects those rows and avoids splitting on the `:` inside `host:port`.
  */
 export function parseVegaDeviceList(stdout: string): Array<{ serial: string; type: string }> {
   const devices: Array<{ serial: string; type: string }> = [];
   for (const raw of stdout.split("\n")) {
     const line = raw.trim();
-    const colon = line.indexOf(":");
-    if (colon < 0) continue;
-    const type = line.slice(0, colon).trim();
-    // A device row's left-of-colon is a CamelCase device type (VirtualDevice,
-    // FireTV, …) with no spaces; banner lines ("Found the following device")
-    // contain spaces and are skipped.
-    if (!type || /\s/.test(type)) continue;
-    const rhs = line.slice(colon + 1).trim();
+    const sep = line.indexOf(" : ");
+    if (sep < 0) continue;
+    const type = line.slice(0, sep).trim();
+    // Accept only an alphabetic CamelCase device type; skips the "Found the
+    // following device(s)" banner and adb-transport rows (emulator-NNNN,
+    // host:port) that appear when adb is explicitly connected to the VVD.
+    if (!/^[A-Za-z]+$/.test(type)) continue;
+    const rhs = line.slice(sep + 3).trim();
     const parts = rhs.split(/\s+-\s+/);
     const serial = parts[parts.length - 1]?.trim();
     if (!serial) continue;
