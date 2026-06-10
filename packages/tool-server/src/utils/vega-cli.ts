@@ -124,13 +124,24 @@ export function vegaShellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-/** Run `vega device <subcommand…> -d <serial>` for a specific device. */
+/**
+ * Run `vega device <subcommand…>` against a device.
+ *
+ * NOTE (v1, Virtual-Device-only): the CLI's `-d/--device <serial>` flag does
+ * NOT match the running Virtual Device by the serial that `device list`/`info`
+ * report — passing it yields an empty `unknown` device, while omitting it
+ * correctly targets the single connected device (the CLI documents `-d` as
+ * "Defaults to the connected device if there is only one"). So we rely on that
+ * default and do not inject `-d`. `serial` is retained for identity/validation
+ * and a future multi-device path (physical Fire TV, where `-d` does apply).
+ */
 export async function vegaDevice(
   serial: string,
   subcommand: string[],
   options: { timeoutMs?: number } = {}
 ): Promise<VegaRunResult> {
-  return runVega(["device", ...subcommand, "-d", serial], options);
+  if (!serial) throw new Error("vegaDevice requires a non-empty device serial");
+  return runVega(["device", ...subcommand], options);
 }
 
 /**
