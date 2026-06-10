@@ -27,10 +27,12 @@ export async function discoverMetro(port: number): Promise<MetroInfo> {
     throw new Error(`Metro at port ${port} is not running (got: ${statusText.slice(0, 100)})`);
   }
 
-  const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") ?? "";
-  if (!projectRoot) {
-    throw new Error(`Metro at port ${port} did not return X-React-Native-Project-Root header`);
-  }
+  // Stock Metro advertises the project root via this header; some forks (e.g.
+  // Amazon's Metro for Vega/Fire TV) don't set it. The project root only affects
+  // source-map path resolution — connect/evaluate/component-tree work without it
+  // — so fall back to the process cwd (typically the project root) instead of
+  // failing the whole debug session.
+  const projectRoot = statusRes.headers.get("X-React-Native-Project-Root") || process.cwd();
 
   const listRes = await fetch(`http://localhost:${port}/json/list`);
   const targets = (await listRes.json()) as CDPTarget[];
