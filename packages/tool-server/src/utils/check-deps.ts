@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolDependency } from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
+import { resolveVegaBinary } from "./vega-cli";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +37,7 @@ const INSTALL_HINTS: Record<ToolDependency, string> = {
   adb: "Android SDK Platform Tools not found. Install with `brew install --cask android-platform-tools` or via Android Studio → SDK Manager. If installed, ensure `adb` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/platform-tools/adb`). Only required for Android devices and emulators.",
   emulator:
     "Android Emulator not found. Install via Android Studio → SDK Manager → Emulator, or `sdkmanager 'emulator'`. If installed, ensure `emulator` is on PATH or set `$ANDROID_HOME` to the SDK root (the resolver checks `$ANDROID_HOME/emulator/emulator`). Only required to launch new Android emulators via `boot-device`.",
+  vega: "Vega SDK CLI not found. Install the Amazon Vega SDK and run `source ~/vega/env` so `vega` (or its `kepler` alias) is on PATH; the resolver also checks `~/vega/bin/vega`. Only required for Vega (Fire TV) devices.",
 };
 
 async function probe(dep: ToolDependency): Promise<boolean> {
@@ -48,6 +50,11 @@ async function probe(dep: ToolDependency): Promise<boolean> {
   // describe the actual problem.
   if (dep === "adb" || dep === "emulator") {
     return (await resolveAndroidBinary(dep)) !== null;
+  }
+  // `vega`/`kepler` may live only under `~/vega/bin` when the user hasn't sourced
+  // `~/vega/env`, so resolve through the SDK-aware resolver rather than PATH alone.
+  if (dep === "vega") {
+    return (await resolveVegaBinary()) !== null;
   }
   try {
     // `command -v` via `/bin/sh` is POSIX-portable and doesn't invoke the dep

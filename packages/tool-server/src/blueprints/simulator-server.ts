@@ -186,6 +186,16 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
+    // Vega (Fire TV) does not use the prebuilt simulator-server binary — its
+    // screen/input go through the vega-control service (CLI + QMP). Resolving
+    // this blueprint for a Vega device is a wiring bug, so fail loudly rather
+    // than spawn the binary with an unsupported platform string.
+    if (device.platform === "vega") {
+      throw new Error(
+        `${SIMULATOR_SERVER_NAMESPACE} does not support Vega devices; Vega uses the vega-control service.`
+      );
+    }
+
     if (device.platform === "ios") {
       await ensureAutomationEnabled(device.id).catch(() => {});
     } else if (device.platform === "android") {
