@@ -11,12 +11,15 @@ export type {
   URN,
   ServiceRef,
   InvokeToolOptions,
+  ToolContext,
   Platform,
   DeviceKind,
   DeviceInfo,
   ToolCapability,
   ToolDependency,
 } from "./types";
+export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
+export type { ArtifactHandle, ArtifactEntry, RegisterArtifactOptions } from "./artifacts";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import { screenshotTool } from "../src/tools/screenshot";
 
 describe("screenshot tool", () => {
@@ -28,7 +29,7 @@ describe("screenshot tool", () => {
     const result = await screenshotTool.execute(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       params,
-      {}
+      { artifacts: new ArtifactStore() }
     );
 
     // The PNG is returned as an artifact handle the MCP client materializes —

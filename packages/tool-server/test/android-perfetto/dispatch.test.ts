@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import {
   nativeProfilerSessionBlueprint,
   type NativeProfilerSessionApi,
@@ -90,9 +91,13 @@ describe("native-profiler-* dispatch by session platform", () => {
 
   it("stop+analyze also route by session platform", async () => {
     const androidApi = await buildSession("android");
-    const stop = await nativeProfilerStopTool.execute({ session: androidApi } as never, {
-      device_id: "emulator-5554",
-    });
+    const stop = await nativeProfilerStopTool.execute(
+      { session: androidApi } as never,
+      {
+        device_id: "emulator-5554",
+      },
+      { artifacts: new ArtifactStore() }
+    );
     // The stop tool wraps the platform's raw path into a downloadable artifact;
     // the filename still proves it routed through the Android (.pftrace) path.
     expect(stop.traceFile).toMatchObject({

@@ -3,7 +3,7 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
-import { getArtifactRegistry, type ArtifactHandle } from "../../artifacts";
+import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -58,11 +58,11 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
-  async execute(services, params, options) {
+  async execute(services, params, ctx) {
     const api = services.simulatorServer as SimulatorServerApi;
-    const signal = options?.signal ?? AbortSignal.timeout(16_000);
+    const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
     const { path } = await httpScreenshot(api, params.rotation, signal, params.scale);
-    const image = await getArtifactRegistry().register(path, { mimeType: "image/png" });
+    const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
     return { image };
   },
 };

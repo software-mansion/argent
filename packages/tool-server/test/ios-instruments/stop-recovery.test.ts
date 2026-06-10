@@ -25,6 +25,10 @@ import {
   type IosStopArtifacts,
 } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
+import { ArtifactStore } from "@argent/registry";
+
+// Tool context the registry would inject; stop registers its trace/exports here.
+const STOP_CTX = { artifacts: new ArtifactStore() };
 
 const mockedExport = vi.mocked(exportIosTraceData);
 
@@ -123,9 +127,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 0, signal: null };
 
-    const result = (await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    })) as IosStopArtifacts;
+    const result = (await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    )) as IosStopArtifacts;
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
     // exportedFiles are now artifact handles (materialized client-side), not raw paths.
@@ -153,9 +161,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
 
     expect(result.warning).toContain("code=137");
     expect(result.warning).toContain("signal=SIGKILL");
@@ -167,9 +179,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingTimedOut = true;
     api.recordingExitedUnexpectedly = false;
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
 
     expect(result.warning).toContain("Recording timed out at 10 min cap");
     expect(result.warning).not.toContain("xctrace exited before stop");
@@ -214,9 +230,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.captureProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
-    const promise = nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const promise = nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
     await vi.advanceTimersByTimeAsync(10);
     const result = await promise;
 

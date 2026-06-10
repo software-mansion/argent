@@ -19,7 +19,8 @@ import {
   writeDumpCompact,
 } from "../../../utils/react-profiler/debug/dump";
 import { serializeCpuSampleIndex } from "../../../utils/react-profiler/pipeline/00-cpu-correlate";
-import { getArtifactRegistry, type ArtifactHandle } from "../../../artifacts";
+import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
+import type { ArtifactStore } from "@argent/registry";
 
 /**
  * Register a server-side file path as a downloadable artifact (or pass through
@@ -28,8 +29,11 @@ import { getArtifactRegistry, type ArtifactHandle } from "../../../artifacts";
  * co-located, downloaded when remote — instead of receiving a dangling host
  * path it can't open.
  */
-async function fileArtifact(p: string | null | undefined): Promise<ArtifactHandle | null> {
-  return p ? getArtifactRegistry().register(p) : null;
+async function fileArtifact(
+  store: ArtifactStore,
+  p: string | null | undefined
+): Promise<ArtifactHandle | null> {
+  return p ? store.register(p) : null;
 }
 
 const annotationSchema = z.object({
@@ -83,7 +87,7 @@ Use when the profiling session is complete and you need to interpret the collect
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
   services: () => ({}),
-  async execute(_services, params) {
+  async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(
       params.port,
       params.device_id
@@ -210,15 +214,16 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
       maxCommitMs: pipelineOutput.maxCommitMs,
     });
 
+    const artifacts = requireArtifacts(ctx);
     const result: Record<string, unknown> = {
       report,
-      reportFile: await fileArtifact(reportFile),
+      reportFile: await fileArtifact(artifacts, reportFile),
       hotCommitsTotal,
       hotCommitsShown,
       sessionFiles: {
         sessionId: sessionPaths.sessionId,
-        cpuProfile: await fileArtifact(sessionPaths.cpuProfilePath),
-        commits: await fileArtifact(sessionPaths.commitsPath),
+        cpuProfile: await fileArtifact(artifacts, sessionPaths.cpuProfilePath),
+        commits: await fileArtifact(artifacts, sessionPaths.commitsPath),
       },
     };
 

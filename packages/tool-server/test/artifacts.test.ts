@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
-import { getArtifactRegistry } from "../src/artifacts";
+import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
 
 // supertest/superagent doesn't buffer binary bodies (gzip) by default.
@@ -26,22 +26,26 @@ vi.mock("../src/utils/update-checker", () => ({
   suppressUpdateNote: vi.fn(),
 }));
 
+// A minimal Registry carrying a real ArtifactStore — the `/artifacts/:id` route
+// resolves files from `registry.artifacts`, so the test registers into the same
+// store instance it hands to createHttpApp.
 function stubRegistry(): Registry {
   return {
+    artifacts: new ArtifactStore(),
     getSnapshot: vi.fn(() => ({ services: new Map(), namespaces: [], tools: [] })),
     getTool: vi.fn(() => undefined),
     invokeTool: vi.fn(),
   } as unknown as Registry;
 }
 
-describe("artifact registry", () => {
+describe("ArtifactStore", () => {
   it("registers a file and infers filename, mime type, and size", async () => {
     const dir = await mkdtemp(join(tmpdir(), "artifact-reg-"));
     try {
       const filePath = join(dir, "shot.png");
       await writeFile(filePath, Buffer.from([1, 2, 3, 4]));
 
-      const handle = await getArtifactRegistry().register(filePath);
+      const handle = await new ArtifactStore().register(filePath);
       expect(handle.__argentArtifact).toBe(true);
       expect(handle.filename).toBe("shot.png");
       expect(handle.mimeType).toBe("image/png");
@@ -60,7 +64,7 @@ describe("artifact registry", () => {
     try {
       const filePath = join(dir, "raw.bin");
       await writeFile(filePath, "hi");
-      const handle = await getArtifactRegistry().register(filePath, {
+      const handle = await new ArtifactStore().register(filePath, {
         filename: "pretty.png",
         mimeType: "image/png",
       });
@@ -78,7 +82,7 @@ describe("artifact registry", () => {
       await mkdir(bundle, { recursive: true });
       await writeFile(join(bundle, "data.bin"), "trace");
 
-      const handle = await getArtifactRegistry().register(bundle);
+      const handle = await new ArtifactStore().register(bundle);
       expect(handle.archive).toBe("tar.gz");
       expect(handle.filename).toBe("session.trace");
       expect(handle.hostPath).toBe(bundle);
@@ -88,7 +92,7 @@ describe("artifact registry", () => {
   });
 
   it("honours an explicit archive option when the path can't be stat'd", async () => {
-    const handle = await getArtifactRegistry().register("/tmp/does-not-exist-yet.trace", {
+    const handle = await new ArtifactStore().register("/tmp/does-not-exist-yet.trace", {
       archive: "tar.gz",
     });
     expect(handle.archive).toBe("tar.gz");
@@ -109,9 +113,10 @@ describe("GET /artifacts/:id", () => {
       const filePath = join(dir, "img.png");
       const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xaa, 0xbb]);
       await writeFile(filePath, bytes);
-      const artifact = await getArtifactRegistry().register(filePath, { mimeType: "image/png" });
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register(filePath, { mimeType: "image/png" });
 
-      handle = createHttpApp(stubRegistry());
+      handle = createHttpApp(registry);
       const res = await supertest(handle.app).get(`/artifacts/${artifact.id}`);
 
       expect(res.status).toBe(200);
@@ -130,8 +135,9 @@ describe("GET /artifacts/:id", () => {
       await writeFile(join(bundle, "top.txt"), "top");
       await writeFile(join(bundle, "sub", "nested.txt"), "nested");
 
-      const artifact = await getArtifactRegistry().register(bundle);
-      handle = createHttpApp(stubRegistry());
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register(bundle);
+      handle = createHttpApp(registry);
       const res = await supertest(handle.app)
         .get(`/artifacts/${artifact.id}`)
         .buffer(true)
@@ -162,10 +168,11 @@ describe("GET /artifacts/:id", () => {
     const dir = await mkdtemp(join(tmpdir(), "artifact-gone-"));
     const filePath = join(dir, "gone.png");
     await writeFile(filePath, "x");
-    const artifact = await getArtifactRegistry().register(filePath);
+    const registry = stubRegistry();
+    const artifact = await registry.artifacts.register(filePath);
     await rm(dir, { recursive: true, force: true });
 
-    handle = createHttpApp(stubRegistry());
+    handle = createHttpApp(registry);
     const res = await supertest(handle.app).get(`/artifacts/${artifact.id}`);
     expect(res.status).toBe(410);
   });

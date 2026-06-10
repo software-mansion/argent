@@ -10,7 +10,8 @@ import { ensureDeps } from "../../../utils/check-deps";
 import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
 import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/android";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
-import { getArtifactRegistry, type ArtifactHandle } from "../../../artifacts";
+import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
+import type { ArtifactStore } from "@argent/registry";
 
 const zodSchema = z.object({
   device_id: z
@@ -56,12 +57,12 @@ const capability = {
 
 /** Register each non-null exported file path as a downloadable artifact. */
 async function exportedFilesToArtifacts(
+  store: ArtifactStore,
   files: Record<string, string | null>
 ): Promise<Record<string, ArtifactHandle | null>> {
-  const registry = getArtifactRegistry();
   const out: Record<string, ArtifactHandle | null> = {};
   for (const [key, filePath] of Object.entries(files)) {
-    out[key] = filePath ? await registry.register(filePath) : null;
+    out[key] = filePath ? await store.register(filePath) : null;
   }
   return out;
 }
@@ -71,8 +72,8 @@ async function exportedFilesToArtifacts(
  * works even when the path is a directory (iOS `.trace`), and even if it can't
  * be stat'd at registration (e.g. a recovered session).
  */
-function registerTrace(traceFile: string): Promise<ArtifactHandle> {
-  return getArtifactRegistry().register(traceFile, { archive: "tar.gz" });
+function registerTrace(store: ArtifactStore, traceFile: string): Promise<ArtifactHandle> {
+  return store.register(traceFile, { archive: "tar.gz" });
 }
 
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
@@ -89,7 +90,7 @@ Fails if no active native-profiler-start session exists for the given device_id.
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
-  async execute(services, params) {
+  async execute(services, params, ctx) {
     const api = services.session as NativeProfilerSessionApi;
     const device = resolveDevice(params.device_id);
     assertSupported("native-profiler-stop", capability, device);
@@ -97,13 +98,15 @@ Fails if no active native-profiler-start session exists for the given device_id.
     // Wrap each platform's raw host paths as downloadable artifacts. Kept per
     // branch (rather than one merged object) so the return type preserves the
     // iOS/Android distinction: iOS always carries exportDiagnostics, Android
-    // never does.
+    // never does. The artifact store is resolved only after a successful stop —
+    // the "no active session" error path never needs it.
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
       const ios: IosStopResult = await stopNativeProfilerIos(api);
+      const artifacts = requireArtifacts(ctx);
       const result: IosStopArtifacts = {
-        traceFile: await registerTrace(ios.traceFile),
-        exportedFiles: await exportedFilesToArtifacts(ios.exportedFiles),
+        traceFile: await registerTrace(artifacts, ios.traceFile),
+        exportedFiles: await exportedFilesToArtifacts(artifacts, ios.exportedFiles),
         exportDiagnostics: ios.exportDiagnostics,
       };
       if (ios.warning) result.warning = ios.warning;
@@ -112,9 +115,10 @@ Fails if no active native-profiler-start session exists for the given device_id.
 
     await ensureDeps(["adb"]);
     const android: AndroidStopResult = await stopNativeProfilerAndroid(api);
+    const artifacts = requireArtifacts(ctx);
     const result: AndroidStopArtifacts = {
-      traceFile: await registerTrace(android.traceFile),
-      exportedFiles: await exportedFilesToArtifacts(android.exportedFiles),
+      traceFile: await registerTrace(artifacts, android.traceFile),
+      exportedFiles: await exportedFilesToArtifacts(artifacts, android.exportedFiles),
     };
     if (android.warning) result.warning = android.warning;
     return result;
