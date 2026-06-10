@@ -20,9 +20,15 @@ vi.mock("../../src/utils/check-deps", () => ({
 }));
 
 import { exportIosTraceData } from "../../src/utils/ios-profiler/export";
-import { nativeProfilerStopTool } from "../../src/tools/profiler/native-profiler/native-profiler-stop";
-import type { IosStopResult } from "../../src/tools/profiler/native-profiler/platforms/ios";
+import {
+  nativeProfilerStopTool,
+  type IosStopArtifacts,
+} from "../../src/tools/profiler/native-profiler/native-profiler-stop";
 import { handleXctraceExit } from "../../src/tools/profiler/native-profiler/native-profiler-start";
+import { ArtifactStore } from "@argent/registry";
+
+// Tool context the registry would inject; stop registers its trace/exports here.
+const STOP_CTX = { artifacts: new ArtifactStore() };
 
 const mockedExport = vi.mocked(exportIosTraceData);
 
@@ -121,13 +127,28 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 0, signal: null };
 
-    const result = (await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    })) as IosStopResult;
+    const result = (await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    )) as IosStopArtifacts;
 
     expect(mockedExport).toHaveBeenCalledWith(FAKE_TRACE);
-    expect(result.traceFile).toBe(FAKE_TRACE);
-    expect(result.exportedFiles).toEqual(FAKE_EXPORT_RESULT.files);
+    // exportedFiles are now artifact handles (materialized client-side), not raw paths.
+    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true, filename: "cpu.xml" });
+    expect(result.exportedFiles.hangs).toMatchObject({
+      __argentArtifact: true,
+      filename: "hangs.xml",
+    });
+    // The .trace bundle is now a downloadable artifact (delivered as tar.gz
+    // on demand), not a "stays on the host" note.
+    expect(result.traceFile).toMatchObject({
+      __argentArtifact: true,
+      archive: "tar.gz",
+      filename: "ios-profiler-20260101-000000.trace",
+    });
     expect(result.exportDiagnostics).toEqual(FAKE_EXPORT_RESULT.diagnostics);
     expect(result.warning).toBeDefined();
     expect(api.recordingExitedUnexpectedly).toBe(false);
@@ -140,9 +161,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingExitedUnexpectedly = true;
     api.lastExitInfo = { code: 137, signal: "SIGKILL" };
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
 
     expect(result.warning).toContain("code=137");
     expect(result.warning).toContain("signal=SIGKILL");
@@ -154,9 +179,13 @@ describe("native-profiler-stop recovery branch", () => {
     api.recordingTimedOut = true;
     api.recordingExitedUnexpectedly = false;
 
-    const result = await nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const result = await nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
 
     expect(result.warning).toContain("Recording timed out at 10 min cap");
     expect(result.warning).not.toContain("xctrace exited before stop");
@@ -201,14 +230,18 @@ describe("native-profiler-stop recovery branch", () => {
     api.captureProcess = asChild(child);
     api.traceFile = FAKE_TRACE;
 
-    const promise = nativeProfilerStopTool.execute({ session: api } as never, {
-      device_id: "DEVICE-UDID",
-    });
+    const promise = nativeProfilerStopTool.execute(
+      { session: api } as never,
+      {
+        device_id: "DEVICE-UDID",
+      },
+      STOP_CTX
+    );
     await vi.advanceTimersByTimeAsync(10);
     const result = await promise;
 
     expect(result.warning).toBeUndefined();
-    expect(result.traceFile).toBe(FAKE_TRACE);
+    expect(result.exportedFiles.cpu).toMatchObject({ __argentArtifact: true });
     expect(api.profilingActive).toBe(false);
     expect(api.captureProcess).toBeNull();
     expect(api.recordingExitedUnexpectedly).toBe(false);

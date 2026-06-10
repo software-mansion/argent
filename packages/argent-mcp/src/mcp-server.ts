@@ -8,6 +8,7 @@ import {
   ensureToolsServer,
   getResolvedToolsUrl,
   isRemoteRouted,
+  getDeviceIdFromArgs,
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -16,6 +17,7 @@ import {
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
 } from "./content.js";
@@ -224,6 +226,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         result,
       });
 
+      const ctx: ContentContext = {
+        toolsUrl: TOOLS_URL,
+        authToken: AUTH_TOKEN,
+        deviceId: getDeviceIdFromArgs(params.arguments),
+      };
+
       let content: ContentBlock[];
       if (
         params.name === "flow-execute" &&
@@ -232,11 +240,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "flow" in result &&
         "steps" in result
       ) {
-        content = await flowRunToMcpContent(result as FlowExecuteResult);
+        content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
       } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
         content = await screenshotDiffToMcpContent(result);
       } else {
-        content = await toMcpContent(result, outputHint, params.arguments);
+        content = await toMcpContent(result, outputHint, ctx, params.arguments);
       }
 
       const udid = getUdidFromArgs(params.arguments);
@@ -246,7 +254,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(screenshotResult.result, "image", { udid });
+          const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
+            toolsUrl: TOOLS_URL,
+            authToken: AUTH_TOKEN,
+            deviceId: udid,
+          });
           const hasImage = screenshotContent.some((b) => b.type === "image");
           if (hasImage) {
             content = [
