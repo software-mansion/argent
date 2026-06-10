@@ -8,6 +8,7 @@ export interface IosSimulator {
   name: string;
   state: string;
   runtime: string;
+  runtimeKind?: "mobile" | "tv";
 }
 
 interface SimctlDevice {
@@ -23,7 +24,7 @@ interface SimctlOutput {
 }
 
 /**
- * List all available iOS simulators via `xcrun simctl list devices --json`.
+ * List all available iOS and tvOS simulators via `xcrun simctl list devices --json`.
  * Returns an empty array when xcrun is missing or the call fails so the
  * rest of the tool surface stays usable on non-mac hosts.
  */
@@ -35,10 +36,18 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
     const data: SimctlOutput = JSON.parse(stdout);
     const out: IosSimulator[] = [];
     for (const [runtimeId, devices] of Object.entries(data.devices)) {
-      if (!runtimeId.includes("iOS")) continue;
+      // Accept both iOS and tvOS runtimes
+      if (!runtimeId.includes("iOS") && !runtimeId.includes("tvOS")) continue;
       for (const d of devices) {
         if (!d.isAvailable) continue;
-        out.push({ udid: d.udid, name: d.name, state: d.state, runtime: runtimeId });
+        const runtimeKind = runtimeId.includes("tvOS") ? "tv" : "mobile";
+        out.push({
+          udid: d.udid,
+          name: d.name,
+          state: d.state,
+          runtime: runtimeId,
+          runtimeKind
+        });
       }
     }
     return out;
