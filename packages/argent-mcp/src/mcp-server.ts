@@ -9,6 +9,8 @@ import {
   getResolvedToolsUrl,
   isRemoteRouted,
   getDeviceIdFromArgs,
+  prepareFileInputs,
+  applyClientFileDirectives,
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -161,11 +163,26 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   ): Promise<{ result: unknown; outputHint?: string; note?: string }> {
     const tools = await fetchTools();
     const meta = tools.find((t) => t.name === name);
+
+    // File boundary, outbound: wrap declared file-path args so the tool-server
+    // can read them in place (co-located) or from inlined content (remote).
+    // Metadata-driven: an older server that doesn't declare fileInputs gets
+    // the args verbatim.
+    let finalArgs = args;
+    if (meta?.fileInputs?.length) {
+      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+        // `resolved` is the startup routing decision that picked TOOLS_URL —
+        // an external target means this process may not share the server's
+        // filesystem, so file bytes must ride along.
+        includeContent: resolved.url !== null,
+      });
+    }
+
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
       init: {
         method: "POST",
         headers: { "Content-Type": "application/json", ...authHeader() },
-        body: JSON.stringify(args ?? {}),
+        body: JSON.stringify(finalArgs ?? {}),
       },
       fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,
     });
@@ -174,7 +191,11 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
     if (!res.ok) throw new Error(json.error ?? json.message ?? res.statusText);
 
-    return { result: json.data, outputHint: meta?.outputHint, note: json.note };
+    // File boundary, inbound: persist any client-write directives (files that
+    // belong in the agent's project, e.g. recorded flow YAMLs) and rewrite
+    // them to the written paths.
+    const { result: data } = await applyClientFileDirectives(json.data);
+    return { result: data, outputHint: meta?.outputHint, note: json.note };
   }
 
   const server = new Server(
@@ -242,7 +263,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
       ) {
         content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
       } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
-        content = await screenshotDiffToMcpContent(result);
+        content = await screenshotDiffToMcpContent(result, ctx);
       } else {
         content = await toMcpContent(result, outputHint, ctx, params.arguments);
       }

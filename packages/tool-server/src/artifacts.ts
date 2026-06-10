@@ -33,7 +33,7 @@ export {
  * tool's `execute` is called directly (bypassing the registry) without a
  * context — i.e. a misconfigured unit test, not a real invocation.
  */
-export function requireArtifacts(ctx?: ToolContext): ArtifactStore {
+export function requireArtifacts(ctx?: Partial<ToolContext>): ArtifactStore {
   if (!ctx?.artifacts) {
     throw new Error(
       "Artifact store missing from tool context. Invoke this tool via registry.invokeTool " +

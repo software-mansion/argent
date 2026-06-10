@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 import { PNG } from "pngjs";
 import { describe, expect, it, vi } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import { executeScreenshotDiffTool, screenshotDiffTool } from "../src/tools/screenshot-diff";
 
 describe("screenshotDiffTool", () => {
@@ -66,13 +67,22 @@ describe("screenshotDiffTool", () => {
         currentPath,
         udid: "ABC",
         outputDir: dir,
-      }
+      },
+      { artifacts: new ArtifactStore() }
     );
 
-    expect(result).toEqual({
-      summary: expect.stringContaining("Screenshot diff summary"),
-      diffPath: path.join(dir, "current-diff.png"),
-      contextDiffPath: path.join(dir, "current-context-diff.png"),
+    // Diff outputs leave as artifact handles so a remote client can download
+    // them; hostPath still points at the requested outputDir.
+    expect(result.summary).toContain("Screenshot diff summary");
+    expect(result.diffPath).toMatchObject({
+      __argentArtifact: true,
+      hostPath: path.join(dir, "current-diff.png"),
+      mimeType: "image/png",
+    });
+    expect(result.contextDiffPath).toMatchObject({
+      __argentArtifact: true,
+      hostPath: path.join(dir, "current-context-diff.png"),
+      mimeType: "image/png",
     });
     expect(Object.keys(result).sort()).toEqual(["contextDiffPath", "diffPath", "summary"]);
   });
@@ -98,7 +108,7 @@ describe("screenshotDiffTool", () => {
         rotation: "LandscapeLeft",
         outputDir: dir,
       },
-      { signal },
+      { signal, artifacts: new ArtifactStore() },
       captureScreenshot as never
     );
 
@@ -116,7 +126,9 @@ describe("screenshotDiffTool", () => {
     await expect(fs.stat(path.join(dir, liveCaptures[0]!))).resolves.toMatchObject({
       size: expect.any(Number),
     });
-    expect(result.diffPath).toBe(path.join(dir, `${liveBaseName}-diff.png`));
+    expect(result.diffPath).toMatchObject({
+      hostPath: path.join(dir, `${liveBaseName}-diff.png`),
+    });
   });
 
   it("falls back to the default scale when the full-resolution capture fails (Android framebuffer mismatch)", async () => {
@@ -139,7 +151,7 @@ describe("screenshotDiffTool", () => {
     const result = await executeScreenshotDiffTool(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      {},
+      { artifacts: new ArtifactStore() },
       captureScreenshot as never
     );
 
@@ -189,13 +201,13 @@ describe("screenshotDiffTool", () => {
     await executeScreenshotDiffTool(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      {},
+      { artifacts: new ArtifactStore() },
       captureScreenshot as never
     );
     await executeScreenshotDiffTool(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       { baselinePath, captureCurrent: true, udid: "ABC", outputDir: dir },
-      {},
+      { artifacts: new ArtifactStore() },
       captureScreenshot as never
     );
 

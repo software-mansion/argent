@@ -20,6 +20,20 @@ export type {
 } from "./types";
 export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
 export type { ArtifactHandle, ArtifactEntry, RegisterArtifactOptions } from "./artifacts";
+export {
+  FILE_INPUT_MARKER,
+  CLIENT_FILE_MARKER,
+  isFileInputWire,
+  isClientFileDirective,
+  interpolateFileInputPath,
+} from "./file-inputs";
+export type {
+  FileInputWire,
+  FileInputKind,
+  FileInputSpec,
+  ResolvedFileInput,
+  ClientFileDirective,
+} from "./file-inputs";
 export { parseURN } from "./urn";
 export {
   ServiceNotFoundError,

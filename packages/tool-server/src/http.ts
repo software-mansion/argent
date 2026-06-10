@@ -1,5 +1,5 @@
 import express, { Request, Response } from "express";
-import type { Registry } from "@argent/registry";
+import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -8,6 +8,7 @@ import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./ut
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
 import { makeArtifactRoute } from "./artifacts";
+import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -104,7 +105,10 @@ function extractHostname(host: string): string {
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
-  app.use(express.json());
+  // 48mb: file-input wrappers may inline base64 file content (saved PNG
+  // baselines, flow YAMLs) when the client is remote. Bounds the whole encoded
+  // request; the decoded per-file ceiling is enforced in file-inputs.ts.
+  app.use(express.json({ limit: "48mb" }));
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
@@ -222,6 +226,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         description: string;
         inputSchema: Record<string, unknown>;
         outputHint?: string;
+        fileInputs?: FileInputSpec[];
         alwaysLoad?: boolean;
         searchHint?: string;
         longRunning?: boolean;
@@ -231,6 +236,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
       };
       if (def?.outputHint) entry.outputHint = def.outputHint;
+      if (def?.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
       if (def?.alwaysLoad) entry.alwaysLoad = true;
       if (def?.searchHint) entry.searchHint = def.searchHint;
       if (def?.longRunning) entry.longRunning = true;
@@ -254,9 +260,27 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
-      let parsedData = req.body;
+      // File boundary: turn any client file-input wrappers back into plain
+      // server-readable paths BEFORE schema validation, so the tool's zod
+      // schema only ever sees the string params it declares. 422 on a file
+      // that is reachable neither in place nor via uploaded content.
+      let bodyArgs = req.body;
+      let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
+      try {
+        const resolved = await resolveFileInputs(def, req.body);
+        bodyArgs = resolved.args;
+        resolvedFileInputs = resolved.fileInputs;
+      } catch (err) {
+        if (err instanceof FileInputError) {
+          res.status(422).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      let parsedData = bodyArgs;
       if (def.zodSchema) {
-        const parseResult = def.zodSchema.safeParse(req.body);
+        const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
           res.status(400).json({ error: parseResult.error.message });
           return;
@@ -320,6 +344,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
+          ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
