@@ -23,7 +23,13 @@ function hostFiber(nativeTag: number, rect: Rect, opts: { withPublicInstance?: b
     cb(rect.x, rect.y, rect.w, rect.h);
   const canonical: Record<string, unknown> = { nativeTag };
   if (opts.withPublicInstance !== false) canonical.publicInstance = { measureInWindow };
-  return { type: "RCTView", stateNode: { node: {}, canonical }, memoizedProps: {}, child: null, sibling: null };
+  return {
+    type: "RCTView",
+    stateNode: { node: {}, canonical },
+    memoizedProps: {},
+    child: null,
+    sibling: null,
+  };
 }
 
 function comp(displayName: string, testID: string, child: unknown, sibling: unknown = null) {
@@ -31,7 +37,9 @@ function comp(displayName: string, testID: string, child: unknown, sibling: unkn
 }
 
 function rootOf(childFiber: unknown) {
-  return { current: { type: null, stateNode: null, memoizedProps: null, child: childFiber, sibling: null } };
+  return {
+    current: { type: null, stateNode: null, memoizedProps: null, child: childFiber, sibling: null },
+  };
 }
 
 function makeHook(rootsByRenderer: Record<number, unknown[]>) {
@@ -40,7 +48,10 @@ function makeHook(rootsByRenderer: Record<number, unknown[]>) {
   return { renderers, getFiberRoots: (id: number) => new Set(rootsByRenderer[id] ?? []) };
 }
 
-async function runScript(hook: unknown, nativeFabricUIManager: unknown): Promise<{ result: string } | null> {
+async function runScript(
+  hook: unknown,
+  nativeFabricUIManager: unknown
+): Promise<{ result: string } | null> {
   const g = globalThis as Record<string, unknown>;
   const saved = {
     window: g.window,
@@ -54,7 +65,9 @@ async function runScript(hook: unknown, nativeFabricUIManager: unknown): Promise
   g.__REACT_DEVTOOLS_GLOBAL_HOOK__ = hook;
   g.nativeFabricUIManager = nativeFabricUIManager;
   g.__r = function () {}; // metro require stub; the Dimensions block is try/caught
-  g.__argent_callback = (payload: string) => { captured = JSON.parse(payload); };
+  g.__argent_callback = (payload: string) => {
+    captured = JSON.parse(payload);
+  };
   try {
     // indirect eval keeps access to the globalThis the script reads
     await (0, eval)(makeComponentTreeScript({ requestId: "t" }));
@@ -70,7 +83,11 @@ async function runScript(hook: unknown, nativeFabricUIManager: unknown): Promise
 
 function components(captured: { result: string } | null) {
   expect(captured).toBeTruthy();
-  return JSON.parse(captured!.result).components as Array<{ name: string; testID?: string; rect: Rect | null }>;
+  return JSON.parse(captured!.result).components as Array<{
+    name: string;
+    testID?: string;
+    rect: Rect | null;
+  }>;
 }
 
 afterEach(() => {
@@ -121,10 +138,18 @@ describe("makeComponentTreeScript — Fabric layout (argent#316)", () => {
   });
 
   it("falls back to nativeFabricUIManager.measure when there is no publicInstance", async () => {
-    const rn = rootOf(comp("MyButton", "button", hostFiber(1, { x: 0, y: 0, w: 0, h: 0 }, { withPublicInstance: false })));
+    const rn = rootOf(
+      comp(
+        "MyButton",
+        "button",
+        hostFiber(1, { x: 0, y: 0, w: 0, h: 0 }, { withPublicInstance: false })
+      )
+    );
     const nf = {
-      measure: (_node: unknown, cb: (x: number, y: number, w: number, h: number, px: number, py: number) => void) =>
-        cb(0, 0, 100, 40, 11, 22),
+      measure: (
+        _node: unknown,
+        cb: (x: number, y: number, w: number, h: number, px: number, py: number) => void
+      ) => cb(0, 0, 100, 40, 11, 22),
     };
     const comps = components(await runScript(makeHook({ 3: [rn] }), nf));
     const btn = comps.find((c) => c.testID === "button");
