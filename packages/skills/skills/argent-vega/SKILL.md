@@ -43,6 +43,8 @@ Vega tools require the Vega SDK on PATH (`source ~/vega/env`, or `~/vega/bin`). 
 
 Fast Refresh (hot-reload of `.tsx` edits without restarting the app) works on Vega. The one hard requirement: a **Debug** build — the debug shell loads its JS from Metro live; a Release build runs its bundled JS and silently ignores Metro.
 
+> Note: these are **manual developer steps** — argent does not start Metro or set up port-forwarding itself (on any platform; it only *connects to* a running Metro for the debugger tools, the same as iOS/Android). Run the steps below in your shell, then use argent to drive and observe the result.
+
 Setup (each step in its own terminal):
 1. **Debug build & install** (once, or after native changes): `npm run build:debug`, then `vega device install-app -p build/aarch64-debug/vega_aarch64.vpkg`.
 2. **Metro:** `npm start` (serves the JS bundle on port 8081). Use `npm start`, not `npx react-native start` — npx may resolve the wrong CLI.
