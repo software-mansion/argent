@@ -3,9 +3,15 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { resolveDevice } from "../../utils/device-info";
-import type { LaunchAppAndroidServices, LaunchAppIosServices, LaunchAppResult } from "./types";
+import type {
+  LaunchAppAndroidServices,
+  LaunchAppIosServices,
+  LaunchAppResult,
+  LaunchAppVegaServices,
+} from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { vegaImpl } from "./platforms/vega";
 
 // Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;
 // iOS bundle ids use the same reverse-DNS shape with dashes allowed. The union
@@ -44,12 +50,14 @@ type Params = z.infer<typeof zodSchema>;
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  vega: { virtual: true, device: true },
 };
 
 export const launchAppTool: ToolDefinition<Params, LaunchAppResult> = {
   id: "launch-app",
-  description: `Open an app by its bundle id (iOS) or package name (Android).
+  description: `Open an app by its bundle id (iOS), package name (Android), or app id (Vega).
 Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection on iOS before the app starts.
+On Vega (Fire TV), pass the interactive component app id from manifest.toml (e.g. com.example.app.main) as bundleId.
 Returns { launched, bundleId }. Fails if the app is not installed on the target device.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.camera, com.apple.Photos, com.apple.mobilemail, com.apple.mobilenotes, com.apple.MobileAddressBook
@@ -68,11 +76,13 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
     LaunchAppIosServices,
     LaunchAppAndroidServices,
     Params,
-    LaunchAppResult
+    LaunchAppResult,
+    LaunchAppVegaServices
   >({
     toolId: "launch-app",
     capability,
     ios: iosImpl,
     android: androidImpl,
+    vega: vegaImpl,
   }),
 };
