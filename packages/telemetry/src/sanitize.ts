@@ -94,6 +94,12 @@ export const ALLOWED: Record<EventName, Record<string, Validator>> = {
   "installation:allowlist_decision": {
     is_enabled: bool,
   },
+  "installation:skill_install": {
+    method: oneOf(["default", "interactive", "manual"] as const),
+    is_online: bool,
+    has_offline_cache: bool,
+    outcome: oneOf(["success", "failure", "skipped"] as const),
+  },
   "installation:package_action": {
     trigger: PACKAGE_ACTION_TRIGGER,
     action: PACKAGE_ACTION,

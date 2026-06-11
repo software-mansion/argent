@@ -571,6 +571,8 @@ export async function init(args: string[]): Promise<void> {
     const useGitHubSource = online && !fromTar && version !== "unknown";
     const skillsSource = useGitHubSource ? buildArgentSkillsSource(version) : SKILLS_DIR;
 
+    let skillOutcome: "success" | "failure" | "skipped";
+
     if (skillsMethod === "manual") {
       p.note(
         [
@@ -590,6 +592,7 @@ export async function init(args: string[]): Promise<void> {
         ].join("\n"),
         "Manual Skills Installation"
       );
+      skillOutcome = "skipped";
     } else {
       const skillsArgs = ["skills", "add", skillsSource];
 
@@ -616,14 +619,23 @@ export async function init(args: string[]): Promise<void> {
         if (skillsMethod === "default") {
           spinner.stop("Skills installed.");
         }
+        skillOutcome = "success";
       } catch (err) {
         if (skillsMethod === "default") {
           spinner.stop(pc.red("Skills installation failed."));
         }
         p.log.error(`Failed to run npx skills: ${err}`);
         p.log.info(`You can install skills manually:\n  npx ${skillsArgs.join(" ")}`);
+        skillOutcome = "failure";
       }
     }
+
+    track("installation:skill_install", {
+      method: skillsMethod,
+      is_online: online,
+      has_offline_cache: offlineWithCache,
+      outcome: skillOutcome,
+    });
 
     // ── Step 3: Rules and Agents ────────────────────────────────────────────────
 
