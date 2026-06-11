@@ -71,7 +71,7 @@ function parseAttributes(raw: string): Record<string, string> {
 // after the first pass and then `<` after the second — wrong per XML §4.6.
 // A single regex alternation scans left-to-right and consumes each match
 // once, so a decoded `&` produced by one step never feeds the next step.
-function decodeXmlEntities(s: string): string {
+export function decodeXmlEntities(s: string): string {
   return s.replace(
     /&(?:#x([0-9A-Fa-f]+)|#(\d+)|(amp|lt|gt|quot|apos));/g,
     (match, hex, dec, name) => {

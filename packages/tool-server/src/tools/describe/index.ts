@@ -5,6 +5,7 @@ import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
 import { iosRequires, describeIos } from "./platforms/ios";
 import { describeChromium } from "./platforms/chromium";
+import { describeVega, vegaRequires } from "./platforms/vega";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { formatDescribeTree } from "./format-tree";
@@ -45,6 +46,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { virtual: true, device: true },
 };
 
 interface ChromiumServices {
@@ -66,6 +68,10 @@ On iOS, uses the AXRuntime accessibility service to inspect whatever is currentl
 system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
+On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
+\`[focused]\`/\`[selected]\` so you can see where the D-pad cursor is, then move it with the \`remote\` tool
+(Vega is remote-driven, not touch). If describe returns an empty tree on Vega, relaunch the foreground
+app (the toolkit attaches at launch) and try again.
 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
 with tap coordinates. When no dialog is present, it returns the foreground app's accessible elements.
@@ -83,7 +89,12 @@ For app-scoped inspection with full UIKit properties (accessibilityIdentifier, v
 use native-describe-screen with an explicit bundleId instead (iOS only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.`,
     alwaysLoad: true,
+<<<<<<< HEAD
     searchHint: "accessibility element tree ui hierarchy tap coordinates ios android chromium dom",
+=======
+    searchHint:
+      "accessibility element tree ui hierarchy tap coordinates ios android vega fire tv focus",
+>>>>>>> 56c10b1 (feat(tool-server): add Vega `describe` via the on-device automation toolkit)
     zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
@@ -98,7 +109,8 @@ For React Native apps, debugger-component-tree returns React component names wit
       Record<string, unknown>,
       Params,
       DescribeResult,
-      ChromiumServices
+      ChromiumServices,
+      Record<string, unknown>
     >({
       toolId: "describe",
       capability,
@@ -114,6 +126,10 @@ For React Native apps, debugger-component-tree returns React component names wit
       },
       chromium: {
         handler: async (services) => withDescription(await describeChromium(services.chromium)),
+      },
+      vega: {
+        requires: vegaRequires,
+        handler: async (_services, params) => withDescription(await describeVega(params.udid)),
       },
     }),
   };
