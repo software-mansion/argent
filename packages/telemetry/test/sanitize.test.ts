@@ -59,6 +59,53 @@ describe("sanitize", () => {
         });
       }
     });
+
+    it("accepts coarse AI client metadata on tool events", () => {
+      expect(
+        sanitize("tool:invoke", {
+          tool: "gesture-tap",
+          tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+          ai_client: "codex",
+          ai_client_name: "codex-mcp-client",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+        ai_client: "codex",
+        ai_client_name: "codex-mcp-client",
+      });
+    });
+
+    it("drops unregistered AI client slugs and path-leaking client names", () => {
+      expect(
+        sanitize("tool:invoke", {
+          tool: "gesture-tap",
+          tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+          ai_client: "my-private-client",
+          ai_client_name: "/Users/alice/secret-client",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+      });
+    });
+
+    it("carries AI client metadata on tool:fail alongside the failure signal", () => {
+      expect(
+        sanitize("tool:fail", {
+          tool: "screenshot",
+          tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+          duration_ms: 12,
+          error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
+          ai_client: "other",
+          ai_client_name: "some-new-tool",
+        })
+      ).toMatchObject({
+        ai_client: "other",
+        ai_client_name: "some-new-tool",
+        error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
+      });
+    });
   });
 
   describe("matches validator", () => {
