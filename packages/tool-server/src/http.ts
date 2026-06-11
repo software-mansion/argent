@@ -1,6 +1,7 @@
 import express, { Request, Response } from "express";
 import { randomUUID } from "node:crypto";
 import { FAILURE_CODES, type FailureSignal, type Registry } from "@argent/registry";
+import { AI_CLIENTS, AI_CLIENT_NAME_PATTERN, type AiTelemetryProps } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -63,13 +64,13 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: "ios" | "android" };
+type InvocationMeta = { platform?: "ios" | "android" } & AiTelemetryProps;
 // Only coarse platform context is retained for failure telemetry. The raw
 // device id (UDID / serial) is used transiently to infer platform and never
 // stored or forwarded.
-type HttpFailureMeta = { platform?: "ios" | "android" };
+type HttpFailureMeta = { platform?: "ios" | "android" } & AiTelemetryProps;
 
-function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | null {
+function inferPlatform(deviceId: string | null): "ios" | "android" | null {
   if (!deviceId) return null;
   try {
     return resolveDevice(deviceId).platform;
@@ -78,17 +79,45 @@ function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | n
   }
 }
 
-function extractInvocationMeta(hasCapability: boolean, data: unknown): InvocationMeta | null {
-  if (!hasCapability || !data || typeof data !== "object") return null;
-  const record = data as Record<string, unknown>;
-  const deviceArg = extractDeviceArg(record);
-  if (deviceArg) {
-    return { platform: resolveDevice(deviceArg).platform };
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+// The MCP server forwards the coarse AI-client identity as request headers (it
+// lives in a different process). We re-validate here against the same allowlist /
+// pattern the sanitizer enforces, so a misbehaving client can't inject arbitrary
+// values into telemetry. The free-form name is only retained when the client is
+// `other` — mirroring the producer and the documented `AiTelemetryProps` contract,
+// so a recognized (or absent) client can never carry a stray name.
+function extractAiTelemetryMeta(req: Request): AiTelemetryProps {
+  const meta: AiTelemetryProps = {};
+  const client = firstHeader(req.headers["x-argent-ai-client"]);
+  if (client && (AI_CLIENTS as readonly string[]).includes(client)) {
+    meta.ai_client = client as AiTelemetryProps["ai_client"];
   }
-  if (typeof record.avdName === "string") {
-    return { platform: "android" };
+  const clientName = firstHeader(req.headers["x-argent-ai-client-name"]);
+  if (meta.ai_client === "other" && clientName && AI_CLIENT_NAME_PATTERN.test(clientName)) {
+    meta.ai_client_name = clientName;
   }
-  return null;
+  return meta;
+}
+
+function extractInvocationMeta(
+  hasCapability: boolean,
+  data: unknown,
+  aiMeta: AiTelemetryProps
+): InvocationMeta | null {
+  const meta: InvocationMeta = { ...aiMeta };
+  if (hasCapability && data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    const deviceArg = extractDeviceArg(record);
+    if (deviceArg) {
+      meta.platform = resolveDevice(deviceArg).platform;
+    } else if (typeof record.avdName === "string") {
+      meta.platform = "android";
+    }
+  }
+  return Object.keys(meta).length > 0 ? meta : null;
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -295,6 +324,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     async (req: Request, res: Response) => {
       const name = req.params.name!;
       const requestStartedAt = performance.now();
+      const aiMeta = extractAiTelemetryMeta(req);
 
       const emitHttpFailure = (
         signal: FailureSignal,
@@ -307,6 +337,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           name,
           {
             ...(platform ? { platform } : {}),
+            ...aiMeta,
           },
           signal,
           performance.now() - requestStartedAt
@@ -424,7 +455,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       const toolInvocationId = randomUUID();
       let releaseInvocationMeta: (() => void) | undefined;
       if (options?.recordInvocation) {
-        const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData);
+        const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
         if (invocationMeta) {
           releaseInvocationMeta = options.recordInvocation(toolInvocationId, invocationMeta);
         }

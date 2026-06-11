@@ -2,6 +2,7 @@
 // same surface at runtime.
 
 import type { FailureSignal } from "@argent/registry";
+import type { AiTelemetryProps } from "./ai-identity.js";
 
 // Installation events
 
@@ -98,20 +99,20 @@ export interface InstallationCliUninstallCompleteProps extends FailureTelemetryP
 
 // Tool usage events
 
-export interface ToolInvokeProps {
+export interface ToolInvokeProps extends AiTelemetryProps {
   tool: string;
   tool_invocation_id: string;
   platform?: "ios" | "android";
 }
 
-export interface ToolCompleteProps {
+export interface ToolCompleteProps extends AiTelemetryProps {
   tool: string;
   tool_invocation_id: string;
   platform?: "ios" | "android";
   duration_ms: number;
 }
 
-export interface ToolFailProps extends FailureTelemetryProps {
+export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
   tool: string;
   tool_invocation_id?: string;
   platform?: "ios" | "android";

@@ -168,4 +168,98 @@ describe("GET /tools progressive-loading metadata", () => {
 
     expect(recordInvocation).toHaveBeenCalledWith(expect.any(String), { platform: "android" });
   });
+
+  it("records the AI client from request headers alongside platform", async () => {
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .set("X-Argent-AI-Client", "codex")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    expect(seenMeta).toEqual({ platform: "ios", ai_client: "codex" });
+  });
+
+  it("captures an unknown tool by name when ai_client is `other`", async () => {
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    // A non-device tool with no platform context still records because AI
+    // metadata is present on the request.
+    await request(handle.app)
+      .post("/tools/plain-tool")
+      .set("X-Argent-AI-Client", "other")
+      .set("X-Argent-AI-Client-Name", "some-new-tool")
+      .send({})
+      .expect(200);
+
+    expect(seenMeta).toEqual({ ai_client: "other", ai_client_name: "some-new-tool" });
+  });
+
+  it("drops unregistered AI client slugs and path-leaking client names", async () => {
+    const recordInvocation = vi.fn(() => vi.fn());
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    // Unknown slug + unsafe name → nothing usable → no metadata → not recorded
+    // for a non-device tool.
+    await request(handle.app)
+      .post("/tools/plain-tool")
+      .set("X-Argent-AI-Client", "evil-client")
+      .set("X-Argent-AI-Client-Name", "/Users/alice/secret")
+      .send({})
+      .expect(200);
+
+    expect(recordInvocation).not.toHaveBeenCalled();
+  });
+
+  it("drops the free-form client name unless ai_client is `other`", async () => {
+    let seenMeta: Record<string, unknown> | undefined;
+    const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
+      seenMeta = meta;
+      return vi.fn();
+    });
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    // A recognized client must never carry a free-form name (the invariant is
+    // that the name is only meaningful for the `other` long tail). The name is
+    // a perfectly valid pattern here — it is dropped purely on the coupling.
+    await request(handle.app)
+      .post("/tools/device-tool")
+      .set("X-Argent-AI-Client", "codex")
+      .set("X-Argent-AI-Client-Name", "claude-code")
+      .send({ udid: "11111111-1111-1111-1111-111111111111" })
+      .expect(200);
+
+    expect(seenMeta).toEqual({ platform: "ios", ai_client: "codex" });
+  });
+
+  it("drops a client name sent with no ai_client header", async () => {
+    const recordInvocation = vi.fn(() => vi.fn());
+    handle.dispose();
+    handle = createHttpApp(stubRegistry(), { recordInvocation });
+
+    // Name-only, no slug → nothing usable → no metadata → not recorded for a
+    // non-device tool.
+    await request(handle.app)
+      .post("/tools/plain-tool")
+      .set("X-Argent-AI-Client-Name", "some-new-tool")
+      .send({})
+      .expect(200);
+
+    expect(recordInvocation).not.toHaveBeenCalled();
+  });
 });
