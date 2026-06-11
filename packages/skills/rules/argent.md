@@ -93,9 +93,17 @@ ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
+APPLE TV (tvOS) SIMULATOR SETUP
+Skill: `argent-tvos-simulator-setup`
+When: Beginning a task that involves an Apple TV simulator, no tvOS simulator booted yet, or need a tvOS UDID. tvOS UDIDs are UUID-shaped like iOS — identify them by `runtimeKind: "tv"` from `list-devices`.
+
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. iOS and Android only — for Apple TV (tvOS) use `argent-tvos-interact` instead.
+
+APPLE TV (tvOS) INTERACTION
+Skill: `argent-tvos-interact`
+When: Interacting with an Apple TV simulator (a `list-devices` entry with `runtimeKind: "tv"`) — moving focus with the Siri remote, activating elements, typing into search fields, or reading tvOS focus state. tvOS is focus-driven, not touch-driven: the `gesture-*` / `button` / `keyboard` tools do NOT apply; use `tv-describe` / `tv-navigate` / `tv-set-focus` / `tv-type`.
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`
