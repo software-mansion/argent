@@ -1,10 +1,11 @@
 import { FAILURE_CODES, getFailureSignalOrFallback, type Registry } from "@argent/registry";
 import { track } from "./index.js";
 import type { Platform } from "./events.js";
+import { aiTelemetryFromMeta, type AiTelemetryProps } from "./ai-identity.js";
 
 // HTTP captures request-only metadata here so registry lifecycle events can
-// include platform context without carrying raw params.
-export interface InvocationMeta {
+// include platform context (and the coarse AI client) without carrying raw params.
+export interface InvocationMeta extends AiTelemetryProps {
   platform?: Platform;
 }
 
@@ -34,6 +35,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
       tool: toolId,
       tool_invocation_id: toolInvocationId,
       ...(meta.platform ? { platform: meta.platform } : {}),
+      ...aiTelemetryFromMeta(meta),
     });
   };
 
@@ -44,6 +46,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
       tool_invocation_id: toolInvocationId,
       ...(meta.platform ? { platform: meta.platform } : {}),
       duration_ms: durationMs,
+      ...aiTelemetryFromMeta(meta),
     });
   };
 
@@ -66,6 +69,7 @@ export function attachRegistryTelemetry(registry: Registry): AttachHandle {
       ...(meta.platform ? { platform: meta.platform } : {}),
       duration_ms: durationMs,
       ...signal,
+      ...aiTelemetryFromMeta(meta),
     });
   };
 

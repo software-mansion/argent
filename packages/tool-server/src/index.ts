@@ -4,6 +4,7 @@ import {
   attachRegistryTelemetry,
   track as telemetryTrack,
   shutdown as telemetryShutdown,
+  aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
@@ -242,6 +243,7 @@ export function start(): void {
         ...(meta.platform ? { platform: meta.platform } : {}),
         duration_ms: durationMs,
         ...signal,
+        ...aiTelemetryFromMeta(meta),
       });
     },
   });

@@ -14,6 +14,7 @@ import {
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
+import { canonicalizeAiClient, AI_CLIENT_NAME_PATTERN } from "@argent/telemetry";
 import {
   toMcpContent,
   flowRunToMcpContent,
@@ -115,6 +116,24 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
   }
 
+  // Coarse identity of the AI tool driving this MCP server, forwarded to the
+  // tool-server (a separate process that owns tool telemetry) as request headers.
+  // The signal is the MCP handshake clientInfo.name; unrecognized tools are
+  // reported as `other` with a bounded free-form name. Never carries prompts,
+  // model output, or tool args.
+  function aiClientHeaders(): Record<string, string> {
+    const rawName = server.getClientVersion()?.name?.trim() || undefined;
+    const aiClient = canonicalizeAiClient(rawName);
+    if (aiClient) return { "X-Argent-AI-Client": aiClient };
+    if (rawName) {
+      return {
+        "X-Argent-AI-Client": "other",
+        ...(AI_CLIENT_NAME_PATTERN.test(rawName) ? { "X-Argent-AI-Client-Name": rawName } : {}),
+      };
+    }
+    return {};
+  }
+
   let reconnectPromise: Promise<void> | null = null;
 
   async function reconnect(): Promise<void> {
@@ -186,7 +205,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
+        headers: { "Content-Type": "application/json", ...authHeader(), ...aiClientHeaders() },
         body: JSON.stringify(finalArgs ?? {}),
       },
       fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,

@@ -27,6 +27,14 @@ export { EVENT_NAMES } from "./events.js";
 export { isDebugEnabled } from "./debug.js";
 export { getConsentState } from "./consent.js";
 export { getSessionId } from "./base-props.js";
+export {
+  AI_CLIENTS,
+  AI_CLIENT_NAME_PATTERN,
+  canonicalizeAiClient,
+  aiTelemetryFromMeta,
+  type AiClient,
+  type AiTelemetryProps,
+} from "./ai-identity.js";
 
 const SHORT_FLUSH_TIMEOUT_MS = 1_500;
 
