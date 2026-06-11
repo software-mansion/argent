@@ -40,6 +40,13 @@ export interface InstallationAllowlistDecisionProps {
   is_enabled: boolean;
 }
 
+export interface InstallationSkillInstallProps {
+  method: "default" | "interactive" | "manual";
+  is_online: boolean;
+  has_offline_cache: boolean;
+  outcome: "success" | "failure" | "skipped";
+}
+
 export type InstallationPackageActionTrigger = "init" | "update" | "mcp_update";
 
 export type InstallationPackageAction =
@@ -123,6 +130,7 @@ export interface EventPropertyMap {
   "installation:update_decision": InstallationUpdateDecisionProps;
   "installation:editors_select": InstallationEditorsSelectProps;
   "installation:allowlist_decision": InstallationAllowlistDecisionProps;
+  "installation:skill_install": InstallationSkillInstallProps;
   "installation:package_action": InstallationPackageActionProps;
   "installation:cli_update_start": InstallationCliUpdateStartProps;
   "installation:cli_update_complete": InstallationCliUpdateCompleteProps;
@@ -148,6 +156,7 @@ export const EVENT_NAMES: readonly EventName[] = [
   "installation:update_decision",
   "installation:editors_select",
   "installation:allowlist_decision",
+  "installation:skill_install",
   "installation:package_action",
   "installation:cli_update_start",
   "installation:cli_update_complete",
