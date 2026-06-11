@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   DevToolsFiberCommit,
@@ -44,14 +44,26 @@ const zodSchema = z.object({
 async function getCommitTree(port: number, deviceId: string): Promise<DevToolsCommitTree> {
   const sessionPaths = getCachedProfilerPaths(port, deviceId);
   if (!sessionPaths?.commitsPath) {
-    throw new Error(
-      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first."
+    throw new FailureError(
+      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_commit_query_load_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   const onDisk = await readCommitTree(sessionPaths.commitsPath);
   if (onDisk.commits.length === 0) {
-    throw new Error(
-      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first."
+    throw new FailureError(
+      "No commit data stored. Run react-profiler-start → exercise app → react-profiler-stop first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_commit_query_load_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   return { commits: onDisk.commits, hookNames: new Map() };
@@ -334,14 +346,24 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
     switch (params.mode) {
       case "by_component": {
         if (!params.component_name) {
-          throw new Error("by_component mode requires the component_name parameter.");
+          throw new FailureError("by_component mode requires the component_name parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_commit_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderByComponent(commitTree.commits, params.component_name, params.top_n);
       }
 
       case "by_time_range": {
         if (!params.time_range_ms) {
-          throw new Error("by_time_range mode requires the time_range_ms parameter.");
+          throw new FailureError("by_time_range mode requires the time_range_ms parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_commit_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderByTimeRange(
           commitTree.commits,
@@ -353,20 +375,35 @@ Fails if react-profiler-stop has not been called or no commit data is stored.`,
 
       case "by_index": {
         if (params.commit_index == null) {
-          throw new Error("by_index mode requires the commit_index parameter.");
+          throw new FailureError("by_index mode requires the commit_index parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_commit_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderByIndex(commitTree.commits, params.commit_index);
       }
 
       case "cascade_tree": {
         if (params.commit_index == null) {
-          throw new Error("cascade_tree mode requires the commit_index parameter.");
+          throw new FailureError("cascade_tree mode requires the commit_index parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_commit_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderCascadeTree(commitTree.commits, params.commit_index);
       }
 
       default:
-        throw new Error(`Unknown mode: ${params.mode}`);
+        throw new FailureError(`Unknown mode: ${params.mode}`, {
+          error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+          failure_stage: "profiler_commit_query_mode",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
     }
   },
 };

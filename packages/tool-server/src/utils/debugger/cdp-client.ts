@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { TypedEventEmitter } from "@argent/registry";
+import { FAILURE_CODES, FailureError, TypedEventEmitter } from "@argent/registry";
 import * as crypto from "node:crypto";
 
 export interface ScriptInfo {
@@ -199,7 +199,12 @@ export class CDPClient {
     };
 
     if (result.exceptionDetails) {
-      throw new Error(formatExceptionDetails(result.exceptionDetails));
+      throw new FailureError(formatExceptionDetails(result.exceptionDetails), {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_RUNTIME_EXCEPTION,
+        failure_stage: "debugger_cdp_evaluate",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
 
     return result.result?.value;
@@ -224,7 +229,14 @@ export class CDPClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingBindings.delete(id);
-        reject(new Error(`Binding response for requestId=${id} timed out`));
+        reject(
+          new FailureError(`Binding response for requestId=${id} timed out`, {
+            error_code: FAILURE_CODES.DEBUGGER_CDP_BINDING_TIMEOUT,
+            failure_stage: "debugger_cdp_binding",
+            failure_area: "tool_server",
+            error_kind: "timeout",
+          })
+        );
       }, timeout);
 
       this.pendingBindings.set(id, { resolve, reject, timer });
@@ -259,8 +271,14 @@ export class CDPClient {
       clearTimeout(req.timer);
       if (msg.error) {
         req.reject(
-          new Error(
-            ((msg.error as Record<string, unknown>).message as string) ?? JSON.stringify(msg.error)
+          new FailureError(
+            ((msg.error as Record<string, unknown>).message as string) ?? JSON.stringify(msg.error),
+            {
+              error_code: FAILURE_CODES.DEBUGGER_CDP_PROTOCOL_ERROR,
+              failure_stage: "debugger_cdp_protocol",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            }
           )
         );
       } else {

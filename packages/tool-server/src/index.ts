@@ -1,4 +1,4 @@
-import { attachRegistryLogger } from "@argent/registry";
+import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
   attachRegistryTelemetry,
@@ -55,6 +55,18 @@ export function start(): void {
   function crashShutdown(label: string, detail: string): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     shutdownReason = "crash";
+    shutdownFailureSignal = {
+      error_code:
+        label === "Unhandled rejection"
+          ? FAILURE_CODES.TOOLSERVER_UNHANDLED_REJECTION
+          : FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
+      failure_stage:
+        label === "Unhandled rejection"
+          ? "toolserver_unhandled_rejection"
+          : "toolserver_uncaught_exception",
+      failure_area: "tool_server",
+      error_kind: "crash",
+    };
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -91,6 +103,7 @@ export function start(): void {
   const telemetryHandle = attachRegistryTelemetry(registry);
   const serverStartedAt = Date.now();
   let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownFailureSignal: FailureSignal | null = null;
 
   const updateChecker = startUpdateChecker();
 
@@ -114,6 +127,7 @@ export function start(): void {
         reason: shutdownReason,
         uptime_ms: Date.now() - serverStartedAt,
         total_tool_calls: telemetryHandle.getTotalToolCalls(),
+        ...(shutdownFailureSignal ?? {}),
       });
       telemetryHandle.detach();
       await telemetryShutdown(1500);
@@ -139,6 +153,14 @@ export function start(): void {
     onShutdown: shutdown,
     bindHost: HOST,
     recordInvocation: telemetryHandle.recordInvocation,
+    recordFailure: (toolId, meta, signal, durationMs) => {
+      telemetryTrack("tool:fail", {
+        tool: toolId,
+        ...(meta.platform ? { platform: meta.platform } : {}),
+        duration_ms: durationMs,
+        ...signal,
+      });
+    },
   });
 
   // Block advertising readiness until the first watcher poll completes — this

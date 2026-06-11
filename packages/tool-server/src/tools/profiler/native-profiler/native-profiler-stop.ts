@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -67,8 +67,14 @@ Fails if no active native-profiler-start session exists for the given device_id.
     }
 
     if (!api.profilingActive || !api.xctraceProcess || !api.traceFile) {
-      throw new Error(
-        "No active native profiling session found. Call native-profiler-start first."
+      throw new FailureError(
+        "No active native profiling session found. Call native-profiler-start first.",
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
+          failure_stage: "native_profiler_stop_session_state",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 

@@ -12,6 +12,7 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@argent/registry": "file:../registry",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
     "@argent/update-core": "file:../update-core",

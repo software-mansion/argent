@@ -1,7 +1,5 @@
-import * as fs from "node:fs";
 import { deleteAnonId } from "./identity.js";
 import { writeConsentFlag } from "./consent.js";
-import { configFilePath } from "./paths.js";
 import { emitDebugError } from "./debug.js";
 
 export interface ForgetOptions {
@@ -37,19 +35,6 @@ export async function forget(options: ForgetOptions = {}): Promise<ForgetResult>
     localIdRemoved = true;
   } catch (err) {
     emitDebugError("forget: deleting telemetry-id failed", err);
-  }
-
-  if (disableConsent) {
-    // Preserve config unless the write left an empty object behind.
-    try {
-      const raw = fs.readFileSync(configFilePath(), "utf8");
-      const json = JSON.parse(raw) as Record<string, unknown>;
-      if (json && typeof json === "object" && Object.keys(json).length === 0) {
-        fs.unlinkSync(configFilePath());
-      }
-    } catch {
-      /* leave config in whatever state it ended up in */
-    }
   }
 
   return { localIdRemoved, consentDisabled };

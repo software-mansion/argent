@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
   type ReactProfilerSessionApi,
@@ -138,11 +138,21 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
     let result = await evalRenders();
 
     if (result?.exceptionDetails) {
-      throw new Error(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`);
+      throw new FailureError(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`, {
+        error_code: FAILURE_CODES.REACT_PROFILER_RUNTIME_EXCEPTION,
+        failure_stage: "react_profiler_renders_runtime_eval",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
 
     if (!result?.result?.value) {
-      throw new Error("No data returned from runtime evaluation.");
+      throw new FailureError("No data returned from runtime evaluation.", {
+        error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+        failure_stage: "react_profiler_renders_runtime_eval",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
 
     let parsed = JSON.parse(result.result.value) as ParsedRenders;
@@ -166,10 +176,18 @@ Fails if the React DevTools hook is not present in the runtime or the app is not
 
     const errorStr = getErrorString(parsed);
     if (errorStr !== null) {
-      throw new Error(
+      throw new FailureError(
         HOOK_NOT_PRESENT_ERRORS.has(errorStr)
           ? HOOK_MISSING_MESSAGE
-          : `React hook error: ${errorStr}`
+          : `React hook error: ${errorStr}`,
+        {
+          error_code: HOOK_NOT_PRESENT_ERRORS.has(errorStr)
+            ? FAILURE_CODES.REACT_PROFILER_DEVTOOLS_HOOK_MISSING
+            : FAILURE_CODES.REACT_PROFILER_HOOK_ERROR,
+          failure_stage: "react_profiler_renders_hook_read",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 

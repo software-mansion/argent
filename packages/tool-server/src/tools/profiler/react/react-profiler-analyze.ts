@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { promises as fsPromises } from "fs";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
@@ -78,8 +78,14 @@ Fails if react-profiler-stop has not been called or no profiling data is stored.
     );
 
     if (!sessionPaths) {
-      throw new Error(
-        "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first."
+      throw new FailureError(
+        "No profiling data stored. Call react-profiler-start → exercise the app → react-profiler-stop first.",
+        {
+          error_code: FAILURE_CODES.REACT_PROFILER_ANALYZE_NO_DATA,
+          failure_stage: "react_profiler_analyze_load_data",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 

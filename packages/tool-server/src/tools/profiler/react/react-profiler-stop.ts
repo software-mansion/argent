@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ServiceState } from "@argent/registry";
+import { FAILURE_CODES, FailureError, ServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
@@ -169,9 +169,15 @@ Fails if no active profiling session exists or the CDP connection was lost durin
       const entry = snapshot.services.get(psUrn);
 
       if (!entry || entry.state !== ServiceState.RUNNING) {
-        throw new Error(
+        throw new FailureError(
           "No active profiling session. The session may have been lost due to a Metro reload. " +
-            "Call react-profiler-start to begin a new session."
+            "Call react-profiler-start to begin a new session.",
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_NO_ACTIVE_SESSION,
+            failure_stage: "react_profiler_stop_session_lookup",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          }
         );
       }
 
@@ -180,9 +186,15 @@ Fails if no active profiling session exists or the CDP connection was lost durin
 
       if (!api.cdp.isConnected()) {
         api.profilingActive = false;
-        throw new Error(
+        throw new FailureError(
           "CDP connection lost — profiling data could not be collected. " +
-            "Call react-profiler-start to begin a new session."
+            "Call react-profiler-start to begin a new session.",
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_CDP_CONNECTION_LOST,
+            failure_stage: "react_profiler_stop_cdp_connection",
+            failure_area: "tool_server",
+            error_kind: "network",
+          }
         );
       }
 
@@ -192,7 +204,12 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         profile?: HermesCpuProfile;
       };
       if (!cpuResult?.profile) {
-        throw new Error("Profiler returned no profile data.");
+        throw new FailureError("Profiler returned no profile data.", {
+          error_code: FAILURE_CODES.REACT_PROFILER_NO_CPU_PROFILE,
+          failure_stage: "react_profiler_stop_cpu_profile",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        });
       }
       const profile = cpuResult.profile;
 
@@ -204,13 +221,24 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         timeout: 60000,
       })) as { result?: { value?: string }; exceptionDetails?: { text?: string } };
       if (stopReadStr.exceptionDetails) {
-        throw new Error(
-          `Runtime exception while reading profiling data: ${stopReadStr.exceptionDetails.text ?? "unknown"}`
+        throw new FailureError(
+          `Runtime exception while reading profiling data: ${stopReadStr.exceptionDetails.text ?? "unknown"}`,
+          {
+            error_code: FAILURE_CODES.REACT_PROFILER_RUNTIME_EXCEPTION,
+            failure_stage: "react_profiler_stop_runtime_read",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          }
         );
       }
       const stopReadRaw = stopReadStr.result?.value;
       if (!stopReadRaw) {
-        throw new Error("No profiling data returned from runtime.");
+        throw new FailureError("No profiling data returned from runtime.", {
+          error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+          failure_stage: "react_profiler_stop_runtime_read",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        });
       }
       const stopRead = JSON.parse(stopReadRaw) as StopReadResult;
 

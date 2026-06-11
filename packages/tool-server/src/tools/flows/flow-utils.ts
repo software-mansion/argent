@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
@@ -13,10 +14,16 @@ let activeProjectRoot: string | null = null;
 
 export function setActiveProjectRoot(root: string): void {
   if (!path.isAbsolute(root)) {
-    throw new Error(
+    throw new FailureError(
       `project_root must be an absolute path (got "${root}"). ` +
         `Pass the absolute path to the project root directory — the same cwd ` +
-        `the calling agent is working in.`
+        `the calling agent is working in.`,
+      {
+        error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_REQUIRED,
+        failure_stage: "flow_project_root_set",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   // Reject ".." segments: getFlowsDir()/getFlowPath() join the flows dir under
@@ -31,8 +38,14 @@ export function setActiveProjectRoot(root: string): void {
 
 export function requireActiveProjectRoot(): string {
   if (!activeProjectRoot) {
-    throw new Error(
-      "No active project root. The calling flow tool must pass project_root before any path is resolved."
+    throw new FailureError(
+      "No active project root. The calling flow tool must pass project_root before any path is resolved.",
+      {
+        error_code: FAILURE_CODES.FLOW_PROJECT_ROOT_REQUIRED,
+        failure_stage: "flow_project_root_require",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   return activeProjectRoot;
@@ -80,7 +93,12 @@ export function getActiveFlowOrNull(): string | null {
 
 export function getActiveFlow(): string {
   if (!activeFlowName) {
-    throw new Error("No active flow. Call flow-start-recording first.");
+    throw new FailureError("No active flow. Call flow-start-recording first.", {
+      error_code: FAILURE_CODES.FLOW_NO_ACTIVE_RECORDING,
+      failure_stage: "flow_active_recording_require",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
   return activeFlowName;
 }
@@ -158,13 +176,23 @@ export function parseFlow(content: string): FlowFile {
     !("steps" in parsed) ||
     !Array.isArray(parsed.steps)
   ) {
-    throw new Error("Invalid flow file: expected an object with a steps array");
+    throw new FailureError("Invalid flow file: expected an object with a steps array", {
+      error_code: FAILURE_CODES.FLOW_FILE_INVALID,
+      failure_stage: "flow_file_parse",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
 
   const steps = parsed.steps.map((raw) => {
     if ("echo" in raw) return fromYamlStep(raw);
     if ("tool" in raw) return fromYamlStep(raw);
-    throw new Error(`Unrecognized flow entry: ${JSON.stringify(raw)}`);
+    throw new FailureError(`Unrecognized flow entry: ${JSON.stringify(raw)}`, {
+      error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
+      failure_stage: "flow_file_parse_step",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   });
 
   return {

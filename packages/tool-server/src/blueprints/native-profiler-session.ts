@@ -1,4 +1,6 @@
 import {
+  FAILURE_CODES,
+  FailureError,
   ServiceRef,
   TypedEventEmitter,
   type DeviceInfo,
@@ -72,9 +74,15 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
   async factory(_deps, _payload, options) {
     const opts = options as unknown as NativeProfilerSessionFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${NATIVE_PROFILER_SESSION_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use nativeProfilerSessionRef(device) when registering the service ref.`
+          `Use nativeProfilerSessionRef(device) when registering the service ref.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_FACTORY_OPTIONS_MISSING,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     const { device } = opts;
@@ -82,10 +90,16 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
     // early so an Android serial gets a clear "not yet" message instead of an
     // opaque xctrace failure deeper in.
     if (device.platform !== "ios") {
-      throw new Error(
+      throw new FailureError(
         `${NATIVE_PROFILER_SESSION_NAMESPACE} currently supports iOS only (xctrace-backed). ` +
           `The target '${device.id}' classifies as Android — Android profiling (Perfetto/simpleperf) is on the roadmap. ` +
-          `Pick an iOS udid from list-devices for now.`
+          `Pick an iOS udid from list-devices for now.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_WRONG_PLATFORM,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     const state: NativeProfilerSessionApi = {
