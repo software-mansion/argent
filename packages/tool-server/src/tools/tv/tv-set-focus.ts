@@ -11,7 +11,10 @@ const zodSchema = z.object({
   label: z
     .string()
     .min(1)
-    .describe("Exact accessibility label of the focusable element to jump focus to (see `tv-describe`)."),
+    .describe(
+      "Accessibility label of the focusable element to jump focus to, as shown by `tv-describe` " +
+        "(use the first line of a compound label — matching is case-insensitive with prefix/substring fallback)."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;

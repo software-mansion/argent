@@ -19,11 +19,31 @@ interface Result {
   focusableCount: number;
 }
 
+/**
+ * tvOS AX labels are often compound multi-line strings, e.g.
+ * "Home\nLander\nSide bar content item\n1 of 5\nselected". `tv-set-focus`
+ * matches on the first line, so that is the label the agent should copy. Return
+ * it as the actionable label and keep the remaining lines as compact context.
+ */
+function primaryLabel(label: string | undefined): string {
+  if (!label) return "(no label)";
+  const firstLine = label.split("\n")[0]?.trim();
+  return firstLine && firstLine.length ? firstLine : "(no label)";
+}
+
 function fmtElement(e: TvElement): string {
   const traits = e.traits?.length ? ` [${e.traits.join(",")}]` : "";
   const value = e.value ? ` = "${e.value}"` : "";
-  const label = e.label ?? "(no label)";
-  return `${label}${value}${traits}`;
+  const label = primaryLabel(e.label);
+  // Surface any extra lines of a compound label as dim context, so the agent
+  // sees the full text but knows the first line is what `tv-set-focus` wants.
+  const extraLines = (e.label ?? "")
+    .split("\n")
+    .slice(1)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const context = extraLines.length ? ` (${extraLines.join(" · ")})` : "";
+  return `${label}${value}${traits}${context}`;
 }
 
 /**
@@ -65,7 +85,7 @@ Requires a booted Apple TV simulator (boot one via boot-device); fails for iOS/A
     return {
       description: lines.join("\n"),
       bundleId: res.bundleId,
-      focusedLabel: res.focused?.label ?? null,
+      focusedLabel: res.focused?.label ? primaryLabel(res.focused.label) : null,
       focusableCount: res.focusable.length,
     };
   },
