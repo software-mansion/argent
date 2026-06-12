@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ServiceState } from "@argent/registry";
+import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
@@ -33,8 +33,13 @@ export function createStopSimulatorServerTool(
       if (!entry || entry.state === ServiceState.IDLE) {
         return { stopped: false, udid };
       }
+      // A non-live node (ERROR / TERMINATING) holds no running process — e.g. a
+      // tvOS UDID, where the SimulatorServer blueprint throws on start and the
+      // node settles into ERROR. Clean it up, but don't claim we stopped a
+      // server that was never running.
+      const wasLive = isLiveServiceState(entry.state);
       await registry.disposeService(urn);
-      return { stopped: true, udid };
+      return { stopped: wasLive, udid };
     },
   };
 }

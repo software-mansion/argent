@@ -1,4 +1,4 @@
-import { ServiceState } from "@argent/registry";
+import { ServiceState, isLiveServiceState } from "@argent/registry";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
@@ -24,8 +24,13 @@ export function createStopAllSimulatorServersTool(
       const stopped: string[] = [];
       for (const [urn, entry] of snapshot.services) {
         if (PREFIXES.some((p) => urn.startsWith(p)) && entry.state !== ServiceState.IDLE) {
+          // Dispose any non-IDLE node (this also clears ERROR/TERMINATING
+          // nodes), but only report the ones that were actually live — an
+          // ERROR node (e.g. a tvOS SimulatorServer that refused to start)
+          // was never a running server.
+          const wasLive = isLiveServiceState(entry.state);
           await registry.disposeService(urn);
-          stopped.push(urn);
+          if (wasLive) stopped.push(urn);
         }
       }
       return { stopped };

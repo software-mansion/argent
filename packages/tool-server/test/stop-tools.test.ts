@@ -52,6 +52,35 @@ describe("stop-simulator-server", () => {
     expect(result).toEqual({ stopped: false, udid: "EEEE-FFFF" });
     expect(registry.disposeService).not.toHaveBeenCalled();
   });
+
+  it("returns stopped: false for an ERROR node (e.g. tvOS) but still cleans it up", async () => {
+    // A tvOS UDID: the SimulatorServer blueprint throws on start, leaving the
+    // node in ERROR. It never ran, so we must not report stopped: true — but we
+    // still dispose to clear the dead node.
+    const services = new Map([
+      ["SimulatorServer:TV-UDID", { state: ServiceState.ERROR, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopSimulatorServerTool(registry);
+
+    const result = await tool.execute!({}, { udid: "TV-UDID" });
+
+    expect(result).toEqual({ stopped: false, udid: "TV-UDID" });
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:TV-UDID");
+  });
+
+  it("reports stopped: true for a STARTING simulator", async () => {
+    const services = new Map([
+      ["SimulatorServer:GGGG-HHHH", { state: ServiceState.STARTING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopSimulatorServerTool(registry);
+
+    const result = await tool.execute!({}, { udid: "GGGG-HHHH" });
+
+    expect(result).toEqual({ stopped: true, udid: "GGGG-HHHH" });
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:GGGG-HHHH");
+  });
 });
 
 describe("stop-all-simulator-servers", () => {
@@ -97,6 +126,23 @@ describe("stop-all-simulator-servers", () => {
 
     expect(result).toEqual({ stopped: ["SimulatorServer:BBB"] });
     expect(registry.disposeService).toHaveBeenCalledOnce();
+  });
+
+  it("disposes an ERROR node (e.g. tvOS) but omits it from the stopped list", async () => {
+    const services = new Map([
+      ["SimulatorServer:TV-UDID", { state: ServiceState.ERROR, dependents: [] }],
+      ["SimulatorServer:BBB", { state: ServiceState.RUNNING, dependents: [] }],
+    ]);
+    const registry = createMockRegistry(services);
+    const tool = createStopAllSimulatorServersTool(registry);
+
+    const result = await tool.execute!({}, undefined);
+
+    // Both get disposed (cleanup), but only the live one is reported as stopped.
+    expect(result).toEqual({ stopped: ["SimulatorServer:BBB"] });
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:TV-UDID");
+    expect(registry.disposeService).toHaveBeenCalledWith("SimulatorServer:BBB");
+    expect(registry.disposeService).toHaveBeenCalledTimes(2);
   });
 });
 
