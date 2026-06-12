@@ -19,6 +19,13 @@ const zodSchema = z.object({
     .number()
     .optional()
     .describe("Total gesture duration in milliseconds (default 300)"),
+  electronMode: z
+    .enum(["scroll", "drag"])
+    .optional()
+    .describe(
+      "Electron only (ignored on iOS/Android). 'scroll' (default) dispatches mouse-wheel deltas at the start point — swipe up scrolls content down, matching touch platforms. " +
+        "'drag' presses and moves the mouse from start to end — use for sliders, drag-and-drop, or text selection. A desktop mouse drag never scrolls content, so keep 'scroll' for lists/pages."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -34,7 +41,33 @@ const capability: ToolCapability = {
   electron: { app: true },
 };
 
-async function swipeElectron(
+/**
+ * Wheel-based scroll for Electron. A desktop renderer scrolls via wheel
+ * events, not mouse drags (a drag selects text). Deltas follow the touch
+ * convention the tool documents: swipe up (fromY > toY) scrolls content
+ * down, so deltaY = (fromY - toY) in CSS pixels. Chunked over the duration
+ * so scroll handlers fire progressively like a real wheel gesture.
+ */
+async function scrollElectron(
+  api: ElectronCdpApi,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  durationMs: number
+): Promise<void> {
+  const vp = api.getViewport();
+  const totalDx = (fromX - toX) * vp.width;
+  const totalDy = (fromY - toY) * vp.height;
+  const steps = Math.max(1, Math.round(durationMs / 16));
+  const point = { x: fromX, y: fromY };
+  for (let i = 0; i < steps; i++) {
+    await api.server.sendWheel(point, totalDx / steps, totalDy / steps);
+    if (i < steps - 1) await sleep(16);
+  }
+}
+
+async function dragElectron(
   api: ElectronCdpApi,
   fromX: number,
   fromY: number,
@@ -74,7 +107,7 @@ export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
   description: `Execute a smooth swipe / drag gesture between two points on the device (iOS simulator, Android emulator, or Electron app). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps).
-Swipe up (fromY > toY) to scroll content down on touch devices. For Electron, the same gesture becomes a mouse drag from (fromX, fromY) to (toX, toY); use wheel-scroll patterns by dragging on a scrollbar / scrollable target.
+Swipe up (fromY > toY) to scroll content down — on Electron this dispatches mouse-wheel deltas at the start point (same scrolling semantics as touch platforms). Pass electronMode: "drag" to get a mouse drag instead (sliders, drag-and-drop); a desktop drag never scrolls content.
 Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend / Electron CDP is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator electron touch move",
@@ -93,7 +126,8 @@ Use when you need to scroll a list, dismiss a modal, drag an element, or navigat
     const timestampMs = Date.now();
     if (device.platform === "electron") {
       const electron = services.electron as ElectronCdpApi;
-      await swipeElectron(electron, params.fromX, params.fromY, params.toX, params.toY, duration);
+      const swipe = params.electronMode === "drag" ? dragElectron : scrollElectron;
+      await swipe(electron, params.fromX, params.fromY, params.toX, params.toY, duration);
       return { swiped: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;
