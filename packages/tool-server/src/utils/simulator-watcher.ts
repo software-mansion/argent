@@ -6,6 +6,7 @@ import {
   nativeDevtoolsRef,
   type NativeDevtoolsApi,
 } from "../blueprints/native-devtools";
+import { isTvOsSimulator } from "./ios-devices";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +31,14 @@ async function initUdid(
   udid: string,
   trackedServices: Map<string, NativeDevtoolsApi>
 ): Promise<void> {
+  // A tvOS sim classifies as platform "ios" by UDID shape, but native-devtools
+  // is iOS-only: resolving it would `simctl spawn … launchctl setenv
+  // DYLD_INSERT_LIBRARIES` an iOS-built dylib into the Apple TV sim (which it
+  // can't load), and re-attempt it on every poll. Skip tvOS entirely — its
+  // focus-engine state is served by the tv-control daemons, not this service.
+  // `isTvOsSimulator` is memoized, so re-probing a still-untracked udid each
+  // poll is a cheap cached lookup.
+  if (await isTvOsSimulator(udid)) return;
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   try {
     const service = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
