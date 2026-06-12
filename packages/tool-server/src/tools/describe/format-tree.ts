@@ -169,7 +169,9 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   // cdp-dom on Electron) use the nested renderer so descendants beyond
   // depth 1 are visible.
   const mode: "flat" | "nested" =
-    opts.source === "uiautomator" || opts.source === "android-devtools" || opts.source === "cdp-dom" ? "nested" : "flat";
+    opts.source === "uiautomator" || opts.source === "android-devtools" || opts.source === "cdp-dom"
+      ? "nested"
+      : "flat";
   const header: string[] = [];
   header.push(`Source: ${opts.source}`);
   header.push(`Mode: ${mode}`);
