@@ -242,15 +242,27 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // setfocus needs AutomationEnabled; same pref the iOS ax-service relies on.
     await ensureAutomationEnabled(udid);
 
-    const axProc = spawnAxDaemon(udid, axSock);
+    let axProc = spawnAxDaemon(udid, axSock);
     const hidProc = spawnHidDaemon(udid, hidSock);
+
+    // The ax daemon runs inside the simulator process tree. When the app is
+    // killed by launch-app / restart-app the daemon exits too — its AX
+    // connection to the old process is gone. Track whether it has exited so
+    // ax-using commands can respawn it on demand instead of returning stale
+    // empty results with a misleading "still launching" hint.
+    let axExited = false;
+    const onAxExit = (code: number | null) => {
+      if (disposed) return;
+      axExited = true;
+    };
+    axProc.on("exit", onAxExit);
 
     const onProcExit = (which: string) => (code: number | null) => {
       if (disposed) return;
+      // HID daemon exit is fatal for the service — no reconnect path there.
       const err = new Error(`tvOS ${which} daemon exited with code ${code}`);
       events.emit("terminated", err);
     };
-    axProc.on("exit", onProcExit("ax-service"));
     hidProc.on("exit", onProcExit("hid-daemon"));
 
     try {
@@ -264,8 +276,21 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       throw err;
     }
 
+    // Respawn the ax daemon if it has exited (e.g. after launch-app / restart-app
+    // killed the simulator app process). Cleans up the old socket file, spawns a
+    // fresh daemon, and waits until its socket is ready.
+    async function ensureAxAlive(): Promise<void> {
+      if (!axExited) return;
+      axExited = false;
+      try { fs.unlinkSync(axSock); } catch {}
+      axProc = spawnAxDaemon(udid, axSock);
+      axProc.on("exit", onAxExit);
+      await waitForSocket(axSock, axProc, 15_000);
+    }
+
     const api: TvControlApi = {
       async describe(): Promise<TvDescribeResponse> {
+        await ensureAxAlive();
         const r = (await sendJson(axSock, "describe", 10_000)) as Partial<TvDescribeResponse>;
         return {
           bundleId: r.bundleId,
@@ -276,15 +301,29 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       },
 
       async hierarchy(): Promise<unknown> {
+        await ensureAxAlive();
         return sendJson(axSock, "hierarchy", 15_000);
       },
 
       async setFocus(label: string): Promise<{ ok: boolean; message: string }> {
+        await ensureAxAlive();
         const r = (await sendJson(axSock, `setfocus ${label}`)) as {
           ok?: boolean;
           message?: string;
         };
-        return { ok: r.ok ?? false, message: r.message ?? "" };
+        if (r.ok) return { ok: true, message: r.message ?? "Focus set successfully" };
+        // The native setNativeFocus returns NO when the element is already focused
+        // (the focus engine refuses a no-op move). Treat that as success so callers
+        // don't need to handle "already focused" as a special case.
+        const state = await api.describe();
+        const focused = state.focused;
+        const normalise = (s: string) => s.toLowerCase().trim();
+        const labelNorm = normalise(label);
+        const focusedLabel = focused?.label ? normalise(focused.label.split("\n")[0] ?? "") : null;
+        if (focusedLabel === labelNorm) {
+          return { ok: true, message: "Already focused" };
+        }
+        return { ok: false, message: r.message ?? "" };
       },
 
       async navigate(direction: TvDirection): Promise<void> {
@@ -312,7 +351,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       api,
       dispose: async () => {
         disposed = true;
-        if (!axProc.killed) axProc.kill("SIGTERM");
+        if (!axProc.killed) axProc.kill("SIGTERM"); // axProc may be a respawned instance
         if (!hidProc.killed) hidProc.kill("SIGTERM");
         for (const p of [axSock, hidSock]) {
           try {
