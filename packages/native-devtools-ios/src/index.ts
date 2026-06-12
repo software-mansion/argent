@@ -54,10 +54,23 @@ export const nativeDevtoolsDylibPathTcp = () => {
 
 // simulator-server is a host-side binary that talks to both iOS Simulators
 // (macOS) and Android emulators (any host with `adb`). Each platform's
-// binary lives in its own subdirectory of bin/ — keyed by `process.platform`
-// — so a single npm package can ship both without colliding filenames.
+// binary lives in its own subdirectory of bin/ — keyed by the host platform
+// key below — so a single npm package can ship all of them without colliding
+// filenames.
+//
+// The key is `process.platform`, except on arm64 Linux where it is
+// "linux-arm64": darwin ships a universal (lipo) binary so one "darwin" dir
+// serves both arches, but Linux binaries are single-arch ELFs, so arm64 gets
+// its own directory next to the x86_64 one ("linux", the pre-arm64 name kept
+// for backward compatibility).
+export function hostPlatformKey(): string {
+  if (process.platform === "linux" && process.arch === "arm64") {
+    return "linux-arm64";
+  }
+  return process.platform;
+}
 function platformBinDir(): string {
-  return path.join(BIN_DIR, process.platform);
+  return path.join(BIN_DIR, hostPlatformKey());
 }
 // TCP dir: <platform>/tcp by default; ARGENT_SIMULATOR_SERVER_TCP_DIR overrides the whole path.
 function platformTcpBinDir(): string {
@@ -74,8 +87,8 @@ export function simulatorServerBinaryPath(): string {
       ? ` Found a binary at the old flat path ${flat}; move it to ${p} or update ARGENT_SIMULATOR_SERVER_DIR to point at the parent of the platform subdirectory.`
       : "";
     throw new Error(
-      `simulator-server binary not found for platform "${process.platform}" at ${p}. ` +
-        `Supported hosts today: darwin, linux.${migrationHint}`
+      `simulator-server binary not found for platform "${hostPlatformKey()}" at ${p}. ` +
+        `Supported hosts today: darwin, linux (x86_64 and arm64).${migrationHint}`
     );
   }
   return p;

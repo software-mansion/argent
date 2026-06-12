@@ -50,7 +50,7 @@ jobs:
           set -e
           missing=0
           echo "simulator-server inventory:"
-          for plat in darwin linux; do
+          for plat in darwin linux linux-arm64; do
             p="packages/argent/bin/${plat}/simulator-server"
             if [[ -x "$p" ]]; then
               size=$(wc -c <"$p")
@@ -58,7 +58,7 @@ jobs:
             else
               echo "  missing ${plat}: ${p}"
               if [[ "$plat" == "darwin" ]]; then missing=1; fi
-              if [[ "$plat" == "linux" && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+              if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
             fi
           done
           [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }

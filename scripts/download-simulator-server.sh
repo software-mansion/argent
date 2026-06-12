@@ -18,12 +18,14 @@ REPO="software-mansion-labs/simulator-server-releases"
 TAG="${1:-radon-main}"
 DEST_DIR="packages/native-devtools-ios/bin"
 
-# release-asset-name → process.platform key. Asset names follow the upstream
-# build matrix (`simulator-server-argent-{macos,linux}`); the keys mirror
-# Node's process.platform so the resolver can lookup by host platform.
+# release-asset-name → host platform key. Asset names follow the upstream
+# build matrix (`simulator-server-argent-{macos,linux,linux-arm64}`); the keys
+# mirror hostPlatformKey() in @argent/native-devtools-ios (process.platform,
+# except "linux-arm64" on arm64 Linux) so the resolver can lookup by host.
 declare -a TARGETS=(
   "simulator-server-argent-macos:darwin"
   "simulator-server-argent-linux:linux"
+  "simulator-server-argent-linux-arm64:linux-arm64"
 )
 
 mkdir -p "${DEST_DIR}"
