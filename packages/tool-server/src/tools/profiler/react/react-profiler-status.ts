@@ -44,7 +44,7 @@ interface StatusResponse extends Record<string, unknown> {
 
 export function createReactProfilerStatusTool(
   registry: Registry
-): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
+): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>, z.input<typeof zodSchema>> {
   return {
     id: "react-profiler-status",
     description: `Check the state of the React profiler session without side effects. Use after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Ownership is verified server-side against this tool-server's in-memory session — no token-threading is required. Returns { session_status, is_running, current_owner, … }. If this tool-server process restarted after react-profiler-start, status will report 'taken_over'; use react-profiler-start { force: true } to reclaim.`,

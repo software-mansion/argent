@@ -58,8 +58,8 @@ export class Registry {
     return this._resolve<T>(urn, [], options);
   }
 
-  registerTool<TParams = void, TResult = unknown>(
-    definition: ToolDefinition<TParams, TResult>
+  registerTool<TParams = void, TResult = unknown, TParamsInput = TParams>(
+    definition: ToolDefinition<TParams, TResult, TParamsInput>
   ): void {
     if (this.tools.has(definition.id)) {
       throw new Error(`Tool "${definition.id}" already registered`);

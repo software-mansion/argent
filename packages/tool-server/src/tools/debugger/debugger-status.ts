@@ -24,7 +24,8 @@ export const debuggerStatusTool: ToolDefinition<
     loadedScripts: number;
     enabledDomains: string[];
     sourceMapReady: boolean;
-  }
+  },
+  z.input<typeof zodSchema>
 > = {
   id: "debugger-status",
   description: `Get JS runtime debugger connection status and diagnostic info.

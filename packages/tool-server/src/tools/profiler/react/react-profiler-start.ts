@@ -66,7 +66,7 @@ function safeGetState(registry: Registry, urn: string): ServiceState | null {
 
 export function createReactProfilerStartTool(
   registry: Registry
-): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
+): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>, z.input<typeof zodSchema>> {
   return {
     id: "react-profiler-start",
     description: `Start CPU profiling + React commit capture on the connected Hermes runtime.

@@ -25,10 +25,12 @@ const TOOLS_CLIENT_ENTRY = path.resolve(
 const INSTALLER_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-installer/src/index.ts");
 const MCP_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-mcp/src/index.ts");
 const CLI_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-cli/src/index.ts");
+const SDK_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-sdk/src/index.ts");
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
+const SDK_OUT_FILE = path.resolve(__dirname, "../dist/sdk.mjs");
 
 // Shared aliases so each bundle resolves workspace deps from source. Resolving
 // from source (rather than each package's compiled dist/) keeps the bundle
@@ -287,10 +289,11 @@ const ASSETS = [
 
 /**
  * Bundle a single entry point with esbuild and log the result.
- * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string }} opts
+ * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string, metafile?: boolean }} opts
+ * @returns {import("esbuild").Metafile | undefined}
  */
-function buildBundle({ entry, out, format, label }) {
-  esbuild.buildSync({
+function buildBundle({ entry, out, format, label, metafile }) {
+  const result = esbuild.buildSync({
     entryPoints: [entry],
     bundle: true,
     platform: "node",
@@ -299,11 +302,45 @@ function buildBundle({ entry, out, format, label }) {
     outfile: out,
     alias: ALIASES,
     mainFields: MAIN_FIELDS,
+    metafile,
     // ESM bundles need the require() shim (for inlined CJS deps) and must keep
     // node: builtins external; the CJS bundle needs neither.
     ...(format === "esm" ? { banner: ESM_REQUIRE_BANNER, external: ["node:*"] } : {}),
   });
   console.log(`✓ Bundled ${label} → ${path.relative(process.cwd(), out)}`);
+  return result.metafile;
+}
+
+// The SDK's imports from these packages must be type-only (`import type`,
+// enforced by verbatimModuleSyntax in packages/argent-sdk). A value import
+// anywhere in the SDK's graph would silently drag the entire tool-server into
+// the client bundle — this turns that silent failure into a build failure.
+const SDK_FORBIDDEN_INPUTS = [
+  "packages/tool-server/",
+  "packages/registry/",
+  "packages/native-devtools-ios/",
+  "packages/native-devtools-android/",
+];
+
+/** Bundle the SDK and assert no server-side source leaked into it. */
+function buildSdkBundle() {
+  const metafile = buildBundle({
+    entry: SDK_ENTRY,
+    out: SDK_OUT_FILE,
+    format: "esm",
+    label: "SDK",
+    metafile: true,
+  });
+  const leaked = Object.keys(metafile.inputs).filter((input) =>
+    SDK_FORBIDDEN_INPUTS.some((dir) => input.includes(dir))
+  );
+  if (leaked.length > 0) {
+    throw new Error(
+      `SDK bundle must not contain server-side sources, but pulled in:\n` +
+        leaked.map((p) => `  - ${p}`).join("\n") +
+        `\nLikely cause: a runtime (non-\`import type\`) import of @argent/tool-server or @argent/registry in packages/argent-sdk.`
+    );
+  }
 }
 
 /**
@@ -446,6 +483,9 @@ const ESM_BUNDLES = [
 for (const b of ESM_BUNDLES) {
   buildBundle({ ...b, format: "esm" });
 }
+
+// SDK bundle (ESM, `@swmansion/argent` / `@swmansion/argent/sdk` exports).
+buildSdkBundle();
 
 // Copy all declared assets.
 for (const a of ASSETS) {

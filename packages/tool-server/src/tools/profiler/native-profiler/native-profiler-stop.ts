@@ -41,7 +41,7 @@ export interface IosStopArtifacts {
  * {@link AndroidStopResult}; unlike iOS there's no `exportDiagnostics` (the
  * `.pftrace` is pulled whole, not exported per-schema).
  */
-interface AndroidStopArtifacts {
+export interface AndroidStopArtifacts {
   /** The pulled `.pftrace` file as a downloadable artifact handle. */
   traceFile: ArtifactHandle;
   exportedFiles: Record<string, ArtifactHandle | null>;

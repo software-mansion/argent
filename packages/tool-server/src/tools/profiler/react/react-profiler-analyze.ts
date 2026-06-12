@@ -68,7 +68,8 @@ const zodSchema = z.object({
 
 export const reactProfilerAnalyzeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  Record<string, unknown>
+  Record<string, unknown>,
+  z.input<typeof zodSchema>
 > = {
   id: "react-profiler-analyze",
   description: `Analyze stored profiling data and return a markdown performance report.

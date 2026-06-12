@@ -14,7 +14,8 @@ const zodSchema = z.object({
 
 export const debuggerEvaluateTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
+  { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined },
+  z.input<typeof zodSchema>
 > = {
   id: "debugger-evaluate",
   description: `Execute arbitrary JavaScript in the React Native app's JS runtime via CDP.

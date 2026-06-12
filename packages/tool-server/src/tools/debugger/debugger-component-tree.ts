@@ -516,7 +516,7 @@ const zodSchema = z.object({
     ),
 });
 
-export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const debuggerComponentTreeTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "debugger-component-tree",
   description: `Fetch the current screen of a running React Native app as a compact component text tree.
 Only shows on-screen components with unique positions — off-screen (scrolled) content,

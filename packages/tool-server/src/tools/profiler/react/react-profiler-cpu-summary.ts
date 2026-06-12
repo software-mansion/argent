@@ -114,7 +114,7 @@ function renderMarkdownTable(entries: HotspotEntry[]): string {
   return [header, sep, ...rows].join("\n");
 }
 
-export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const reactProfilerCpuSummaryTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "react-profiler-cpu-summary",
   description: `Return a raw Hermes CPU flamegraph summary (top hotspot functions by self-time).
 FOR DEDICATED CPU INVESTIGATION ONLY — do NOT call this as part of a normal profiling session.

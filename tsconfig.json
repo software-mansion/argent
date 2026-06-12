@@ -7,6 +7,7 @@
     { "path": "packages/native-devtools-android" },
     { "path": "packages/tool-server" },
     { "path": "packages/argent-tools-client" },
+    { "path": "packages/argent-sdk" },
     { "path": "packages/argent-installer" },
     { "path": "packages/argent-mcp" },
     { "path": "packages/argent-cli" },

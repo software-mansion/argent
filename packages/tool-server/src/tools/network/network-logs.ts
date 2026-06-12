@@ -66,7 +66,7 @@ const zodSchema = z.object({
     ),
 });
 
-export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "view-network-logs",
   description: `Retrieve captured network (HTTP) requests from the running React Native app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.

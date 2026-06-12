@@ -77,7 +77,7 @@ interface RawEntry {
   responseBody?: string;
 }
 
-interface NetworkRequestDetails {
+export interface NetworkRequestDetails {
   requestId: string;
   state: string;
   resourceType?: string;
@@ -102,7 +102,8 @@ interface NetworkRequestDetails {
 
 export const networkRequestTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  NetworkRequestDetails | string
+  NetworkRequestDetails | string,
+  z.input<typeof zodSchema>
 > = {
   id: "view-network-request-details",
   description: `Get full details of a specific network request by its requestId (from view-network-logs).

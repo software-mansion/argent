@@ -26,7 +26,7 @@ type Result =
   | { status: "restart_required"; message: string }
   | { status: "ok"; count: number; events: NetworkEvent[] };
 
-export const nativeNetworkLogsTool: ToolDefinition<Params, Result> = {
+export const nativeNetworkLogsTool: ToolDefinition<Params, Result, z.input<typeof zodSchema>> = {
   id: "native-network-logs",
   requires: ["xcrun"],
   capability: { apple: { simulator: true, device: true } },

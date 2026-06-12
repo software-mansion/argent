@@ -193,6 +193,11 @@ function writeAndExit(stream: NodeJS.WriteStream, chunk: string, code: number): 
   stream.write(chunk, () => process.exit(code));
 }
 
+// Type-only re-export for the SDK: lets @argent/sdk derive its typed method
+// surface from the served tool set without any runtime dependency on this
+// package (the import on the SDK side is `import type`).
+export type { AllTools } from "./tools-manifest";
+
 if (require.main === module) {
   const cmd = process.argv[2];
   if (cmd === "start") {

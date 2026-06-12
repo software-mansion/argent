@@ -104,7 +104,7 @@ const zodSchema = z.object({
     .describe("Number of top re-rendering components to return (default 20)"),
 });
 
-export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const reactProfilerRendersTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "react-profiler-renders",
   description: `Scan the live React fiber tree to collect component render counts and durations.
 Returns a markdown table of the top re-rendering components. No profiling session required — works on a live connected app.

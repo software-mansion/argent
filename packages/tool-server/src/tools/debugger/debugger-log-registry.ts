@@ -3,7 +3,7 @@ import type { ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
 
-interface LogRegistryResponse extends LogStats {
+export interface LogRegistryResponse extends LogStats {
   clusters: MessageCluster[];
   deviceName: string;
   appName: string;
@@ -21,7 +21,8 @@ const zodSchema = z.object({
 
 export const debuggerLogRegistryTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  LogRegistryResponse
+  LogRegistryResponse,
+  z.input<typeof zodSchema>
 > = {
   id: "debugger-log-registry",
   description: `Get a summary of all console logs captured from the React Native app.

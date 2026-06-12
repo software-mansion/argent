@@ -314,7 +314,7 @@ function getTopComponents(
     }));
 }
 
-export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const profilerCommitQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "profiler-commit-query",
   description: `Query React commit data for iterative investigation of render performance.
 Requires react-profiler-stop to have been called first.

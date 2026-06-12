@@ -1,74 +1,13 @@
-import { Registry } from "@argent/registry";
+import { Registry, type ToolDefinition } from "@argent/registry";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
-import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
-import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
-import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
-import { nativeFullHierarchyTool } from "../tools/native-devtools/native-full-hierarchy";
-import { nativeDescribeScreenTool } from "../tools/native-devtools/native-describe-screen";
-import { nativeViewAtPointTool } from "../tools/native-devtools/native-view-at-point";
-import { nativeUserInteractableViewAtPointTool } from "../tools/native-devtools/native-user-interactable-view-at-point";
 import { jsRuntimeDebuggerBlueprint } from "../blueprints/js-runtime-debugger";
 import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
-import { listDevicesTool } from "../tools/devices/list-devices";
-import { createBootDeviceTool } from "../tools/devices/boot-device";
-import { launchAppTool } from "../tools/launch-app";
-import { restartAppTool } from "../tools/restart-app";
-import { reinstallAppTool } from "../tools/reinstall-app";
-import { openUrlTool } from "../tools/open-url";
-import { screenshotTool } from "../tools/screenshot";
-import { gestureTapTool } from "../tools/gesture-tap";
-import { gestureSwipeTool } from "../tools/gesture-swipe";
-import { gestureCustomTool } from "../tools/gesture-custom";
-import { gesturePinchTool } from "../tools/gesture-pinch";
-import { gestureRotateTool } from "../tools/gesture-rotate";
-import { buttonTool } from "../tools/button";
-import { keyboardTool } from "../tools/keyboard";
-import { rotateTool } from "../tools/rotate";
-import { createRunSequenceTool } from "../tools/run-sequence";
-import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
-import { debuggerStatusTool } from "../tools/debugger/debugger-status";
-import { debuggerEvaluateTool } from "../tools/debugger/debugger-evaluate";
-import { debuggerReloadMetroTool } from "../tools/debugger/debugger-reload-metro";
-import { debuggerComponentTreeTool } from "../tools/debugger/debugger-component-tree";
-import { debuggerInspectElementTool } from "../tools/debugger/debugger-inspect-element";
-import { debuggerLogRegistryTool } from "../tools/debugger/debugger-log-registry";
-import { networkLogsTool } from "../tools/network/network-logs";
-import { networkRequestTool } from "../tools/network/network-request";
-import { createDescribeTool } from "../tools/describe";
-import { createReactProfilerStartTool } from "../tools/profiler/react/react-profiler-start";
-import { createReactProfilerStopTool } from "../tools/profiler/react/react-profiler-stop";
-import { createReactProfilerStatusTool } from "../tools/profiler/react/react-profiler-status";
-import { reactProfilerAnalyzeTool } from "../tools/profiler/react/react-profiler-analyze";
-import { reactProfilerComponentSourceTool } from "../tools/profiler/react/react-profiler-component-source";
-import { reactProfilerCpuSummaryTool } from "../tools/profiler/react/react-profiler-cpu-summary";
-import { reactProfilerRendersTool } from "../tools/profiler/react/react-profiler-renders";
-import { reactProfilerFiberTreeTool } from "../tools/profiler/react/react-profiler-fiber-tree";
-import { nativeProfilerStartTool } from "../tools/profiler/native-profiler/native-profiler-start";
-import { nativeProfilerStopTool } from "../tools/profiler/native-profiler/native-profiler-stop";
-import { nativeProfilerAnalyzeTool } from "../tools/profiler/native-profiler/native-profiler-analyze";
 import { nativeProfilerSessionBlueprint } from "../blueprints/native-profiler-session";
-import { profilerCpuQueryTool } from "../tools/profiler/query/profiler-cpu-query";
-import { profilerCommitQueryTool } from "../tools/profiler/query/profiler-commit-query";
-import { profilerStackQueryTool } from "../tools/profiler/query/profiler-stack-query";
-import { profilerCombinedReportTool } from "../tools/profiler/combined/profiler-combined-report";
-import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
-import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
-import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
-import { stopMetroTool } from "../tools/simulator/stop-metro";
-import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
-import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
-import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
-import { flowFinishRecordingTool } from "../tools/flows/flow-finish-recording";
-import { createRunFlowTool } from "../tools/flows/flow-run";
-import { flowReadPrerequisiteTool } from "../tools/flows/flow-read-prerequisite";
-import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-data";
-import { updateArgentTool } from "../tools/system/update-argent";
-import { dismissUpdateTool } from "../tools/system/dismiss-update";
-import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { createAllTools } from "../tools-manifest";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -82,74 +21,9 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
 
-  registry.registerTool(listDevicesTool);
-  registry.registerTool(createBootDeviceTool(registry));
-  registry.registerTool(launchAppTool);
-  registry.registerTool(restartAppTool);
-  registry.registerTool(reinstallAppTool);
-  registry.registerTool(openUrlTool);
-  registry.registerTool(screenshotTool);
-  registry.registerTool(screenshotDiffTool);
-  registry.registerTool(gestureTapTool);
-  registry.registerTool(gestureSwipeTool);
-  registry.registerTool(gestureCustomTool);
-  registry.registerTool(gesturePinchTool);
-  registry.registerTool(gestureRotateTool);
-  registry.registerTool(buttonTool);
-  registry.registerTool(keyboardTool);
-  registry.registerTool(rotateTool);
-  registry.registerTool(createRunSequenceTool(registry));
-  registry.registerTool(debuggerConnectTool);
-  registry.registerTool(debuggerStatusTool);
-  registry.registerTool(debuggerEvaluateTool);
-  registry.registerTool(debuggerReloadMetroTool);
-  registry.registerTool(debuggerComponentTreeTool);
-  registry.registerTool(debuggerInspectElementTool);
-  registry.registerTool(debuggerLogRegistryTool);
-  registry.registerTool(networkLogsTool);
-  registry.registerTool(networkRequestTool);
-  registry.registerTool(createDescribeTool(registry));
-  registry.registerTool(createReactProfilerStartTool(registry));
-  registry.registerTool(createReactProfilerStopTool(registry));
-  registry.registerTool(createReactProfilerStatusTool(registry));
-  registry.registerTool(reactProfilerAnalyzeTool);
-  registry.registerTool(reactProfilerComponentSourceTool);
-  registry.registerTool(reactProfilerCpuSummaryTool);
-  registry.registerTool(reactProfilerRendersTool);
-  registry.registerTool(reactProfilerFiberTreeTool);
-  registry.registerTool(nativeProfilerStartTool);
-  registry.registerTool(nativeProfilerStopTool);
-  registry.registerTool(nativeProfilerAnalyzeTool);
-  registry.registerTool(profilerCpuQueryTool);
-  registry.registerTool(profilerCommitQueryTool);
-  registry.registerTool(profilerStackQueryTool);
-  registry.registerTool(profilerCombinedReportTool);
-  registry.registerTool(profilerLoadTool);
-  registry.registerTool(gatherWorkspaceDataTool);
-  registry.registerTool(nativeDevtoolsStatusTool);
-  registry.registerTool(nativeNetworkLogsTool);
-  registry.registerTool(nativeFindViewsTool);
-  registry.registerTool(nativeFullHierarchyTool);
-  registry.registerTool(nativeDescribeScreenTool);
-  registry.registerTool(nativeViewAtPointTool);
-  registry.registerTool(nativeUserInteractableViewAtPointTool);
-
-  // Cleanup tools (close over registry for direct service disposal)
-  registry.registerTool(createStopSimulatorServerTool(registry));
-  registry.registerTool(createStopAllSimulatorServersTool(registry));
-  registry.registerTool(stopMetroTool);
-
-  // Flow tools
-  registry.registerTool(flowStartRecordingTool);
-  registry.registerTool(createFlowAddStepTool(registry));
-  registry.registerTool(flowInsertEchoTool);
-  registry.registerTool(flowFinishRecordingTool);
-  registry.registerTool(flowReadPrerequisiteTool);
-  registry.registerTool(createRunFlowTool(registry));
-
-  // System tools
-  registry.registerTool(updateArgentTool);
-  registry.registerTool(dismissUpdateTool);
+  for (const tool of Object.values(createAllTools(registry))) {
+    registry.registerTool(tool as ToolDefinition<unknown, unknown>);
+  }
 
   return registry;
 }

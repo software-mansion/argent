@@ -30,7 +30,7 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
+export interface Result {
   /**
    * The captured PNG as an artifact handle. The MCP client materializes it to
    * a local file and renders it inline — no second fetch of the simulator
@@ -45,7 +45,7 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
 };
 
-export const screenshotTool: ToolDefinition<Params, Result> = {
+export const screenshotTool: ToolDefinition<Params, Result, z.input<typeof zodSchema>> = {
   id: "screenshot",
   description: `Capture a screenshot of the device screen (iOS simulator or Android emulator). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.

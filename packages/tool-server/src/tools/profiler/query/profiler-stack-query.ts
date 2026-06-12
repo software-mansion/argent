@@ -344,7 +344,7 @@ async function executeAndroid(api: NativeProfilerSessionApi, params: z.infer<typ
   });
 }
 
-export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const profilerStackQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "profiler-stack-query",
   description: `Query native profiler trace data for iterative investigation of native performance.
 Requires native-profiler-stop → native-profiler-analyze to have been called first.

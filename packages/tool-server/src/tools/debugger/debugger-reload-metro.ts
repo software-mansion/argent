@@ -21,7 +21,8 @@ export const debuggerReloadMetroTool: ToolDefinition<
     deviceName: string;
     appName: string;
     logicalDeviceId: string | undefined;
-  }
+  },
+  z.input<typeof zodSchema>
 > = {
   id: "debugger-reload-metro",
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.

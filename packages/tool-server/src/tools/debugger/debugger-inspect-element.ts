@@ -157,7 +157,8 @@ export const debuggerInspectElementTool: ToolDefinition<
       appName: string;
       logicalDeviceId: string | undefined;
     }
-  | { error: string }
+  | { error: string },
+  z.input<typeof zodSchema>
 > = {
   id: "debugger-inspect-element",
   description: `Inspect the React component hierarchy at a screen coordinate (x, y).

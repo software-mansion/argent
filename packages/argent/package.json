@@ -12,8 +12,21 @@
     "argent": "dist/cli.js",
     "argent-simulator-server": "bin/argent-simulator-server.cjs"
   },
+  "types": "dist/sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk.d.ts",
+      "default": "./dist/sdk.mjs"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "default": "./dist/sdk.mjs"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "npm run build:dispatcher && npm run build:bundles && npm run sync-readme",
+    "build": "npm run build:dispatcher && npm run build:bundles && npm run build:sdk-types && npm run sync-readme",
+    "build:sdk-types": "dts-bundle-generator -o dist/sdk.d.ts --project ../argent-sdk/tsconfig.json --no-check --no-banner --external-inlines @argent/sdk @argent/tool-server @argent/tools-client @argent/registry @argent/update-core @argent/native-devtools-ios @argent/native-devtools-android -- ../argent-sdk/src/index.ts",
     "build:dispatcher": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:bundles": "node scripts/bundle-tools.cjs",
     "sync-readme": "node scripts/sync-readme.cjs",
@@ -41,7 +54,8 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0"
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
@@ -51,6 +65,7 @@
     "@clack/prompts": "^1.1.0",
     "@types/node": "^25.9.0",
     "@types/semver": "^7.7.1",
+    "dts-bundle-generator": "^9.5.1",
     "esbuild": "^0.28.0",
     "picocolors": "^1.1.1",
     "semver": "^7.7.4",

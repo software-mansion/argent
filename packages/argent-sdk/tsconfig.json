@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"],
+    "strict": true,
+    "composite": true,
+    "declaration": true,
+    "sourceMap": true,
+    // Forces `import type` for type-only imports. This is load-bearing: the
+    // SDK imports types from @argent/tool-server, and a value import would
+    // pull the whole server into the published SDK bundle.
+    "verbatimModuleSyntax": true
+  },
+  "references": [
+    { "path": "../registry" },
+    { "path": "../tool-server" },
+    { "path": "../argent-tools-client" }
+  ],
+  "include": ["src/**/*"]
+}

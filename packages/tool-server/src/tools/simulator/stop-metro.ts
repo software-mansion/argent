@@ -14,7 +14,8 @@ const zodSchema = z.object({
 
 export const stopMetroTool: ToolDefinition<
   { port: number },
-  { stopped: boolean; port: number; pids: number[] }
+  { stopped: boolean; port: number; pids: number[] },
+  z.input<typeof zodSchema>
 > = {
   id: "stop-metro",
   description: `Stop the Metro bundler process listening on a given port (default 8081). Use when ending a React Native session or when Metro must be restarted. Returns { stopped, port, pids }; stopped=false if no process is found on the port. Fails if the port lookup command times out or the process cannot be killed. This is DESTRUCTIVE — always ask the user for confirmation before calling this tool.`,

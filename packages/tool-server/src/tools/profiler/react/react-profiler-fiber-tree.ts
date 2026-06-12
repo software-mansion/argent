@@ -104,7 +104,7 @@ const zodSchema = z.object({
   filter: z.string().optional().describe("Regex string to filter component names"),
 });
 
-export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown> = {
+export const reactProfilerFiberTreeTool: ToolDefinition<z.infer<typeof zodSchema>, unknown, z.input<typeof zodSchema>> = {
   id: "react-profiler-fiber-tree",
   description: `Inspect the React fiber tree and return a JSON representation of the component hierarchy.
 Use when tracing ancestry of a library component or checking for useMemoCache hook (confirms React Compiler is active on a component).

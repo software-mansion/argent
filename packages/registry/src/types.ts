@@ -137,11 +137,20 @@ export type ToolDependency = "adb" | "xcrun" | "emulator";
 
 // ── Tool Types ──
 
-export interface ToolDefinition<TParams = void, TResult = unknown> {
+export interface ToolDefinition<TParams = void, TResult = unknown, TParamsInput = TParams> {
   id: string;
   description?: string;
   /** Zod schema for tool input; used for runtime validation. When provided, inputSchema is auto-derived at registration time. */
   zodSchema?: z.ZodObject<any>;
+  /**
+   * Phantom type carrier — never set at runtime. Holds the schema's INPUT type
+   * (`z.input`, where `.default()` fields are optional) for tools whose input
+   * and output types differ. `execute` receives the parsed OUTPUT (`TParams`,
+   * defaults applied); client-side consumers like the SDK use `TParamsInput`
+   * to type what callers may pass. Declare via the third generic:
+   * `ToolDefinition<Params, Result, z.input<typeof zodSchema>>`.
+   */
+  readonly __paramsInput?: TParamsInput;
   /** JSON Schema for tool input; used for listing (GET /tools). Auto-derived from zodSchema if not explicitly set. */
   inputSchema?: Record<string, unknown>;
   /** Optional hint for adapters (e.g. "image" for MCP to return base64 image content). */

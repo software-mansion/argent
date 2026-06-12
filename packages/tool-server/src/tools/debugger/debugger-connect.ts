@@ -21,7 +21,8 @@ export const debuggerConnectTool: ToolDefinition<
     logicalDeviceId: string | undefined;
     isNewDebugger: boolean;
     connected: boolean;
-  }
+  },
+  z.input<typeof zodSchema>
 > = {
   id: "debugger-connect",
   description: `Connect to a running Metro dev server's CDP debugger endpoint.

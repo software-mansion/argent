@@ -335,7 +335,7 @@ function shortenUrl(url: string): string {
   return parts.slice(-2).join("/");
 }
 
-export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const profilerCpuQueryTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "profiler-cpu-query",
   description: `Query Hermes CPU profile data with targeted modes for iterative investigation.
 Requires react-profiler-stop (and ideally react-profiler-analyze) to have been called first.

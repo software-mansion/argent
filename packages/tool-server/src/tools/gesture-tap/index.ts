@@ -14,7 +14,7 @@ const zodSchema = z.object({
 
 type Params = z.infer<typeof zodSchema>;
 
-interface Result {
+export interface Result {
   tapped: boolean;
   timestampMs: number;
 }

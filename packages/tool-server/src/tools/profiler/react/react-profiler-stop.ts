@@ -151,7 +151,7 @@ export function flattenProfilingData(
 
 export function createReactProfilerStopTool(
   registry: Registry
-): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>> {
+): ToolDefinition<z.infer<typeof zodSchema>, Record<string, unknown>, z.input<typeof zodSchema>> {
   return {
     id: "react-profiler-stop",
     description: `Stop CPU profiling and collect the cpuProfile + React commit tree.

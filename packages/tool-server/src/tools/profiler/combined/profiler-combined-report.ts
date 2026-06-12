@@ -39,7 +39,7 @@ interface HangCommitCorrelation {
   }[];
 }
 
-export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
+export const profilerCombinedReportTool: ToolDefinition<z.infer<typeof zodSchema>, string, z.input<typeof zodSchema>> = {
   id: "profiler-combined-report",
   description: `Generate a cross-correlated report combining React Profiler and native profiler data.
 Maps native hangs to React commits using wall-clock time alignment.
