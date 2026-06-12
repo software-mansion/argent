@@ -1,6 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createToolsClient, type ToolMeta, type ToolsServerPaths } from "@argent/tools-client";
+import {
+  createToolsClient,
+  materializeArtifacts,
+  getDeviceIdFromArgs,
+  type ToolMeta,
+  type ToolsServerPaths,
+  type MaterializedImage,
+} from "@argent/tools-client";
 import {
   parseFlags,
   formatSchemaUsage,
@@ -91,18 +98,27 @@ async function fetchImageToFile(
   fs.writeFileSync(outPath, buf);
 }
 
-function renderResult(result: unknown, outputHint: string | undefined, json: boolean): string {
+function renderResult(
+  result: unknown,
+  outputHint: string | undefined,
+  images: MaterializedImage[],
+  json: boolean
+): string {
   if (json) return JSON.stringify(result, null, 2);
 
-  if (
-    outputHint === "image" &&
-    result &&
-    typeof result === "object" &&
-    "path" in result &&
-    typeof (result as { path: unknown }).path === "string"
-  ) {
-    const r = result as { path: string; url?: string };
-    return `Saved screenshot: ${r.path}`;
+  if (outputHint === "image") {
+    // New tool-servers return an artifact handle that the materializer has
+    // already resolved to a local file.
+    if (images.length > 0) return `Saved screenshot: ${images[0]!.localPath}`;
+    // Legacy `{ url, path }` shape from older tool-servers.
+    if (
+      result &&
+      typeof result === "object" &&
+      "path" in result &&
+      typeof (result as { path: unknown }).path === "string"
+    ) {
+      return `Saved screenshot: ${(result as { path: string }).path}`;
+    }
   }
 
   if (typeof result === "string") return result;
@@ -110,7 +126,7 @@ function renderResult(result: unknown, outputHint: string | undefined, json: boo
 }
 
 export async function run(argv: string[], options: RunCommandOptions): Promise<void> {
-  const { fetchTool, callTool } = createToolsClient({ paths: options.paths });
+  const { fetchTool, callTool, baseUrl } = createToolsClient({ paths: options.paths });
   const [toolName, ...rest] = argv;
 
   if (!toolName || toolName === "--help" || toolName === "-h") {
@@ -181,9 +197,20 @@ Examples:
 
   let result: unknown;
   let note: string | undefined;
+  let images: MaterializedImage[] = [];
   try {
     const resp = await callTool(toolName, payload);
-    result = resp.data;
+    // Resolve any artifact handles to local files (using the file already on
+    // disk when the tool-server is co-located, downloading otherwise). After
+    // this the result holds real local paths, so rendering is location-agnostic.
+    const { url, token } = await baseUrl();
+    const materialized = await materializeArtifacts(resp.data, {
+      toolsUrl: url,
+      authToken: token,
+      deviceId: getDeviceIdFromArgs(payload),
+    });
+    result = materialized.result;
+    images = materialized.images;
     note = resp.note;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -191,10 +218,17 @@ Examples:
   }
 
   // Image side-effect: save before rendering so --out works in non-JSON mode
-  // and --json mode still prints the structured result.
-  if (outPath && meta.outputHint === "image" && result && typeof result === "object") {
+  // and --json mode still prints the structured result. Prefer the bytes the
+  // materializer already resolved; fall back to the legacy `{ url }` fetch for
+  // older tool-servers that don't emit artifact handles.
+  if (outPath && meta.outputHint === "image") {
     try {
-      await fetchImageToFile(result as { url?: string; path?: string }, outPath);
+      if (images.length > 0) {
+        fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+        fs.writeFileSync(outPath, images[0]!.data);
+      } else if (result && typeof result === "object") {
+        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
+      }
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
       process.exit(1);
@@ -202,7 +236,7 @@ Examples:
   }
 
   if (note) console.error(note);
-  console.log(renderResult(result, meta.outputHint, json));
+  console.log(renderResult(result, meta.outputHint, images, json));
 
   if (outPath && meta.outputHint === "image" && !json) {
     console.log(`Wrote: ${outPath}`);

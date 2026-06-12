@@ -11,7 +11,7 @@
 # file in git when releasing a new helper, then rebuild.
 #
 # Environment:
-#   PREBUILT_ANDROID_DEVTOOLS_APK  if set, copy this path to dist/ instead of
+#   PREBUILT_ANDROID_DEVTOOLS_APK  if set, copy this path to bin/ instead of
 #                                  building (used by CI / non-Android-SDK hosts)
 #
 # Required tools (resolved via $ANDROID_HOME):
@@ -24,14 +24,14 @@ PKG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE_DIR="$(cd "${PKG_DIR}/../.." && pwd)"
 SUBMODULE_DIR="${WORKSPACE_DIR}/packages/argent-private/packages/native-devtools-android"
 SRC_DIR="${SUBMODULE_DIR}/Sources/AndroidDevtools"
-DIST_DIR="${PKG_DIR}/dist"
+BIN_DIR="${PKG_DIR}/bin"
 BUILD_DIR="${PKG_DIR}/.build"
 
-VERSION="$(node -p "require('${PKG_DIR}/manifest.json').versionName")"
-VERSION_CODE="$(node -p "require('${PKG_DIR}/manifest.json').versionCode")"
+VERSION="$(node -p "require('${PKG_DIR}/assets/manifest.json').versionName")"
+VERSION_CODE="$(node -p "require('${PKG_DIR}/assets/manifest.json').versionCode")"
 
-APK_OUT="${DIST_DIR}/argent-android-devtools-${VERSION}.apk"
-mkdir -p "${DIST_DIR}"
+APK_OUT="${BIN_DIR}/argent-android-devtools-${VERSION}.apk"
+mkdir -p "${BIN_DIR}"
 
 # If a prebuilt APK is provided (CI on a non-Android host, or local PREBUILT
 # override), copy it and skip the build pipeline.

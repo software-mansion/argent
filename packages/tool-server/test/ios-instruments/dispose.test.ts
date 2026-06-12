@@ -65,8 +65,8 @@ describe("nativeProfilerSessionBlueprint dispose", () => {
     child.respondsTo = new Set<NodeJS.Signals>(["SIGKILL"]);
     child.respondAfterMs = 1;
     api.profilingActive = true;
-    api.xctracePid = 1234;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 1234;
+    api.captureProcess = asChild(child);
 
     const promise = dispose();
     await vi.advanceTimersByTimeAsync(1);
@@ -74,8 +74,8 @@ describe("nativeProfilerSessionBlueprint dispose", () => {
 
     expect(child.signalLog).toEqual(["SIGKILL"]);
     expect(api.profilingActive).toBe(false);
-    expect(api.xctracePid).toBeNull();
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
   });
 
   it("returns within the reap window even if SIGKILL never reaps the handle", async () => {
@@ -85,8 +85,8 @@ describe("nativeProfilerSessionBlueprint dispose", () => {
     // SIGKILL targets near-instantly; this scenario asserts dispose still
     // unblocks if for any reason 'exit' never fires.
     api.profilingActive = true;
-    api.xctracePid = 1234;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 1234;
+    api.captureProcess = asChild(child);
 
     const promise = dispose();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -94,8 +94,8 @@ describe("nativeProfilerSessionBlueprint dispose", () => {
 
     expect(child.signalLog).toEqual(["SIGKILL"]);
     expect(api.profilingActive).toBe(false);
-    expect(api.xctracePid).toBeNull();
-    expect(api.xctraceProcess).toBeNull();
+    expect(api.capturePid).toBeNull();
+    expect(api.captureProcess).toBeNull();
   });
 
   it("survives kill() throwing on an already-dead handle", async () => {
@@ -106,8 +106,8 @@ describe("nativeProfilerSessionBlueprint dispose", () => {
     });
     child.exitCode = 0;
     api.profilingActive = true;
-    api.xctracePid = 1234;
-    api.xctraceProcess = asChild(child);
+    api.capturePid = 1234;
+    api.captureProcess = asChild(child);
 
     await expect(dispose()).resolves.toBeUndefined();
     expect(api.profilingActive).toBe(false);

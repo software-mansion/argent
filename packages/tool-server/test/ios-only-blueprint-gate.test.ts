@@ -39,11 +39,11 @@ describe("iOS-only blueprints reject Android targets up-front", () => {
     );
   });
 
-  it("native-profiler-session blueprint rejects an Android device with a targeted error", async () => {
+  it("native-profiler-session blueprint accepts an Android device (Perfetto backend)", async () => {
     const device = androidDevice("emulator-5556");
-    await expect(nativeProfilerSessionBlueprint.factory({}, device, { device })).rejects.toThrow(
-      /NativeProfilerSession currently supports iOS only.*classifies as android/
-    );
+    const instance = await nativeProfilerSessionBlueprint.factory({}, device, { device });
+    expect(instance.api.platform).toBe("android");
+    await instance.dispose();
   });
 
   it("native-devtools blueprint does NOT gate an iOS DeviceInfo (gate is one-sided)", async () => {

@@ -4,6 +4,7 @@ import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/si
 import { electronCdpRef, type ElectronCdpApi } from "../../blueprints/electron-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
+import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 const zodSchema = z.object({
   udid: z
@@ -42,8 +43,13 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 interface Result {
-  url: string;
-  path: string;
+  /**
+   * The captured PNG as an artifact handle. The MCP client materializes it to
+   * a local file and renders it inline — no second fetch of the simulator
+   * server's `127.0.0.1` media URL, which is unreachable when the tool-server
+   * is remote.
+   */
+  image: ArtifactHandle;
 }
 
 const capability: ToolCapability = {
@@ -69,18 +75,22 @@ Fails if the simulator-server / emulator backend / Electron CDP is not reachable
     }
     return { simulatorServer: simulatorServerRef(device) };
   },
-  async execute(services, params, options) {
+  async execute(services, params, ctx) {
     const device = resolveDevice(params.udid);
     if (device.platform === "electron") {
       const electron = services.electron as ElectronCdpApi;
-      return electron.captureScreenshot({
+      const { path } = await electron.captureScreenshot({
         rotation: params.rotation,
         scale: params.scale,
         downscaler: params.downscaler,
       });
+      const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+      return { image };
     }
     const api = services.simulatorServer as SimulatorServerApi;
-    const signal = options?.signal ?? AbortSignal.timeout(16_000);
-    return httpScreenshot(api, params.rotation, signal, params.scale);
+    const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
+    const { path } = await httpScreenshot(api, params.rotation, signal, params.scale);
+    const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+    return { image };
   },
 };

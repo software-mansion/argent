@@ -25,6 +25,32 @@ import {
   type BootstrapResult,
 } from "../../../utils/react-profiler/devtools-bootstrap";
 
+/**
+ * Verbose explanations the operator sees when the runtime is not profileable.
+ * Centralised so every tool that detects "this app cannot be profiled" emits
+ * the same diagnosis instead of bespoke one-liners.
+ */
+export const NO_DEVTOOLS_HOOK_ERROR =
+  "React DevTools hook (__REACT_DEVTOOLS_GLOBAL_HOOK__) is not present in this app's JavaScript runtime. " +
+  "React profiling requires a development build with React DevTools enabled. " +
+  "Likely causes: (1) the app is a release/production build — DevTools is stripped to reduce bundle size; " +
+  "(2) you connected to the wrong JS runtime; (3) this isn't a React (Native) app. " +
+  "Fix: rebuild in debug/dev mode (e.g. `npx react-native run-ios` without --configuration Release; for Expo, run a dev client). " +
+  "Once the app is running with DevTools attached, call react-profiler-start again.";
+
+/**
+ * Returned when the DevTools hook IS present but no React renderer has
+ * registered against it. Distinct from NO_DEVTOOLS_HOOK_ERROR because the
+ * remediation differs: rebuilding in dev mode does nothing here — the user
+ * needs the renderer to attach (wait for first commit, or let
+ * react-profiler-start bootstrap the DevTools backend on bridgeless RN
+ * dev builds that lack an external DevTools client).
+ */
+export const NO_RENDERERS_ATTACHED_ERROR =
+  "React DevTools hook is present but no React renderer has registered yet. " +
+  "The hook is loaded but no fiber renderer has attached — typically because the app has not committed its first render, or the DevTools backend has not been bootstrapped on a bridgeless React Native dev build. " +
+  "Fix: ensure the app has rendered (interact with it once, then retry); if it stays empty, call react-profiler-start first — it will attempt to attach the DevTools backend automatically.";
+
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
   device_id: z
@@ -146,9 +172,7 @@ Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot 
       let state = JSON.parse(stateJson) as ReadStateResult;
 
       if (!state.hookExists) {
-        throw new Error(
-          "React DevTools is not available in this app. This usually means the app is a production build. Ask the user to run a development build of the app, then retry."
-        );
+        throw new Error(NO_DEVTOOLS_HOOK_ERROR);
       }
 
       // If the hook is present but no rendererInterface is registered, the

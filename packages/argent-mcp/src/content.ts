@@ -5,12 +5,24 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { materializeArtifacts, type MaterializeContext } from "@argent/tools-client";
 
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string };
 
+/**
+ * Context for resolving artifact handles in a result. When omitted, content
+ * rendering falls back to the legacy `{ url, path }` screenshot shape (used by
+ * older tool-servers and by unit tests that don't exercise the artifact path).
+ */
+export type ContentContext = MaterializeContext;
+
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+function imageBlock(data: Buffer, mimeType: string): ContentBlock {
+  return { type: "image", data: data.toString("base64"), mimeType };
+}
 
 // Fetch image bytes and confirm they actually start with a PNG signature.
 // Without this check, a 404 (file missing), an HTML error page, or any other
@@ -32,24 +44,62 @@ async function fetchPngBytes(url: string): Promise<Buffer | null> {
 export async function toMcpContent(
   result: unknown,
   outputHint?: string,
+  ctx?: ContentContext,
   args?: unknown
 ): Promise<ContentBlock[]> {
-  if (outputHint === "image" && result && typeof result === "object" && "url" in result) {
-    const r = result as { url: string; path?: string };
-    if (isRecord(args) && args.includeImageInContext === false) {
-      return [{ type: "text" as const, text: `Saved: ${r.path}` }];
+  // `includeImageInContext: false` asks for the saved-path text only — no inline image.
+  const suppressImage = isRecord(args) && args.includeImageInContext === false;
+
+  // Artifact path: when a context is available, resolve handles to local files.
+  // Tools producing files (screenshots, profiler exports) return artifact
+  // handles instead of host paths, so this works regardless of where the
+  // tool-server runs.
+  if (ctx) {
+    const { result: rewritten, images } = await materializeArtifacts(result, ctx);
+
+    if (outputHint === "image") {
+      if (images.length > 0) {
+        const saved: ContentBlock = { type: "text", text: `Saved: ${images[0]!.localPath}` };
+        if (suppressImage) return [saved];
+        const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
+        blocks.push(saved);
+        return blocks;
+      }
+      // No image artifact present — fall back to the legacy `{ url, path }`
+      // shape for older tool-servers.
+      return legacyImageContent(rewritten, suppressImage);
     }
 
+    const blocks: ContentBlock[] = [{ type: "text", text: JSON.stringify(rewritten, null, 2) }];
+    // Surface any images that rode along on a non-image result.
+    if (!suppressImage) for (const img of images) blocks.push(imageBlock(img.data, img.mimeType));
+    return blocks;
+  }
+
+  if (outputHint === "image") {
+    return legacyImageContent(result, suppressImage);
+  }
+
+  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
+}
+
+/**
+ * Legacy screenshot rendering for older tool-servers that return `{ url, path }`
+ * instead of an artifact handle: fetch the media URL directly, validating it is
+ * a real PNG (issue #255) before shipping it as an image.
+ */
+async function legacyImageContent(
+  result: unknown,
+  suppressImage: boolean
+): Promise<ContentBlock[]> {
+  if (result && typeof result === "object" && "url" in result) {
+    const r = result as { url: string; path?: string };
+    if (suppressImage) {
+      return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
+    }
     const buf = await fetchPngBytes(r.url);
     if (buf) {
-      return [
-        {
-          type: "image" as const,
-          data: buf.toString("base64"),
-          mimeType: "image/png" as const,
-        },
-        { type: "text" as const, text: `Saved: ${r.path ?? ""}` },
-      ];
+      return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
     }
     return [
       {
@@ -58,8 +108,7 @@ export async function toMcpContent(
       },
     ];
   }
-
-  return [{ type: "text" as const, text: JSON.stringify(result, null, 2) }];
+  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -118,7 +167,10 @@ export type FlowExecuteResult = {
  * Unpack flow-execute's structured step results into MCP content blocks.
  * Each step carries its own outputHint so toMcpContent handles images correctly.
  */
-export async function flowRunToMcpContent(result: FlowExecuteResult): Promise<ContentBlock[]> {
+export async function flowRunToMcpContent(
+  result: FlowExecuteResult,
+  ctx?: ContentContext
+): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
 
   if (result.executionPrerequisite) {
@@ -146,7 +198,7 @@ export async function flowRunToMcpContent(result: FlowExecuteResult): Promise<Co
       });
     } else {
       blocks.push({ type: "text", text: `[${num}] ${step.tool}` });
-      const stepContent = await toMcpContent(step.result, step.outputHint, step.args);
+      const stepContent = await toMcpContent(step.result, step.outputHint, ctx, step.args);
       blocks.push(...stepContent);
     }
   }
