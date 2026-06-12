@@ -5,107 +5,122 @@ import {
   type NativeProfilerSessionApi,
 } from "../../../blueprints/native-profiler-session";
 import { resolveDevice } from "../../../utils/device-info";
-import { exportIosTraceData } from "../../../utils/ios-profiler/export";
+import { assertSupported } from "../../../utils/capability";
+import { ensureDeps } from "../../../utils/check-deps";
+import { stopNativeProfilerIos, type IosStopResult } from "./platforms/ios";
+import { stopNativeProfilerAndroid, type AndroidStopResult } from "./platforms/android";
 import type { ExportDiagnostics } from "../../../utils/ios-profiler/export";
-import { shutdownChild } from "../../../utils/ios-profiler/lifecycle";
-
-const STOP_GRACE_MS = 30_000;
-const STOP_TERM_MS = 5_000;
-const STOP_KILL_MS = 5_000;
+import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
+import type { ArtifactStore } from "@argent/registry";
 
 const zodSchema = z.object({
-  device_id: z.string().describe("Target device id from `list-devices`. Currently iOS-only."),
+  device_id: z
+    .string()
+    .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
 });
 
-interface StopResult {
-  traceFile: string;
-  exportedFiles: Record<string, string | null>;
+/**
+ * iOS stop result with files exposed as downloadable artifacts. Mirrors
+ * {@link IosStopResult}, but `traceFile`/`exportedFiles` are artifact handles
+ * the MCP client materializes locally instead of raw host paths.
+ */
+export interface IosStopArtifacts {
+  /**
+   * The Instruments `.trace` bundle as an artifact handle. It's a directory, so
+   * it's delivered as a gzipped tar when a remote client downloads it; local
+   * clients use the bundle in place.
+   */
+  traceFile: ArtifactHandle;
+  exportedFiles: Record<string, ArtifactHandle | null>;
   exportDiagnostics: ExportDiagnostics;
   warning?: string;
 }
 
+/**
+ * Android stop result with files exposed as downloadable artifacts. Mirrors
+ * {@link AndroidStopResult}; unlike iOS there's no `exportDiagnostics` (the
+ * `.pftrace` is pulled whole, not exported per-schema).
+ */
+interface AndroidStopArtifacts {
+  /** The pulled `.pftrace` file as a downloadable artifact handle. */
+  traceFile: ArtifactHandle;
+  exportedFiles: Record<string, ArtifactHandle | null>;
+  warning?: string;
+}
+
+type StopResult = IosStopArtifacts | AndroidStopArtifacts;
+
+const capability = {
+  apple: { simulator: true, device: true },
+  android: { emulator: true, device: true, unknown: true },
+} as const;
+
+/** Register each non-null exported file path as a downloadable artifact. */
+async function exportedFilesToArtifacts(
+  store: ArtifactStore,
+  files: Record<string, string | null>
+): Promise<Record<string, ArtifactHandle | null>> {
+  const out: Record<string, ArtifactHandle | null> = {};
+  for (const [key, filePath] of Object.entries(files)) {
+    out[key] = filePath ? await store.register(filePath) : null;
+  }
+  return out;
+}
+
+/**
+ * Register the trace bundle for download. Marked `archive: "tar.gz"` so it
+ * works even when the path is a directory (iOS `.trace`), and even if it can't
+ * be stat'd at registration (e.g. a recovered session).
+ */
+function registerTrace(store: ArtifactStore, traceFile: string): Promise<ArtifactHandle> {
+  return store.register(traceFile, { archive: "tar.gz" });
+}
+
 export const nativeProfilerStopTool: ToolDefinition<z.infer<typeof zodSchema>, StopResult> = {
   id: "native-profiler-stop",
-  requires: ["xcrun"],
-  capability: { apple: { simulator: true, device: true } },
-  description: `Stop native profiling and export trace data to XML files.
-iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks data. Call native-profiler-start first.
+  capability,
+  description: `Stop native profiling and export trace data.
+iOS: sends SIGINT to xctrace, waits for packaging, then exports CPU, hangs, and leaks XML.
+Android: sends SIGTERM to the perfetto daemon, polls /proc/<pid>, then \`adb pull\`s the .pftrace.
+Call native-profiler-start first.
 Use when the user has finished the interaction to profile and you need to export the trace.
-Returns { traceFile, exportedFiles, exportDiagnostics } with paths to the exported XML data.
+Returns { traceFile, exportedFiles, exportDiagnostics? }; traceFile is the raw trace bundle and exportedFiles the exports, all downloadable artifacts materialized to local paths.
 Fails if no active native-profiler-start session exists for the given device_id.`,
   zodSchema,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
-  async execute(services) {
+  async execute(services, params, ctx) {
     const api = services.session as NativeProfilerSessionApi;
+    const device = resolveDevice(params.device_id);
+    assertSupported("native-profiler-stop", capability, device);
 
-    // Recover a recording where xctrace is already gone but the trace bundle
-    // is on disk: either the in-process 10-min cap fired, or xctrace exited
-    // unexpectedly (attached app died, simulator daemon hiccup, etc).
-    if ((api.recordingTimedOut || api.recordingExitedUnexpectedly) && api.traceFile) {
-      const traceFile = api.traceFile;
-      const wasTimeout = api.recordingTimedOut;
-      const exitInfo = api.lastExitInfo;
-      api.recordingTimedOut = false;
-      api.recordingExitedUnexpectedly = false;
-      api.lastExitInfo = null;
-
-      const { files: exportedFiles, diagnostics } = exportIosTraceData(traceFile);
-      api.exportedFiles = exportedFiles;
-
-      const warning = wasTimeout
-        ? "Recording timed out at 10 min cap; exported the partial trace. " +
-          "Call native-profiler-start again for a fresh recording."
-        : `xctrace exited before stop was called (code=${exitInfo?.code ?? "?"}, ` +
-          `signal=${exitInfo?.signal ?? "?"}); exported the partial trace. ` +
-          "Common causes: attached app terminated, simulator daemon restart. " +
-          "Call native-profiler-start again for a fresh recording.";
-      process.stderr.write(`[native-profiler] ${warning}\n`);
-
-      return { traceFile, exportedFiles, exportDiagnostics: diagnostics, warning };
+    // Wrap each platform's raw host paths as downloadable artifacts. Kept per
+    // branch (rather than one merged object) so the return type preserves the
+    // iOS/Android distinction: iOS always carries exportDiagnostics, Android
+    // never does. The artifact store is resolved only after a successful stop —
+    // the "no active session" error path never needs it.
+    if (api.platform === "ios") {
+      await ensureDeps(["xcrun"]);
+      const ios: IosStopResult = await stopNativeProfilerIos(api);
+      const artifacts = requireArtifacts(ctx);
+      const result: IosStopArtifacts = {
+        traceFile: await registerTrace(artifacts, ios.traceFile),
+        exportedFiles: await exportedFilesToArtifacts(artifacts, ios.exportedFiles),
+        exportDiagnostics: ios.exportDiagnostics,
+      };
+      if (ios.warning) result.warning = ios.warning;
+      return result;
     }
 
-    if (!api.profilingActive || !api.xctraceProcess || !api.traceFile) {
-      throw new Error(
-        "No active native profiling session found. Call native-profiler-start first."
-      );
-    }
-
-    if (api.recordingTimeout) {
-      clearTimeout(api.recordingTimeout);
-      api.recordingTimeout = null;
-    }
-
-    const result = await shutdownChild(api.xctraceProcess, {
-      graceMs: STOP_GRACE_MS,
-      termMs: STOP_TERM_MS,
-      killMs: STOP_KILL_MS,
-    });
-
-    let warning: string | undefined;
-    if (!result.clean) {
-      warning =
-        `xctrace did not respond to SIGINT${result.signalUsed === "SIGKILL" ? "/SIGTERM" : ""}; ` +
-        `${result.signalUsed} was used. Trace bundle may be incomplete.`;
-      process.stderr.write(`[native-profiler] ${warning}\n`);
-    }
-
-    api.profilingActive = false;
-    api.xctracePid = null;
-    api.xctraceProcess = null;
-    api.recordingExitedUnexpectedly = false;
-    api.lastExitInfo = null;
-
-    const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile);
-    api.exportedFiles = exportedFiles;
-
-    const stopResult: StopResult = {
-      traceFile: api.traceFile,
-      exportedFiles,
-      exportDiagnostics: diagnostics,
+    await ensureDeps(["adb"]);
+    const android: AndroidStopResult = await stopNativeProfilerAndroid(api);
+    const artifacts = requireArtifacts(ctx);
+    const result: AndroidStopArtifacts = {
+      traceFile: await registerTrace(artifacts, android.traceFile),
+      exportedFiles: await exportedFilesToArtifacts(artifacts, android.exportedFiles),
     };
-    if (warning) stopResult.warning = warning;
-    return stopResult;
+    if (android.warning) result.warning = android.warning;
+    return result;
   },
 };

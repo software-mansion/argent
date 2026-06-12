@@ -9,9 +9,9 @@ describe("buildToolsServerEnv", () => {
   };
 
   it("passes packaged runtime asset paths and the auth token into the spawned tool-server's env", () => {
-    const env = buildToolsServerEnv(paths, 43123, "fake-token", { TEST_VAR: "1" });
+    const env = buildToolsServerEnv(paths, 43123, { TEST_VAR: "1" }, { token: "fake-token" });
 
-    expect(env.PORT).toBe("43123");
+    expect(env.ARGENT_PORT).toBe("43123");
     expect(env.TEST_VAR).toBe("1");
     expect(env[AUTH_TOKEN_ENV]).toBe("fake-token");
     expect(env.ARGENT_SIMULATOR_SERVER_DIR).toBe(paths.simulatorServerDir);

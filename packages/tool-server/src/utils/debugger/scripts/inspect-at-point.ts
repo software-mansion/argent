@@ -61,11 +61,38 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   if (!hook.renderers || typeof hook.renderers.values !== 'function' || hook.renderers.size === 0) {
     __argent_fail(${noRendererMsg}); return;
   }
-  var renderer = Array.from(hook.renderers.values())[0];
   if (typeof hook.getFiberRoots !== 'function') { __argent_fail(${noRendererMsg}); return; }
-  var roots = hook.getFiberRoots(1);
-  var root = roots && Array.from(roots)[0];
-  if (!root || !root.current) { __argent_fail(${noRootMsg}); return; }
+
+  // Pick the renderer + root that hosts the real app UI. Secondary reconcilers
+  // (react-native-skia, react-native-svg, ...) register their own renderer and
+  // often take id 1, whose roots contain only that library's nodes. Walk every
+  // renderer's roots and keep the (renderer, root) pair with the largest fiber
+  // subtree, then run getInspectorDataForViewAtPoint against that renderer.
+  var renderer = null, root = null, _best = -1;
+  if (hook.renderers && typeof hook.renderers.forEach === 'function') {
+    hook.renderers.forEach(function(_r, _id) {
+      var _rs;
+      try { _rs = hook.getFiberRoots(_id); } catch (e) { return; }
+      if (!_rs) return;
+      _rs.forEach(function(_rt) {
+        var _sz = 0, _stk = [_rt.current];
+        while (_stk.length > 0 && _sz < 20000) {
+          var _nd = _stk.pop();
+          if (!_nd) continue;
+          _sz++;
+          if (_nd.child) _stk.push(_nd.child);
+          if (_nd.sibling) _stk.push(_nd.sibling);
+        }
+        if (_sz > _best) { _best = _sz; renderer = _r; root = _rt; }
+      });
+    });
+  }
+  if (!renderer || !root) {
+    renderer = Array.from(hook.renderers.values())[0];
+    var _legacy = hook.getFiberRoots(1);
+    root = _legacy ? Array.from(_legacy)[0] : null;
+  }
+  if (!renderer || !root || !root.current) { __argent_fail(${noRootMsg}); return; }
 
   var useFabric = typeof nativeFabricUIManager !== 'undefined';
 

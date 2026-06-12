@@ -81,8 +81,7 @@ export async function ensureAndroidDevtoolsInstalled(serial: string): Promise<vo
     const message = err instanceof Error ? err.message : String(err);
     if (/INSTALL_FAILED_UPDATE_INCOMPATIBLE/.test(message)) {
       // Signature mismatch — the device has a same-package APK signed by a
-      // different key. Uninstall the old one and retry. This is the
-      // keystore-rotation footgun the research folder calls out at §5.2.
+      // different key. Uninstall the old one and retry.
       try {
         await runAdb(["-s", serial, "uninstall", manifest.packageName], { timeoutMs: 30_000 });
       } catch {

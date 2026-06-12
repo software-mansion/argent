@@ -3,6 +3,7 @@ import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
+import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 const zodSchema = z.object({
   udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
@@ -30,8 +31,13 @@ const zodSchema = z.object({
 type Params = z.infer<typeof zodSchema>;
 
 interface Result {
-  url: string;
-  path: string;
+  /**
+   * The captured PNG as an artifact handle. The MCP client materializes it to
+   * a local file and renders it inline — no second fetch of the simulator
+   * server's `127.0.0.1` media URL, which is unreachable when the tool-server
+   * is remote.
+   */
+  image: ArtifactHandle;
 }
 
 const capability: ToolCapability = {
@@ -52,9 +58,11 @@ Fails if the simulator-server / emulator backend is not reachable for the given 
   services: (params) => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
-  async execute(services, params, options) {
+  async execute(services, params, ctx) {
     const api = services.simulatorServer as SimulatorServerApi;
-    const signal = options?.signal ?? AbortSignal.timeout(16_000);
-    return httpScreenshot(api, params.rotation, signal, params.scale);
+    const signal = ctx?.signal ?? AbortSignal.timeout(16_000);
+    const { path } = await httpScreenshot(api, params.rotation, signal, params.scale);
+    const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+    return { image };
   },
 };

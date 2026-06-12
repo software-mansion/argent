@@ -1,6 +1,6 @@
 ---
 name: argent-native-profiler
-description: Native profiling for CPU hotspots, UI hangs, and memory leaks. Currently iOS-only (xctrace-backed); Android support (Perfetto/simpleperf) is on the roadmap. Use when diagnosing native-level performance issues.
+description: Native profiling for CPU hotspots, UI hangs, memory issues. iOS via xctrace; Android via Perfetto. Use when diagnosing native-level performance issues.
 ---
 
 ## 1. Tools
@@ -15,8 +15,8 @@ description: Native profiling for CPU hotspots, UI hangs, and memory leaks. Curr
 
 ## 2. Platform Support
 
-- **iOS**: Fully supported. Backend: Xcode Instruments via `xctrace` on a booted simulator or connected device. Requires Xcode command-line tools on PATH.
-- **Android**: Not yet implemented. An Android backend (Perfetto or simpleperf via `adb`) is planned; today `native-profiler-start` rejects Android serials with a clear "iOS-only for now" error.
+- **iOS**: Backend: Xcode Instruments via `xctrace` on a booted simulator or connected device. Requires Xcode command-line tools on PATH. Surfaces CPU hotspots, UI hangs, and memory leaks (instruments `Leaks` table).
+- **Android**: Backend: Perfetto via `adb shell perfetto` + an in-process WASM trace-processor engine. Surfaces CPU hotspots and UI hangs, with per-hang jank reason codes, a main-thread state breakdown with `blocked_function` attribution, and a GC overlap annotation. Also reports an RSS-growth signal for memory pressure; treat it as a hint to confirm manually, not a confirmed leak. The target app must be debuggable or include `<profileable android:shell="true"/>` in its manifest for `perf_sample` callstacks to be captured.
 
 ---
 
@@ -53,12 +53,12 @@ You do not need to derive `app_process` manually — just make sure the app is l
 
 ### Step 1: Start recording
 
-Call `native-profiler-start` with `device_id` (iOS UDID; Android not yet supported). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
+Call `native-profiler-start` with `device_id` (iOS UDID or Android serial). The tool auto-detects the running app and saves the trace to `/tmp/argent-profiler-cwd/` with a timestamped filename.
 Let the user interact with the app or drive interaction via simulator tools (see `argent-device-interact` skill).
 
 ### Step 2: Stop and export
 
-Call `native-profiler-stop` with `device_id`. On iOS this sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML. Check `exportDiagnostics` in the response for any export warnings.
+Call `native-profiler-stop` with `device_id`. iOS sends SIGINT to xctrace, waits for trace packaging, and exports CPU, hangs, and leaks data to XML — check `exportDiagnostics` for any export warnings. Android sends SIGTERM to the on-device perfetto daemon, polls `/proc/<pid>` until it exits, then `adb pull`s the `.pftrace` to the host.
 
 ### Step 3: Analyze
 
