@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as os from "node:os";
+import { setFlag } from "@argent/configuration-core";
 import {
   AUTO_SCREENSHOT_TOOLS,
   AUTO_SCREENSHOT_DELAY_MS_BY_TOOL,
@@ -91,44 +95,43 @@ describe("shouldAutoScreenshot", () => {
 });
 
 // ---------------------------------------------------------------------------
-// autoScreenshotEnabled
+// autoScreenshotEnabled — driven by the off-by-default `disable-auto-screenshot`
+// flag (auto-screenshot is on unless the flag is set).
 // ---------------------------------------------------------------------------
 describe("autoScreenshotEnabled", () => {
-  const original = process.env.ARGENT_AUTO_SCREENSHOT;
+  let tmpHome: string;
+  let tmpProject: string;
+
+  beforeEach(() => {
+    tmpHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-screenshot-home-")));
+    tmpProject = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-screenshot-proj-")));
+    // Marker so resolveProjectRoot stops at tmpProject instead of walking up.
+    fs.writeFileSync(path.join(tmpProject, "package.json"), "{}");
+  });
 
   afterEach(() => {
-    if (original === undefined) delete process.env.ARGENT_AUTO_SCREENSHOT;
-    else process.env.ARGENT_AUTO_SCREENSHOT = original;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.rmSync(tmpProject, { recursive: true, force: true });
   });
 
-  it("returns true when env var is unset", () => {
-    delete process.env.ARGENT_AUTO_SCREENSHOT;
-    expect(autoScreenshotEnabled()).toBe(true);
+  it("is on by default when the flag is unset", () => {
+    expect(autoScreenshotEnabled({ homeDir: tmpHome, cwd: tmpProject })).toBe(true);
   });
 
-  it("returns true when env var is empty string", () => {
-    process.env.ARGENT_AUTO_SCREENSHOT = "";
-    expect(autoScreenshotEnabled()).toBe(true);
+  it("is off when the flag is enabled globally", () => {
+    setFlag("disable-auto-screenshot", true, "global", { homeDir: tmpHome });
+    expect(autoScreenshotEnabled({ homeDir: tmpHome, cwd: tmpProject })).toBe(false);
   });
 
-  it('returns true when env var is "1"', () => {
-    process.env.ARGENT_AUTO_SCREENSHOT = "1";
-    expect(autoScreenshotEnabled()).toBe(true);
+  it("is off when the flag is enabled at project scope", () => {
+    setFlag("disable-auto-screenshot", true, "project", { cwd: tmpProject });
+    expect(autoScreenshotEnabled({ homeDir: tmpHome, cwd: tmpProject })).toBe(false);
   });
 
-  it('returns true when env var is "true" (case-insensitive)', () => {
-    process.env.ARGENT_AUTO_SCREENSHOT = "True";
-    expect(autoScreenshotEnabled()).toBe(true);
-  });
-
-  it('returns false when env var is "0"', () => {
-    process.env.ARGENT_AUTO_SCREENSHOT = "0";
-    expect(autoScreenshotEnabled()).toBe(false);
-  });
-
-  it('returns false when env var is "false"', () => {
-    process.env.ARGENT_AUTO_SCREENSHOT = "false";
-    expect(autoScreenshotEnabled()).toBe(false);
+  it("project scope overrides a global disable (explicit false re-enables)", () => {
+    setFlag("disable-auto-screenshot", true, "global", { homeDir: tmpHome });
+    setFlag("disable-auto-screenshot", false, "project", { cwd: tmpProject });
+    expect(autoScreenshotEnabled({ homeDir: tmpHome, cwd: tmpProject })).toBe(true);
   });
 });
 

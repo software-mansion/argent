@@ -16,6 +16,7 @@ import {
 import {
   adbShell,
   checkSnapshotLoadable,
+  emulatorSupportsFlag,
   hasDefaultBootSnapshot,
   listAndroidDevices,
   listAvds,
@@ -111,6 +112,7 @@ const STAGE_BUDGET = {
   adbRegister: 60_000, // adb devices sees the serial for this AVD
   deviceReady: 180_000, // adb -s wait-for-device returns (state === "device")
   bootCompleted: 300_000, // sys.boot_completed = 1
+  pmReady: 45_000, // pm path android answers (retried; non-fatal on the final attempt)
   firstRealFrame: 90_000, // screencap returns ≥1 non-zero pixel after cold boot
   firstRealFrameHot: 8_000, // tighter budget for snapshot-restore composite —
   // the broken state is sticky (per assertScreencapAlive's docstring), so a
@@ -461,6 +463,13 @@ async function attemptBoot(params: {
   adbRegisterBudgetMs: number;
   deviceReadyBudgetMs: number;
   bootCompletedBudgetMs: number;
+  // How long to keep retrying the PackageManager sanity probe before giving up.
+  pmProbeBudgetMs: number;
+  // Whether a PM probe that never succeeds should tear the emulator down and
+  // throw. True on the hot-boot attempt (so the caller can fall back to a cold
+  // boot); false on the final cold attempt, where a slow-but-alive guest is
+  // returned as booted rather than destroyed.
+  tearDownIfUnready: boolean;
 }): Promise<{ serial: string }> {
   const child = spawn(params.emulatorBinary, params.emulatorArgs, {
     detached: true,
@@ -574,25 +583,64 @@ async function attemptBoot(params: {
 
   // Stage 5: PackageManager sanity — a snapshot restore preserves
   // sys.boot_completed=1 so this is the first real proof the guest is live.
-  // Race against earlyExitError so a crash here surfaces with the actual
-  // signal/exit-code error, not a misleading "PackageManager did not respond".
-  const stage5Racer = createEarlyExitRacer(() => earlyExitError);
-  try {
-    await Promise.race([
-      adbShell(serial, "pm path android", { timeoutMs: 10_000 }),
-      stage5Racer.promise,
-    ]);
-  } catch (err) {
-    await killEmulatorQuietly(serial, child);
-    if (err instanceof Error && /^emulator binary (exited|terminated)/.test(err.message)) {
-      throw err;
+  // `pm` can take tens of seconds to answer on a loaded host or a freshly
+  // wiped image still finishing its first-boot package scan, even though the
+  // device is healthy and already registered with adb — so retry within a
+  // budget instead of failing on a single 10 s window. Each attempt races
+  // earlyExitError so a real crash surfaces with the actual signal/exit-code
+  // error rather than a misleading "PackageManager did not respond".
+  const pmBudgetMs = Math.max(10_000, params.pmProbeBudgetMs);
+  const pmDeadline = Math.min(params.attemptDeadline, Date.now() + pmBudgetMs);
+  let pmReady = false;
+  let pmCrash: Error | null = null;
+  while (Date.now() < pmDeadline && !earlyExitError) {
+    const stage5Racer = createEarlyExitRacer(() => earlyExitError);
+    try {
+      await Promise.race([
+        adbShell(serial, "pm path android", {
+          timeoutMs: Math.max(2_000, Math.min(10_000, pmDeadline - Date.now())),
+        }),
+        stage5Racer.promise,
+      ]);
+      pmReady = true;
+      break;
+    } catch (err) {
+      // A QEMU crash mid-probe is terminal — stop retrying and surface it below.
+      if (err instanceof Error && /^emulator binary (exited|terminated)/.test(err.message)) {
+        pmCrash = err;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1_000));
+    } finally {
+      stage5Racer.cancel();
     }
-    throw new Error(
-      `PackageManager did not respond on ${serial} after boot_completed. ` +
-        `Emulator has been terminated.`
+  }
+
+  if (!pmReady) {
+    // A confirmed crash (mid-probe or via the exit racer) always tears down and
+    // rethrows the real cause.
+    const crash = pmCrash ?? earlyExitError;
+    if (crash) {
+      await killEmulatorQuietly(serial, child);
+      throw crash;
+    }
+    // Tear down only when there is still a fallback left to try (hot boot ->
+    // cold boot). On the final attempt a slow-but-alive guest is NOT a reason
+    // to destroy it: it reached boot_completed and registered with adb, gRPC
+    // screenshots/gestures work without PM, and killing it guarantees failure
+    // with nothing to fall back to.
+    if (params.tearDownIfUnready) {
+      await killEmulatorQuietly(serial, child);
+      throw new Error(
+        `PackageManager did not respond on ${serial} within ${Math.round(pmBudgetMs / 1000)}s ` +
+          `after boot_completed. Emulator has been terminated.`
+      );
+    }
+    process.stderr.write(
+      `[boot-device] ${serial} reached boot_completed and registered with adb, but PackageManager ` +
+        `stayed slow for ${Math.round(pmBudgetMs / 1000)}s; returning it as booted rather than ` +
+        `tearing it down. Give it a few seconds to settle if taps or screenshots misbehave.\n`
     );
-  } finally {
-    stage5Racer.cancel();
   }
 
   return { serial };
@@ -753,6 +801,17 @@ async function bootAndroidImpl(params: {
   }
   const serialsBefore = new Set(existingDevices.map((d) => d.serial));
 
+  // Suppress the emulator's crash-report prompt/uploader on builds that accept
+  // the flag. `-crash-report-mode` is undocumented and only present in newer
+  // emulator releases (~36.x and late 35.x), so feature-detect it via `-help`
+  // rather than pass it blind: an unrecognized flag aborts the launch before
+  // boot. Computed here (after the already-running reuse fast-path returns) so
+  // the `-help` probe is skipped when we are not going to spawn, and shared by
+  // both the hot- and cold-boot arg lists below.
+  const crashReportArgs = (await emulatorSupportsFlag("-crash-report-mode"))
+    ? ["-crash-report-mode", "never"]
+    : [];
+
   // Decide whether to try a hot boot: only if a default_boot snapshot exists
   // on disk AND the emulator's own `-check-snapshot-loadable` probe says the
   // metadata is valid. Probe takes ~1-2 s and catches the two most common
@@ -787,6 +846,7 @@ async function bootAndroidImpl(params: {
         "-no-snapshot-save",
         ...RENDERER_ARGS,
         ...LAUNCH_HARDENING_ARGS,
+        ...crashReportArgs,
       ];
       const hotAttemptDeadline = Math.min(overallDeadline, Date.now() + HOT_BOOT_BUDGET_MS);
       try {
@@ -802,6 +862,10 @@ async function bootAndroidImpl(params: {
           adbRegisterBudgetMs: 30_000,
           deviceReadyBudgetMs: 30_000,
           bootCompletedBudgetMs: 30_000,
+          // Keep the hot path tight: a single ~10 s PM window, and tear down on
+          // failure so we fall through to the cold boot below.
+          pmProbeBudgetMs: 10_000,
+          tearDownIfUnready: true,
         });
         await assertScreencapAlive(result.serial);
         return {
@@ -839,6 +903,7 @@ async function bootAndroidImpl(params: {
     gpuMode,
     ...extraEmulatorArgs,
     ...LAUNCH_HARDENING_ARGS,
+    ...crashReportArgs,
   ];
   let coldResult: { serial: string };
   try {
@@ -851,6 +916,11 @@ async function bootAndroidImpl(params: {
       adbRegisterBudgetMs: STAGE_BUDGET.adbRegister,
       deviceReadyBudgetMs: STAGE_BUDGET.deviceReady,
       bootCompletedBudgetMs: STAGE_BUDGET.bootCompleted,
+      // Final attempt: retry PM for longer, and do NOT tear the emulator down
+      // if it stays slow — a guest that reached boot_completed is usable, and
+      // there is no further fallback to justify destroying it.
+      pmProbeBudgetMs: STAGE_BUDGET.pmReady,
+      tearDownIfUnready: false,
     });
   } catch (err) {
     const base = err instanceof Error ? err.message : String(err);

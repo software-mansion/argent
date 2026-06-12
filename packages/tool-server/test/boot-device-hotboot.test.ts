@@ -711,4 +711,70 @@ describe("boot-device Android — hot-boot with cold-boot fallback", () => {
       vi.useRealTimers();
     }
   });
+
+  it("returns the cold-booted emulator as booted when PackageManager stays slow on the final attempt (does not tear it down)", async () => {
+    // Regression: a slow-but-alive guest (pm never answers within the probe
+    // window even though sys.boot_completed=1 and adb registered the serial)
+    // must NOT be torn down on the final cold attempt — there is no fallback
+    // left and the device is usable via gRPC. Previously a single 10 s pm
+    // probe failure killed the emulator and failed the whole boot.
+    hasSnapshotMock.mockResolvedValue(false); // skip hot boot -> straight to cold
+    let killed = false;
+    let devicesCalls = 0;
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "emulator" && args[0] === "-list-avds")
+        return { stdout: "Pixel_7_API_34\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "version")
+        return { stdout: "Android Debug Bridge\n", stderr: "" };
+      if (cmd === "adb" && args[0] === "start-server") return { stdout: "", stderr: "" };
+      if (cmd === "adb" && args[0] === "devices") {
+        devicesCalls += 1;
+        const emuLine = devicesCalls >= 2 ? "emulator-5554\tdevice\n" : "";
+        return { stdout: `List of devices attached\n${emuLine}`, stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "wait-for-device")
+        return { stdout: "", stderr: "" };
+      if (cmd === "adb" && args[0] === "-s" && args.includes("emu") && args.includes("kill")) {
+        killed = true;
+        return { stdout: "OK\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        const shellCmd = args[3] ?? "";
+        if (shellCmd.startsWith("getprop sys.boot_completed")) return { stdout: "1\n", stderr: "" };
+        if (shellCmd.startsWith("getprop")) return { stdout: "unknown\n", stderr: "" };
+        // pm never answers — simulate the adb call being SIGKILLed on timeout.
+        if (shellCmd === "pm path android")
+          return new Error(
+            "Command failed: adb -s emulator-5554 shell pm path (killed=true signal=SIGKILL)"
+          );
+        // screencap returns a real (non-zero) frame so awaitFirstRealFrame passes.
+        if (shellCmd.startsWith("screencap")) return { stdout: "1\n", stderr: "" };
+        return { stdout: "\n", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    vi.useFakeTimers();
+    try {
+      const tool = createBootDeviceTool(registry);
+      const resultP = tool.execute!({}, { avdName: "Pixel_7_API_34" });
+      // Drive past the ~45 s PM-probe retry budget instantly. The guest is
+      // alive (screencap returns a real frame, so awaitFirstRealFrame passes),
+      // so the final cold attempt returns it as booted instead of killing it.
+      await vi.advanceTimersByTimeAsync(50_000);
+      const result = await resultP;
+
+      expect(result).toMatchObject({
+        platform: "android",
+        serial: "emulator-5554",
+        booted: true,
+      });
+      // The healthy-but-slow guest must be left running, not killed.
+      expect(killed).toBe(false);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawnMock.mock.calls[0]![1]).toContain("-no-snapshot-load");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

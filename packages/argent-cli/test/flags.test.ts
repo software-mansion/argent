@@ -2,20 +2,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { disable, enable, flags as flagsCmd } from "../src/flags.js";
 import {
-  disable,
-  enable,
-  flags as flagsCmd,
-  FLAG_REGISTRY,
-  getFlagDefinition,
   getFlagsPath,
   isFlagEnabled,
   readFlags,
-  resolveProjectRoot,
   setFlag,
-  unsetFlag,
   type FlagDefinition,
-} from "../src/flags.js";
+} from "@argent/configuration-core";
 
 // Hermetic registry for the CLI tests so they never depend on which flags ship
 // in the production FLAG_REGISTRY. enable()/flags() take an injectable registry
@@ -38,10 +32,6 @@ let tmpProject: string;
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 let originalCwd: string;
-
-function readJsonFile(filePath: string): unknown {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
 
 beforeEach(() => {
   // realpath unwraps macOS's /var → /private/var tmpdir symlink so the path
@@ -70,216 +60,6 @@ afterEach(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
   fs.rmSync(tmpProject, { recursive: true, force: true });
 });
-
-describe("getFlagsPath", () => {
-  it("defaults global path under ~/.argent/flags.json", () => {
-    expect(getFlagsPath("global")).toBe(path.join(tmpHome, ".argent", "flags.json"));
-  });
-
-  it("project path lives at <project-root>/.argent/flags.json", () => {
-    expect(getFlagsPath("project")).toBe(path.join(tmpProject, ".argent", "flags.json"));
-  });
-
-  it("respects explicit cwd / homeDir overrides", () => {
-    const altHome = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "argent-flags-alt-home-"))
-    );
-    const altProj = fs.realpathSync(
-      fs.mkdtempSync(path.join(os.tmpdir(), "argent-flags-alt-proj-"))
-    );
-    fs.writeFileSync(path.join(altProj, "package.json"), "{}");
-    try {
-      expect(getFlagsPath("global", { homeDir: altHome })).toBe(
-        path.join(altHome, ".argent", "flags.json")
-      );
-      expect(getFlagsPath("project", { cwd: altProj })).toBe(
-        path.join(altProj, ".argent", "flags.json")
-      );
-    } finally {
-      fs.rmSync(altHome, { recursive: true, force: true });
-      fs.rmSync(altProj, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("resolveProjectRoot", () => {
-  it("walks up to the nearest marker", () => {
-    const nested = path.join(tmpProject, "a", "b", "c");
-    fs.mkdirSync(nested, { recursive: true });
-    expect(resolveProjectRoot(nested)).toBe(tmpProject);
-  });
-
-  it("returns startDir when no marker exists in ancestry", () => {
-    // A bare tmpdir guaranteed to have no project markers between it and /
-    const bare = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "argent-flags-noroot-")));
-    try {
-      expect(resolveProjectRoot(bare)).toBe(bare);
-    } finally {
-      fs.rmSync(bare, { recursive: true, force: true });
-    }
-  });
-
-  it("treats existing .argent as a marker", () => {
-    fs.rmSync(path.join(tmpProject, "package.json"));
-    const argentDir = path.join(tmpProject, ".argent");
-    fs.mkdirSync(argentDir);
-    const nested = path.join(tmpProject, "sub");
-    fs.mkdirSync(nested);
-    expect(resolveProjectRoot(nested)).toBe(tmpProject);
-  });
-
-  it("treats existing .git as a marker", () => {
-    fs.rmSync(path.join(tmpProject, "package.json"));
-    fs.mkdirSync(path.join(tmpProject, ".git"));
-    const nested = path.join(tmpProject, "sub");
-    fs.mkdirSync(nested);
-    expect(resolveProjectRoot(nested)).toBe(tmpProject);
-  });
-});
-
-describe("setFlag / unsetFlag / readFlags", () => {
-  it("writes the flag to disk and reads it back", () => {
-    setFlag("alpha", true, "global");
-    expect(readFlags("global")).toEqual({ alpha: true });
-
-    const file = readJsonFile(getFlagsPath("global"));
-    expect(file).toEqual({ flags: { alpha: true } });
-  });
-
-  it("preserves other flags when setting one", () => {
-    setFlag("alpha", true, "global");
-    setFlag("beta", false, "global");
-    expect(readFlags("global")).toEqual({ alpha: true, beta: false });
-  });
-
-  it("overwrites a flag with a new value", () => {
-    setFlag("alpha", true, "global");
-    setFlag("alpha", false, "global");
-    expect(readFlags("global")).toEqual({ alpha: false });
-  });
-
-  it("unsetFlag removes the entry and reports whether it existed", () => {
-    setFlag("alpha", true, "global");
-    setFlag("beta", true, "global");
-    expect(unsetFlag("alpha", "global")).toBe(true);
-    expect(readFlags("global")).toEqual({ beta: true });
-    expect(unsetFlag("missing", "global")).toBe(false);
-  });
-
-  it("removes the file (and empty .argent dir) when the last flag is unset", () => {
-    setFlag("alpha", true, "global");
-    unsetFlag("alpha", "global");
-    expect(fs.existsSync(getFlagsPath("global"))).toBe(false);
-    expect(fs.existsSync(path.join(tmpHome, ".argent"))).toBe(false);
-  });
-
-  it("keeps the .argent dir when sibling state lives next to flags.json", () => {
-    setFlag("alpha", true, "global");
-    const sibling = path.join(tmpHome, ".argent", "tool-server.json");
-    fs.writeFileSync(sibling, "{}");
-    unsetFlag("alpha", "global");
-    expect(fs.existsSync(getFlagsPath("global"))).toBe(false);
-    expect(fs.existsSync(sibling)).toBe(true);
-    expect(fs.existsSync(path.join(tmpHome, ".argent"))).toBe(true);
-  });
-
-  it("project + global live in separate files", () => {
-    setFlag("alpha", true, "global");
-    setFlag("alpha", false, "project");
-    expect(readFlags("global")).toEqual({ alpha: true });
-    expect(readFlags("project")).toEqual({ alpha: false });
-  });
-
-  it("recovers from malformed JSON by treating storage as empty", () => {
-    const file = getFlagsPath("global");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, "not json");
-    expect(readFlags("global")).toEqual({});
-    setFlag("alpha", true, "global");
-    expect(readFlags("global")).toEqual({ alpha: true });
-  });
-
-  it("ignores non-boolean values in the stored flags object", () => {
-    const file = getFlagsPath("global");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      file,
-      JSON.stringify({ flags: { real: true, bogus: "yes", numeric: 1, nested: {} } })
-    );
-    expect(readFlags("global")).toEqual({ real: true });
-  });
-
-  it("treats missing .argent dir as empty without throwing", () => {
-    expect(readFlags("global")).toEqual({});
-    expect(readFlags("project")).toEqual({});
-  });
-
-  it("writes are atomic — no .tmp leftover in the .argent dir", () => {
-    setFlag("alpha", true, "global");
-    setFlag("beta", true, "global");
-    const dir = path.join(tmpHome, ".argent");
-    const leftovers = fs.readdirSync(dir).filter((f) => f.includes(".tmp"));
-    expect(leftovers).toEqual([]);
-  });
-});
-
-describe("isFlagEnabled", () => {
-  it("returns false for an unknown flag", () => {
-    expect(isFlagEnabled("unknown")).toBe(false);
-  });
-
-  it("project value overrides global value (explicit false masks global true)", () => {
-    setFlag("alpha", true, "global");
-    setFlag("alpha", false, "project");
-    expect(isFlagEnabled("alpha")).toBe(false);
-
-    setFlag("beta", false, "global");
-    setFlag("beta", true, "project");
-    expect(isFlagEnabled("beta")).toBe(true);
-  });
-
-  it("falls through to global when project does not set it", () => {
-    setFlag("alpha", true, "global");
-    expect(isFlagEnabled("alpha")).toBe(true);
-  });
-
-  it("falls through to project-only when global is unset", () => {
-    setFlag("alpha", true, "project");
-    expect(isFlagEnabled("alpha")).toBe(true);
-  });
-});
-
-describe("prototype-named flags (Object.prototype keys)", () => {
-  // FLAG_NAME_RE allows names like "toString"/"constructor"/"valueOf", which
-  // also exist on Object.prototype. A naive `name in obj` check would treat
-  // these as set (returning a truthy prototype member) even when storage is
-  // empty — these guard that hasOwn semantics are used throughout.
-  const protoNames = ["toString", "constructor", "valueOf", "hasOwnProperty"];
-
-  for (const name of protoNames) {
-    it(`isFlagEnabled("${name}") is false (and a real boolean) when unset`, () => {
-      const result = isFlagEnabled(name);
-      expect(result).toBe(false);
-      expect(typeof result).toBe("boolean");
-    });
-
-    it(`unsetFlag("${name}") on storage without it returns false and is a no-op`, () => {
-      setFlag("real", true, "global");
-      expect(unsetFlag(name, "global")).toBe(false);
-      expect(readFlags("global")).toEqual({ real: true });
-    });
-
-    it(`enable/disable round trip works for a flag literally named "${name}"`, () => {
-      setFlag(name, true, "global");
-      expect(readFlags("global")).toEqual({ [name]: true });
-      expect(isFlagEnabled(name)).toBe(true);
-      expect(unsetFlag(name, "global")).toBe(true);
-      expect(isFlagEnabled(name)).toBe(false);
-    });
-  }
-});
-
-// ── CLI ──────────────────────────────────────────────────────────────────────
 
 interface CapturedConsole {
   stdout: string;
@@ -410,6 +190,20 @@ describe("enable / disable CLI", () => {
     expect(readFlags("global")).toEqual({});
   });
 
+  it("--help lists every available flag with its description", () => {
+    const out = captureConsole(() => enable(["--help"], TEST_REGISTRY));
+    expect(out.stdout).toContain("Available flags:");
+    expect(out.stdout).toContain("my-feature-flag");
+    expect(out.stdout).toContain("Primary test flag.");
+    expect(out.stdout).toContain("proj-flag");
+    expect(out.stdout).toContain("Project-scoped test flag.");
+    // -h is an alias for --help and shows the same listing.
+    const short = captureConsole(() => disable(["-h"], TEST_REGISTRY));
+    expect(short.stdout).toContain("Available flags:");
+    expect(short.stdout).toContain("Listing flag A.");
+    expect(readFlags("global")).toEqual({});
+  });
+
   it("enable → disable round trip leaves a clean tree (no stub entry)", () => {
     captureConsole(() => enable(["x"], TEST_REGISTRY));
     captureConsole(() => disable(["x"]));
@@ -425,9 +219,10 @@ describe("enable / disable CLI", () => {
     expect(readFlags("global")).toEqual({});
   });
 
-  it("rejects every enable when the (default) registry is empty", () => {
-    // No registry argument → production FLAG_REGISTRY, which ships empty.
-    const out = expectExit(2, () => enable(["anything"]));
+  it("rejects enabling the legacy auto-shutdown flag name (never wired)", () => {
+    // ARGENT_AUTO_SHUTDOWN stayed an env var (renamed), so `auto-shutdown` was
+    // never added to the registry — `argent enable auto-shutdown` must fail.
+    const out = expectExit(2, () => enable(["auto-shutdown"]));
     expect(out.stderr).toContain("Unknown feature flag");
     expect(readFlags("global")).toEqual({});
   });
@@ -442,16 +237,6 @@ describe("enable / disable CLI", () => {
 });
 
 describe("flags (list) CLI", () => {
-  it("prints a friendly message when the registry is empty", () => {
-    // Pass an explicit empty registry: on this branch the default FLAG_REGISTRY
-    // ships the variant-selection flag (see the next test), so the empty-state
-    // message only appears when the registry is genuinely empty.
-    const out = captureConsole(() => flagsCmd([], []));
-    expect(out.stdout).toContain("No feature flags are defined.");
-    expect(out.stdout).toContain(getFlagsPath("global"));
-    expect(out.stdout).toContain(getFlagsPath("project"));
-  });
-
   it("ships the variant-selection flag in the production registry", () => {
     // Guards the gate: setup-registry.ts reads isFlagEnabled("variant-selection"),
     // so that exact name must stay registered (and discoverable via `argent flags`).
@@ -510,37 +295,19 @@ describe("flags (list) CLI", () => {
     const out = captureConsole(() => flagsCmd(["--help"]));
     expect(out.stdout).toContain("Usage: argent flags");
   });
-});
 
-describe("FLAG_REGISTRY / getFlagDefinition", () => {
-  it("getFlagDefinition returns the entry or undefined", () => {
-    expect(getFlagDefinition("my-feature-flag", TEST_REGISTRY)?.description).toBe(
-      "Primary test flag."
-    );
-    expect(getFlagDefinition("nope", TEST_REGISTRY)).toBeUndefined();
-  });
-
-  it("every shipped registry entry has a non-empty name and description", () => {
-    // Guards against a half-filled entry being added to the production registry.
-    for (const def of FLAG_REGISTRY) {
-      expect(def.name).toMatch(/^[a-zA-Z][a-zA-Z0-9._-]*$/);
-      expect(def.description.trim().length).toBeGreaterThan(0);
-    }
+  it("--help lists every available flag with its description", () => {
+    const out = captureConsole(() => flagsCmd(["--help"], TEST_REGISTRY));
+    expect(out.stdout).toContain("Available flags:");
+    expect(out.stdout).toContain("my-feature-flag");
+    expect(out.stdout).toContain("Primary test flag.");
+    expect(out.stdout).toContain("Listing flag B.");
   });
 });
 
 describe("deprecating a flag (removed from FLAG_REGISTRY)", () => {
   // A flag that was enabled before being deprecated still lives in flags.json
   // but is absent from the registry. Loading/reading it must never throw.
-
-  it("reading a deprecated stored flag never throws and returns its value", () => {
-    setFlag("deprecated-flag", true, "global");
-    setFlag("deprecated-false", false, "project");
-    // Neither name is in any registry — these are pure storage reads.
-    expect(readFlags("global")).toEqual({ "deprecated-flag": true });
-    expect(isFlagEnabled("deprecated-flag")).toBe(true);
-    expect(isFlagEnabled("deprecated-false")).toBe(false);
-  });
 
   it("`argent flags` lists a deprecated stored flag under 'unrecognized' (no throw)", () => {
     setFlag("deprecated-flag", true, "global");

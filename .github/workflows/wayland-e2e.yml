@@ -181,7 +181,7 @@ jobs:
           mkdir -p ~/.argent
           : > ~/.argent/tool-server.log
           cd packages/tool-server
-          nohup env PORT=3033 npx ts-node src/index.ts start \
+          nohup env ARGENT_PORT=3033 npx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
           echo "tool-server pid=$!"
           # Wait for /tools to respond.

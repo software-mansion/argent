@@ -1,5 +1,6 @@
 import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
+import type { ArtifactStore } from "./artifacts";
 
 // ── Service Types ──
 
@@ -58,6 +59,19 @@ export type ServiceRef = string | { urn: string; options?: Record<string, unknow
 /** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
   signal?: AbortSignal;
+}
+
+/**
+ * What a tool's `execute` receives as its third argument. The registry builds
+ * this for every invocation: it carries the caller's {@link InvokeToolOptions}
+ * (e.g. `signal`) plus cross-cutting context the registry owns — currently the
+ * {@link ArtifactStore}, so any tool that produces a host file can register it
+ * (`ctx.artifacts.register(path)`) without declaring a per-tool service. The
+ * registry always populates `artifacts`; it is only ever absent when `execute`
+ * is called directly (bypassing `invokeTool`), e.g. in a unit test.
+ */
+export interface ToolContext extends InvokeToolOptions {
+  artifacts: ArtifactStore;
 }
 
 // ── Device + Capability Types ──
@@ -173,11 +187,7 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
   requires?: ToolDependency[];
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
-  execute(
-    services: Record<string, unknown>,
-    params: TParams,
-    options?: InvokeToolOptions
-  ): Promise<TResult>;
+  execute(services: Record<string, unknown>, params: TParams, ctx?: ToolContext): Promise<TResult>;
 }
 
 export interface ToolRecord {

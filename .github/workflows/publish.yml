@@ -36,8 +36,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download signed native binaries (dylibs + ax-service)
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
         run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Perfetto trace-processor WASM artifacts
+        run: bash scripts/download-trace-processor.sh "${{ steps.binaries_tag.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -75,6 +80,15 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
+      - run: test -d packages/argent/assets/queries
+      - run: test -f packages/argent/assets/manifest.json
+      - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
+      - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
+      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test -f packages/argent/assets/trace-processor/LICENSE
+      - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
+      - run: ls packages/argent/bin/argent-android-devtools-*.apk
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent

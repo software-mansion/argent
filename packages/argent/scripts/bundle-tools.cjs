@@ -6,9 +6,11 @@ const fs = require("fs");
 const path = require("path");
 
 const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
+
+// esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
-const NATIVE_DEVTOOLS_ENTRY = path.resolve(
+const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-ios/src/index.ts"
 );
@@ -24,21 +26,28 @@ const INSTALLER_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-installer/
 const MCP_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-mcp/src/index.ts");
 const CLI_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-cli/src/index.ts");
 const PREVIEW_WINDOW_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/preview-window/src/main.ts");
+const CONFIGURATION_ENTRY = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/configuration-core/src/index.ts"
+);
 const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
 const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
-// Shared aliases so each bundle resolves workspace deps from source.
+// Shared aliases so each bundle resolves workspace deps from source. Resolving
+// from source (rather than each package's compiled dist/) keeps the bundle
+// independent of build order/freshness.
 const ALIASES = {
   "@argent/registry": REGISTRY_ENTRY,
-  "@argent/native-devtools-ios": NATIVE_DEVTOOLS_ENTRY,
+  "@argent/native-devtools-ios": NATIVE_DEVTOOLS_IOS_ENTRY,
   "@argent/native-devtools-android": NATIVE_DEVTOOLS_ANDROID_ENTRY,
   "@argent/tools-client": TOOLS_CLIENT_ENTRY,
   "@argent/installer": INSTALLER_ENTRY,
   "@argent/mcp": MCP_ENTRY,
   "@argent/cli": CLI_ENTRY,
+  "@argent/configuration-core": CONFIGURATION_ENTRY,
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which
@@ -54,6 +63,8 @@ const MAIN_FIELDS = ["module", "main"];
 const ESM_REQUIRE_BANNER = {
   js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
 };
+
+// ── Asset source/destination paths ─────────────────────────────────────────
 // Source layout mirrors what `scripts/download-simulator-server.sh` writes:
 // platform-keyed subdirectories of bin/, each containing one simulator-server
 // binary. ax-service is macOS-only (it spawns inside an iOS Simulator), so it
@@ -65,6 +76,17 @@ const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
 const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux"];
+// Generated module pinning the Perfetto version that stamps the bundled
+// trace_processor.wasm. esbuild inlines it into every bundle via the
+// @argent/native-devtools-android alias.
+const BUNDLED_META_DEST = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/src/bundled-meta.ts"
+);
+const PERFETTO_VERSION_FILE = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/argent-private/packages/native-devtools-android/PERFETTO_VERSION"
+);
 const DYLIBS_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-ios/dylibs");
 const DYLIBS_DEST = path.resolve(__dirname, "../dylibs");
 const SKILLS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/skills");
@@ -73,14 +95,343 @@ const RULES_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/rules");
 const RULES_DEST = path.resolve(__dirname, "../rules");
 const AGENTS_SRC = path.resolve(WORKSPACE_ROOT, "packages/skills/agents");
 const AGENTS_DEST = path.resolve(__dirname, "../agents");
+const QUERIES_SRC = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android/assets/queries");
+const QUERIES_DEST = path.resolve(__dirname, "../assets/queries");
+const TRACE_PROCESSOR_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/assets/trace-processor"
+);
+const TRACE_PROCESSOR_DEST = path.resolve(__dirname, "../assets/trace-processor");
 const ANDROID_PKG_DIR = path.resolve(WORKSPACE_ROOT, "packages/native-devtools-android");
-const ANDROID_MANIFEST_SRC = path.join(ANDROID_PKG_DIR, "manifest.json");
-const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../manifest.json");
-const ANDROID_APK_DIST_SRC = path.join(ANDROID_PKG_DIR, "dist");
-const ANDROID_APK_DEST_DIR = path.resolve(__dirname, "../dist");
+const ANDROID_MANIFEST_SRC = path.join(ANDROID_PKG_DIR, "assets/manifest.json");
+const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../assets/manifest.json");
+const ANDROID_APK_SRC_DIR = path.join(ANDROID_PKG_DIR, "bin");
+const UI_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/index.html");
+const UI_DEST = path.resolve(__dirname, "../dist/preview-ui/index.html");
+const UI_THEME_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/theme.css");
+const UI_THEME_DEST = path.resolve(__dirname, "../dist/preview-ui/theme.css");
+const TRACE_TEMPLATE_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/utils/ios-profiler/Argent.tracetemplate"
+);
+const TRACE_TEMPLATE_DEST = path.resolve(__dirname, "../assets/Argent.tracetemplate");
+const TRACECFG_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-android/assets/argent.tracecfg.pbtxt"
+);
+const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
 
-// Purge artifact directories so stale files don't survive across builds.
-for (const dir of [BIN_DIR, DYLIBS_DEST, SKILLS_DEST, RULES_DEST, AGENTS_DEST]) {
+// ── Asset table ─────────────────────────────────────────────────────────────
+// Declarative copy plan. Each entry is copied (or its absence reported) by
+// copyAsset() below. `required: true` throws on a missing source; otherwise
+// copyAsset warns and skips. The per-asset required/optional decision is the
+// whole point of keeping this table explicit.
+//
+//   kind        "file" (copyFileSync) | "dir" (cpSync recursive)
+//   src/dest    absolute source and destination paths
+//   mode        optional chmod applied to the copied file
+//   required    throw (true) vs warn (false) when src is missing
+//   copiedLabel text after "✓ Copied " on success (count is prefixed if set)
+//   missLabel   subject of the "<X> not found at …" miss message
+//   countExt    count src entries ending in this ext, shown before copiedLabel
+//   count       custom counter (src) => number, takes precedence over countExt
+//   hint        extra guidance appended to the throw message (required assets)
+/**
+ * @typedef {Object} Asset
+ * @property {"file"|"dir"} kind
+ * @property {string} src
+ * @property {string} dest
+ * @property {boolean} required
+ * @property {string} copiedLabel
+ * @property {string} missLabel
+ * @property {number} [mode]
+ * @property {string} [countExt]
+ * @property {(src: string) => number} [count]
+ * @property {string} [hint]
+ */
+/** @type {Asset[]} */
+const ASSETS = [
+  // iOS ax-service binary (macOS-only — runs inside an iOS Simulator).
+  {
+    kind: "file",
+    src: AX_BIN_SRC,
+    dest: AX_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "ax-service binary",
+    missLabel: "ax-service binary",
+  },
+  // iOS ax-service TCP variant. Best-effort: only present when the TCP transport was built.
+  {
+    kind: "file",
+    src: AX_TCP_BIN_SRC,
+    dest: AX_TCP_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "ax-service (tcp) binary",
+    missLabel: "ax-service (tcp) binary",
+  },
+  // Android host-side Perfetto trace processor: the third-party WASM engine
+  // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).
+  // wasm-trace-processor.ts resolves these via
+  // `path.join(__dirname, "..", "assets", "trace-processor")` — in the bundled
+  // tool-server.cjs that is `<pkg>/assets/trace-processor/`, i.e. this exact
+  // destination. Not committed; fetched + sha256-verified at pack time by
+  // scripts/download-trace-processor.sh, so this copy is purely local.
+  {
+    kind: "dir",
+    src: TRACE_PROCESSOR_SRC,
+    dest: TRACE_PROCESSOR_DEST,
+    required: true,
+    copiedLabel: "trace-processor WASM asset(s)",
+    missLabel: "trace-processor WASM assets directory",
+    hint: "Run: bash scripts/download-trace-processor.sh (fetches from argent-private-releases)",
+  },
+  // iOS native devtools dylibs so the packaged tool-server can inject them at runtime.
+  {
+    kind: "dir",
+    src: DYLIBS_SRC,
+    dest: DYLIBS_DEST,
+    required: false,
+    copiedLabel: "native dylib(s)",
+    missLabel: "Native devtools dylibs",
+    countExt: ".dylib",
+  },
+  // Android helper manifest.json. Required: helperManifest()/bundledHelperApkPath()
+  // read it at runtime, and the version-stamped APK filename is derived from its
+  // versionName (see the dedicated APK block after the copy loop).
+  {
+    kind: "file",
+    src: ANDROID_MANIFEST_SRC,
+    dest: ANDROID_MANIFEST_DEST,
+    required: true,
+    copiedLabel: "Android manifest",
+    missLabel: "Android manifest",
+    hint: "Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)",
+  },
+  // Preview UI (@argent/ui) next to the bundled tool-server so that tool-server's
+  // /preview/ endpoint can locate it via __dirname lookup. index.html AND its
+  // externalised theme.css must both ship — a partial copy would 404
+  // /preview/theme.css and serve an unstyled UI.
+  {
+    kind: "file",
+    src: UI_SRC,
+    dest: UI_DEST,
+    required: false,
+    copiedLabel: "preview UI",
+    missLabel: "Preview UI",
+  },
+  {
+    kind: "file",
+    src: UI_THEME_SRC,
+    dest: UI_THEME_DEST,
+    required: false,
+    copiedLabel: "preview UI theme.css",
+    missLabel: "Preview UI theme.css",
+  },
+  // Argent.tracetemplate so native-profiler-start (iOS) can find it at runtime.
+  {
+    kind: "file",
+    src: TRACE_TEMPLATE_SRC,
+    dest: TRACE_TEMPLATE_DEST,
+    required: false,
+    copiedLabel: "Argent.tracetemplate",
+    missLabel: "Argent.tracetemplate",
+  },
+  // argent.tracecfg.pbtxt so the Android profiler capture step can find it at
+  // runtime. capture.ts resolves the path via @argent/native-devtools-android's
+  // `traceConfigPath()`, which does
+  // `path.join(__dirname, "..", "assets", "argent.tracecfg.pbtxt")` — in the
+  // bundled tool-server.cjs that is `<pkg>/assets/argent.tracecfg.pbtxt`,
+  // i.e. this exact destination.
+  {
+    kind: "file",
+    src: TRACECFG_SRC,
+    dest: TRACECFG_DEST,
+    required: true,
+    copiedLabel: "argent.tracecfg.pbtxt",
+    missLabel: "argent.tracecfg.pbtxt",
+    hint: "This file is required for Android native profiling.",
+  },
+  // Android profiler SQL queries. run-tp.ts resolves QUERY_DIR via
+  // `path.join(__dirname, "..", "assets", "queries")` — in the bundled
+  // tool-server.cjs that is `<pkg>/assets/queries/`, i.e. this exact destination.
+  {
+    kind: "dir",
+    src: QUERIES_SRC,
+    dest: QUERIES_DEST,
+    required: true,
+    copiedLabel: "SQL queries",
+    missLabel: "Android profiler queries directory",
+    countExt: ".sql",
+    hint: "This directory is required for native-profiler-analyze on Android.",
+  },
+  // Skills shipped on npm. Mirrors the full directory structure from
+  // packages/skills/skills/ (e.g. metro-debugger/SKILL.md,
+  // metro-debugger/references/source-maps.md, …).
+  {
+    kind: "dir",
+    src: SKILLS_SRC,
+    dest: SKILLS_DEST,
+    required: false,
+    copiedLabel: "skill(s)",
+    missLabel: "Skills source",
+    count: (src) =>
+      fs.readdirSync(src, { withFileTypes: true }).filter((e) => e.isDirectory()).length,
+  },
+  // Rules shipped on npm.
+  {
+    kind: "dir",
+    src: RULES_SRC,
+    dest: RULES_DEST,
+    required: false,
+    copiedLabel: "rule(s)",
+    missLabel: "Rules source",
+    countExt: ".md",
+  },
+  // Agents shipped on npm.
+  {
+    kind: "dir",
+    src: AGENTS_SRC,
+    dest: AGENTS_DEST,
+    required: false,
+    copiedLabel: "agent(s)",
+    missLabel: "Agents source",
+    count: (src) =>
+      fs
+        .readdirSync(src, { withFileTypes: true })
+        .filter((e) => e.isFile() && e.name.endsWith(".md")).length,
+  },
+];
+
+/**
+ * Bundle a single entry point with esbuild and log the result.
+ * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string, external?: string[] }} opts
+ */
+function buildBundle({ entry, out, format, label, external = [] }) {
+  esbuild.buildSync({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    target: "node22",
+    format,
+    outfile: out,
+    alias: ALIASES,
+    mainFields: MAIN_FIELDS,
+    // ESM bundles need the require() shim (for inlined CJS deps) and must keep
+    // node: builtins external; CJS bundles only externalise what the caller
+    // passes (e.g. `electron` — see the tools-server call site).
+    ...(format === "esm"
+      ? { banner: ESM_REQUIRE_BANNER, external: [...new Set(["node:*", ...external])] }
+      : external.length > 0
+        ? { external }
+        : {}),
+  });
+  console.log(`✓ Bundled ${label} → ${path.relative(process.cwd(), out)}`);
+}
+
+/**
+ * Resolve the count shown in the success line, or null when the asset isn't
+ * counted (`count` takes precedence over `countExt`).
+ * @param {Asset} a
+ * @returns {number | null}
+ */
+function assetCount(a) {
+  if (a.count) return a.count(a.src);
+  if (a.countExt) {
+    const ext = a.countExt;
+    return fs.readdirSync(a.src).filter((f) => f.endsWith(ext)).length;
+  }
+  return null;
+}
+
+/**
+ * Copy one ASSETS entry, throwing or warning per its `required` flag.
+ * @param {Asset} a
+ */
+function copyAsset(a) {
+  if (!fs.existsSync(a.src)) {
+    if (a.required) {
+      throw new Error(`${a.missLabel} not found at ${a.src}.` + (a.hint ? `\n${a.hint}` : ""));
+    }
+    console.warn(`⚠ ${a.missLabel} not found at ${a.src} — skipping copy`);
+    return;
+  }
+
+  if (a.kind === "dir") {
+    fs.cpSync(a.src, a.dest, { recursive: true });
+  } else {
+    fs.mkdirSync(path.dirname(a.dest), { recursive: true });
+    fs.copyFileSync(a.src, a.dest);
+  }
+  if (a.mode != null) fs.chmodSync(a.dest, a.mode);
+
+  const rel = path.relative(process.cwd(), a.dest);
+  const count = assetCount(a);
+  if (count != null) {
+    console.log(`✓ Copied ${count} ${a.copiedLabel} → ${rel}`);
+  } else {
+    console.log(`✓ Copied ${a.copiedLabel} → ${rel}`);
+  }
+}
+
+/**
+ * Read the pinned Perfetto version from argent-private's PERFETTO_VERSION (the
+ * same file CI builds the engine against), falling back to the committed
+ * constant in bundled-meta.ts when the submodule isn't checked out (dev/source
+ * builds). Stamps the bundled trace_processor.wasm so the marker and the engine
+ * always agree.
+ */
+function readPerfettoVersion() {
+  try {
+    const v = fs.readFileSync(PERFETTO_VERSION_FILE, "utf8").trim();
+    if (v) return v;
+  } catch {
+    /* submodule absent — fall through to committed constant */
+  }
+  try {
+    const existing = fs.readFileSync(BUNDLED_META_DEST, "utf8");
+    const m = existing.match(/PERFETTO_VERSION\s*=\s*"([^"]+)"/);
+    if (m) return m[1];
+  } catch {
+    /* committed file missing — final fallback below */
+  }
+  return "v55.3";
+}
+
+/**
+ * Regenerate bundled-meta.ts so it pins the Perfetto version that stamps the
+ * bundled trace_processor.wasm. The version comes from argent-private's
+ * PERFETTO_VERSION (or the committed fallback). Since the engine is now a single
+ * cross-platform WASM artifact, there is no per-platform marker to emit.
+ */
+function generateBundledMeta() {
+  const version = readPerfettoVersion();
+  const content = `// GENERATED at pack time by packages/argent/scripts/bundle-tools.cjs.
+//
+// Committed with a sane fallback value so dev / source builds (and the
+// submodule-less checkout) still compile; the pack step overwrites this file
+// with the Perfetto version pinned in argent-private's PERFETTO_VERSION. esbuild
+// inlines it into every published bundle. The trace-processor engine is now a
+// single cross-platform WASM artifact (no per-platform binary), fetched +
+// sha256-verified at pack time, so this version is purely informational — it
+// stamps the bundled \`trace_processor.wasm\` — and JS<->engine version skew is
+// structurally impossible.
+
+export const PERFETTO_VERSION = "${version}";
+`;
+  fs.writeFileSync(BUNDLED_META_DEST, content);
+  console.log(`✓ Generated bundled-meta.ts (perfetto=${version})`);
+}
+
+// Generate the bundled marker BEFORE esbuild runs, so the constants get inlined
+// into tool-server.cjs / installer.mjs / etc.
+generateBundledMeta();
+
+// Purge artifact directories so stale files don't survive across builds. Derived
+// from the table (every dir-kind destination, plus BIN_DIR) so it can't drift.
+const PURGE_DIRS = [BIN_DIR, ...ASSETS.filter((a) => a.kind === "dir").map((a) => a.dest)];
+for (const dir of PURGE_DIRS) {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -94,24 +445,16 @@ const DISPATCHER_DEST = path.resolve(BIN_DIR, "argent-simulator-server.cjs");
 fs.copyFileSync(DISPATCHER_SRC, DISPATCHER_DEST);
 fs.chmodSync(DISPATCHER_DEST, 0o755);
 
-// The Android helper artifacts live alongside the bundles (manifest at the
-// package root, APK inside the shared dist/ folder) so they aren't covered
-// by the per-directory purge above. Removing them explicitly keeps a
-// missing-APK rebuild from leaving a stale manifest behind that would later
-// fool helperManifest() into pointing at an APK that's no longer present.
+// The Android manifest lives outside PURGE_DIRS (it's a single file under
+// assets/), so remove it explicitly so a stale manifest can't fool
+// helperManifest() into pointing at an APK that's no longer present.
+// The APK itself goes into BIN_DIR which is already fully purged above.
 fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
-if (fs.existsSync(ANDROID_APK_DEST_DIR)) {
-  for (const entry of fs.readdirSync(ANDROID_APK_DEST_DIR)) {
-    if (/^argent-android-devtools-.*\.apk$/.test(entry)) {
-      fs.rmSync(path.join(ANDROID_APK_DEST_DIR, entry), { force: true });
-    }
-  }
-}
 
 // Ensure dist/ exists
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
-// Bundle the tools server.
+// Bundle the tools server (CJS — the dispatcher loads it via require()).
 //
 // `electron` MUST stay external. It is a runtime dependency of
 // @swmansion/argent (npm installs it into node_modules/electron). If esbuild
@@ -122,70 +465,32 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 // never opens. Keeping it external means the runtime `require("electron")` in
 // preview-window.ts resolves against the real node_modules/electron with an
 // intact __dirname. (The preview-window bundle below externalises it too.)
-esbuild.buildSync({
-  entryPoints: [TOOLS_ENTRY],
-  bundle: true,
-  platform: "node",
-  target: "node22",
+buildBundle({
+  entry: TOOLS_ENTRY,
+  out: OUT_FILE,
   format: "cjs",
-  outfile: OUT_FILE,
-  alias: ALIASES,
+  label: "tools server",
   external: ["electron"],
-  mainFields: MAIN_FIELDS,
 });
 
-console.log(`✓ Bundled tools server → ${path.relative(process.cwd(), OUT_FILE)}`);
+// The remaining bundles are ESM so that:
+//   - installer: import.meta.dirname works at runtime (the dispatcher
+//     lazy-imports it, so its workspace dep needn't resolve in the published pkg);
+//   - MCP server: the @modelcontextprotocol/sdk ESM export paths resolve;
+//   - CLI commands: the tools/run/server subcommands share the same toolchain.
+const ESM_BUNDLES = [
+  { entry: INSTALLER_ENTRY, out: INSTALLER_OUT_FILE, label: "installer" },
+  { entry: MCP_ENTRY, out: MCP_OUT_FILE, label: "MCP server" },
+  { entry: CLI_ENTRY, out: CLI_OUT_FILE, label: "CLI commands" },
+];
+for (const b of ESM_BUNDLES) {
+  buildBundle({ ...b, format: "esm" });
+}
 
-// Bundle the installer (init/update/uninstall) as ESM so import.meta.dirname
-// works at runtime. The dispatcher lazy-imports this bundle so the workspace
-// dep doesn't need to be resolvable in the published package.
-esbuild.buildSync({
-  entryPoints: [INSTALLER_ENTRY],
-  bundle: true,
-  platform: "node",
-  target: "node22",
-  format: "esm",
-  outfile: INSTALLER_OUT_FILE,
-  alias: ALIASES,
-  banner: ESM_REQUIRE_BANNER,
-  external: ["node:*"],
-  mainFields: MAIN_FIELDS,
-});
-
-console.log(`✓ Bundled installer → ${path.relative(process.cwd(), INSTALLER_OUT_FILE)}`);
-
-// Bundle the MCP stdio server. ESM so the @modelcontextprotocol/sdk imports
-// (which use ESM exports paths) resolve correctly.
-esbuild.buildSync({
-  entryPoints: [MCP_ENTRY],
-  bundle: true,
-  platform: "node",
-  target: "node22",
-  format: "esm",
-  outfile: MCP_OUT_FILE,
-  alias: ALIASES,
-  banner: ESM_REQUIRE_BANNER,
-  external: ["node:*"],
-  mainFields: MAIN_FIELDS,
-});
-
-console.log(`✓ Bundled MCP server → ${path.relative(process.cwd(), MCP_OUT_FILE)}`);
-
-// Bundle the CLI subcommands (tools/run/server).
-esbuild.buildSync({
-  entryPoints: [CLI_ENTRY],
-  bundle: true,
-  platform: "node",
-  target: "node22",
-  format: "esm",
-  outfile: CLI_OUT_FILE,
-  alias: ALIASES,
-  banner: ESM_REQUIRE_BANNER,
-  external: ["node:*"],
-  mainFields: MAIN_FIELDS,
-});
-
-console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT_FILE)}`);
+// Copy all declared assets.
+for (const a of ASSETS) {
+  copyAsset(a);
+}
 
 // Bundle the Electron preview-window main entrypoint. CJS, with `electron`
 // externalised — the dependency is declared on @swmansion/argent so npm
@@ -195,20 +500,13 @@ console.log(`✓ Bundled CLI commands → ${path.relative(process.cwd(), CLI_OUT
 // helper can find it via `path.join(__dirname, "preview-window", "main.cjs")`
 // without needing @argent/preview-window to be a published sibling pkg.
 fs.mkdirSync(path.dirname(PREVIEW_WINDOW_OUT_FILE), { recursive: true });
-esbuild.buildSync({
-  entryPoints: [PREVIEW_WINDOW_ENTRY],
-  bundle: true,
-  platform: "node",
-  target: "node22",
+buildBundle({
+  entry: PREVIEW_WINDOW_ENTRY,
+  out: PREVIEW_WINDOW_OUT_FILE,
   format: "cjs",
-  outfile: PREVIEW_WINDOW_OUT_FILE,
+  label: "preview-window main",
   external: ["electron", "node:*"],
-  mainFields: MAIN_FIELDS,
 });
-
-console.log(
-  `✓ Bundled preview-window main → ${path.relative(process.cwd(), PREVIEW_WINDOW_OUT_FILE)}`
-);
 
 // Copy simulator-server for every supported host platform that's present in
 // the staging area. Require the darwin binary only when bundling ON darwin
@@ -233,125 +531,22 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
   }
 }
 
-// Copy ax-service binary (macOS-only — it runs inside an iOS Simulator)
-if (fs.existsSync(AX_BIN_SRC)) {
-  fs.mkdirSync(path.dirname(AX_BIN_DEST), { recursive: true });
-  fs.copyFileSync(AX_BIN_SRC, AX_BIN_DEST);
-  fs.chmodSync(AX_BIN_DEST, 0o755);
-  console.log(`✓ Copied ax-service binary → ${path.relative(process.cwd(), AX_BIN_DEST)}`);
+// Copy the Android helper APK into bin/ (the only Android native artifact left —
+// the trace processor now ships as WASM under assets/trace-processor/). Runs
+// after the copy loop, so dropping into the already-purged-and-repopulated
+// BIN_DIR is safe. Its filename is version-stamped from manifest.json's
+// versionName (see bundledHelperApkPath()); the APK is required at runtime, so a
+// missing one throws.
+const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
+const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
+const apkSrc = path.join(ANDROID_APK_SRC_DIR, apkName);
+if (fs.existsSync(apkSrc)) {
+  fs.copyFileSync(apkSrc, path.join(BIN_DIR, apkName));
+  console.log(`✓ Copied Android helper APK → ${path.relative(process.cwd(), BIN_DIR)}/${apkName}`);
 } else {
-  console.warn(`⚠ ax-service binary not found at ${AX_BIN_SRC} — skipping copy`);
-}
-
-// Copy ax-service TCP variant (darwin/tcp/ax-service). Best-effort: only
-// present when the TCP transport was built; skip without error if absent.
-if (fs.existsSync(AX_TCP_BIN_SRC)) {
-  fs.mkdirSync(path.dirname(AX_TCP_BIN_DEST), { recursive: true });
-  fs.copyFileSync(AX_TCP_BIN_SRC, AX_TCP_BIN_DEST);
-  fs.chmodSync(AX_TCP_BIN_DEST, 0o755);
-  console.log(
-    `✓ Copied ax-service (tcp) binary → ${path.relative(process.cwd(), AX_TCP_BIN_DEST)}`
+  throw new Error(
+    `Android helper APK not found at ${apkSrc}.\n` +
+      `Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)\n` +
+      `or: bash packages/native-devtools-android/scripts/build.sh`
   );
-} else {
-  console.warn(`⚠ ax-service (tcp) binary not found at ${AX_TCP_BIN_SRC} — skipping copy`);
-}
-
-// Copy native devtools dylibs so the packaged tool-server can inject them at runtime.
-if (fs.existsSync(DYLIBS_SRC)) {
-  fs.cpSync(DYLIBS_SRC, DYLIBS_DEST, { recursive: true });
-  const count = fs.readdirSync(DYLIBS_SRC).filter((f) => f.endsWith(".dylib")).length;
-  console.log(`✓ Copied ${count} native dylib(s) → ${path.relative(process.cwd(), DYLIBS_DEST)}`);
-} else {
-  console.warn(`⚠ Native devtools dylibs not found at ${DYLIBS_SRC} — skipping copy`);
-}
-
-// Copy the Android helper APK + its manifest.json into the published package.
-if (fs.existsSync(ANDROID_MANIFEST_SRC)) {
-  const manifest = JSON.parse(fs.readFileSync(ANDROID_MANIFEST_SRC, "utf8"));
-  const apkName = `argent-android-devtools-${manifest.versionName}.apk`;
-  const apkSrc = path.join(ANDROID_APK_DIST_SRC, apkName);
-  if (fs.existsSync(apkSrc)) {
-    fs.copyFileSync(ANDROID_MANIFEST_SRC, ANDROID_MANIFEST_DEST);
-    fs.copyFileSync(apkSrc, path.join(ANDROID_APK_DEST_DIR, apkName));
-    console.log(
-      `✓ Copied Android helper APK + manifest → ${path.relative(process.cwd(), ANDROID_APK_DEST_DIR)}/${apkName}`
-    );
-  } else {
-    console.warn(
-      `⚠ Android helper APK not found at ${apkSrc} — run ` +
-        `\`bash packages/native-devtools-android/scripts/build.sh\` ` +
-        `or \`bash scripts/download-native-binaries.sh\` first`
-    );
-  }
-} else {
-  console.warn(`⚠ Android manifest not found at ${ANDROID_MANIFEST_SRC} — skipping copy`);
-}
-
-// Copy preview UI (@argent/ui) next to the bundled tool-server so that
-// tool-server's /preview/ endpoint can locate it via __dirname lookup.
-// index.html AND its externalised theme.css must both ship — a partial copy
-// would 404 /preview/theme.css and serve an unstyled UI.
-const UI_SRC_DIR = path.resolve(WORKSPACE_ROOT, "packages/ui");
-const UI_DEST_DIR = path.resolve(__dirname, "../dist/preview-ui");
-const UI_ASSETS = ["index.html", "theme.css"];
-
-if (fs.existsSync(path.join(UI_SRC_DIR, "index.html"))) {
-  fs.mkdirSync(UI_DEST_DIR, { recursive: true });
-  for (const asset of UI_ASSETS) {
-    fs.copyFileSync(path.join(UI_SRC_DIR, asset), path.join(UI_DEST_DIR, asset));
-  }
-  console.log(
-    `✓ Copied preview UI (${UI_ASSETS.join(", ")}) → ${path.relative(process.cwd(), UI_DEST_DIR)}`
-  );
-} else {
-  console.warn(`⚠ Preview UI not found at ${UI_SRC_DIR} — skipping copy`);
-}
-
-// Copy Argent.tracetemplate so native-profiler-start can find it at runtime.
-const TRACE_TEMPLATE_SRC = path.resolve(
-  WORKSPACE_ROOT,
-  "packages/tool-server/src/utils/ios-profiler/Argent.tracetemplate"
-);
-const TRACE_TEMPLATE_DEST = path.resolve(__dirname, "../dist/Argent.tracetemplate");
-
-if (fs.existsSync(TRACE_TEMPLATE_SRC)) {
-  fs.copyFileSync(TRACE_TEMPLATE_SRC, TRACE_TEMPLATE_DEST);
-  console.log(
-    `✓ Copied Argent.tracetemplate → ${path.relative(process.cwd(), TRACE_TEMPLATE_DEST)}`
-  );
-} else {
-  console.warn(`⚠ Argent.tracetemplate not found at ${TRACE_TEMPLATE_SRC} — skipping copy`);
-}
-
-// Copy skills into the package so they ship on npm.
-// Mirrors the full directory structure from packages/skills/skills/
-// (e.g. metro-debugger/SKILL.md, metro-debugger/references/source-maps.md, …)
-if (fs.existsSync(SKILLS_SRC)) {
-  fs.cpSync(SKILLS_SRC, SKILLS_DEST, { recursive: true });
-  const count = fs
-    .readdirSync(SKILLS_SRC, { withFileTypes: true })
-    .filter((e) => e.isDirectory()).length;
-  console.log(`✓ Copied ${count} skill(s) → ${path.relative(process.cwd(), SKILLS_DEST)}`);
-} else {
-  console.warn(`⚠ Skills source not found at ${SKILLS_SRC} — skipping copy`);
-}
-
-// Copy rules into the package so they ship on npm.
-if (fs.existsSync(RULES_SRC)) {
-  fs.cpSync(RULES_SRC, RULES_DEST, { recursive: true });
-  const count = fs.readdirSync(RULES_SRC).filter((f) => f.endsWith(".md")).length;
-  console.log(`✓ Copied ${count} rule(s) → ${path.relative(process.cwd(), RULES_DEST)}`);
-} else {
-  console.warn(`⚠ Rules source not found at ${RULES_SRC} — skipping copy`);
-}
-
-// Copy agents into the package so they ship on npm.
-if (fs.existsSync(AGENTS_SRC)) {
-  fs.cpSync(AGENTS_SRC, AGENTS_DEST, { recursive: true });
-  const count = fs
-    .readdirSync(AGENTS_SRC, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith(".md")).length;
-  console.log(`✓ Copied ${count} agent(s) → ${path.relative(process.cwd(), AGENTS_DEST)}`);
-} else {
-  console.warn(`⚠ Agents source not found at ${AGENTS_SRC} — skipping copy`);
 }

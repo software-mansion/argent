@@ -113,6 +113,26 @@ describe("diffPngFiles", () => {
     expect(result.contextDiffPath).toBeUndefined();
   });
 
+  it("compares same-aspect screenshots of different resolutions instead of failing", async () => {
+    const dir = await makeTempDir();
+    const baselinePath = path.join(dir, "baseline.png");
+    const currentPath = path.join(dir, "current.png");
+    // Same aspect ratio (0.5), different scale: a 0.3x-style saved baseline vs a
+    // full-res live capture. These must be normalized and compared, not rejected.
+    await writePng(baselinePath, 10, 20, { r: 30, g: 60, b: 90 });
+    await writePng(currentPath, 20, 40, { r: 30, g: 60, b: 90 });
+
+    const result = await diffPngFiles({ baselinePath, currentPath, outputDir: dir });
+
+    expect(result.dimensionMismatch).toBeUndefined();
+    expect(result.summary).not.toContain("dimension_mismatch");
+    expect(result.imageSize).toEqual({ width: 10, height: 20 });
+    expect(result.diffPath).toBe(path.join(dir, "current-diff.png"));
+    const diff = PNG.sync.read(await fs.readFile(result.diffPath!));
+    expect(diff.width).toBe(10);
+    expect(diff.height).toBe(20);
+  });
+
   it("merges same-line fragments but keeps separate rows distinct", async () => {
     const dir = await makeTempDir();
     const baselinePath = path.join(dir, "baseline.png");

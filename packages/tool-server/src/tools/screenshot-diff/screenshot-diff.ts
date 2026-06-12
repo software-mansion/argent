@@ -7,6 +7,7 @@ import {
   type TextAnalysis,
 } from "./text-diff";
 import { formatScreenshotDiffSummary } from "./screenshot-diff-summary";
+import { normalizeToCommonSize, resizeDecodedPng } from "./resize";
 
 export interface Size {
   width: number;
@@ -117,19 +118,26 @@ export async function diffPngFiles(options: {
 }): Promise<PngDiffResult> {
   const settings = resolveDiffSettings();
 
-  const [baseline, current] = await Promise.all([
+  const [decodedBaseline, decodedCurrent] = await Promise.all([
     decodePngFile(options.baselinePath),
     decodePngFile(options.currentPath),
   ]);
 
-  if (baseline.width !== current.width || baseline.height !== current.height) {
+  // Same-aspect screenshots saved at different scales (e.g. a 0.3x baseline vs
+  // a 1.0x live capture) are uniform scalings of one framebuffer, so normalize
+  // them to a common size and compare instead of failing on the resolution
+  // mismatch. Genuinely different aspect ratios still hard-fail below.
+  const normalized = normalizeToCommonSize(decodedBaseline, decodedCurrent);
+  if (!normalized) {
     return summarizeResult(
       buildDimensionMismatchResult({
-        baseline,
-        current,
+        baseline: decodedBaseline,
+        current: decodedCurrent,
       })
     );
   }
+  const baseline = normalized.baseline;
+  const current = normalized.current;
 
   const totalPixels = baseline.width * baseline.height;
   const pixelDiff = markChangedPixels({
@@ -158,13 +166,17 @@ export async function diffPngFiles(options: {
   const mismatchPercentage =
     totalPixels === 0 ? 0 : (pixelDiff.differentPixels / totalPixels) * 100;
 
+  // The OCR/font-geometry pass re-reads the original files from disk, so it
+  // must receive the originally-decoded images (whose dimensions match those
+  // files) rather than the normalized copies. Derive its top cutoff from the
+  // original baseline height for the same reason.
   const textAnalysis = await analyzeScreenshotTextChangesSafely({
     baselinePath: options.baselinePath,
     currentPath: options.currentPath,
     hasPixelDiff: pixelDiff.differentPixels > 0,
-    baselineImage: baseline,
-    currentImage: current,
-    ignoreTopPixels: pixelDiff.ignoredTopRows,
+    baselineImage: decodedBaseline,
+    currentImage: decodedCurrent,
+    ignoreTopPixels: ignoredTopRowsFor(decodedBaseline.height, settings.ignoreTopNormalizedY),
     textChangeMinConfidence: DEFAULT_TEXT_CHANGE_MIN_CONFIDENCE,
   });
 
@@ -224,10 +236,7 @@ function markChangedPixels(params: {
   const baselineData = params.baseline.data;
   const currentData = params.current.data;
   const mask = new Uint8Array(totalPixels);
-  const ignoredTopRows = Math.min(
-    params.baseline.height,
-    Math.ceil(params.baseline.height * params.ignoreTopNormalizedY)
-  );
+  const ignoredTopRows = ignoredTopRowsFor(params.baseline.height, params.ignoreTopNormalizedY);
   let differentPixels = 0;
 
   for (let y = ignoredTopRows; y < params.baseline.height; y++) {
@@ -246,6 +255,10 @@ function markChangedPixels(params: {
   }
 
   return { mask, differentPixels, ignoredTopRows };
+}
+
+function ignoredTopRowsFor(height: number, ignoreTopNormalizedY: number): number {
+  return Math.min(height, Math.ceil(height * ignoreTopNormalizedY));
 }
 
 function getChangedRegions(params: {
@@ -378,179 +391,13 @@ async function writePngFile(filePath: string, png: PNG): Promise<void> {
 }
 
 function downscalePng(source: PNG, scale: number): PNG {
-  const targetWidth = Math.max(1, Math.round(source.width * scale));
-  const targetHeight = Math.max(1, Math.round(source.height * scale));
-  if (targetWidth === source.width && targetHeight === source.height) {
-    return clonePng(source);
-  }
-
-  return lanczos3ResizeRgba({
-    sourceData: source.data,
-    sourceWidth: source.width,
-    sourceHeight: source.height,
-    targetWidth,
-    targetHeight,
-  });
-}
-
-interface ResampleAxisWeights {
-  start: number;
-  weights: Float32Array;
-}
-
-function lanczos3ResizeRgba(params: {
-  sourceData: Buffer;
-  sourceWidth: number;
-  sourceHeight: number;
-  targetWidth: number;
-  targetHeight: number;
-}): PNG {
-  const horizontal = buildLanczos3AxisWeights(params.sourceWidth, params.targetWidth);
-  const vertical = buildLanczos3AxisWeights(params.sourceHeight, params.targetHeight);
-
-  const intermediate = new Float32Array(params.targetWidth * params.sourceHeight * 4);
-  resampleHorizontalRgba({
-    sourceData: params.sourceData,
-    sourceWidth: params.sourceWidth,
-    sourceHeight: params.sourceHeight,
-    targetWidth: params.targetWidth,
-    weights: horizontal,
-    output: intermediate,
-  });
-
-  const target = new PNG({ width: params.targetWidth, height: params.targetHeight });
-  resampleVerticalRgba({
-    intermediate,
-    targetWidth: params.targetWidth,
-    targetHeight: params.targetHeight,
-    weights: vertical,
-    output: target.data,
-  });
-
-  return target;
-}
-
-function resampleHorizontalRgba(params: {
-  sourceData: Buffer;
-  sourceWidth: number;
-  sourceHeight: number;
-  targetWidth: number;
-  weights: ResampleAxisWeights[];
-  output: Float32Array;
-}): void {
-  for (let y = 0; y < params.sourceHeight; y++) {
-    const rowOffset = y * params.sourceWidth * 4;
-    const targetRowOffset = y * params.targetWidth * 4;
-    for (let x = 0; x < params.targetWidth; x++) {
-      const { start, weights } = params.weights[x];
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let a = 0;
-      const baseOffset = rowOffset + start * 4;
-      for (let k = 0; k < weights.length; k++) {
-        const sampleOffset = baseOffset + k * 4;
-        const w = weights[k];
-        r += params.sourceData[sampleOffset] * w;
-        g += params.sourceData[sampleOffset + 1] * w;
-        b += params.sourceData[sampleOffset + 2] * w;
-        a += params.sourceData[sampleOffset + 3] * w;
-      }
-      const targetOffset = targetRowOffset + x * 4;
-      params.output[targetOffset] = r;
-      params.output[targetOffset + 1] = g;
-      params.output[targetOffset + 2] = b;
-      params.output[targetOffset + 3] = a;
-    }
-  }
-}
-
-function resampleVerticalRgba(params: {
-  intermediate: Float32Array;
-  targetWidth: number;
-  targetHeight: number;
-  weights: ResampleAxisWeights[];
-  output: Buffer;
-}): void {
-  const rowStride = params.targetWidth * 4;
-  for (let y = 0; y < params.targetHeight; y++) {
-    const { start, weights } = params.weights[y];
-    const targetRowOffset = y * rowStride;
-    for (let x = 0; x < params.targetWidth; x++) {
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let a = 0;
-      const columnOffset = start * rowStride + x * 4;
-      for (let k = 0; k < weights.length; k++) {
-        const sampleOffset = columnOffset + k * rowStride;
-        const w = weights[k];
-        r += params.intermediate[sampleOffset] * w;
-        g += params.intermediate[sampleOffset + 1] * w;
-        b += params.intermediate[sampleOffset + 2] * w;
-        a += params.intermediate[sampleOffset + 3] * w;
-      }
-      const targetOffset = targetRowOffset + x * 4;
-      params.output[targetOffset] = clampToByte(r);
-      params.output[targetOffset + 1] = clampToByte(g);
-      params.output[targetOffset + 2] = clampToByte(b);
-      params.output[targetOffset + 3] = clampToByte(a);
-    }
-  }
-}
-
-function buildLanczos3AxisWeights(sourceSize: number, targetSize: number): ResampleAxisWeights[] {
-  const scale = targetSize / sourceSize;
-  // For downscaling, stretch the kernel by `scale` to act as a low-pass
-  // anti-aliasing filter. For upscaling, evaluate the kernel at its native
-  // width so we interpolate rather than blur.
-  const filterScale = scale < 1 ? scale : 1;
-  const supportInSource = LANCZOS3_RADIUS / filterScale;
-  const axis: ResampleAxisWeights[] = new Array(targetSize);
-
-  for (let i = 0; i < targetSize; i++) {
-    const center = (i + 0.5) / scale - 0.5;
-    const start = Math.max(0, Math.ceil(center - supportInSource - LANCZOS3_EPSILON));
-    const end = Math.min(sourceSize - 1, Math.floor(center + supportInSource + LANCZOS3_EPSILON));
-    const length = Math.max(1, end - start + 1);
-    const weights = new Float32Array(length);
-    let sum = 0;
-    for (let k = 0; k < length; k++) {
-      const sampleIndex = start + k;
-      const w = lanczos3Kernel((sampleIndex - center) * filterScale);
-      weights[k] = w;
-      sum += w;
-    }
-    if (sum !== 0) {
-      const inverseSum = 1 / sum;
-      for (let k = 0; k < length; k++) {
-        weights[k] *= inverseSum;
-      }
-    }
-    axis[i] = { start, weights };
-  }
-  return axis;
-}
-
-const LANCZOS3_RADIUS = 3;
-const LANCZOS3_EPSILON = 1e-9;
-
-function lanczos3Kernel(x: number): number {
-  if (x === 0) return 1;
-  if (x <= -LANCZOS3_RADIUS || x >= LANCZOS3_RADIUS) return 0;
-  const piX = Math.PI * x;
-  return (LANCZOS3_RADIUS * Math.sin(piX) * Math.sin(piX / LANCZOS3_RADIUS)) / (piX * piX);
-}
-
-function clampToByte(value: number): number {
-  if (value <= 0) return 0;
-  if (value >= 255) return 255;
-  return Math.round(value);
-}
-
-function clonePng(source: PNG): PNG {
-  const target = new PNG({ width: source.width, height: source.height });
-  source.data.copy(target.data);
+  const resized = resizeDecodedPng(
+    { width: source.width, height: source.height, data: source.data },
+    source.width * scale,
+    source.height * scale
+  );
+  const target = new PNG({ width: resized.width, height: resized.height });
+  resized.data.copy(target.data);
   return target;
 }
 

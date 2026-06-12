@@ -7,6 +7,7 @@ import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
+import { makeArtifactRoute } from "./artifacts";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
@@ -203,6 +204,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Hidden (not MCP-exposed) preview UI + stream discovery endpoints.
   // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
   app.use("/preview", createPreviewRouter(registry));
+
+  // Artifact retrieval: streams files produced by tools (screenshots, profiler
+  // exports) over the remote-aware HTTP boundary so the MCP client can fetch
+  // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  app.get("/artifacts/:id", makeArtifactRoute(registry));
 
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();

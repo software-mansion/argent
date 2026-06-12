@@ -46,3 +46,14 @@ export {
   type ParsedLinkUrl,
   type ParsedLinkTarget,
 } from "./link-config.js";
+
+export {
+  materializeArtifacts,
+  isArtifactHandle,
+  getDeviceIdFromArgs,
+  artifactsRoot,
+  ARTIFACT_MARKER,
+  type ArtifactHandle,
+  type MaterializeContext,
+  type MaterializedImage,
+} from "./artifacts.js";

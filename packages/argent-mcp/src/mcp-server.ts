@@ -8,6 +8,7 @@ import {
   ensureToolsServer,
   getResolvedToolsUrl,
   isRemoteRouted,
+  getDeviceIdFromArgs,
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
@@ -16,6 +17,7 @@ import {
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
   isScreenshotDiffResult,
+  type ContentContext,
   type ContentBlock,
   type FlowExecuteResult,
 } from "./content.js";
@@ -82,6 +84,10 @@ export interface StartMcpServerOptions {
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
+  // isFlagEnabled hits disk, so resolve it once at startup rather than on every
+  // tool call. A flag change therefore needs an MCP restart to take effect.
+  const autoScreenshotOn = autoScreenshotEnabled();
+
   let TOOLS_URL: string;
   let AUTH_TOKEN: string;
   // Honor a configured remote target (ARGENT_TOOLS_URL env or ~/.argent/link.json)
@@ -224,6 +230,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         result,
       });
 
+      const ctx: ContentContext = {
+        toolsUrl: TOOLS_URL,
+        authToken: AUTH_TOKEN,
+        deviceId: getDeviceIdFromArgs(params.arguments),
+      };
+
       let content: ContentBlock[];
       if (
         params.name === "flow-execute" &&
@@ -232,21 +244,25 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "flow" in result &&
         "steps" in result
       ) {
-        content = await flowRunToMcpContent(result as FlowExecuteResult);
+        content = await flowRunToMcpContent(result as FlowExecuteResult, ctx);
       } else if (params.name === "screenshot-diff" && isScreenshotDiffResult(result)) {
         content = await screenshotDiffToMcpContent(result);
       } else {
-        content = await toMcpContent(result, outputHint, params.arguments);
+        content = await toMcpContent(result, outputHint, ctx, params.arguments);
       }
 
       const udid = getUdidFromArgs(params.arguments);
-      if (autoScreenshotEnabled() && udid && shouldAutoScreenshot(params.name)) {
+      if (autoScreenshotOn && udid && shouldAutoScreenshot(params.name)) {
         const delayMs = getAutoScreenshotDelayMs(params.name);
         if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
 
         try {
           const screenshotResult = await callTool("screenshot", { udid });
-          const screenshotContent = await toMcpContent(screenshotResult.result, "image", { udid });
+          const screenshotContent = await toMcpContent(screenshotResult.result, "image", {
+            toolsUrl: TOOLS_URL,
+            authToken: AUTH_TOKEN,
+            deviceId: udid,
+          });
           const hasImage = screenshotContent.some((b) => b.type === "image");
           if (hasImage) {
             content = [
@@ -317,7 +333,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     healthInterval.unref();
   }
 
-  if (process.env.ARGENT_AUTO_SHUTDOWN === "1") {
+  if (process.env.ARGENT_TOOL_SERVER_SHUTDOWN_ON_MCP_EXIT === "1") {
     process.stdin.on("close", () => {
       fetch(`${TOOLS_URL}/shutdown`, { method: "POST", headers: authHeader() }).catch(() => {});
       setTimeout(() => process.exit(0), 5_000);
