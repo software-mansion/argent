@@ -10,6 +10,7 @@ import { ensureDeps } from "../../../utils/check-deps";
 import type { NativeProfilerAnalyzeResult } from "../../../utils/ios-profiler/types";
 import { analyzeNativeProfilerIos } from "./platforms/ios";
 import { analyzeNativeProfilerAndroid } from "./platforms/android";
+import { requireArtifacts, type ArtifactHandle } from "../../../artifacts";
 
 const zodSchema = z.object({
   device_id: z
@@ -22,9 +23,19 @@ const capability = {
   android: { emulator: true, device: true, unknown: true },
 } as const;
 
+/**
+ * Wire shape: `reportFile` leaves as an artifact handle (not a host path) so
+ * the client can materialize the full markdown report locally and the inline
+ * report's "Read the reportFile" instruction works wherever the tool-server
+ * runs — the exact pattern react-profiler-analyze already uses.
+ */
+type NativeProfilerAnalyzeToolResult = Omit<NativeProfilerAnalyzeResult, "reportFile"> & {
+  reportFile: ArtifactHandle | null;
+};
+
 export const nativeProfilerAnalyzeTool: ToolDefinition<
   z.infer<typeof zodSchema>,
-  NativeProfilerAnalyzeResult
+  NativeProfilerAnalyzeToolResult
 > = {
   id: "native-profiler-analyze",
   capability,
@@ -41,16 +52,25 @@ Fails if native-profiler-stop has not been called first to export trace data.`,
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
-  async execute(services, params) {
+  async execute(services, params, ctx) {
     const api = services.session as NativeProfilerSessionApi;
     const device = resolveDevice(params.device_id);
     assertSupported("native-profiler-analyze", capability, device);
 
+    let result: NativeProfilerAnalyzeResult;
     if (api.platform === "ios") {
       await ensureDeps(["xcrun"]);
-      return analyzeNativeProfilerIos(api);
+      result = await analyzeNativeProfilerIos(api);
+    } else {
+      await ensureDeps(["adb"]);
+      result = await analyzeNativeProfilerAndroid(api);
     }
-    await ensureDeps(["adb"]);
-    return analyzeNativeProfilerAndroid(api);
+
+    return {
+      ...result,
+      reportFile: result.reportFile
+        ? await requireArtifacts(ctx).register(result.reportFile)
+        : null,
+    };
   },
 };

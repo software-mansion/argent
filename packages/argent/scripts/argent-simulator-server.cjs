@@ -13,11 +13,19 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 
-const binary = path.join(__dirname, process.platform, "simulator-server");
+// Mirrors hostPlatformKey() in @argent/native-devtools-ios: darwin ships a
+// universal (lipo) binary, but Linux binaries are single-arch ELFs, so arm64
+// Linux resolves to its own "linux-arm64" directory next to the x86_64 one
+// ("linux"). Duplicated here because the dispatcher must stay a standalone
+// file — it ships verbatim as the npm `bin` entry.
+const platformKey =
+  process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
+
+const binary = path.join(__dirname, platformKey, "simulator-server");
 if (!fs.existsSync(binary)) {
   console.error(
-    `argent-simulator-server: no binary for platform "${process.platform}" at ${binary}.\n` +
-      `Supported hosts today: darwin, linux.`
+    `argent-simulator-server: no binary for platform "${platformKey}" at ${binary}.\n` +
+      `Supported hosts today: darwin, linux (x86_64 and arm64).`
   );
   process.exit(1);
 }

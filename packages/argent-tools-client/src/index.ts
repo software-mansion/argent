@@ -57,3 +57,16 @@ export {
   type MaterializeContext,
   type MaterializedImage,
 } from "./artifacts.js";
+
+export {
+  prepareFileInputs,
+  applyClientFileDirectives,
+  FILE_INPUT_MARKER,
+  CLIENT_FILE_MARKER,
+  type FileInputSpec,
+  type FileInputKind,
+  type FileInputWire,
+  type ClientFileDirective,
+  type PrepareFileInputsOptions,
+  type AppliedClientFiles,
+} from "./file-inputs.js";

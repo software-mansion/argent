@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { promises as fs } from "fs";
-import type { ToolDefinition } from "@argent/registry";
+import type { FileInputSpec, ToolDefinition } from "@argent/registry";
 import { buildAstIndexWithDiagnostics } from "../../../utils/react-profiler/pipeline/06-resolve/ast-index";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 
@@ -8,6 +8,16 @@ const zodSchema = z.object({
   component_name: z.string().describe("Name of the React component to look up"),
   project_root: z.string().describe("Absolute path to the RN project root"),
 });
+
+/**
+ * The AST lookup scans the whole project tree, which can't ride along in a
+ * tool call — so the boundary gates on the directory existing on this host. A
+ * remote caller whose checkout isn't mirrored here gets an actionable error
+ * instead of a silent empty index ("component not found" for everything).
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "project_root", path: "${project_root}", kind: "directory" },
+];
 
 export const reactProfilerComponentSourceTool: ToolDefinition<
   z.infer<typeof zodSchema>,
@@ -25,6 +35,7 @@ Returns found: false if the component is not found in user-owned code (e.g. live
   // catalogue should see this is paired with the other react-profiler tools
   // and not reach for it on an Electron app.
   capability: RN_ONLY_TOOL_CAPABILITY,
+  fileInputs,
   services: () => ({}),
   async execute(_services, params) {
     const astIndex = await buildAstIndexWithDiagnostics(params.project_root);

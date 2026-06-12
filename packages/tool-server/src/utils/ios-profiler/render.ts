@@ -63,10 +63,13 @@ export async function renderNativeProfilerReport(
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
+  // Reference the result field rather than embedding the host path: the
+  // client materializes `reportFile` to a path on ITS machine, and the raw
+  // server path would dangle when the tool-server runs remotely.
   const report =
     wroteFile && reportFile
       ? inlineReport +
-        `\n\n> Full report: \`${reportFile}\` — ${bottlenecksTotal} bottleneck(s) total, showing top ${shownHotspots} CPU hotspots and top ${shownHangs} hangs inline. Use the Read tool to view all details.`
+        `\n\n> Full report saved — ${bottlenecksTotal} bottleneck(s) total, showing top ${shownHotspots} CPU hotspots and top ${shownHangs} hangs inline. Use the Read tool on the \`reportFile\` path in this result to view all details.`
       : inlineReport;
 
   return {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
-import { getFlowPath, getActiveFlow, appendStep } from "./flow-utils";
+import { getActiveFlow, appendStepToActiveFlow, type FlowSavedTo } from "./flow-utils";
 
 const zodSchema = z.object({
   command: z.string().describe('MCP tool name (e.g. "tap", "screenshot", "launch-app")'),
@@ -22,7 +22,7 @@ export function createFlowAddStepTool(
   registry: Registry
 ): ToolDefinition<
   z.infer<typeof zodSchema>,
-  { message: string; toolResult: unknown; flowFile: string }
+  { message: string; toolResult: unknown; flowFile: string; savedTo: FlowSavedTo }
 > {
   return {
     id: "flow-add-step",
@@ -31,12 +31,11 @@ export function createFlowAddStepTool(
     services: () => ({}),
     async execute(_services, params) {
       const flowName = getActiveFlow();
-      const filePath = getFlowPath(flowName);
       const args: Record<string, unknown> = params.args ? JSON.parse(params.args) : {};
 
       const toolResult = await registry.invokeTool(params.command, args);
 
-      const flowFile = await appendStep(filePath, {
+      const { flowFile, savedTo } = await appendStepToActiveFlow({
         kind: "tool",
         name: params.command,
         args,
@@ -47,6 +46,7 @@ export function createFlowAddStepTool(
         message: `Step added to "${flowName}" flow`,
         toolResult,
         flowFile,
+        savedTo,
       };
     },
   };

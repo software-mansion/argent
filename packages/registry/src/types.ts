@@ -1,6 +1,7 @@
 import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
 import type { ArtifactStore } from "./artifacts";
+import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 
 // ── Service Types ──
 
@@ -59,6 +60,15 @@ export type ServiceRef = string | { urn: string; options?: Record<string, unknow
 /** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
   signal?: AbortSignal;
+  /**
+   * Resolution outcome for each declared {@link ToolDefinition.fileInputs}
+   * target the caller sent as a file-input wrapper, keyed by target arg name.
+   * Populated by the HTTP layer (which resolves wrappers before validation)
+   * and forwarded to the tool via {@link ToolContext}. Absent for plain-string
+   * args (older clients, direct invocations), so a missing entry means
+   * "legacy caller — behave exactly as before the file boundary existed".
+   */
+  fileInputs?: Record<string, ResolvedFileInput>;
 }
 
 /**
@@ -179,6 +189,13 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * resolved branch's deps after `classifyDevice`.
    */
   requires?: ToolDependency[];
+  /**
+   * Args that name files/directories on the CALLER's machine. Surfaced through
+   * `GET /tools` so the client can wrap them for the file boundary, and
+   * resolved back to server-readable paths before zod validation. See
+   * `file-inputs.ts` for the wire contract and kind semantics.
+   */
+  fileInputs?: FileInputSpec[];
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
   execute(services: Record<string, unknown>, params: TParams, ctx?: ToolContext): Promise<TResult>;
