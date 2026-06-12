@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// launch-app / restart-app classify a tvOS sim as platform "ios" by UDID shape,
-// so they must NOT resolve the iOS-only native-devtools service for it: that
-// factory runs `simctl spawn … launchctl setenv DYLD_INSERT_LIBRARIES` with an
-// iOS-built dylib at resolution time, poisoning the Apple TV sim's launchd env.
-// These tests pin the lazy-resolution behaviour: native-devtools is resolved
-// for a regular iOS sim and skipped for a tvOS one.
+// launch-app / restart-app classify a tvOS sim as platform "ios" by UDID shape.
+// native-devtools is iOS *and* tvOS capable — its ensureEnv injects the
+// platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR bootstrap for
+// Apple TV) — so the service is resolved for both kinds of sim. These tests pin
+// that lazy-resolution behaviour: native-devtools is resolved regardless of
+// whether the target is a regular iOS sim or a tvOS one.
 
 const execFileMock = vi.fn(
   (
@@ -60,7 +60,7 @@ beforeEach(() => {
   mockPrecheck.mockClear().mockResolvedValue(null);
 });
 
-describe("launch-app — tvOS skips native-devtools injection", () => {
+describe("launch-app — resolves native-devtools for iOS and tvOS", () => {
   it("resolves native-devtools for a regular iOS simulator", async () => {
     const { registry, resolveService } = makeRegistry();
     const tool = createLaunchAppTool(registry);
@@ -72,7 +72,7 @@ describe("launch-app — tvOS skips native-devtools injection", () => {
     expect(mockPrecheck).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT resolve native-devtools for a tvOS simulator", async () => {
+  it("also resolves native-devtools for a tvOS simulator (platform-matched dylib)", async () => {
     mockIsTvOs.mockResolvedValue(true);
     const { registry, resolveService } = makeRegistry();
     const tool = createLaunchAppTool(registry);
@@ -80,9 +80,9 @@ describe("launch-app — tvOS skips native-devtools injection", () => {
     const res = await tool.execute!({}, { udid: TVOS_UDID, bundleId: "com.example.tvapp" });
 
     expect(res).toEqual({ launched: true, bundleId: "com.example.tvapp" });
-    // The whole point: no iOS-only service resolution / DYLD injection for tvOS.
-    expect(resolveService).not.toHaveBeenCalled();
-    expect(mockPrecheck).not.toHaveBeenCalled();
+    // ensureEnv picks the TVOSSIMULATOR slice, so injection is resolved on tvOS too.
+    expect(resolveService).toHaveBeenCalledTimes(1);
+    expect(mockPrecheck).toHaveBeenCalledTimes(1);
     // It still launched the app via simctl.
     const launched = execFileMock.mock.calls.some(
       ([cmd, args]) =>
@@ -95,7 +95,7 @@ describe("launch-app — tvOS skips native-devtools injection", () => {
   });
 });
 
-describe("restart-app — tvOS skips native-devtools injection", () => {
+describe("restart-app — resolves native-devtools for iOS and tvOS", () => {
   it("resolves native-devtools for a regular iOS simulator", async () => {
     const { registry, resolveService } = makeRegistry();
     const tool = createRestartAppTool(registry);
@@ -107,7 +107,7 @@ describe("restart-app — tvOS skips native-devtools injection", () => {
     expect(mockPrecheck).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT resolve native-devtools for a tvOS simulator", async () => {
+  it("also resolves native-devtools for a tvOS simulator (platform-matched dylib)", async () => {
     mockIsTvOs.mockResolvedValue(true);
     const { registry, resolveService } = makeRegistry();
     const tool = createRestartAppTool(registry);
@@ -115,8 +115,8 @@ describe("restart-app — tvOS skips native-devtools injection", () => {
     const res = await tool.execute!({}, { udid: TVOS_UDID, bundleId: "com.example.tvapp" });
 
     expect(res).toEqual({ restarted: true, bundleId: "com.example.tvapp" });
-    expect(resolveService).not.toHaveBeenCalled();
-    expect(mockPrecheck).not.toHaveBeenCalled();
+    expect(resolveService).toHaveBeenCalledTimes(1);
+    expect(mockPrecheck).toHaveBeenCalledTimes(1);
     // terminate + launch still ran against the tvOS udid.
     const launched = execFileMock.mock.calls.some(
       ([cmd, args]) =>

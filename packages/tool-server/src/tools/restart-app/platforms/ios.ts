@@ -7,14 +7,14 @@ import {
   type NativeDevtoolsApi,
 } from "../../../blueprints/native-devtools";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { isTvOsSimulator } from "../../../utils/ios-devices";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
 const execFileAsync = promisify(execFile);
 
 // native-devtools is resolved lazily (through `registry`) rather than declared
-// as an eager service, so a tvOS sim — which classifies as platform "ios" by
-// UDID shape — never resolves the iOS-only injection. See createRestartAppTool.
+// as an eager service. It is iOS *and* tvOS capable: the blueprint's ensureEnv
+// picks the platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR
+// bootstrap for Apple TV sims), so resolving it here injects correctly on both.
 export function makeIosImpl(
   registry: Registry
 ): PlatformImpl<Record<string, unknown>, RestartAppParams, RestartAppResult> {
@@ -22,18 +22,13 @@ export function makeIosImpl(
     requires: ["xcrun"],
     handler: async (_services, params, device) => {
       const { udid, bundleId } = params;
-      // tvOS has no native-devtools injection — its iOS-built dylib can't load
-      // in an Apple TV process, and resolving the service would `setenv` a bad
-      // DYLD_INSERT_LIBRARIES into the sim. Skip straight to the relaunch.
-      if (!(await isTvOsSimulator(udid))) {
-        const ndRef = nativeDevtoolsRef(device);
-        const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
-          ndRef.urn,
-          ndRef.options
-        );
-        const blocked = await precheckNativeDevtools(nativeDevtools, udid);
-        if (blocked) return blocked;
-      }
+      const ndRef = nativeDevtoolsRef(device);
+      const nativeDevtools = await registry.resolveService<NativeDevtoolsApi>(
+        ndRef.urn,
+        ndRef.options
+      );
+      const blocked = await precheckNativeDevtools(nativeDevtools, udid);
+      if (blocked) return blocked;
       try {
         await execFileAsync("xcrun", ["simctl", "terminate", udid, bundleId]);
       } catch {
