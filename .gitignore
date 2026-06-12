@@ -50,7 +50,12 @@ packages/argent/rules/
 packages/argent/assets/
 packages/argent/README.md
 
-# We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore 
+# Vega on-device agent: Rust build output + the vendored prebuilt device binary
+# (built from packages/native-devtools-vega/agent, downloaded/copied at build time)
+packages/native-devtools-vega/agent/target/
+packages/native-devtools-vega/bin/
+
+# We do intentionally track internal .claude skills. Do not remove them solely based on .gitignore
 .claude/
 .cursor/
 .vscode/
