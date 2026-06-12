@@ -232,7 +232,10 @@ jobs:
           curl -sS -m 60 -X POST http://127.0.0.1:3033/tools/screenshot \
             -H 'Content-Type: application/json' \
             -d '{"udid":"emulator-5554"}' > /tmp/shot.json
-          PATH_PNG=$(python3 -c "import json,sys;print(json.load(open('/tmp/shot.json'))['data']['path'])")
+          # The screenshot tool returns an ArtifactHandle ({ image: { hostPath, ... } })
+          # since the remote-artifacts change; the job runs co-located with the
+          # tool-server so hostPath is directly readable.
+          PATH_PNG=$(python3 -c "import json,sys;print(json.load(open('/tmp/shot.json'))['data']['image']['hostPath'])")
           cp "$PATH_PNG" /tmp/wayland-cold-boot.png
           SZ=$(stat -c%s /tmp/wayland-cold-boot.png)
           echo "size=${SZ}B"
