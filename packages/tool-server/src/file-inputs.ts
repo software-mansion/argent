@@ -80,6 +80,12 @@ async function probeHostPath(wire: FileInputWire, kind: FileInputSpec["kind"]): 
   }
 }
 
+function formatBytes(bytes: number | undefined): string {
+  if (bytes == null) return "unknown size";
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function sanitizeFilename(name: string): string {
   const cleaned = name.replace(/[^A-Za-z0-9._-]/g, "_");
   return cleaned.length > 0 && cleaned !== "." && cleaned !== ".." ? cleaned : "upload";
@@ -137,6 +143,15 @@ async function resolveOne(
     const { filePath, dir } = await materializeUpload(wire);
     tempDirs.push(dir);
     return { value: filePath, meta: { ...meta, viaUpload: true } };
+  }
+
+  if (wire.contentOmitted === "size-limit") {
+    throw new FileInputError(
+      `File "${wire.path}" is ${formatBytes(wire.size)} — larger than the ` +
+        `${formatBytes(MAX_UPLOAD_BYTES)} file-input transfer limit, so the client did not ` +
+        `upload it, and it was not found on the tool-server host. Copy the file to the ` +
+        `tool-server machine and pass that path, or use a smaller file.`
+    );
   }
 
   throw new FileInputError(

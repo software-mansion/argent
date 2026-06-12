@@ -45,6 +45,14 @@ export interface FileInputWire {
    * calls never pay the encoding cost.
    */
   content?: string;
+  /**
+   * Present when the client had readable content but deliberately did not
+   * inline it. Lets the server explain *why* an absent-on-host file has no
+   * bytes instead of guessing ("size-limit" = file exceeds the client's
+   * inline-content cap). A string enum so future reasons extend it without
+   * another field.
+   */
+  contentOmitted?: "size-limit";
 }
 
 /**

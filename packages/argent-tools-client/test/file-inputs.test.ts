@@ -67,6 +67,31 @@ describe("prepareFileInputs", () => {
     expect(Buffer.from(out.baselinePath!.content!, "base64").toString()).toBe("png-bytes");
   });
 
+  it("marks oversize content as omitted instead of silently skipping it", async () => {
+    const filePath = path.join(tmpDir, "huge.bin");
+    await fs.writeFile(filePath, Buffer.alloc(32 * 1024 * 1024 + 1));
+    const st = await fs.stat(filePath);
+
+    const specs: FileInputSpec[] = [
+      { target: "baselinePath", path: "${baselinePath}", kind: "file" },
+    ];
+    const out = (await prepareFileInputs(
+      specs,
+      { baselinePath: filePath },
+      { includeContent: true }
+    )) as Record<string, FileInputWire>;
+
+    // Stat survives so a co-located copy still resolves in place; only the
+    // bytes are withheld, with the reason on the wire.
+    expect(out.baselinePath).toEqual({
+      [FILE_INPUT_MARKER]: true,
+      path: filePath,
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      contentOmitted: "size-limit",
+    });
+  });
+
   it("derives a new target param from a multi-param template (flow_file)", async () => {
     const flowsDir = path.join(tmpDir, ".argent", "flows");
     await fs.mkdir(flowsDir, { recursive: true });

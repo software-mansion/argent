@@ -43,6 +43,8 @@ export interface FileInputWire {
   size?: number;
   mtimeMs?: number;
   content?: string;
+  /** Why readable content was deliberately not inlined ("size-limit" = over MAX_CONTENT_BYTES). */
+  contentOmitted?: "size-limit";
 }
 
 export interface ClientFileDirective {
@@ -53,9 +55,10 @@ export interface ClientFileDirective {
 
 /**
  * Hard ceiling on inlined content, mirroring the server's decoded-upload
- * limit. A larger file is sent as a path-only wrapper: it still works
- * co-located, and a remote server answers with its clear "not found on host,
- * no content uploaded" error instead of this client dying on a huge encode.
+ * limit. A larger file is sent as a stat-only wrapper marked
+ * `contentOmitted: "size-limit"`: it still resolves in place co-located, and
+ * a remote server without the file answers with a precise "exceeds the
+ * transfer limit" error instead of this client dying on a huge encode.
  */
 const MAX_CONTENT_BYTES = 32 * 1024 * 1024;
 
@@ -122,6 +125,12 @@ export async function prepareFileInputs(
           wire.mtimeMs = st.mtimeMs;
           if (opts.includeContent && st.size <= MAX_CONTENT_BYTES) {
             wire.content = (await readFile(filePath)).toString("base64");
+          } else if (opts.includeContent) {
+            // Too big to ride in the call — say so instead of sending a bare
+            // wrapper, so an absent-on-server path gets a "transfer limit"
+            // error rather than misleading "file not found" guidance. The
+            // stat fields stay, so a co-located copy still resolves in place.
+            wire.contentOmitted = "size-limit";
           }
         }
       } catch {

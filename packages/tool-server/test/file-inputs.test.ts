@@ -154,7 +154,44 @@ describe("resolveFileInputs", () => {
         { fileInputs: FILE_SPEC },
         { input: wire({ path: path.join(tmpDir, "ghost.png") }) }
       )
-    ).rejects.toThrow(FileInputError);
+    ).rejects.toThrow(/was not found on the tool-server host/);
+  });
+
+  it("explains the transfer limit when content was omitted for size and the path is absent", async () => {
+    await expect(
+      resolveFileInputs(
+        { fileInputs: FILE_SPEC },
+        {
+          input: wire({
+            path: path.join(tmpDir, "huge.bin"),
+            size: 36 * 1024 * 1024,
+            mtimeMs: 1234,
+            contentOmitted: "size-limit",
+          }),
+        }
+      )
+    ).rejects.toThrow(/36\.0 MB — larger than the 32\.0 MB file-input transfer limit/);
+  });
+
+  it("still resolves an oversize file in place when it matches on this host", async () => {
+    const filePath = path.join(tmpDir, "big-but-here.bin");
+    await fs.writeFile(filePath, "stat-matched bytes");
+    const st = await fs.stat(filePath);
+
+    const { args, fileInputs } = await resolveFileInputs(
+      { fileInputs: FILE_SPEC },
+      {
+        input: wire({
+          path: filePath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          contentOmitted: "size-limit",
+        }),
+      }
+    );
+
+    expect(args.input).toBe(filePath);
+    expect(fileInputs!.input).toMatchObject({ presentOnHost: true, viaUpload: false });
   });
 
   it("rejects an upload whose decoded size disagrees with the recorded size", async () => {
