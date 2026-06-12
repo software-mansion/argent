@@ -72,6 +72,25 @@ function findDependencyMissing(err: unknown): DependencyMissingError | null {
   return null;
 }
 
+/**
+ * Walk the `.cause` chain for the first error of type `T`. The registry wraps
+ * everything thrown from a tool's `execute` (and from a service factory) in
+ * ToolExecutionError / ServiceInitializationError, so a domain error like
+ * UnsupportedOperationError only ever reaches this catch nested inside a wrapper
+ * — a top-level `instanceof` would miss it and mis-map a clean 4xx to a 500.
+ */
+function findInChain<T extends Error>(
+  err: unknown,
+  ctor: new (...args: never[]) => T
+): T | null {
+  let current: unknown = err;
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    if (current instanceof ctor) return current;
+    current = current.cause;
+  }
+  return null;
+}
+
 // ── HTTP app ────────────────────────────────────────────────────────
 
 export interface HttpAppOptions {
@@ -476,16 +495,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(424).json({ error: depErr.message, missing: depErr.missing });
           return;
         }
-        if (err instanceof UnsupportedOperationError) {
-          res.status(400).json({ error: err.message });
+        // Unwrap the cause chain: these are thrown from inside execute() / a
+        // service factory and reach here wrapped in ToolExecutionError, so a
+        // top-level instanceof would miss them and fall through to a 500.
+        const unsupported = findInChain(err, UnsupportedOperationError);
+        if (unsupported) {
+          res.status(400).json({ error: unsupported.message });
           return;
         }
-        if (err instanceof NotImplementedOnPlatformError) {
+        const notImpl = findInChain(err, NotImplementedOnPlatformError);
+        if (notImpl) {
           res.status(501).json({
-            error: err.message,
-            toolId: err.toolId,
-            platform: err.platform,
-            hint: err.hint,
+            error: notImpl.message,
+            toolId: notImpl.toolId,
+            platform: notImpl.platform,
+            hint: notImpl.hint,
           });
           return;
         }

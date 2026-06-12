@@ -10,6 +10,8 @@ import {
 import { simulatorServerBinaryPath, simulatorServerBinaryDir } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { ensureDep } from "../utils/check-deps";
+import { isTvOsSimulator } from "../utils/ios-devices";
+import { UnsupportedOperationError } from "../utils/capability";
 
 export const SIMULATOR_SERVER_NAMESPACE = "SimulatorServer";
 
@@ -187,6 +189,22 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
     }
 
     if (device.platform === "ios") {
+      // A tvOS sim classifies as platform "ios" by UDID shape, but simulator-server
+      // cannot drive the Apple TV focus engine. Its transport (`sendCommand`) is
+      // fire-and-forget, so a tvOS touch/key would silently no-op while the tool
+      // still reported success. Reject here — the one chokepoint every gesture /
+      // keyboard / paste / rotate tool resolves through — and point at the tv-*
+      // tools instead. screenshot avoids this guard by branching to `xcrun`
+      // before it ever resolves this service.
+      if (await isTvOsSimulator(device.id)) {
+        throw new UnsupportedOperationError(
+          SIMULATOR_SERVER_NAMESPACE,
+          device,
+          "this is an Apple TV (tvOS) simulator — touch, keyboard, paste and rotate " +
+            "input are not available. Use the tv-describe / tv-navigate / tv-set-focus / " +
+            "tv-type tools (see the argent-tvos-interact skill)"
+        );
+      }
       await ensureAutomationEnabled(device.id).catch(() => {});
     } else if (device.platform === "android") {
       // Both the emulator and the physical-device controller talk to the target
