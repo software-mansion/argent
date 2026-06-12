@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator and Android emulator control. Argent MCP tools are the preferred form of interaction with the application.
+Argent MCP tools are available in this project for iOS simulator, Android emulator, and Electron desktop app control. Argent MCP tools are the preferred form of interaction with the application.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -17,6 +17,7 @@ Use cases:
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS or Android)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
+- Running, debugging, or testing an Electron desktop app (boot with `boot-device` + `electronAppPath`; on Electron scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only)
   </description>
 
 <tapping_rule>
@@ -44,7 +45,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Electron apps appear as `platform: "electron"`, `state: "Running"`.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 
