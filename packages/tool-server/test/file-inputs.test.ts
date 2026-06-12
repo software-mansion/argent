@@ -84,6 +84,70 @@ describe("resolveFileInputs", () => {
     expect(await fs.readFile(args.input as string, "utf8")).toBe("steps: []\n");
   });
 
+  it("cleanup removes materialized uploads and is a no-op for in-place paths", async () => {
+    const inPlace = path.join(tmpDir, "in-place.png");
+    await fs.writeFile(inPlace, "png-bytes");
+    const st = await fs.stat(inPlace);
+    const content = Buffer.from("uploaded bytes");
+
+    const specs: FileInputSpec[] = [
+      { target: "a", path: "${a}", kind: "file" },
+      { target: "b", path: "${b}", kind: "file" },
+    ];
+    const { args, cleanup } = await resolveFileInputs(
+      { fileInputs: specs },
+      {
+        a: wire({ path: inPlace, size: st.size, mtimeMs: st.mtimeMs }),
+        b: wire({
+          path: "/client/only.png",
+          size: content.length,
+          content: content.toString("base64"),
+        }),
+      }
+    );
+
+    const materialized = args.b as string;
+    expect(await fs.readFile(materialized, "utf8")).toBe("uploaded bytes");
+
+    await cleanup();
+    await expect(fs.stat(materialized)).rejects.toThrow();
+    // The temp dir holding it is gone too, and double-cleanup is harmless.
+    await expect(fs.stat(path.dirname(materialized))).rejects.toThrow();
+    await cleanup();
+    // In-place inputs are the caller's files — never removed.
+    expect(await fs.readFile(inPlace, "utf8")).toBe("png-bytes");
+  });
+
+  it("cleans up already-materialized uploads when a later spec fails", async () => {
+    const content = Buffer.from("bytes");
+    const specs: FileInputSpec[] = [
+      { target: "a", path: "${a}", kind: "file" },
+      { target: "b", path: "${b}", kind: "file" },
+    ];
+
+    const listInputTempDirs = async () => {
+      const entries = await fs.readdir(os.tmpdir());
+      return entries.filter((e) => e.startsWith("argent-file-input-"));
+    };
+    const before = await listInputTempDirs();
+
+    await expect(
+      resolveFileInputs(
+        { fileInputs: specs },
+        {
+          a: wire({
+            path: "/client/a.png",
+            size: content.length,
+            content: content.toString("base64"),
+          }),
+          b: wire({ path: path.join(tmpDir, "ghost.png") }),
+        }
+      )
+    ).rejects.toThrow(FileInputError);
+
+    expect(await listInputTempDirs()).toEqual(before);
+  });
+
   it("rejects a missing file with no uploaded content", async () => {
     await expect(
       resolveFileInputs(

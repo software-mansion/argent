@@ -270,6 +270,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         const resolved = await resolveFileInputs(def, req.body);
         bodyArgs = resolved.args;
         resolvedFileInputs = resolved.fileInputs;
+        // Materialized uploads are call-scoped: remove them once the response
+        // settles, whichever way it ends (success, validation failure, tool
+        // error, or client abort).
+        res.once("close", () => void resolved.cleanup());
       } catch (err) {
         if (err instanceof FileInputError) {
           res.status(422).json({ error: err.message });

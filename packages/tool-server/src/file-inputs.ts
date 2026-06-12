@@ -19,10 +19,9 @@
  * behavior.
  */
 
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { randomUUID } from "node:crypto";
 import {
   isFileInputWire,
   type FileInputSpec,
@@ -47,6 +46,14 @@ export interface ResolveFileInputsResult {
   args: Record<string, unknown>;
   /** Per-target outcomes, forwarded to the tool via `InvokeToolOptions.fileInputs`. */
   fileInputs: Record<string, ResolvedFileInput> | undefined;
+  /**
+   * Removes every temp file this call materialized. Uploads are call-scoped —
+   * the tool reads them during execution and nothing may reference them after
+   * the response, so the caller must invoke this once the call settles.
+   * Always safe: a no-op when everything resolved in place, and removal
+   * failures are swallowed (cleanup must never affect the call's outcome).
+   */
+  cleanup: () => Promise<void>;
 }
 
 /**
@@ -78,8 +85,8 @@ function sanitizeFilename(name: string): string {
   return cleaned.length > 0 && cleaned !== "." && cleaned !== ".." ? cleaned : "upload";
 }
 
-/** Write uploaded content under the OS temp dir and return the file path. */
-async function materializeUpload(wire: FileInputWire): Promise<string> {
+/** Write uploaded content into a fresh OS temp dir; returns the file path and the dir to remove on cleanup. */
+async function materializeUpload(wire: FileInputWire): Promise<{ filePath: string; dir: string }> {
   const data = Buffer.from(wire.content!, "base64");
   if (data.length > MAX_UPLOAD_BYTES) {
     throw new FileInputError(
@@ -96,16 +103,16 @@ async function materializeUpload(wire: FileInputWire): Promise<string> {
         `recorded ${wire.size} — refusing a truncated or corrupted upload.`
     );
   }
-  const dir = join(tmpdir(), "argent-file-inputs", randomUUID());
-  await mkdir(dir, { recursive: true });
+  const dir = await mkdtemp(join(tmpdir(), "argent-file-input-"));
   const filePath = join(dir, sanitizeFilename(basename(wire.path)));
   await writeFile(filePath, data);
-  return filePath;
+  return { filePath, dir };
 }
 
 async function resolveOne(
   spec: FileInputSpec,
-  wire: FileInputWire
+  wire: FileInputWire,
+  tempDirs: string[]
 ): Promise<{ value: string; meta: ResolvedFileInput }> {
   const meta: ResolvedFileInput = {
     clientPath: wire.path,
@@ -127,8 +134,9 @@ async function resolveOne(
   }
 
   if (typeof wire.content === "string") {
-    const value = await materializeUpload(wire);
-    return { value, meta: { ...meta, viaUpload: true } };
+    const { filePath, dir } = await materializeUpload(wire);
+    tempDirs.push(dir);
+    return { value: filePath, meta: { ...meta, viaUpload: true } };
   }
 
   throw new FileInputError(
@@ -149,21 +157,33 @@ export async function resolveFileInputs(
   def: Pick<ToolDefinition<unknown, unknown>, "fileInputs">,
   body: unknown
 ): Promise<ResolveFileInputsResult> {
+  const tempDirs: string[] = [];
+  const cleanup = async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})));
+  };
+
   const specs = def.fileInputs;
   if (!specs || specs.length === 0 || typeof body !== "object" || body === null) {
-    return { args: (body ?? {}) as Record<string, unknown>, fileInputs: undefined };
+    return { args: (body ?? {}) as Record<string, unknown>, fileInputs: undefined, cleanup };
   }
 
   const args = { ...(body as Record<string, unknown>) };
   let resolved: Record<string, ResolvedFileInput> | undefined;
 
-  for (const spec of specs) {
-    const value = args[spec.target];
-    if (!isFileInputWire(value)) continue;
-    const { value: path, meta } = await resolveOne(spec, value);
-    args[spec.target] = path;
-    resolved = { ...(resolved ?? {}), [spec.target]: meta };
+  try {
+    for (const spec of specs) {
+      const value = args[spec.target];
+      if (!isFileInputWire(value)) continue;
+      const { value: path, meta } = await resolveOne(spec, value, tempDirs);
+      args[spec.target] = path;
+      resolved = { ...(resolved ?? {}), [spec.target]: meta };
+    }
+  } catch (err) {
+    // A later spec failing must not leak the uploads already written for
+    // earlier ones — the caller never gets a result to clean up from.
+    await cleanup();
+    throw err;
   }
 
-  return { args, fileInputs: resolved };
+  return { args, fileInputs: resolved, cleanup };
 }
