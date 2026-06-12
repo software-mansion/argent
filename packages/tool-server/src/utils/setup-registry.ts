@@ -25,6 +25,7 @@ import { screenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
 import { gestureScrollTool } from "../tools/gesture-scroll";
+import { gestureDragTool } from "../tools/gesture-drag";
 import { gestureCustomTool } from "../tools/gesture-custom";
 import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
@@ -98,6 +99,7 @@ export function createRegistry(): Registry {
   registry.registerTool(gestureTapTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureScrollTool);
+  registry.registerTool(gestureDragTool);
   registry.registerTool(gestureCustomTool);
   registry.registerTool(gesturePinchTool);
   registry.registerTool(gestureRotateTool);

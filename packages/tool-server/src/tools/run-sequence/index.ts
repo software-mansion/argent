@@ -11,6 +11,7 @@ const ALLOWED_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
   "gesture-scroll",
+  "gesture-drag",
   "gesture-custom",
   "gesture-pinch",
   "gesture-rotate",
@@ -31,7 +32,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate"
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -89,6 +90,7 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-tap:    { x: number, y: number }                                                                              [ios/android/electron]
   gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [ios/android]
   gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [electron only]
+  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [electron only]
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }              [ios only]
   gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }                    [ios only]

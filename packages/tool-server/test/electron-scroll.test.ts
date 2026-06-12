@@ -58,7 +58,7 @@ describe("gesture-scroll", () => {
   });
 
   it("schema rejects a scroll with no delta", () => {
-    const parsed = gestureScrollTool.zodSchema.safeParse({
+    const parsed = gestureScrollTool.zodSchema!.safeParse({
       udid: "electron-cdp-19222",
       x: 0.5,
       y: 0.5,
