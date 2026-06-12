@@ -82,7 +82,7 @@ jobs:
           npm pack -w @swmansion/argent --pack-destination package-artifact
 
       - name: Upload npm package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: argent-main-npm-package
           path: package-artifact/*.tgz
