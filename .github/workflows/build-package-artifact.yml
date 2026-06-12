@@ -54,7 +54,7 @@ jobs:
             p="packages/argent/bin/${plat}/simulator-server"
             if [[ -x "$p" ]]; then
               size=$(wc -c <"$p")
-              echo "  ok ${plat}: ${p} (${size} bytes)"
+              echo "  ok ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
             else
               echo "  missing ${plat}: ${p}"
               if [[ "$plat" == "darwin" ]]; then missing=1; fi

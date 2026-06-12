@@ -68,6 +68,28 @@ for entry in "${TARGETS[@]}"; do
 
   mv "${PLATFORM_DIR}/${ASSET_NAME}" "${PLATFORM_DIR}/simulator-server"
   chmod +x "${PLATFORM_DIR}/simulator-server"
+
+  # Architecture sanity check: a wrong-arch binary in a platform dir is worse
+  # than a missing one — the resolver would happily pick it and the user gets
+  # an ENOEXEC at spawn time with no hint of the root cause. Fail hard here
+  # (unlike the missing-asset case above) because a present-but-mislabeled
+  # asset is an upstream packaging bug that must not ship.
+  if command -v file >/dev/null 2>&1; then
+    DESC="$(file -b "${PLATFORM_DIR}/simulator-server")"
+    case "${PLATFORM}" in
+      darwin) EXPECT="Mach-O universal" ;;
+      linux) EXPECT="ELF 64-bit.*x86-64" ;;
+      linux-arm64) EXPECT="ELF 64-bit.*aarch64" ;;
+      *) EXPECT="" ;;
+    esac
+    if [[ -n "${EXPECT}" ]] && ! [[ "${DESC}" =~ ${EXPECT} ]]; then
+      echo "✗ ${ASSET_NAME} has the wrong architecture for ${PLATFORM}:" >&2
+      echo "    got:      ${DESC}" >&2
+      echo "    expected: ${EXPECT}" >&2
+      exit 1
+    fi
+    echo "  ✓ arch ok: ${DESC}"
+  fi
 done
 
 echo ""
