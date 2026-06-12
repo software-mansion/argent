@@ -19,8 +19,8 @@ import { networkInspectorBlueprint } from "../blueprints/network-inspector";
 import { reactProfilerSessionBlueprint } from "../blueprints/react-profiler-session";
 import { listDevicesTool } from "../tools/devices/list-devices";
 import { createBootDeviceTool } from "../tools/devices/boot-device";
-import { launchAppTool } from "../tools/launch-app";
-import { restartAppTool } from "../tools/restart-app";
+import { createLaunchAppTool } from "../tools/launch-app";
+import { createRestartAppTool } from "../tools/restart-app";
 import { reinstallAppTool } from "../tools/reinstall-app";
 import { openUrlTool } from "../tools/open-url";
 import { createScreenshotTool } from "../tools/screenshot";
@@ -106,8 +106,8 @@ export function createRegistry(): Registry {
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
-  registry.registerTool(launchAppTool);
-  registry.registerTool(restartAppTool);
+  registry.registerTool(createLaunchAppTool(registry));
+  registry.registerTool(createRestartAppTool(registry));
   registry.registerTool(reinstallAppTool);
   registry.registerTool(openUrlTool);
   registry.registerTool(createScreenshotTool(registry));
