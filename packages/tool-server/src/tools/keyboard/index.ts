@@ -3,7 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
-import { resolveVegaTransport } from "../../utils/vega-transport";
+import { runVegaFastCli } from "../../utils/vega-fast-cli";
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
 import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "./chromium-keys";
 
@@ -125,14 +125,15 @@ Provide text, key, or both. Use instead of paste when paste is unreliable or uns
       return runChromium(chromium, params);
     }
     if (device.platform === "vega") {
-      const transport = await resolveVegaTransport(params.udid);
+      // Shell out to vega-fast-cli; it maps named keys + injects via the on-device server.
       let keysPressed = 0;
       if (params.key) {
-        await transport.pressNamedKey(params.key);
+        await runVegaFastCli(["key", params.key]);
         keysPressed++;
       }
       if (params.text) {
-        keysPressed += await transport.sendText(params.text);
+        await runVegaFastCli(["type", params.text]);
+        keysPressed += [...params.text].length;
       }
       return { typed: params.text ?? params.key ?? "", keys: keysPressed };
     }

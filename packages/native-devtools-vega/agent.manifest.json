@@ -1,8 +1,0 @@
-{
-  "version": "0.1.0",
-  "sha256": "4d5f50bce47fd30929dc85b0f808ad8798cbd990d73a3eae22f3b48e72f8d21f",
-  "deviceBinName": "argent-vega-agent",
-  "deviceBinPath": "/scratch/argent-vega-agent",
-  "devicePort": 8384,
-  "protocol": "vega-agent/1"
-}

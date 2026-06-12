@@ -35,11 +35,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # vega-fast-cli is in a separate PRIVATE repo — needs VEGA_FAST_CLI_TOKEN.
+      # Gated by ARGENT_REQUIRE_VEGA_AGENT (kept aligned with publish.yml): "0"
+      # skips a missing release/token, "1" makes it required.
+      - name: Download vega-fast-cli (Vega on-device binary)
+        run: bash scripts/download-vega-fast-cli.sh
+        env:
+          GH_TOKEN: ${{ secrets.VEGA_FAST_CLI_TOKEN }}
+          ARGENT_REQUIRE_VEGA_AGENT: "0"
+
       - run: npm ci
 
       - run: npx tsc --build
 
-      - run: npm run build -w @swmansion/argent
+      - name: Build argent package
+        run: npm run build -w @swmansion/argent
+        env:
+          ARGENT_REQUIRE_VEGA_AGENT: "0"
 
       # Keep the artifact build checks aligned with the publish workflow so the
       # uploaded tarball has the same required runtime assets as an npm release.
@@ -75,6 +87,22 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      - name: Verify vega-fast-cli host binaries
+        env:
+          ARGENT_REQUIRE_VEGA_AGENT: "0"
+        run: |
+          set -e
+          echo "vega-fast-cli inventory:"
+          for plat in darwin linux; do
+            p="packages/argent/bin/${plat}/vega-fast-cli"
+            if [[ -x "$p" ]]; then
+              echo "  ok ${plat}: ${p} ($(wc -c <"$p") bytes)"
+            elif [[ "${ARGENT_REQUIRE_VEGA_AGENT}" == "1" ]]; then
+              echo "::error::vega-fast-cli (${plat}) missing at ${p}"; exit 1
+            else
+              echo "  missing ${plat}: ${p} — absent (gate off)"
+            fi
+          done
 
       - name: Pack npm package
         run: |

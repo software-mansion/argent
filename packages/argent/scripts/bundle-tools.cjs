@@ -122,6 +122,16 @@ const TRACECFG_SRC = path.resolve(
   "packages/native-devtools-android/assets/argent.tracecfg.pbtxt"
 );
 const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
+// vega-fast-cli: the per-platform host binary (each embeds the on-device
+// server), fetched by scripts/download-vega-fast-cli.sh into
+// packages/native-devtools-vega/bin/<platform>/ (not committed). Shipped under
+// <pkg>/bin/<platform>/vega-fast-cli, the same per-platform layout as
+// simulator-server; the tool-server resolves it via __dirname/../bin/<platform>
+// (see utils/vega-fast-cli.ts).
+const VEGA_FAST_CLI_BIN_SRC_ROOT = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-vega/bin"
+);
 
 // ── Asset table ─────────────────────────────────────────────────────────────
 // Declarative copy plan. Each entry is copied (or its absence reported) by
@@ -565,4 +575,32 @@ if (fs.existsSync(apkSrc)) {
       `Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)\n` +
       `or: bash packages/native-devtools-android/scripts/build.sh`
   );
+}
+
+// Copy the per-platform vega-fast-cli host binary into bin/<platform>/, the same
+// layout as simulator-server. Each binary embeds the on-device server, so this
+// is the only Vega artifact. Fetched (not committed) by
+// scripts/download-vega-fast-cli.sh. When a platform's binary is absent: throw
+// in CI (ARGENT_REQUIRE_VEGA_AGENT=1) so a release can't ship a broken Vega path
+// on the host it's built for; warn otherwise (mirrors the simulator-server gating).
+{
+  const requireVega = process.env.ARGENT_REQUIRE_VEGA_AGENT === "1";
+  for (const platform of SUPPORTED_HOST_PLATFORMS) {
+    const src = path.join(VEGA_FAST_CLI_BIN_SRC_ROOT, platform, "vega-fast-cli");
+    const destDir = path.join(BIN_DIR, platform);
+    const dest = path.join(destDir, "vega-fast-cli");
+    if (fs.existsSync(src)) {
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(src, dest);
+      fs.chmodSync(dest, 0o755);
+      console.log(`✓ Copied vega-fast-cli (${platform}) → ${path.relative(process.cwd(), dest)}`);
+    } else if (requireVega && platform === process.platform) {
+      throw new Error(
+        `vega-fast-cli (${platform}) not found at ${src}.\n` +
+          `Run: bash scripts/download-vega-fast-cli.sh (fetches from software-mansion-labs/vega-fast-cli)`
+      );
+    } else {
+      console.warn(`⚠ vega-fast-cli (${platform}) not found at ${src} — skipping`);
+    }
+  }
 }

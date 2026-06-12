@@ -46,11 +46,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # vega-fast-cli lives in a separate PRIVATE repo, so its release isn't
+      # readable with the default GITHUB_TOKEN — needs VEGA_FAST_CLI_TOKEN (a PAT
+      # / App token with read access). Gated by ARGENT_REQUIRE_VEGA_AGENT: while
+      # it's "0" a missing release/token just skips (the bundler then ships
+      # without Vega assets); flip to "1" once the repo + first release + token
+      # are in place to make it a hard requirement.
+      - name: Download vega-fast-cli (Vega on-device binary)
+        run: bash scripts/download-vega-fast-cli.sh
+        env:
+          GH_TOKEN: ${{ secrets.VEGA_FAST_CLI_TOKEN }}
+          ARGENT_REQUIRE_VEGA_AGENT: "0"
+
       - run: npm ci
 
       - run: npx tsc --build
 
-      - run: npm run build -w @swmansion/argent
+      - name: Build argent package
+        run: npm run build -w @swmansion/argent
+        env:
+          ARGENT_REQUIRE_VEGA_AGENT: "0"
 
       # Per-platform bundle layout (commit 80e724a). darwin is always required;
       # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
@@ -90,6 +105,25 @@ jobs:
       - run: test -f packages/argent/assets/trace-processor/LICENSE
       - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
       - run: ls packages/argent/bin/argent-android-devtools-*.apk
+      # vega-fast-cli per-platform host binaries — only required once
+      # ARGENT_REQUIRE_VEGA_AGENT is flipped to "1" (see the download step). Until
+      # then, log presence/absence without failing the publish.
+      - name: Verify vega-fast-cli host binaries
+        env:
+          ARGENT_REQUIRE_VEGA_AGENT: "0"
+        run: |
+          set -e
+          echo "vega-fast-cli inventory:"
+          for plat in darwin linux; do
+            p="packages/argent/bin/${plat}/vega-fast-cli"
+            if [[ -x "$p" ]]; then
+              echo "  ✓ ${plat}: ${p} ($(wc -c <"$p") bytes)"
+            elif [[ "${ARGENT_REQUIRE_VEGA_AGENT}" == "1" ]]; then
+              echo "::error::vega-fast-cli (${plat}) missing at ${p}"; exit 1
+            else
+              echo "  ⚠ ${plat}: ${p} — absent (gate off)"
+            fi
+          done
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent

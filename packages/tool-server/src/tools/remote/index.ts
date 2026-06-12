@@ -2,10 +2,10 @@ import { z } from "zod";
 import type { ToolCapability, ToolDefinition } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { UnsupportedOperationError } from "../../utils/capability";
-import { REMOTE_KEYCODES, type RemoteButton } from "../../utils/vega-input";
-import { resolveVegaTransport } from "../../utils/vega-transport";
+import { REMOTE_BUTTONS, type RemoteButton } from "../../utils/vega-input";
+import { runVegaFastCli } from "../../utils/vega-fast-cli";
 
-const BUTTONS = Object.keys(REMOTE_KEYCODES) as [RemoteButton, ...RemoteButton[]];
+const BUTTONS = [...REMOTE_BUTTONS] as [RemoteButton, ...RemoteButton[]];
 
 // `button` accepts a single button OR a path of buttons. A path runs in ONE
 // device round-trip + one tool call, so it is strongly preferred for any
@@ -89,8 +89,9 @@ Returns { pressed, count }. Keys are injected on-device via inputd-cli so the fo
     const base = Array.isArray(params.button) ? params.button : [params.button];
     const repeat = Math.max(1, Math.floor(params.repeat ?? 1));
     const buttons = repeat === 1 ? base : Array.from({ length: repeat }, () => base).flat();
-    const transport = await resolveVegaTransport(params.udid);
-    const count = await transport.pressButtons(buttons);
-    return { pressed: buttons, count };
+    // Shell out to vega-fast-cli: `press <button>...` injects the whole path in
+    // one round-trip via the on-device server (deployed/started on first use).
+    await runVegaFastCli(["press", ...buttons]);
+    return { pressed: buttons, count: buttons.length };
   },
 };

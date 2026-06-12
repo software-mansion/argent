@@ -1,2 +1,0 @@
-# Rust build output (the device binary is built here, then vendored to ../bin/)
-/target
