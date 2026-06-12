@@ -10,7 +10,8 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { bootstrapDylibPath, bootstrapDylibPathTcp } from "@argent/native-devtools-ios";
+import { bootstrapDylibPath, bootstrapDylibPathTcp, bootstrapDylibPathTvos } from "@argent/native-devtools-ios";
+import { isTvOsSimulator } from "../utils/ios-devices";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 
 export type NativeDevtoolsTransport = "unix" | "tcp";
@@ -269,8 +270,16 @@ async function ensureEnv(
   udid: string,
   endpoint: { transport: "unix"; socketPath: string } | { transport: "tcp"; port: number }
 ): Promise<void> {
-  const bootstrapPath =
-    endpoint.transport === "tcp" ? bootstrapDylibPathTcp() : bootstrapDylibPath();
+  // Pick the dylib slice that matches the simulator's target platform.
+  // tvOS simulators require a TVOSSIMULATOR-platform dylib — injecting the
+  // default IOSSIMULATOR slice causes dyld to silently skip the library and
+  // native injection never connects.
+  const isTvos = await isTvOsSimulator(udid);
+  const bootstrapPath = isTvos
+    ? bootstrapDylibPathTvos()
+    : endpoint.transport === "tcp"
+      ? bootstrapDylibPathTcp()
+      : bootstrapDylibPath();
 
   // Read from launchctl inside the simulator (via simctl spawn) instead of
   // `simctl getenv`. The latter silently truncates values longer than 127 bytes,
