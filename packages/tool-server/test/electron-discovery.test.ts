@@ -1,5 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from "vitest";
+import * as fs from "node:fs";
 import * as http from "node:http";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AddressInfo } from "node:net";
 import {
   discoverElectronDevices,
@@ -70,6 +73,23 @@ async function startFakeCdpServer(options?: {
 
 const portsToCleanup: number[] = [];
 const serversToCleanup: FakeCdpServer[] = [];
+
+// Redirect port persistence to a throwaway file so tests never touch the
+// real ~/.argent/electron-cdp-ports.json on a developer machine or CI runner.
+const TEST_PORTS_FILE = path.join(os.tmpdir(), `argent-test-electron-ports-${process.pid}.json`);
+
+beforeAll(() => {
+  process.env.ARGENT_ELECTRON_PORTS_FILE = TEST_PORTS_FILE;
+});
+
+afterAll(() => {
+  delete process.env.ARGENT_ELECTRON_PORTS_FILE;
+  try {
+    fs.unlinkSync(TEST_PORTS_FILE);
+  } catch {
+    // never created — fine
+  }
+});
 
 afterEach(async () => {
   for (const p of portsToCleanup.splice(0)) untrackElectronPort(p);
@@ -149,5 +169,47 @@ describe("discoverElectronDevices", () => {
     devices = await discoverElectronDevices({ timeoutMs: 300 });
     expect(devices.some((d) => d.port === server.port)).toBe(false);
     expect(getCandidateElectronPorts()).not.toContain(server.port);
+  });
+});
+
+describe("port persistence across tool-server restarts", () => {
+  // Booted Electron apps are detached and outlive the tool-server (which
+  // auto-exits on idle). A fresh module instance — same as a fresh process —
+  // must rediscover them from the persisted file.
+  it("a fresh module instance sees ports tracked by a previous one", async () => {
+    trackElectronPort(43210);
+    portsToCleanup.push(43210);
+
+    vi.resetModules();
+    const fresh = await import("../src/utils/electron-discovery");
+    expect(fresh.getCandidateElectronPorts()).toContain(43210);
+  });
+
+  it("a dead persisted port is pruned from the file after a failed probe", async () => {
+    trackElectronPort(43211);
+    portsToCleanup.push(43211);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(43211);
+
+    // Nothing listens on 43211 — the probe fails and prunes it everywhere.
+    await discoverElectronDevices({ timeoutMs: 300, ports: [43211] });
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).not.toContain(43211);
+    expect(getCandidateElectronPorts()).not.toContain(43211);
+  });
+
+  it("untrackElectronPort removes the port from the persisted file", () => {
+    trackElectronPort(43212);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(43212);
+    untrackElectronPort(43212);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).not.toContain(43212);
+  });
+
+  it("ignores a corrupt persistence file", () => {
+    fs.writeFileSync(TEST_PORTS_FILE, "not json{{{");
+    expect(() => getCandidateElectronPorts()).not.toThrow();
+    expect(getCandidateElectronPorts()).toContain(9222);
+    // Tracking after corruption rewrites the file cleanly.
+    trackElectronPort(43213);
+    portsToCleanup.push(43213);
+    expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(43213);
   });
 });

@@ -30,6 +30,17 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// Electron discovery probes real TCP ports (9222 plus any persisted by a
+// previous tool-server on this machine). A developer actually running an
+// Electron app would leak it into this test's device list — stub discovery
+// so the result only contains what the simctl / adb mocks define.
+vi.mock("../src/utils/electron-discovery", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/electron-discovery")>(
+    "../src/utils/electron-discovery"
+  );
+  return { ...actual, discoverElectronDevices: vi.fn(async () => []) };
+});
+
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 
 function simctlJson(): string {

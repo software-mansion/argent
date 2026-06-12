@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ELECTRON_ID_PREFIX, electronIdFromPort } from "./device-info";
 import { ensureCdpReachable, discoverPrimaryPage } from "../blueprints/electron-cdp";
 
@@ -38,14 +41,54 @@ function parsePortList(raw: string | undefined): number[] {
 // well-known 9222 and the user-provided env list.
 const TRACKED_PORTS = new Set<number>();
 
+/**
+ * Tracked ports are also mirrored to a small file so they survive tool-server
+ * restarts. Booted Electron apps are detached and deliberately outlive the
+ * tool-server (which auto-exits on idle), so without persistence every
+ * restart makes running apps invisible to `list-devices` — the agent then
+ * boots a duplicate instance. Dead ports are pruned on probe failure, so the
+ * file self-heals after the app quits.
+ */
+function portsFilePath(): string {
+  return (
+    process.env.ARGENT_ELECTRON_PORTS_FILE ??
+    path.join(os.homedir(), ".argent", "electron-cdp-ports.json")
+  );
+}
+
+function loadPersistedPorts(): number[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(portsFilePath(), "utf8")) as unknown;
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((p): p is number => typeof p === "number" && p > 0 && p <= 65535);
+  } catch {
+    return [];
+  }
+}
+
+function persistPorts(mutate: (ports: Set<number>) => void): void {
+  // Best-effort: a persistence failure must never break boot or discovery.
+  try {
+    const file = portsFilePath();
+    const merged = new Set(loadPersistedPorts());
+    mutate(merged);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(Array.from(merged)));
+  } catch {
+    // ignore
+  }
+}
+
 /** Register a port the tool-server spawned. Boot-device calls this. */
 export function trackElectronPort(port: number): void {
   TRACKED_PORTS.add(port);
+  persistPorts((ports) => ports.add(port));
 }
 
 /** Remove a port. Optional — list-devices auto-prunes ports that fail to probe. */
 export function untrackElectronPort(port: number): void {
   TRACKED_PORTS.delete(port);
+  persistPorts((ports) => ports.delete(port));
 }
 
 /**
@@ -53,10 +96,11 @@ export function untrackElectronPort(port: number): void {
  * - Always includes 9222 (the Chromium default).
  * - Honours `ARGENT_ELECTRON_PORTS` (comma-separated list) so users can register custom ports.
  * - Includes ports `boot-device` opened in this server process via `trackElectronPort`.
+ * - Includes ports persisted by previous tool-server processes (apps outlive the server).
  */
 export function getCandidateElectronPorts(): number[] {
   const fromEnv = parsePortList(process.env.ARGENT_ELECTRON_PORTS);
-  return Array.from(new Set([9222, ...fromEnv, ...TRACKED_PORTS]));
+  return Array.from(new Set([9222, ...fromEnv, ...TRACKED_PORTS, ...loadPersistedPorts()]));
 }
 
 async function probePort(port: number, timeoutMs: number): Promise<ElectronDevice | null> {
@@ -77,6 +121,11 @@ async function probePort(port: number, timeoutMs: number): Promise<ElectronDevic
   } catch {
     // Drop dead tracked ports so list-devices doesn't keep probing a closed app.
     TRACKED_PORTS.delete(port);
+    // Only touch the file when this port was actually persisted — failed
+    // probes of 9222 / env ports must not create or rewrite it.
+    if (loadPersistedPorts().includes(port)) {
+      persistPorts((ports) => ports.delete(port));
+    }
     return null;
   } finally {
     clearTimeout(timer);
