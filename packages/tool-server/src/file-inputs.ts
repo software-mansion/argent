@@ -174,7 +174,9 @@ export async function resolveFileInputs(
 ): Promise<ResolveFileInputsResult> {
   const tempDirs: string[] = [];
   const cleanup = async () => {
-    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})));
+    await Promise.all(
+      tempDirs.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {}))
+    );
   };
 
   const specs = def.fileInputs;
