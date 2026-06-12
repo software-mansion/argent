@@ -28,6 +28,7 @@ import {
   getAutoScreenshotDelayMs,
 } from "./auto-screenshot.js";
 import { toMcpTool } from "./tool-mapping.js";
+import { getInstalledVersion } from "./installed-version.js";
 
 const MAX_RETRIES = 4;
 const EXP_BACKOFF_BASE = 250;
@@ -182,7 +183,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   const server = new Server(
-    { name: "argent", version: "0.5.3" },
+    { name: "argent", version: getInstalledVersion() },
     {
       capabilities: { tools: {} },
       instructions:
