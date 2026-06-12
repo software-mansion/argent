@@ -22,12 +22,26 @@ Prereqs: Vega SDK on PATH (`source ~/vega/env`). Start the VVD yourself — `veg
 
 ## Inspect screen (describe)
 
-`describe {udid}` → nested element tree from the on-device automation toolkit: each line is a `button`/`text`/`image` with its label, `id` (test_id), `[clickable]`, and **`[focused]`/`[selected]`** (where the D-pad cursor is) + a normalized [0,1] frame. This is the discovery tool for Vega — call it before navigating so `remote` moves are deliberate, not blind. The toolkit auto-enables when argent launches the app; if the tree comes back empty, the app started before the toolkit attached → `restart-app` and retry. Needs `adb` on PATH. (No element-tap yet — act via `remote`.)
+`describe {udid}` → nested element tree from the on-device automation toolkit: each line is a `button`/`text`/`image` with its label, `id` (test_id), `[clickable]`, and **`[focused]`/`[selected]`** (`[focused]` is the live D-pad cursor; `[selected]` is just an active-tab/highlight state — track `[focused]`) + a normalized [0,1] frame. This is the discovery tool for Vega — call it before navigating so `remote` moves are deliberate, not blind. The toolkit auto-enables when argent launches the app; if the tree comes back empty, the app started before the toolkit attached → `restart-app` and retry. Needs `adb` on PATH. (No element-tap yet — act via `remote`.)
+
+**Always pass `{includeImageInContext:false}` to `describe` while navigating.** The text tree already carries focus + every label/position, so the auto-screenshot is pure waste: it adds a device round-trip and ~1–1.5k image tokens that re-accumulate every turn. Text-only `describe` is ~150ms; the screenshot-bearing one is ~2s. Only take a real `screenshot` when you genuinely need pixels (rendering/layout/colour check).
 
 ## Input
 
-- `remote {udid, button, repeat?}` — buttons: `up`/`down`/`left`/`right`, `select`, `back`, `home`, `menu`, `playPause`, `rewind`, `fastForward`. e.g. `{button:"down", repeat:3}` then `{button:"select"}`.
+- `remote {udid, button}` — `button` is a single key **or a whole path**. Keys: `up`/`down`/`left`/`right`, `select`, `back`, `home`, `menu`, `playPause`, `rewind`, `fastForward`. Single: `{button:"down"}`. Repeat one key: `{button:"down", repeat:3}`.
+- `remote {udid, button:[...]}` — run a **whole path in one call**, e.g. `{button:["up","right","right","select"]}`. **Strongly prefer this for any multi-step move.** Each `remote` call pays a fixed ~1.6s device handshake, so one path of N presses (~1.6s + N·0.3s, one API round-trip) replaces N separate calls (N·~1.9s, N round-trips). A 3-hop drops ~5.9s→~2.6s; longer paths win more.
 - `keyboard {udid, text}` or `{udid, key:"enter"}` — type into a focused field (focus it with the D-pad first).
+
+## Fast navigation (the loop)
+
+Per screen, do exactly two tool calls:
+
+1. `describe {udid, includeImageInContext:false}` — read the tree, find `[focused]` and the target element.
+2. Compute the full D-pad path from focus → target (count rows/columns from the frames), then fire it as **one** `remote {button:[...]}` ending in `select`.
+
+Then `describe` again to confirm. This is text-only and ~2 round-trips/screen instead of one-press-per-round-trip with a screenshot each time. Off-by-one is normal on first traversal of an unfamiliar layout — re-`describe`, correct with a short follow-up `sequence`, and you'll have the layout's geometry for the rest of the run.
+
+**Model:** the decision each step is mechanical (read text tree → count steps → emit a path), so run device navigation on a fast model (e.g. Sonnet/Haiku). Reserve larger models for reasoning about the app, not for grinding D-pad steps.
 
 ## Screenshot
 

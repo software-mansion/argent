@@ -4,6 +4,7 @@ import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
 import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
+import { disposeAllVegaAgents } from "../../utils/vega-agent-manager";
 
 const PREFIXES = [
   `${SIMULATOR_SERVER_NAMESPACE}:`,
@@ -17,7 +18,7 @@ export function createStopAllSimulatorServersTool(
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
-    description: `Stop all running simulator-server processes (iOS + Android), native devtools services, and Chromium CDP sessions, freeing their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
+    description: `Stop all running simulator-server processes (iOS + Android), native devtools services, Chromium CDP sessions, and Vega on-device agents, freeing their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs/identifiers that were shut down. Fails silently if no servers are running.`,
     services: () => ({}),
     async execute() {
       const snapshot = registry.getSnapshot();
@@ -27,6 +28,11 @@ export function createStopAllSimulatorServersTool(
           await registry.disposeService(urn);
           stopped.push(urn);
         }
+      }
+      // On-device Vega agents are managed outside the registry (see
+      // vega-agent-manager); shut them down + drop their adb forwards too.
+      for (const udid of await disposeAllVegaAgents()) {
+        stopped.push(`VegaAgent:${udid}`);
       }
       return { stopped };
     },

@@ -44,17 +44,25 @@ Two findings drove the architecture:
    interactive REPL. Holding **one** REPL process open and piping
    `button_press <key> holdDuration 1` per key amortizes setup and removes the hold, landing
    at ~3–6 ms/key. **This — not the HTTP transport — is the agent's core advantage over a
-   plain `adb shell` fallback.** Focus movement at `holdDuration 1` was verified by diffing
+   plain `adb shell`.** Focus movement at `holdDuration 1` was verified by diffing
    `selectFunction` in `getPageSource` before/after.
+
+   (`adb shell` reaching the VVD directly is ~30 ms/op — a fine *floor* and what the transport
+   was first prototyped against — but the integrated transport is **agent-only**: no adb /
+   vega-cli fallback. If the agent can't be brought up, the call fails rather than silently
+   running ~50–500× slower. A dropped connection is self-healed by restarting the agent once.)
 
 ---
 
 ## Design decisions (and why)
 
-- **An on-device agent, not just `adb shell`.** `adb shell` alone gets ~50× and is the
-  fallback. The agent adds the last order of magnitude by holding the `inputd-cli` REPL open
-  (no per-press fork, no 270 ms hold) and by proxying `getPageSource` in-process. The two
-  layers are complementary: the agent is the fast path, `adb shell` is the always-works floor.
+- **Agent-only, no fallback.** `adb shell` alone would get ~50× and was the original prototype
+  target, but the integrated transport uses *only* the agent: it adds the last order of
+  magnitude by holding the `inputd-cli` REPL open (no per-press fork, no 270 ms hold) and by
+  proxying `getPageSource` in-process. Deliberately there is no adb / vega-cli fallback — a
+  silent drop to a ~50–500× slower path hides real breakage, so a call instead fails loudly if
+  the agent can't start. A dead agent (tmpfs wipe, OOM, manual kill) is restarted once,
+  transparently, on the next command.
 
 - **Held-open `inputd-cli start` REPL instead of reverse-engineering injection.** `inputd-cli`
   injects through a priority `inputmgr` injection point via `libevdev` over Amazon's `aipc`.
@@ -89,8 +97,7 @@ Two findings drove the architecture:
 
 - **HTTP error envelope, not HTTP status codes, for logical errors.** `/cmd` returns HTTP 200
   with `{"ok":false,"error":{type,message}}` for command-level failures; non-200 is reserved
-  for transport faults. This matches the `android-devtools-client` convention so the TS client
-  can treat all three backends uniformly.
+  for transport faults. This matches the `android-devtools-client` convention.
 
 ---
 
@@ -100,19 +107,22 @@ Two findings drove the architecture:
 Argent (host, Node/TS)                          Vega VVD (aarch64 Linux, app_user)
 ┌───────────────────────────┐                   ┌──────────────────────────────────────┐
 │ resolveVegaTransport()     │                   │  argent-vega-agent  (this package)     │
-│  ├─ agent   (fast ~3ms)  ──┼── HTTP/1.1 ───────┼─▶ 127.0.0.1:8384                       │
-│  ├─ adb     (~30ms)        │   over            │     ├─ POST /cmd button/text ──┐       │
-│  └─ vega-cli(~1.8s, last)  │   adb forward     │     │                          ▼       │
-│                            │   tcp:0→tcp:8384  │     │   held-open `inputd-cli start`   │
-│ VegaDevice blueprint       │                   │     │   REPL (one process, piped)      │
-│  deploy · forward · health │                   │     └─ POST /cmd getPageSource ─▶ :8383 │
+│  └─ agent (~3ms) ──────────┼── HTTP/1.1 ───────┼─▶ 127.0.0.1:8384                       │
+│     (no fallback)          │   over            │     ├─ POST /cmd button/text ──┐       │
+│                            │   adb forward     │     │                          ▼       │
+│ vega-agent-manager         │   tcp:0→tcp:8384  │     │   held-open `inputd-cli start`   │
+│  deploy · forward · health │                   │     │   REPL (one process, piped)      │
+│  · restart-on-death        │                   │     └─ POST /cmd getPageSource ─▶ :8383 │
 └───────────────────────────┘                   │         (on-device automation toolkit) │
                                                  └──────────────────────────────────────┘
 ```
 
 - **`agent/`** — the Rust crate (`argent-vega-agent`).
-- The TS integration (`VegaDevice` blueprint, `resolveVegaTransport`, deploy-if-missing,
-  tool rewiring) lives in `packages/tool-server` and is **Phase 1** (not yet landed).
+- The TS integration lives in `packages/tool-server/src/utils/`: `vega-transport.ts`
+  (agent-only transport), `vega-agent-manager.ts` (lifecycle singleton, not a registry
+  blueprint), `vega-agent-client.ts`, `vega-agent-install.ts`, `vega-agent-assets.ts`. The
+  `remote` and `keyboard` tools route through it; teardown is wired into
+  `stop-all-simulator-servers`.
 
 ---
 
@@ -180,10 +190,34 @@ exits — used by the host's deploy-if-missing probe).
 - **Phase 0 (this package's `agent/`): done & validated on a live VVD** — agent runs, survives
   a detached shell, HTTP over `adb forward` works; `button` (~3–6 ms, focus moves), `text`, and
   `getPageSource` all verified.
-- **Phase 1 (not landed):** `VegaDevice` blueprint + `resolveVegaTransport` (agent → adb →
-  vega-cli) + tool rewiring (`remote`, `keyboard`, `list-installed-apps`) + bundle/download
-  pipeline + teardown in `stop-all-simulator-servers`. See the plan referenced in the repo
-  root / session notes.
-- **Open items:** confirm `KEY_ENTER`/select reliability at `holdMs 1`; vend the prebuilt
-  binary + manifest (`sha256`, version) for deploy-if-missing; add `touch`/`swipe` ops if Vega
-  ever needs pointer input.
+- **Phase 1 (landed): agent-only transport.** `resolveVegaTransport` + `vega-agent-manager`
+  (deploy-if-missing, start, forward, health, restart-on-death) in `packages/tool-server`; the
+  `remote`, `keyboard`, and `describe` tools route through it; teardown in
+  `stop-all-simulator-servers`. Typechecks and verified end-to-end against the live VVD (agent
+  backend + transparent restart on a killed agent). No adb/vega-cli fallback — agent-only by
+  design.
+- **`describe` routes through the agent (landed).** `getPageSource` now comes over the
+  keep-alive agent socket instead of a per-call `adb forward` + fresh `fetch`; the dead
+  host-side JSON-RPC path (`vegaJsonRpc` / `fetchVegaPageSource`) was removed. The toolkit
+  enable flag stays owned by `launch-app` / `restart-app` (only read at app launch). Verified
+  on the live VVD: 7 KB page source parsed to a full tree, **steady-state ~2–5 ms** per fetch
+  (was tens–hundreds of ms). (`list-installed-apps`: still on the legacy path — route too if
+  convenient, lower value.)
+
+### Before this ships
+
+- **Bundle the binary + manifest into the published `argent` package.** Today
+  `vega-agent-assets.ts` resolves them by repo-relative path / `ARGENT_VEGA_AGENT_*` env
+  override, which only holds in a source checkout. In the published package that path is gone,
+  so deploy throws and — with no fallback by design — the whole Vega input path is dead for end
+  users. This is a release blocker, not a nice-to-have.
+
+### Verify / later
+
+- `KEY_ENTER`/select at `holdMs 1` (agent default): **verified reliable** on the VVD (OS 1.1
+  TV Ship). 5/5 activations landed via the agent path — tile→detail, the `Watch now` playback
+  button, and `select` as the terminal key of a batched `["right","right","left","left",
+  "select"]` path. No misses, no need to bump the hold. Re-check on retail hardware if parity
+  is ever needed.
+- `touch`/`swipe` ops only if Vega ever needs pointer input — speculative; Vega is
+  D-pad-navigated, so not planned.
