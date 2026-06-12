@@ -6,13 +6,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "references": [
-    { "path": "../registry" },
-    { "path": "../update-core" },
-    { "path": "../native-devtools-ios" },
-    { "path": "../native-devtools-android" },
-    { "path": "../argent-cli" }
-  ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

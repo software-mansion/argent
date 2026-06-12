@@ -48,6 +48,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "disable-auto-screenshot",
     description: "Disable the automatic screenshot captured after interaction tools.",
   },
+  {
+    name: "variant-selection",
+    description:
+      "Variant proposal & selection UI — the propose_variant / await_user_selection tools and the Electron preview window. Off by default while the feature is in development.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

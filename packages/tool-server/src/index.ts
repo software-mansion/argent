@@ -3,6 +3,8 @@ import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
 import { startUpdateChecker } from "./utils/update-checker";
+import { createPreviewWindowManager } from "./utils/preview-window";
+import { variantProposalStore } from "./utils/variant-proposals";
 
 const PROCESS_TIMEOUT_MS = 5_000;
 const DEFAULT_PORT = "3001";
@@ -14,6 +16,12 @@ function formatOrigin(host: string, port: number): string {
   const h = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
   return `http://${h}:${port}`;
 }
+
+// After a successful selection submit, wait this long before asking the
+// Electron preview window to play its close animation. Gives the renderer
+// time to show the green "Selection sent" toast first; the agent's await
+// has already been resolved by this point, so the delay is purely cosmetic.
+const PREVIEW_CLOSE_DELAY_MS = 1_000;
 
 /**
  * Prepends an ISO timestamp to every line written to stdout/stderr.
@@ -86,9 +94,62 @@ export function start(): void {
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
+  // The Electron preview window is spawned on demand when an
+  // `await_user_selection` parks, and asked to animate-close itself when the
+  // user submits. The same child is reused across rounds within one
+  // tool-server lifetime.
+  const previewWindow = createPreviewWindowManager();
+  const previewWindowBaseUrl = (): string | null => {
+    if (!server) return null;
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : null;
+    if (!port) return null;
+    // Stream the device the agent proposed against (if any), so the window
+    // connects directly instead of asking the user to pick a simulator.
+    const device = variantProposalStore.snapshot().device;
+    const query = device ? `?udid=${encodeURIComponent(device)}` : "";
+    return `http://127.0.0.1:${port}/preview/${query}`;
+  };
+  let pendingCloseTimer: NodeJS.Timeout | null = null;
+  const cancelPendingClose = (): void => {
+    if (pendingCloseTimer) {
+      clearTimeout(pendingCloseTimer);
+      pendingCloseTimer = null;
+    }
+  };
+  const onAwaitParked = (): void => {
+    // If a fresh round parks within PREVIEW_CLOSE_DELAY_MS of a submit,
+    // the pending close would fire seconds after the new window opened
+    // and squeeze it away under the user. Cancel the close instead.
+    cancelPendingClose();
+    const url = previewWindowBaseUrl();
+    if (url) previewWindow.ensureOpen(url);
+  };
+  const onSelectionSubmitted = (): void => {
+    cancelPendingClose();
+    pendingCloseTimer = setTimeout(() => {
+      pendingCloseTimer = null;
+      previewWindow.requestClose();
+    }, PREVIEW_CLOSE_DELAY_MS);
+  };
+  // User clicked "Close" in the preview window — dismiss it immediately (the
+  // animated close), leaving any parked await still waiting.
+  const onCloseRequested = (): void => {
+    cancelPendingClose();
+    previewWindow.requestClose();
+  };
+  variantProposalStore.events.on("awaitParked", onAwaitParked);
+  variantProposalStore.events.on("selectionSubmitted", onSelectionSubmitted);
+  variantProposalStore.events.on("closeRequested", onCloseRequested);
+
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
   shutdown = async (exitCode = 0) => {
+    variantProposalStore.events.off("awaitParked", onAwaitParked);
+    variantProposalStore.events.off("selectionSubmitted", onSelectionSubmitted);
+    variantProposalStore.events.off("closeRequested", onCloseRequested);
+    cancelPendingClose();
+    previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
     httpHandle.dispose();
