@@ -79,6 +79,14 @@ export interface TvControlApi {
   type(text: string): Promise<void>;
   /** Liveness check across both daemons. */
   ping(): Promise<boolean>;
+  /**
+   * Force a fresh ax daemon even if the current one is still alive. The daemon
+   * caches AXRuntime's `primaryApp`, which can keep pointing at a killed app
+   * after launch-app / restart-app — so describe returns an empty focus set on
+   * a fully-rendered screen. Recycling re-binds to the current foreground app.
+   * Programmatic equivalent of `pkill -f tvos-ax-service`.
+   */
+  recycleAx(): Promise<void>;
 }
 
 function axSocketPath(udid: string): string {
@@ -245,11 +253,13 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     let axProc = spawnAxDaemon(udid, axSock);
     const hidProc = spawnHidDaemon(udid, hidSock);
 
-    // The ax daemon runs inside the simulator process tree. When the app is
-    // killed by launch-app / restart-app the daemon exits too — its AX
-    // connection to the old process is gone. Track whether it has exited so
-    // ax-using commands can respawn it on demand instead of returning stale
-    // empty results with a misleading "still launching" hint.
+    // The ax daemon is a standalone process spawned via `simctl spawn` — it is
+    // NOT a child of the foreground app, so it survives launch-app / restart-app.
+    // What it does NOT survive cleanly is AXRuntime's `primaryApp` cache, which
+    // can keep pointing at the now-dead app and make describe report an empty
+    // focus set on a fully-rendered screen. Two recovery paths therefore
+    // exist: respawn if the process happens to have exited (rare), and an
+    // on-demand `recycleAx()` that kills + respawns to drop a stale cache.
     let axExited = false;
     const onAxExit = (code: number | null) => {
       if (disposed) return;
@@ -276,16 +286,36 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       throw err;
     }
 
-    // Respawn the ax daemon if it has exited (e.g. after launch-app / restart-app
-    // killed the simulator app process). Cleans up the old socket file, spawns a
-    // fresh daemon, and waits until its socket is ready.
-    async function ensureAxAlive(): Promise<void> {
-      if (!axExited) return;
+    // Kill any current ax daemon, clear its socket, spawn a fresh one and wait
+    // until it accepts connections. Serialized via `axRespawn` so concurrent
+    // ax commands can't race a half-spawned daemon or double-spawn.
+    let axRespawn: Promise<void> | null = null;
+    async function spawnFreshAx(): Promise<void> {
+      if (axProc && !axProc.killed) {
+        axProc.removeListener("exit", onAxExit);
+        axProc.kill("SIGKILL");
+      }
       axExited = false;
       try { fs.unlinkSync(axSock); } catch {}
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
       await waitForSocket(axSock, axProc, 15_000);
+    }
+
+    // Respawn only if the daemon process actually exited (rare — it normally
+    // outlives the app). Stale-cache recovery goes through `recycleAx` instead.
+    async function ensureAxAlive(): Promise<void> {
+      if (!axExited || disposed) return;
+      if (!axRespawn) axRespawn = spawnFreshAx().finally(() => { axRespawn = null; });
+      await axRespawn;
+    }
+
+    // Force a fresh daemon regardless of liveness — drops a stale primaryApp
+    // cache. Coalesces concurrent callers onto a single respawn.
+    async function recycleAx(): Promise<void> {
+      if (disposed) return;
+      if (!axRespawn) axRespawn = spawnFreshAx().finally(() => { axRespawn = null; });
+      await axRespawn;
     }
 
     const api: TvControlApi = {
@@ -344,6 +374,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         } catch {
           return false;
         }
+      },
+
+      async recycleAx(): Promise<void> {
+        await recycleAx();
       },
     };
 

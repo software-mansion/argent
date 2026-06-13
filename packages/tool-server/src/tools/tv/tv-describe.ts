@@ -28,21 +28,27 @@ interface Result {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Right after launch-app / restart-app the foreground app is on its splash /
-// loading screen and genuinely has no focusable elements yet — the focus engine
-// only populates once the first focusable view mounts (for a React Native app,
-// after the JS bundle loads). A single describe in that window returns an empty
-// list that looks identical to a real "AX is broken" result, so the agent gives
-// up. Retry a few times over a short window to ride out a brief transition, and
-// if it's still empty, say *why* so the agent waits and retries rather than
-// concluding tvOS support is broken.
+// An empty focus set right after launch-app / restart-app has two causes that
+// look identical from the host:
+//   1. The app is still on its splash / loading screen and genuinely has no
+//      focusable views yet (a React Native app only exposes focus once its JS
+//      bundle has loaded).
+//   2. The ax daemon's AXRuntime `primaryApp` cache is stale — still pointing
+//      at the app process that launch-app / restart-app killed — so it reports
+//      nothing for a screen that is actually fully rendered.
+// We can't tell them apart from a single probe, so: first ride out a brief
+// transition window with in-place retries (handles case 1's tail). If still
+// empty, recycle the daemon once and re-probe — a fresh daemon rebinds to the
+// current foreground app, so a stale cache (case 2) now populates while a truly
+// loading screen (case 1) stays empty. Only then surface the hint.
 const EMPTY_RETRY_ATTEMPTS = 3;
 const EMPTY_RETRY_DELAY_MS = 600;
 const EMPTY_HINT =
-  "No focusable elements — the app is most likely still launching (splash / loading screen) " +
-  "or mid-transition. This is normal right after launch-app / restart-app. Wait ~2-3s and call " +
-  "tv-describe again; a React Native app only exposes focus once its JS bundle has loaded. If it " +
-  "stays empty after several seconds, take a screenshot to confirm what's on screen.";
+  "No focusable elements after retrying and recycling the AX service. The app is most likely " +
+  "still launching (splash / loading screen) or mid-transition — this is normal right after " +
+  "launch-app / restart-app. Wait ~2-3s and call tv-describe again; a React Native app only " +
+  "exposes focus once its JS bundle has loaded. If it stays empty, take a screenshot to confirm " +
+  "what's actually on screen.";
 
 /** A describe result is "empty" when the focus engine reports nothing actionable. */
 function isEmpty(res: TvDescribeResponse): boolean {
@@ -104,6 +110,15 @@ Requires a booted Apple TV simulator (boot one via boot-device); fails for iOS/A
     let res = await api.describe();
     for (let attempt = 1; attempt < EMPTY_RETRY_ATTEMPTS && isEmpty(res); attempt++) {
       await sleep(EMPTY_RETRY_DELAY_MS);
+      res = await api.describe();
+    }
+
+    // Still empty after the transition window: the daemon may be holding a stale
+    // primaryApp cache from a killed app. Recycle it once and re-probe —
+    // a fresh daemon rebinds to the current foreground app, recovering a
+    // fully-rendered screen that the stale cache reported as empty.
+    if (isEmpty(res)) {
+      await api.recycleAx();
       res = await api.describe();
     }
 

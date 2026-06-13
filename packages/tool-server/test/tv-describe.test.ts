@@ -2,10 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import { tvDescribeTool } from "../src/tools/tv/tv-describe";
 import type { TvControlApi, TvDescribeResponse } from "../src/blueprints/tv-control";
 
-// The tool only ever touches `describe()`; the rest of the API is unused here.
-function makeApi(describe: TvControlApi["describe"]): TvControlApi {
+// The tool touches `describe()` and `recycleAx()`; the rest is unused here.
+function makeApi(
+  describe: TvControlApi["describe"],
+  recycleAx: TvControlApi["recycleAx"] = vi.fn().mockResolvedValue(undefined)
+): TvControlApi {
   return {
     describe,
+    recycleAx,
     hierarchy: vi.fn(),
     setFocus: vi.fn(),
     navigate: vi.fn(),
@@ -58,14 +62,35 @@ describe("tv-describe — empty-state resilience", () => {
     expect(res.hint).toBeUndefined();
   });
 
-  it("exhausts retries and surfaces the loading hint when still empty", async () => {
-    const describe = vi.fn().mockResolvedValue(empty);
-    const res = await run(makeApi(describe));
+  it("recycles the daemon and recovers when the cache was stale", async () => {
+    // The transition-window retries stay empty (stale primaryApp cache), then a
+    // recycle rebinds to the real foreground app and the next probe populates.
+    const describe = vi
+      .fn()
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValueOnce(empty)
+      .mockResolvedValue(populated);
+    const recycleAx = vi.fn().mockResolvedValue(undefined);
+    const res = await run(makeApi(describe, recycleAx));
 
-    expect(describe).toHaveBeenCalledTimes(3);
+    expect(describe).toHaveBeenCalledTimes(4);
+    expect(recycleAx).toHaveBeenCalledTimes(1);
+    expect(res.focusableCount).toBe(2);
+    expect(res.hint).toBeUndefined();
+  });
+
+  it("exhausts retries, recycles, and surfaces the hint when still empty", async () => {
+    const describe = vi.fn().mockResolvedValue(empty);
+    const recycleAx = vi.fn().mockResolvedValue(undefined);
+    const res = await run(makeApi(describe, recycleAx));
+
+    // 3 transition-window probes + 1 post-recycle probe.
+    expect(describe).toHaveBeenCalledTimes(4);
+    expect(recycleAx).toHaveBeenCalledTimes(1);
     expect(res.focusableCount).toBe(0);
     expect(res.focusedLabel).toBeNull();
-    expect(res.hint).toMatch(/still launching|loading|transition/i);
+    expect(res.hint).toMatch(/still launching|loading|transition|recycl/i);
     expect(res.description).toContain("Note:");
   });
 });
