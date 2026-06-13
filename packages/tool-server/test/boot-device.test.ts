@@ -320,6 +320,76 @@ describe("boot-device — iOS path", () => {
     );
     expect(hasShutdown).toBe(false);
   });
+
+  // A tvOS reboot orphans the host-side tvos-hid-daemon (it holds a
+  // SimDeviceLegacyClient bound to the prior boot for its whole lifetime, so
+  // tv-navigate silently no-ops afterward). boot-device must drop the cached
+  // TvControl service on a boot transition so the next tv-* call rebuilds it
+  // against the fresh boot. The ax-service self-heals (it runs inside the sim
+  // and the reboot kills it), so it doesn't need this.
+  const TV_UDID = "77777777-7777-7777-7777-777777777777";
+
+  it("disposes the cached TvControl service when a tvOS sim is booted from Shutdown", async () => {
+    listIosSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const disposeService = vi.fn(async () => undefined);
+    const registry = { resolveService, disposeService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: TV_UDID });
+
+    expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+  });
+
+  it("disposes the cached TvControl service on a tvOS force reboot", async () => {
+    listIosSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const disposeService = vi.fn(async () => undefined);
+    const registry = { resolveService, disposeService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: TV_UDID, force: true });
+
+    expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+  });
+
+  it("does NOT dispose TvControl for an iOS (non-tv) sim boot — that daemon self-heals", async () => {
+    // Default mock list has no runtimeKind:"tv" entry, so the iOS path must
+    // never touch disposeService.
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const disposeService = vi.fn(async () => undefined);
+    const registry = { resolveService, disposeService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    await tool.execute!({}, { udid: "11111111-1111-1111-1111-111111111111" });
+
+    expect(disposeService).not.toHaveBeenCalled();
+  });
+
+  it("swallows ServiceNotFoundError when no TvControl service is cached (fresh tvOS boot)", async () => {
+    const { ServiceNotFoundError } = await import("@argent/registry");
+    listIosSimulatorsMock.mockResolvedValueOnce([
+      { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
+    ]);
+    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const disposeService = vi.fn(async () => {
+      throw new ServiceNotFoundError(`TvControl:${TV_UDID}`);
+    });
+    const registry = { resolveService, disposeService } as unknown as Registry;
+    const tool = createBootDeviceTool(registry);
+
+    // The not-found case is the common fresh-boot path and must not fail boot.
+    await expect(tool.execute!({}, { udid: TV_UDID })).resolves.toEqual({
+      platform: "ios",
+      udid: TV_UDID,
+      booted: true,
+    });
+    expect(disposeService).toHaveBeenCalledWith(`TvControl:${TV_UDID}`);
+  });
 });
 
 describe("boot-device — input validation (exclusive udid/avdName)", () => {

@@ -1,7 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
+import { ServiceNotFoundError } from "@argent/registry";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import { TV_CONTROL_NAMESPACE } from "../../blueprints/tv-control";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -408,9 +410,11 @@ async function bootIos(
   }
   await ensureDep("xcrun");
 
-  const simState = await listIosSimulators()
-    .then((sims) => sims.find((s) => s.udid === udid)?.state)
+  const simMatch = await listIosSimulators()
+    .then((sims) => sims.find((s) => s.udid === udid))
     .catch(() => undefined);
+  const simState = simMatch?.state;
+  const isTvOs = simMatch?.runtimeKind === "tv";
 
   // force=true on a running sim: shut it down so we can pre-write AX prefs.
   if (force && simState === "Booted") {
@@ -435,6 +439,29 @@ async function bootIos(
     }
   });
   await execFileAsync("xcrun", ["simctl", "bootstatus", udid, "-b"]);
+
+  // tvOS only: a boot transition (Shutdown→Booted, or a force reboot) orphans
+  // the host-side HID daemon. Unlike the ax-service — which runs *inside* the
+  // sim via `simctl spawn` and is therefore killed by the reboot and respawned
+  // on the next describe — the tvos-hid-daemon runs on the host and holds a
+  // SimDeviceLegacyClient bound to the *previous* boot for its whole lifetime.
+  // The reboot invalidates that client, but the daemon process stays alive and
+  // its `navigate`/`type` sends are fire-and-forget, so tv-navigate silently
+  // no-ops with no error and no recovery path (the daemon-exit reconnect never
+  // fires). Dropping the cached TvControl service here forces the next tv-*
+  // call to rebuild it with a fresh daemon bound to the new boot. Disposal is
+  // best-effort: ServiceNotFoundError just means nothing was cached (the common
+  // fresh-boot case), which is a no-op.
+  if (isTvOs && needsPreBoot) {
+    await registry.disposeService(`${TV_CONTROL_NAMESPACE}:${udid}`).catch((err: unknown) => {
+      if (err instanceof ServiceNotFoundError) return;
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] failed to recycle stale TvControl service after reboot (${
+          err instanceof Error ? err.message : String(err)
+        }); tv-navigate may no-op until the tool-server restarts.\n`
+      );
+    });
+  }
 
   // Best-effort fallback: no-op on the happy path (pref already cached from
   // pre-boot write). When the sim was already Booted without force, writes
