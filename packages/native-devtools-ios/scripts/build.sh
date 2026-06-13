@@ -16,6 +16,10 @@
 #   PREBUILT_NATIVE_DEVTOOLS_IOS  - if set, copy this path to dylibs/ instead of building (CI on non-macOS)
 #   PREBUILT_KEYBOARD_PATCH       - same for keyboard patch dylib
 #   PREBUILT_INJECTION_BOOTSTRAP  - same for bootstrap dylib
+#   PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS / PREBUILT_KEYBOARD_PATCH_TVOS /
+#   PREBUILT_INJECTION_BOOTSTRAP_TVOS - tvOS-slice counterparts, copied to
+#     dylibs/tvos/ on the prebuilt path (all three required together)
+#   PREBUILT_TVOS_AX_SERVICE / PREBUILT_TVOS_HID_DAEMON - prebuilt tvOS daemon binaries
 #   Release signing: set IDENTITY (or CODESIGN_IDENTITY), or for CI keychain import set
 #     CERTIFICATE, PRIVATE_KEY_BASE64, PRIVATE_KEY_PASSWORD, KEYCHAIN_PASSWORD, IDENTITY.
 
@@ -74,6 +78,19 @@ if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS:-}" ]] && [[ -n "${PREBUILT_KEYBOARD_PA
   cp "$PREBUILT_NATIVE_DEVTOOLS_IOS" "$DEST_FILE"
   cp "$PREBUILT_KEYBOARD_PATCH" "$DEST_FILE_KB"
   cp "$PREBUILT_INJECTION_BOOTSTRAP" "$DEST_FILE_BS"
+  # tvOS slice (dylibs/tvos/). Only on the unix transport — the tvOS dylibs have
+  # no TCP variant — and only when all three are supplied, since
+  # InjectionBootstrap dlopen()s the other two from its own directory.
+  if [[ "$TRANSPORT" == "unix" \
+    && -n "${PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS:-}" \
+    && -n "${PREBUILT_KEYBOARD_PATCH_TVOS:-}" \
+    && -n "${PREBUILT_INJECTION_BOOTSTRAP_TVOS:-}" ]]; then
+    echo "Using pre-built tvOS dylibs"
+    mkdir -p "${ROOT_DIR}/dylibs/tvos"
+    cp "$PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS" "${ROOT_DIR}/dylibs/tvos/libNativeDevtoolsIos.dylib"
+    cp "$PREBUILT_KEYBOARD_PATCH_TVOS" "${ROOT_DIR}/dylibs/tvos/libKeyboardPatch.dylib"
+    cp "$PREBUILT_INJECTION_BOOTSTRAP_TVOS" "${ROOT_DIR}/dylibs/tvos/libArgentInjectionBootstrap.dylib"
+  fi
   exit 0
 fi
 
@@ -179,10 +196,88 @@ else
     -o "${AX_DEST}" "${AX_SRC_DIR}/ax_service.m"
 fi
 
-# tvOS control binaries. Unix-socket only (no TCP variant), so only build them
-# for the default transport. tvos-ax-service runs inside an appletvsimulator;
-# tvos-hid-daemon runs on the macOS host and injects HID via SimulatorKit.
+# tvOS control binaries + injection dylibs. Unix-socket only (no TCP variant),
+# so only built for the default transport. tvos-ax-service runs inside an
+# appletvsimulator; tvos-hid-daemon runs on the macOS host and injects HID via
+# SimulatorKit.
 if [[ "$TRANSPORT" == "unix" ]]; then
+  # tvOS injection dylibs. Same ObjC/C sources as the iOS dylibs, recompiled
+  # against the appletvsimulator SDK (platform TVOSSIMULATOR) — injecting the
+  # iOS slice into an Apple TV sim makes dyld silently skip the library, so
+  # native-devtools never connects (see ensureEnv's isTvos branch). They live
+  # next to their iOS counterparts under dylibs/tvos/ because
+  # bootstrapDylibPathTvos() reads from there regardless of transport, and
+  # InjectionBootstrap dlopen()s the other two from its own directory, so all
+  # three must ship together.
+  TVOS_DYLIB_DIR="${ROOT_DIR}/dylibs/tvos"
+  TVOS_DEST_FILE="${TVOS_DYLIB_DIR}/libNativeDevtoolsIos.dylib"
+  TVOS_DEST_FILE_KB="${TVOS_DYLIB_DIR}/libKeyboardPatch.dylib"
+  TVOS_DEST_FILE_BS="${TVOS_DYLIB_DIR}/libArgentInjectionBootstrap.dylib"
+  mkdir -p "$TVOS_DYLIB_DIR"
+  TVOS_SDK_PATH="$(xcrun --sdk appletvsimulator --show-sdk-path)"
+
+  echo "Building libNativeDevtoolsIos.dylib (tvOS)..."
+  if [[ -n "${PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS:-}" ]]; then
+    cp "$PREBUILT_NATIVE_DEVTOOLS_IOS_TVOS" "$TVOS_DEST_FILE"
+  else
+    xcrun --sdk appletvsimulator clang \
+      -dynamiclib \
+      -fobjc-arc \
+      -fmodules \
+      ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -isysroot "${TVOS_SDK_PATH}" \
+      -mtvos-simulator-version-min=17.0 \
+      -arch arm64 \
+      -arch x86_64 \
+      -framework Foundation \
+      -framework UIKit \
+      "${SRC_DIR}/InjectionEntry.m" \
+      "${SRC_DIR}/DevtoolsConnection.m" \
+      "${SRC_DIR}/NetworkInspector.m" \
+      "${SRC_DIR}/BodyStreamForwarder.m" \
+      "${SRC_DIR}/NativeDevtoolsURLProtocol.m" \
+      "${SRC_DIR}/ViewHierarchy/ViewHierarchyUtils.m" \
+      "${SRC_DIR}/ViewHierarchy/GetFullHierarchy.m" \
+      "${SRC_DIR}/ViewHierarchy/FindViews.m" \
+      "${SRC_DIR}/ViewHierarchy/ViewAtPoint.m" \
+      "${SRC_DIR}/ViewHierarchy/UserInteractableViewAtPoint.m" \
+      "${SRC_DIR}/ViewHierarchy/DescribeScreen.m" \
+      -o "${TVOS_DEST_FILE}"
+  fi
+
+  echo "Building libKeyboardPatch.dylib (tvOS)..."
+  if [[ -n "${PREBUILT_KEYBOARD_PATCH_TVOS:-}" ]]; then
+    cp "$PREBUILT_KEYBOARD_PATCH_TVOS" "$TVOS_DEST_FILE_KB"
+  else
+    xcrun --sdk appletvsimulator clang \
+      -dynamiclib \
+      -fobjc-arc \
+      -fmodules \
+      ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -isysroot "${TVOS_SDK_PATH}" \
+      -mtvos-simulator-version-min=17.0 \
+      -arch arm64 \
+      -arch x86_64 \
+      -framework Foundation \
+      "${SRC_DIR}/KeyboardPatch.m" \
+      -o "${TVOS_DEST_FILE_KB}"
+  fi
+
+  echo "Building libArgentInjectionBootstrap.dylib (tvOS)..."
+  if [[ -n "${PREBUILT_INJECTION_BOOTSTRAP_TVOS:-}" ]]; then
+    cp "$PREBUILT_INJECTION_BOOTSTRAP_TVOS" "$TVOS_DEST_FILE_BS"
+  else
+    xcrun --sdk appletvsimulator clang \
+      -dynamiclib \
+      ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
+      -isysroot "${TVOS_SDK_PATH}" \
+      -mtvos-simulator-version-min=17.0 \
+      -arch arm64 \
+      -arch x86_64 \
+      "${SRC_DIR}/InjectionBootstrap.c" \
+      -o "${TVOS_DEST_FILE_BS}"
+  fi
+
   echo "Building tvos-ax-service..."
   TVOS_SRC_DIR="${SUBMODULE_DIR}/Sources/TvosServices"
   TVOS_AX_DEST="${BIN_DIR}/tvos-ax-service"
@@ -191,7 +286,6 @@ if [[ "$TRANSPORT" == "unix" ]]; then
   if [[ -n "${PREBUILT_TVOS_AX_SERVICE:-}" ]]; then
     cp "$PREBUILT_TVOS_AX_SERVICE" "$TVOS_AX_DEST"
   else
-    TVOS_SDK_PATH="$(xcrun --sdk appletvsimulator --show-sdk-path)"
     xcrun --sdk appletvsimulator clang \
       -fobjc-arc \
       ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
@@ -224,6 +318,12 @@ if [[ "$MODE" == "release" ]]; then
     codesign --force --options runtime --sign "$IDENTITY" "${DEST_FILE_BS}"
     codesign --verify --verbose "${DEST_FILE_BS}"
     if [[ "$TRANSPORT" == "unix" ]]; then
+      codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE}"
+      codesign --verify --verbose "${TVOS_DEST_FILE}"
+      codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE_KB}"
+      codesign --verify --verbose "${TVOS_DEST_FILE_KB}"
+      codesign --force --options runtime --sign "$IDENTITY" "${TVOS_DEST_FILE_BS}"
+      codesign --verify --verbose "${TVOS_DEST_FILE_BS}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_AX_DEST}"
       codesign --verify --verbose "${TVOS_AX_DEST}"
       codesign --force --options runtime --sign "$IDENTITY" "${TVOS_HID_DEST}"
