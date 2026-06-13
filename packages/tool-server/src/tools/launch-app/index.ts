@@ -51,17 +51,17 @@ const capability: ToolCapability = {
 // `launch-app` resolves native-devtools through `registry` inside the iOS
 // handler (closed over below) rather than via the registry's `services()`
 // declaration — the same pattern as `describe` / `screenshot`. A tvOS sim
-// classifies as platform "ios" by UDID shape, and an eager `nativeDevtools`
-// ref would resolve its iOS-only factory for the Apple TV device. That factory
-// injects an iOS-built dylib via `simctl spawn … launchctl setenv
-// DYLD_INSERT_LIBRARIES` at resolution time, poisoning the tvOS launchd env
-// with a dylib it can't load. Resolving lazily lets the iOS handler skip the
-// injection entirely for tvOS and just launch the app.
+// classifies as platform "ios" by UDID shape; native-devtools is iOS *and*
+// tvOS capable, so the handler resolves it for both. Its ensureEnv picks the
+// platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR bootstrap
+// for Apple TV sims), so injection is prepared correctly on tvOS too — not
+// skipped. Lazy resolution keeps this aligned with the other iOS tools that
+// branch on the resolved device inside their handler.
 export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, LaunchAppResult> {
   return {
     id: "launch-app",
     description: `Open an app by its bundle id (iOS) or package name (Android), or confirm the running renderer (Chromium).
-Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection on iOS before the app starts (skipped on Apple TV / tvOS, which has no native-devtools injection).
+Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { launched, bundleId }. Fails if the app is not installed on the target device (iOS / Android).
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
 

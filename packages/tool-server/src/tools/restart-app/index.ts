@@ -42,17 +42,17 @@ const capability: ToolCapability = {
 // `restart-app` resolves native-devtools through `registry` inside the iOS
 // handler (closed over below) rather than via the registry's `services()`
 // declaration — the same pattern as `describe` / `screenshot`. A tvOS sim
-// classifies as platform "ios" by UDID shape, and an eager `nativeDevtools`
-// ref would resolve its iOS-only factory for the Apple TV device. That factory
-// injects an iOS-built dylib via `simctl spawn … launchctl setenv
-// DYLD_INSERT_LIBRARIES` at resolution time, poisoning the tvOS launchd env
-// with a dylib it can't load. Resolving lazily lets the iOS handler skip the
-// injection entirely for tvOS and just terminate + relaunch the app.
+// classifies as platform "ios" by UDID shape; native-devtools is iOS *and*
+// tvOS capable, so the handler resolves it for both. Its ensureEnv picks the
+// platform-matched DYLD_INSERT_LIBRARIES slice (the TVOSSIMULATOR bootstrap
+// for Apple TV sims), so injection is prepared correctly on tvOS too — not
+// skipped. Lazy resolution keeps this aligned with the other iOS tools that
+// branch on the resolved device inside their handler.
 export function createRestartAppTool(registry: Registry): ToolDefinition<Params, RestartAppResult> {
   return {
     id: "restart-app",
     description: `Terminate then relaunch an app by bundle id / package name.
-Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection on iOS before the relaunch (skipped on Apple TV / tvOS, which has no native-devtools injection).
+Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
     alwaysLoad: true,
     searchHint: "terminate relaunch restart reset app bundle id package simulator emulator tvos",

@@ -1,6 +1,5 @@
 import * as net from "node:net";
 import * as fs from "node:fs";
-import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
   TypedEventEmitter,
@@ -12,8 +11,6 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators } from "../utils/ios-devices";
-
-const execFileAsync = promisify(execFile);
 
 export const TV_CONTROL_NAMESPACE = "TvControl";
 
