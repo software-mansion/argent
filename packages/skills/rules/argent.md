@@ -94,15 +94,15 @@ Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
 
 TV (APPLE TV / ANDROID TV) SETUP
-Skill: `argent-tvos-simulator-setup`
-When: Beginning a task that involves an Apple TV simulator (or need a tvOS UDID), with the setup flow for Android TV too. TV targets are identified by `runtimeKind: "tv"` from `list-devices` — an Apple TV simulator (UUID-shaped, like iOS) or an Android TV serial (`emulator-NNNN`, like a phone). Boot an Android TV AVD via `argent-android-emulator-setup`.
+Skill: `argent-tv-setup`
+When: Beginning a task that involves a TV target — an Apple TV simulator or an Android TV emulator. TV targets are identified by `runtimeKind: "tv"` from `list-devices` — an Apple TV simulator (UUID-shaped, like iOS) or an Android TV serial (`emulator-NNNN`, like a phone). Boot an Android TV AVD via `argent-android-emulator-setup`.
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
-When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for a TV target (`runtimeKind: "tv"`, Apple TV or Android TV) use `argent-tvos-interact` instead.
+When: Performing touch interactions, typing, pressing hardware buttons, launching/restarting apps, opening URLs, rotating device, taking standalone screenshots, or verifying a visible UI code change. Phone/tablet iOS and Android only — for a TV target (`runtimeKind: "tv"`, Apple TV or Android TV) use `argent-tv-interact` instead.
 
 TV (APPLE TV / ANDROID TV) INTERACTION
-Skill: `argent-tvos-interact`
+Skill: `argent-tv-interact`
 When: Interacting with a TV target (a `list-devices` entry with `runtimeKind: "tv"` — Apple TV simulator or Android TV device) — moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` / `button` / `keyboard` tools do NOT apply; use `tv-describe` / `tv-navigate` / `tv-set-focus` / `tv-type` (the same tools drive both platforms).
 
 SCREENSHOT DIFF & VISUAL REGRESSION

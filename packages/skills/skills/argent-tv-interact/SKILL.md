@@ -1,5 +1,5 @@
 ---
-name: argent-tvos-interact
+name: argent-tv-interact
 description: Interact with a TV device (Apple TV / tvOS simulator or Android TV / leanback device) using argent MCP tools. Use when navigating TV UI, moving focus with the remote / D-pad, activating elements, typing text into search fields, or reading the focus state of a TV target.
 ---
 
@@ -20,7 +20,7 @@ Do not use `gesture-tap`, `gesture-swipe`, `button`, `keyboard`, or any other co
 
 If you delegate device tasks to sub-agents, make sure they have MCP permissions.
 
-Call `list-devices` and pick a device with `runtimeKind: "tv"` — an Apple TV simulator (iOS UDID shape) or an Android TV serial. If none are booted, call `boot-device` first. See `argent-tvos-simulator-setup` for the full setup flow.
+Call `list-devices` and pick a device with `runtimeKind: "tv"` — an Apple TV simulator (iOS UDID shape) or an Android TV serial. If none are booted, call `boot-device` first. See `argent-tv-setup` for the full setup flow.
 
 ---
 
@@ -44,17 +44,19 @@ Call `list-devices` and pick a device with `runtimeKind: "tv"` — an Apple TV s
 ### tv-describe — Read focus state
 
 ```json
-{ "udid": "<tvOS UDID>" }
+{ "udid": "<TV target id>" }
 ```
 
 Returns the currently focused element and all focusable elements on screen. Always call this before navigating (to see what is available) and after navigating (to confirm where focus landed).
 
 Output includes `focusedLabel`, `focusableCount`, and a `description` text rendering of the full focus state.
 
+> **Android TV: some screens legitimately report `focusableCount: 0`.** Android TV reads focus from the OS accessibility tree (`uiautomator`). Many `react-native-tvos` screens manage focus with React Native's *own* focus engine, which Android's accessibility tree does not expose — so `tv-describe` can correctly return zero focusables on a screen that visibly has selectable tiles (e.g. a full-screen RN promo/upsell). This is faithful reporting, not a tool failure. When it happens: (1) take a `screenshot` to see what's actually there, (2) use the full `describe` tool instead — it surfaces the `content-desc`/`text` tree the RN screen does expose, and (3) `tv-navigate` still moves focus on these screens even though the labels aren't enumerable, so you can drive blind + screenshot to confirm. Screens that use native focusable views (the NFL sidebar, system dialogs) report focusables normally.
+
 ### tv-navigate — Send a Siri-remote input
 
 ```json
-{ "udid": "<tvOS UDID>", "direction": "right" }
+{ "udid": "<TV target id>", "direction": "right" }
 ```
 
 Valid directions: `up`, `down`, `left`, `right`, `select`, `menu`, `home`, `playpause`.
@@ -80,6 +82,8 @@ Returns `{ ok, message }`. `ok: false` means the label was not on screen, or (An
 ```
 
 Types text into the currently focused text field (injected HID keyboard on Apple TV, `adb input text` on Android TV). Focus the field first with `tv-navigate` or `tv-set-focus`, then call this. Uppercase and common symbols are handled automatically.
+
+> `tv-type` reports `{ typed }` on success **whether or not a field actually received the text** — it can't see where the keystrokes land. If the target field must hold focus first, confirm the text arrived with a follow-up `tv-describe`/`screenshot` rather than trusting the return value. A common miss on Android TV is typing into a field that hasn't gained focus yet (e.g. a still-loading screen): the call "succeeds" but the field stays empty — re-focus and retry.
 
 ---
 
@@ -121,7 +125,7 @@ auto-injected — don't repeat it per step.
 
 ```json
 {
-  "udid": "<TVOS-UDID>",
+  "udid": "<TV target id>",
   "steps": [
     { "tool": "tv-navigate", "args": { "direction": "right" } },
     { "tool": "tv-navigate", "args": { "direction": "right" } },
@@ -145,6 +149,9 @@ between steps.
 | `tv-set-focus` returns `ok: false` | Label not on screen (call `tv-describe` and use the exact label shown), or on Android TV focus couldn't reach it by D-pad — fall back to step-by-step `tv-navigate` |
 | Apple TV daemons take a few seconds on first call | Normal — `tvos-ax-service` and `tvos-hid-daemon` start on first use and stay running |
 | Focus doesn't move as expected | Some TV screens throttle focus changes; always call `tv-describe` after each step |
+| **Android TV:** `tv-describe` shows `focusableCount: 0` on a screen that clearly has tiles | Expected on `react-native-tvos` screens that use RN's own focus engine (invisible to the OS accessibility tree). Use `screenshot` + the full `describe` tool; `tv-navigate` still moves focus, so drive + screenshot to confirm. Not a bug. |
+| **Android TV:** right after `launch-app`/`restart-app`, `tv-describe` is empty | The RN bundle is still loading (splash window). Wait ~2–3s and retry — `tv-describe` retries internally, but a cold dev-client start can take longer. |
+| `debugger-*` / profiler tools target the wrong app when two devices share one Metro | The CDP page is chosen by **recency of the last registered WebSocket**, not by `device_id` — `device_id` only resolves the session-cache key. If a tvOS and an Android (or phone) app are both connected to one Metro, the most-recently-foregrounded one wins. Bring the target app to the foreground (or background the other, e.g. a HOME intent) so it re-registers as the most-recent page, then connect. |
 
 ---
 
@@ -152,7 +159,7 @@ between steps.
 
 | Skill | When to use |
 |-------|-------------|
-| `argent-tvos-simulator-setup` | Boot and connect to an Apple TV simulator before interacting |
+| `argent-tv-setup` | Boot and connect to a TV target (Apple TV simulator or Android TV emulator) before interacting |
 | `argent-android-emulator-setup` | Boot and connect to an Android emulator / Android TV AVD before interacting |
 | `argent-device-interact` | Tapping, swiping, gestures — phone/tablet iOS and Android (not TV) |
 | `argent-ios-simulator-setup` | iOS simulator boot and connection setup |

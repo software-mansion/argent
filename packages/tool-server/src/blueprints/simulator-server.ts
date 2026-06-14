@@ -202,7 +202,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
           device,
           "this is an Apple TV (tvOS) simulator — touch, keyboard, paste and rotate " +
             "input are not available. Use the tv-describe / tv-navigate / tv-set-focus / " +
-            "tv-type tools (see the argent-tvos-interact skill)"
+            "tv-type tools (see the argent-tv-interact skill)"
         );
       }
       await ensureAutomationEnabled(device.id).catch(() => {});
