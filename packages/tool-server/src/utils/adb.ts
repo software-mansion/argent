@@ -107,12 +107,17 @@ function describeAdbFailure(args: string[], err: unknown): Error {
     code?: string | number | null;
     signal?: string | null;
     killed?: boolean;
-    stderr?: string;
-    stdout?: string;
+    // Binary execs (runAdbBinary, encoding:"buffer") reject with Buffer
+    // stderr/stdout, not string — coerce before trimming so this handler
+    // never throws and mask the real adb diagnostic.
+    stderr?: string | Buffer;
+    stdout?: string | Buffer;
     message?: string;
   };
   const argv = args.join(" ");
-  const ioDetail = (e.stderr ?? "").trim() || (e.stdout ?? "").trim();
+  const asText = (v: string | Buffer | undefined): string =>
+    v == null ? "" : v.toString();
+  const ioDetail = asText(e.stderr).trim() || asText(e.stdout).trim();
   if (ioDetail) return new Error(`adb ${argv} failed: ${ioDetail}`);
   const meta: string[] = [];
   if (e.killed) meta.push("killed=true");
