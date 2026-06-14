@@ -1,5 +1,5 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote } from "../../../utils/adb";
+import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
 
 // `am start -W` always prints a `Status:` banner. A positive-match check on
@@ -16,27 +16,55 @@ export function assertAmStartOk(out: string): void {
   // That's the behavior callers want from launch-app, so we don't reject it.
 }
 
-// Resolve the package's LAUNCHER activity via `cmd package resolve-activity`.
-// Output of `--brief` is one component per line; the last non-empty line is
-// `pkg/fully.Qualified.Activity`. This lets the default (no-activity) branch
-// use `am start -W` for a proper blocking launch instead of `monkey 1`.
-export async function resolveLauncherActivity(udid: string, bundleId: string): Promise<string> {
-  const raw = await adbShell(udid, `cmd package resolve-activity --brief ${shellQuote(bundleId)}`, {
-    timeoutMs: 10_000,
-  });
+// Parse the last `pkg/Activity` component out of `resolve-activity --brief`
+// output (one component per line; the resolved activity is the last non-empty
+// line). Returns null when the output names no concrete component — e.g. the
+// package has no activity for the requested category.
+function parseResolvedActivity(raw: string): string | null {
   const last = raw
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
     .pop();
-  if (!last || !/^[\w.]+\/[\w.$]+$/.test(last)) {
-    throw new Error(
-      `Could not resolve a LAUNCHER activity for ${bundleId}. ` +
-        `Install the app first, or pass an explicit \`activity\`. ` +
-        `(resolve-activity output: ${raw.trim() || "empty"})`
+  return last && /^[\w.]+\/[\w.$]+$/.test(last) ? last : null;
+}
+
+// Resolve the package's launcher activity via `cmd package resolve-activity`.
+// `--brief` prints one component per line; the resolved activity is the last
+// non-empty line (`pkg/fully.Qualified.Activity`). This lets the default
+// (no-activity) branch use `am start -W` for a proper blocking launch.
+//
+// `isTv` switches the intent category from LAUNCHER to LEANBACK_LAUNCHER:
+// Android TV apps declare a leanback launcher activity and frequently have NO
+// phone-style LAUNCHER one, so a plain resolve returns the system resolver
+// (`android/...ResolverActivity`) or nothing. We try LEANBACK first on TV and
+// fall back to the standard LAUNCHER so apps that ship both still launch.
+export async function resolveLauncherActivity(
+  udid: string,
+  bundleId: string,
+  isTv = false
+): Promise<string> {
+  const resolveFor = async (category?: string): Promise<string | null> => {
+    const intent = category ? ` -c ${shellQuote(category)}` : "";
+    const raw = await adbShell(
+      udid,
+      `cmd package resolve-activity --brief${intent} ${shellQuote(bundleId)}`,
+      { timeoutMs: 10_000 }
     );
+    return parseResolvedActivity(raw);
+  };
+
+  if (isTv) {
+    const leanback = await resolveFor("android.intent.category.LEANBACK_LAUNCHER");
+    if (leanback) return leanback;
   }
-  return last;
+  const launcher = await resolveFor();
+  if (launcher) return launcher;
+
+  throw new Error(
+    `Could not resolve a ${isTv ? "LEANBACK_LAUNCHER or LAUNCHER" : "LAUNCHER"} activity for ${bundleId}. ` +
+      `Install the app first, or pass an explicit \`activity\`.`
+  );
 }
 
 export const androidImpl: PlatformImpl<
@@ -72,7 +100,10 @@ export const androidImpl: PlatformImpl<
         component = `${params.bundleId}/.${a}`;
       }
     } else {
-      component = await resolveLauncherActivity(params.udid, params.bundleId);
+      // Android TV apps declare a LEANBACK_LAUNCHER activity (often with no
+      // phone LAUNCHER), so resolve against that category on TV targets.
+      const isTv = await isAndroidTv(params.udid);
+      component = await resolveLauncherActivity(params.udid, params.bundleId, isTv);
     }
     const out = await adbShell(params.udid, `am start -W -n ${shellQuote(component)}`, {
       timeoutMs: 30_000,

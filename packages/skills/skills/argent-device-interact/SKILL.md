@@ -13,7 +13,7 @@ All interaction tools below accept a `udid` parameter and auto-dispatch iOS vs A
 
 **Cookies & storage (Chromium only):** `chromium-cookies` reads/writes cookies via the Network domain (so HttpOnly cookies are visible): `action=get` (optionally scoped by `url`), `set` (`name`, `value`, + `url`/`domain`, optional `secure`/`httpOnly`/`sameSite`/`expires`), `delete` (`name`), `clear` (all). `chromium-storage` reads/writes Web Storage for the active page: `store=local|session`, `action=get` (one `key` or all entries), `set`, `remove`, `clear`. Both are per-origin / active-tab. Handy for seeding auth before a flow or asserting app state after one.
 
-> **Apple TV (tvOS) is not covered by this skill.** tvOS UDIDs are UUID-shaped, identical to iOS, but tvOS is **focus-driven, not touch-driven** — the `gesture-*`, `button`, and `keyboard` tools do not work on it. If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tvos-interact` skill (`tv-describe` / `tv-navigate` / `tv-set-focus` / `tv-type`) instead.
+> **TV targets (Apple TV / Android TV) are not covered by this skill.** A TV target is **focus-driven, not touch-driven** — the `gesture-*`, `button`, and `keyboard` tools do not work on it. This applies to both Apple TV simulators (UUID-shaped, identical to iOS) and Android TV / leanback devices (serial-shaped, identical to a phone emulator). If `list-devices` tags your target `runtimeKind: "tv"`, stop and use the `argent-tvos-interact` skill (`tv-describe` / `tv-navigate` / `tv-set-focus` / `tv-type`) instead.
 
 For platform-specific caveats (Metro `adb reverse`, locked-screen describe errors, etc.), see § 9 Platform-specific notes at the bottom.
 

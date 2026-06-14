@@ -1,6 +1,6 @@
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeTreeData } from "../../contract";
-import { adbExecOutBinary } from "../../../../utils/adb";
+import { adbExecOutBinary, isAndroidTv } from "../../../../utils/adb";
 import { resolveDevice } from "../../../../utils/device-info";
 import { getAndroidScreenSize } from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
@@ -10,6 +10,15 @@ import {
 } from "../../../../blueprints/android-devtools";
 
 export const androidRequires: ToolDependency[] = ["adb"];
+
+// Android TV is focus-driven: the uiautomator tree is still readable (so we
+// don't short-circuit describe the way iOS does for tvOS), but the agent
+// shouldn't tap coordinates — it should move the D-pad focus instead. Surface
+// the tv-* tools as a hint rather than blocking the (still-useful) tree.
+const ANDROID_TV_HINT =
+  "This is an Android TV (leanback) device — it is focus-driven and has no touch. " +
+  "Prefer the `tv-describe` tool to read the focused / focusable elements, and " +
+  "`tv-navigate` / `tv-set-focus` / `tv-type` to interact, rather than coordinate taps.";
 
 /**
  * Try the persistent `android-devtools` helper first; on any error fall back
@@ -23,6 +32,10 @@ export async function describeAndroid(
   serial: string,
   _bundleId?: string
 ): Promise<DescribeTreeData> {
+  // Probe form factor up front (cheap + memoised) so both the devtools and the
+  // legacy uiautomator return paths can attach the TV hint.
+  const hint = (await isAndroidTv(serial)) ? ANDROID_TV_HINT : undefined;
+
   if (registry) {
     try {
       // The android-devtools helper is driven entirely over adb, so it works the
@@ -36,7 +49,7 @@ export async function describeAndroid(
         devtools.getScreenSize(),
       ]);
       const tree = parseUiAutomatorDump(xml, size.width, size.height);
-      return { tree, source: "android-devtools" };
+      return { tree, source: "android-devtools", hint };
     } catch (serviceErr) {
       // Fall through to the legacy uiautomator path. Every error here is
       // recoverable because the legacy path has independent failure modes.
@@ -84,5 +97,5 @@ export async function describeAndroid(
     );
   }
   const tree = parseUiAutomatorDump(raw, size.width, size.height);
-  return { tree, source: "uiautomator" };
+  return { tree, source: "uiautomator", hint };
 }

@@ -11,6 +11,16 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators } from "../utils/ios-devices";
+import type {
+  TvControlApi,
+  TvDescribeResponse,
+  TvDirection,
+  TvElement,
+} from "./tv-control-types";
+
+// Re-export the shared TV contract so existing importers of `tv-control` keep
+// working. The Android TV backend implements the same `TvControlApi`.
+export type { TvControlApi, TvDescribeResponse, TvDirection, TvElement };
 
 export const TV_CONTROL_NAMESPACE = "TvControl";
 
@@ -35,56 +45,10 @@ export function tvControlRef(device: DeviceInfo): {
   };
 }
 
-// ── AX read-path types (mirror the tvos_ax_service JSON shapes) ──
-
-export interface TvElement {
-  label?: string;
-  frame?: { x: number; y: number; width: number; height: number };
-  tapPoint?: { x: number; y: number };
-  traits?: string[];
-  value?: string;
-  isFocused?: boolean;
-}
-
-export interface TvDescribeResponse {
-  bundleId?: string;
-  focused: TvElement | null;
-  focusable: TvElement[];
-  screenFrame?: { width: number; height: number };
-}
-
-export type TvDirection =
-  | "up"
-  | "down"
-  | "left"
-  | "right"
-  | "select"
-  | "menu"
-  | "home"
-  | "playpause";
-
-export interface TvControlApi {
-  /** Read the currently focused element plus all focusable elements. */
-  describe(): Promise<TvDescribeResponse>;
-  /** Read the full accessibility tree. */
-  hierarchy(): Promise<unknown>;
-  /** Jump focus directly to the element with the given label (requires AutomationEnabled). */
-  setFocus(label: string): Promise<{ ok: boolean; message: string }>;
-  /** Send a Siri-remote directional / button event via the host HID daemon. */
-  navigate(direction: TvDirection): Promise<void>;
-  /** Type a string via the HID keyboard. */
-  type(text: string): Promise<void>;
-  /** Liveness check across both daemons. */
-  ping(): Promise<boolean>;
-  /**
-   * Force a fresh ax daemon even if the current one is still alive. The daemon
-   * caches AXRuntime's `primaryApp`, which can keep pointing at a killed app
-   * after launch-app / restart-app — so describe returns an empty focus set on
-   * a fully-rendered screen. Recycling re-binds to the current foreground app.
-   * Programmatic equivalent of `pkill -f tvos-ax-service`.
-   */
-  recycleAx(): Promise<void>;
-}
+// The TV read-path / control types (`TvElement`, `TvDescribeResponse`,
+// `TvDirection`, `TvControlApi`) live in `tv-control-types.ts` so the Android TV
+// backend can share them without importing the iOS daemon binaries. The tvOS
+// daemon JSON shapes mirror `TvDescribeResponse`.
 
 function axSocketPath(udid: string): string {
   return `/tmp/argent-tv-ax-${udid.slice(0, 8)}.sock`;

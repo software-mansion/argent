@@ -1,18 +1,20 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
-import { tvControlRef, type TvControlApi } from "../../blueprints/tv-control";
+import { tvServiceRef } from "./tv-service";
+import type { TvControlApi } from "../../blueprints/tv-control-types";
 
 const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Apple TV simulator UDID from `list-devices` (a device with runtimeKind 'tv')."),
+    .describe(
+      "TV target id from `list-devices` (a device with runtimeKind 'tv') — an Apple TV simulator UDID or an Android TV serial."
+    ),
   label: z
     .string()
     .min(1)
     .describe(
-      "Accessibility label of the focusable element to jump focus to, as shown by `tv-describe` " +
+      "Accessibility label of the focusable element to move focus to, as shown by `tv-describe` " +
         "(use the first line of a compound label — matching is case-insensitive with prefix/substring fallback)."
     ),
 });
@@ -27,14 +29,14 @@ interface Result {
 
 const tvSetFocusTool: ToolDefinition<Params, Result> = {
   id: "tv-set-focus",
-  description: `Jump focus directly to a tvOS element by its accessibility label, skipping step-by-step \`tv-navigate\`.
-Faster than D-pad traversal when you already know the target label from \`tv-describe\`, but less faithful to real remote use — prefer \`tv-navigate\` when validating actual navigation paths.
-Returns { ok, message, label }. ok=false (with a message) when the label isn't found or the simulator doesn't have AutomationEnabled.
-Requires a booted Apple TV simulator; fails for iOS/Android devices.`,
-  searchHint: "tvos apple tv set focus jump element label accessibility teleport",
+  description: `Move focus to a TV element by its accessibility label, skipping step-by-step \`tv-navigate\`.
+On Apple TV this jumps focus directly (native setNativeFocus); on Android TV there is no jump primitive, so it walks the D-pad toward the target's on-screen position (best-effort, bounded) — prefer \`tv-navigate\` when validating an exact navigation path.
+Returns { ok, message, label }. ok=false (with a message) when the label isn't on screen, focus can't reach it, or (Apple TV) the simulator lacks AutomationEnabled.
+Requires a booted TV target (runtimeKind 'tv'); fails for phones/tablets.`,
+  searchHint: "tvos apple tv android tv set focus jump element label accessibility teleport leanback dpad",
   zodSchema,
   services: (params) => ({
-    tv: tvControlRef(resolveDevice(params.udid)),
+    tv: tvServiceRef(params.udid),
   }),
   async execute(services, params) {
     const api = services.tv as TvControlApi;

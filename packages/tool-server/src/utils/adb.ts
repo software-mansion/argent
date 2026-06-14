@@ -207,6 +207,13 @@ export interface AndroidDevice {
   model: string | null;
   avdName: string | null;
   sdkLevel: number | null;
+  /**
+   * "tv" for an Android TV (leanback) device/emulator, "mobile" otherwise.
+   * Mirrors `IosSimulator.runtimeKind` so a TV target is identified the same
+   * way across platforms. Populated only for devices in the "device" state
+   * (it needs a `getprop` round-trip); undefined when unknown.
+   */
+  runtimeKind?: "mobile" | "tv";
 }
 
 // Set of states `adb devices` actually emits — filtering to this set rejects
@@ -288,6 +295,62 @@ async function readAvdName(serial: string): Promise<string | null> {
 }
 
 /**
+ * Detect whether an Android target is a TV (leanback) device. Android TV AVDs
+ * and devices share the `emulator-NNNN` serial shape and `isEmulator` flag with
+ * phones, so the serial alone can't tell them apart — only a device property
+ * can. `ro.build.characteristics` is a comma-separated list that includes `tv`
+ * on every Android TV / Google TV system image (set by the leanback device
+ * overlay), which is the same signal `UiModeManager` uses for TELEVISION mode.
+ *
+ * Best-effort: a failed/empty getprop (mid-boot, locked-down device) resolves
+ * to "mobile" rather than throwing, so discovery never fails on the probe.
+ */
+async function readRuntimeKind(serial: string): Promise<"mobile" | "tv"> {
+  const characteristics = await adbShell(serial, "getprop ro.build.characteristics", {
+    timeoutMs: ENRICH_TIMEOUT_MS,
+  }).catch(() => "");
+  const isTv = characteristics
+    .split(",")
+    .map((c) => c.trim().toLowerCase())
+    .includes("tv");
+  return isTv ? "tv" : "mobile";
+}
+
+// A device's form factor is fixed for the life of its boot (a phone image can't
+// become a TV one), so memoize per-serial to keep the hot describe/navigate
+// path off the `getprop` round-trip. Mirrors `runtimeKindCache` in ios-devices.
+// Only "tv"/"mobile" verdicts are cached; the map is never populated for a
+// device that isn't currently in the "device" state.
+const androidRuntimeKindCache = new Map<string, "mobile" | "tv">();
+
+/**
+ * Resolve the runtime kind ("mobile" | "tv") of an Android serial, or undefined
+ * when the device isn't currently listed in the "device" state (so a TV-only
+ * tool can surface a clear error rather than driving an offline target).
+ *
+ * `resolveDevice` classifies by serial shape alone and tags every Android
+ * target `platform: "android"`; code paths that must branch on Android TV
+ * (the tv-* tools) call this for the real form factor. Parallels
+ * `getSimulatorRuntimeKind` on the iOS side.
+ */
+export async function getAndroidRuntimeKind(
+  serial: string
+): Promise<"mobile" | "tv" | undefined> {
+  const cached = androidRuntimeKindCache.get(serial);
+  if (cached) return cached;
+  const devices = await listAndroidDevices();
+  const match = devices.find((d) => d.serial === serial && d.state === "device");
+  if (!match?.runtimeKind) return undefined;
+  androidRuntimeKindCache.set(serial, match.runtimeKind);
+  return match.runtimeKind;
+}
+
+/** True when the given Android serial is an Android TV (leanback) target. */
+export async function isAndroidTv(serial: string): Promise<boolean> {
+  return (await getAndroidRuntimeKind(serial)) === "tv";
+}
+
+/**
  * List all Android devices + emulators known to adb, enriched with model,
  * AVD name, and SDK level via `getprop`. Use `listAndroidSerials` when you
  * only need the state-scoped serial list — it avoids the extra round-trips.
@@ -307,7 +370,7 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
           sdkLevel: null,
         };
       }
-      const [model, sdk, avd] = await Promise.all([
+      const [model, sdk, avd, runtimeKind] = await Promise.all([
         adbShell(d.serial, "getprop ro.product.model", { timeoutMs: ENRICH_TIMEOUT_MS }).catch(
           () => ""
         ),
@@ -315,6 +378,7 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
           () => ""
         ),
         readAvdName(d.serial),
+        readRuntimeKind(d.serial),
       ]);
       const sdkLevel = parseInt(sdk.trim(), 10);
       return {
@@ -324,6 +388,7 @@ export async function listAndroidDevices(): Promise<AndroidDevice[]> {
         model: model.trim() || null,
         avdName: avd,
         sdkLevel: Number.isFinite(sdkLevel) ? sdkLevel : null,
+        runtimeKind,
       };
     })
   );

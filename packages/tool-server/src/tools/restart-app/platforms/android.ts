@@ -1,5 +1,5 @@
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
-import { adbShell, shellQuote } from "../../../utils/adb";
+import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
 import { assertAmStartOk, resolveLauncherActivity } from "../../launch-app/platforms/android";
 import type { RestartAppParams, RestartAppResult } from "../types";
 
@@ -25,7 +25,8 @@ export const androidImpl: PlatformImpl<
           ? activity
           : `${bundleId}/${activity}`;
     } else {
-      component = await resolveLauncherActivity(udid, bundleId);
+      const isTv = await isAndroidTv(udid);
+      component = await resolveLauncherActivity(udid, bundleId, isTv);
     }
     const out = await adbShell(udid, `am start -W -n ${shellQuote(component)}`, {
       timeoutMs: 30_000,

@@ -1,0 +1,192 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// The Android TV backend drives the device entirely through `adb` helpers and
+// reads the screen size for `ping`. Mock both so the factory + api run without
+// a real device.
+vi.mock("../src/utils/adb", () => ({
+  adbShell: vi.fn(async () => ""),
+  adbExecOutBinary: vi.fn(async () => Buffer.from("")),
+  shellQuote: (v: string) => `'${v.replace(/'/g, "'\\''")}'`,
+  getAndroidRuntimeKind: vi.fn(async () => "tv" as const),
+}));
+
+vi.mock("../src/utils/android-screen", () => ({
+  getAndroidScreenSize: vi.fn(async () => ({ width: 1920, height: 1080 })),
+}));
+
+import {
+  androidTvControlBlueprint,
+  androidTvControlRef,
+} from "../src/blueprints/android-tv-control";
+import type { TvControlApi } from "../src/blueprints/tv-control-types";
+import { adbShell, adbExecOutBinary, getAndroidRuntimeKind } from "../src/utils/adb";
+
+const mockShell = vi.mocked(adbShell);
+const mockExecOut = vi.mocked(adbExecOutBinary);
+const mockRuntimeKind = vi.mocked(getAndroidRuntimeKind);
+
+const SERIAL = "emulator-5556";
+const device = { id: SERIAL, platform: "android" as const, kind: "emulator" as const };
+
+async function makeApi(): Promise<TvControlApi> {
+  const instance = await androidTvControlBlueprint.factory({}, device, { device });
+  return instance.api;
+}
+
+// Build a uiautomator dump with the given focusable nodes. `focusedIndex` marks
+// which one carries focused="true".
+function dump(
+  nodes: Array<{ label: string; bounds: string; cls?: string; text?: string }>,
+  focusedIndex: number
+): Buffer {
+  const inner = nodes
+    .map((n, i) => {
+      const cls = n.cls ?? "android.widget.TextView";
+      const focused = i === focusedIndex ? "true" : "false";
+      const text = n.text ?? "";
+      return `<node class="${cls}" content-desc="${n.label}" text="${text}" bounds="${n.bounds}" focusable="true" focused="${focused}" enabled="true" package="com.example.tv" />`;
+    })
+    .join("");
+  return Buffer.from(`<?xml version='1.0'?><hierarchy rotation="0">${inner}</hierarchy>`);
+}
+
+beforeEach(() => {
+  mockShell.mockReset();
+  mockShell.mockResolvedValue("");
+  mockExecOut.mockReset();
+  mockRuntimeKind.mockReset();
+  mockRuntimeKind.mockResolvedValue("tv");
+});
+
+describe("android-tv-control — ref + factory gating", () => {
+  it("builds a namespaced ref", () => {
+    const ref = androidTvControlRef(device);
+    expect(ref.urn).toBe(`AndroidTvControl:${SERIAL}`);
+    expect(ref.options.device).toBe(device);
+  });
+
+  it("rejects a non-TV (mobile) device", async () => {
+    mockRuntimeKind.mockResolvedValue("mobile");
+    await expect(makeApi()).rejects.toThrow(/Android-TV-only/);
+  });
+
+  it("rejects an offline / unknown serial", async () => {
+    mockRuntimeKind.mockResolvedValue(undefined);
+    await expect(makeApi()).rejects.toThrow(/no ready Android device/);
+  });
+});
+
+describe("android-tv-control — navigate maps to keyevents", () => {
+  it.each([
+    ["up", 19],
+    ["down", 20],
+    ["left", 21],
+    ["right", 22],
+    ["select", 23],
+    ["menu", 4],
+    ["home", 3],
+    ["playpause", 85],
+  ] as const)("sends %s as keyevent %i", async (direction, code) => {
+    const api = await makeApi();
+    await api.navigate(direction);
+    expect(mockShell).toHaveBeenCalledWith(SERIAL, `input keyevent ${code}`, expect.anything());
+  });
+});
+
+describe("android-tv-control — type", () => {
+  it("encodes spaces as %s and quotes the token", async () => {
+    const api = await makeApi();
+    await api.type("hello world");
+    expect(mockShell).toHaveBeenCalledWith(
+      SERIAL,
+      "input text 'hello%sworld'",
+      expect.anything()
+    );
+  });
+
+  it("is a no-op for empty text", async () => {
+    const api = await makeApi();
+    await api.type("");
+    // Only the factory's runtime-kind probe ran via getAndroidRuntimeKind; no
+    // `input text` shell-out.
+    expect(mockShell).not.toHaveBeenCalledWith(SERIAL, expect.stringContaining("input text"), expect.anything());
+  });
+});
+
+describe("android-tv-control — describe", () => {
+  it("projects the focused + focusable nodes from the uiautomator dump", async () => {
+    mockExecOut.mockResolvedValue(
+      dump(
+        [
+          { label: "Home", bounds: "[0,0][100,50]" },
+          { label: "Search", bounds: "[100,0][200,50]", cls: "android.widget.Button" },
+        ],
+        0
+      )
+    );
+    const api = await makeApi();
+    const res = await api.describe();
+    expect(res.bundleId).toBe("com.example.tv");
+    expect(res.focused?.label).toBe("Home");
+    expect(res.focusable).toHaveLength(2);
+    expect(res.focusable[1]?.label).toBe("Search");
+    expect(res.focusable[1]?.traits).toContain("button");
+  });
+});
+
+describe("android-tv-control — setFocus D-pad walk", () => {
+  it("treats an already-focused target as success without pressing keys", async () => {
+    mockExecOut.mockResolvedValue(dump([{ label: "Home", bounds: "[0,0][100,50]" }], 0));
+    const api = await makeApi();
+    const r = await api.setFocus("Home");
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/already focused/i);
+    expect(mockShell).not.toHaveBeenCalledWith(SERIAL, expect.stringContaining("keyevent"), expect.anything());
+  });
+
+  it("fails clearly when the label is not on screen", async () => {
+    mockExecOut.mockResolvedValue(dump([{ label: "Home", bounds: "[0,0][100,50]" }], 0));
+    const api = await makeApi();
+    const r = await api.setFocus("Settings");
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/not on screen|no focusable element/i);
+  });
+
+  it("walks right toward a target to the right and lands on it", async () => {
+    // Two cells: focus starts on the left (Home), target Search is to the right.
+    // First read → focused Home; after one right press → focused Search.
+    const before = dump(
+      [
+        { label: "Home", bounds: "[0,0][100,50]" },
+        { label: "Search", bounds: "[100,0][200,50]" },
+      ],
+      0
+    );
+    const after = dump(
+      [
+        { label: "Home", bounds: "[0,0][100,50]" },
+        { label: "Search", bounds: "[100,0][200,50]" },
+      ],
+      1
+    );
+    // read #1 = initial state (Home focused); after the right press,
+    // read #2 = Search focused → walk lands and returns ok.
+    mockExecOut
+      .mockResolvedValueOnce(before) // setFocus: initial state
+      .mockResolvedValue(after); // re-read after the right press → Search focused
+
+    const api = await makeApi();
+    const r = await api.setFocus("Search");
+    expect(r.ok).toBe(true);
+    expect(mockShell).toHaveBeenCalledWith(SERIAL, "input keyevent 22", expect.anything()); // DPAD_RIGHT
+  });
+});
+
+describe("android-tv-control — recycleAx is a no-op", () => {
+  it("resolves without touching adb", async () => {
+    const api = await makeApi();
+    mockShell.mockClear();
+    await expect(api.recycleAx()).resolves.toBeUndefined();
+    expect(mockShell).not.toHaveBeenCalled();
+  });
+});

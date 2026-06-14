@@ -1,18 +1,19 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { resolveDevice } from "../../utils/device-info";
+import { tvServiceRef } from "./tv-service";
 import {
-  tvControlRef,
   type TvControlApi,
   type TvDescribeResponse,
   type TvElement,
-} from "../../blueprints/tv-control";
+} from "../../blueprints/tv-control-types";
 
 const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Apple TV simulator UDID from `list-devices` (a device with runtimeKind 'tv')."),
+    .describe(
+      "TV target id from `list-devices` (a device with runtimeKind 'tv') — an Apple TV simulator UDID or an Android TV serial."
+    ),
 });
 
 type Params = z.infer<typeof zodSchema>;
@@ -44,7 +45,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const EMPTY_RETRY_ATTEMPTS = 3;
 const EMPTY_RETRY_DELAY_MS = 600;
 const EMPTY_HINT =
-  "No focusable elements after retrying and recycling the AX service. The app is most likely " +
+  "No focusable elements after retrying and recycling the read path. The app is most likely " +
   "still launching (splash / loading screen) or mid-transition — this is normal right after " +
   "launch-app / restart-app. Wait ~2-3s and call tv-describe again; a React Native app only " +
   "exposes focus once its JS bundle has loaded. If it stays empty, take a screenshot to confirm " +
@@ -83,23 +84,24 @@ function fmtElement(e: TvElement): string {
 }
 
 /**
- * Render the tvOS focus state as text. Unlike iOS/Android there are no tap
- * coordinates to act on — the agent moves the focus engine with `tv-navigate`
- * (or jumps with `tv-set-focus`) and confirms with another `tv-describe`. So
- * the rendering centers on "what's focused" and "what can be focused".
+ * Render the TV focus state as text. A TV UI is focus-driven — there are no tap
+ * coordinates to act on — so the agent moves the highlight with `tv-navigate`
+ * (or `tv-set-focus`) and confirms with another `tv-describe`. The rendering
+ * centers on "what's focused" and "what can be focused".
  */
 const tvDescribeTool: ToolDefinition<Params, Result> = {
   id: "tv-describe",
-  description: `Read the on-screen accessibility state of a tvOS (Apple TV) simulator.
-tvOS is focus-driven: there is no touch. This returns the currently FOCUSED element and the list of FOCUSABLE elements, so you can decide which direction to move.
+  description: `Read the on-screen focus state of a TV device — an Apple TV (tvOS) simulator or an Android TV device.
+A TV UI is focus-driven: there is no touch. This returns the currently FOCUSED element and the list of FOCUSABLE elements, so you can decide which direction to move.
 Use it before and after every \`tv-navigate\` / \`tv-set-focus\` to see where focus landed and what changed.
 Returns { description (text rendering), bundleId, focusedLabel, focusableCount }.
-Requires a booted Apple TV simulator (boot one via boot-device); fails for iOS/Android devices — use \`describe\` for those.`,
+Requires a booted TV target (runtimeKind 'tv'); fails for phones/tablets — use \`describe\` for those.`,
   alwaysLoad: true,
-  searchHint: "tvos apple tv describe focus focusable accessibility remote dpad television",
+  searchHint:
+    "tvos apple tv android tv describe focus focusable accessibility remote dpad television leanback",
   zodSchema,
   services: (params) => ({
-    tv: tvControlRef(resolveDevice(params.udid)),
+    tv: tvServiceRef(params.udid),
   }),
   async execute(services) {
     const api = services.tv as TvControlApi;
