@@ -297,15 +297,33 @@ async function readAvdName(serial: string): Promise<string | null> {
 /**
  * Detect whether an Android target is a TV (leanback) device. Android TV AVDs
  * and devices share the `emulator-NNNN` serial shape and `isEmulator` flag with
- * phones, so the serial alone can't tell them apart — only a device property
- * can. `ro.build.characteristics` is a comma-separated list that includes `tv`
- * on every Android TV / Google TV system image (set by the leanback device
- * overlay), which is the same signal `UiModeManager` uses for TELEVISION mode.
+ * phones, so the serial alone can't tell them apart — only a device capability
+ * can.
  *
- * Best-effort: a failed/empty getprop (mid-boot, locked-down device) resolves
- * to "mobile" rather than throwing, so discovery never fails on the probe.
+ * The authoritative signal is the system feature list (`pm list features`):
+ * `android.software.leanback` / `android.hardware.type.television` are exactly
+ * what `PackageManager.hasSystemFeature(FEATURE_LEANBACK)` checks, and they are
+ * present on every Android TV / Google TV image (physical and emulator). We do
+ * NOT rely on `ro.build.characteristics` containing `tv`: it's correct on most
+ * physical TV devices but the Google ATV *emulator* images report
+ * `characteristics=emulator` (no `tv`), so a characteristics-only check
+ * misclassifies every TV AVD as a phone. We keep the characteristics token as a
+ * secondary fallback for the rare image where `pm list features` is unavailable.
+ *
+ * Best-effort: a failed/empty probe (mid-boot, locked-down device) resolves to
+ * "mobile" rather than throwing, so discovery never fails on it.
  */
 async function readRuntimeKind(serial: string): Promise<"mobile" | "tv"> {
+  const features = await adbShell(serial, "pm list features", {
+    timeoutMs: ENRICH_TIMEOUT_MS,
+  }).catch(() => "");
+  if (/feature:android\.(software\.leanback|hardware\.type\.television)\b/.test(features)) {
+    return "tv";
+  }
+
+  // Fallback: the `tv` token in ro.build.characteristics. Correct on most
+  // physical TV hardware; absent on the ATV emulator (hence the feature-list
+  // primary above), but harmless to check when the feature list came back empty.
   const characteristics = await adbShell(serial, "getprop ro.build.characteristics", {
     timeoutMs: ENRICH_TIMEOUT_MS,
   }).catch(() => "");
