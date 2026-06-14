@@ -461,6 +461,29 @@ async function bootIos(
         }); tv-navigate may no-op until the tool-server restarts.\n`
       );
     });
+
+    // The same boot transition also wipes the simulator's launchd
+    // DYLD_INSERT_LIBRARIES, but the cached NativeDevtools service keeps a
+    // sticky `envSetup=true` flag from the *previous* boot — so its
+    // `ensureEnvReady()` short-circuits and never re-sets the env. The result:
+    // launch-app / restart-app produce an uninjected process and
+    // native-devtools-status stays `connected:false` forever, with no recovery
+    // short of a tool-server restart (requiresAppRestart's ensureEnvReady call
+    // can't help — same sticky flag). Dropping the cached service here forces
+    // the resolveService below to rebuild it with a fresh `envSetup=false`, so
+    // ensureEnv re-applies DYLD on this boot. The DYLD-clear-on-reboot is not
+    // strictly tvOS-specific, but we gate this on tvOS to match the validated
+    // repro and avoid changing the well-exercised iOS boot path; widen the gate
+    // if the same stuck-injection state is ever reproduced on an iOS reboot.
+    const ndUrn = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" }).urn;
+    await registry.disposeService(ndUrn).catch((err: unknown) => {
+      if (err instanceof ServiceNotFoundError) return;
+      process.stderr.write(
+        `[boot-device ${udid.slice(0, 8)}] failed to recycle stale NativeDevtools service after reboot (${
+          err instanceof Error ? err.message : String(err)
+        }); native-devtools may stay disconnected until the tool-server restarts.\n`
+      );
+    });
   }
 
   // Best-effort fallback: no-op on the happy path (pref already cached from

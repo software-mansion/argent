@@ -606,7 +606,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         // Re-verify and re-set env — handles the case where the simulator was
         // rebooted and launchd cleared DYLD_INSERT_LIBRARIES. Must use
         // reverifyEnv (not ensureEnvReady): the latter latches after the first
-        // success and would skip re-applying the wiped env.
+        // success and would skip re-applying the wiped env. boot-device also
+        // disposes the cached service on a tvOS boot transition (so the next
+        // resolveService rebuilds it with a fresh envSetup=false) — this active
+        // re-verify is the in-instance defense for boots that path doesn't catch.
         await reverifyEnv();
         return true;
       },
