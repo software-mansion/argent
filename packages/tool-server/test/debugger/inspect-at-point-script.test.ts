@@ -190,6 +190,7 @@ describe("makeInspectScript — RN 0.81 container anchor + componentStack", () =
       "    at RCTView (<anonymous>)",
       "    at View (" + B + ":10685:19)",
       "    at AnimatedComponent(View) (" + B + ":125621:37)",
+      "    at hermesInternal (address at http://x/InternalBytecode.js:1:2)",
       "    at LoggedOut (" + B + ":200000:10)",
     ].join("\n");
     const fn = vi.fn((_ref: any, _x: number, _y: number, cb: (d: unknown) => void) =>
@@ -216,6 +217,7 @@ describe("makeInspectScript — RN 0.81 container anchor + componentStack", () =
     const names = out?.items?.map((i) => i.name);
     expect(names).toEqual(["View", "AnimatedComponent(View)", "LoggedOut"]);
     expect(names).not.toContain("RCTView"); // host primitive (<anonymous>) dropped
+    expect(names).not.toContain("hermesInternal"); // Hermes bytecode frame dropped
     const loggedOut = out?.items?.find((i) => i.name === "LoggedOut");
     expect(loggedOut?.frame).toMatchObject({ file: B, line: 200000, col: 10 });
   });

@@ -168,15 +168,19 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
     return null;
   }
 
-  // RN 0.81+ getInspectorDataForViewAtPoint no longer returns a walkable
-  // data.closestInstance; instead it returns data.componentStack -- a React
-  // component-stack STRING whose lines look like:
+  // On the RN runtimes observed live (RN 0.81.x + Hermes, legacy bridge),
+  // getInspectorDataForViewAtPoint does not return a walkable data.closestInstance
+  // -- closestInstance is absent and data.componentStack (a React component-stack
+  // STRING) carries the result instead. Lines look like:
   //   "    at View (http://.../index.bundle//...:10685:19)"
   //   "    at RCTView (<anonymous>)"
+  //   "    at f (address at http://.../InternalBytecode.js:1:2)"  // Hermes internal
   // Parse the component frames out of it. Bundle locations (file:line:col) are
   // handed back as unsymbolicated frames so the tool layer /symbolicate's them
   // exactly like _debugStack frames. Host primitives (<anonymous>, no source)
-  // are dropped, matching the closestInstance walk which skips host fibers.
+  // and Hermes bytecode/native frames (file token with a space or '<', e.g.
+  // "address at <url>") are dropped -- only a clean source/bundle path is
+  // symbolicatable and corresponds to an app component.
   function itemsFromComponentStack(cs) {
     var out = [];
     var lines = cs.split('\\n');
@@ -185,6 +189,7 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
       if (!m) continue;
       var lm = m[2].match(/^(.*):(\\d+):(\\d+)$/);
       if (!lm) continue;
+      if (/[ <]/.test(lm[1])) continue;
       out.push({ name: m[1], frame: { fn: m[1], file: lm[1], line: parseInt(lm[2]), col: parseInt(lm[3]) } });
     }
     return out;
