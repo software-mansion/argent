@@ -358,12 +358,15 @@ async function renderFunctionCallersAndroid(
   ];
   // Frame names are stored mangled, so the query is matched as a substring.
   // When nothing matched verbatim, spell out the real leaf symbols that did, so
-  // an unexpected (or over-broad) match is obvious rather than silent.
-  const distinctMatched = [...new Set(rows.map((r) => r.matched_function))];
+  // an unexpected (or over-broad) match is obvious rather than silent. Dedup on
+  // the DEMANGLED name so overloads (`_ZN3foo3barEv`/`_ZN3foo3barEi`, both
+  // `foo::bar` once args are dropped) collapse to a single bullet and the count
+  // matches what's printed.
+  const distinctMatched = [...new Set(rows.map((r) => demangleSymbol(r.matched_function)))];
   if (!rows.some((r) => r.is_exact) || distinctMatched.length > 1) {
     lines.push(
       `_Substring match: \`${opts.functionName}\` hit ${distinctMatched.length} leaf symbol(s):_`,
-      ...distinctMatched.slice(0, 10).map((m) => `- \`${demangleSymbol(m)}\``),
+      ...distinctMatched.slice(0, 10).map((m) => `- \`${m}\``),
       ...(distinctMatched.length > 10 ? [`- …and ${distinctMatched.length - 10} more`] : []),
       ""
     );

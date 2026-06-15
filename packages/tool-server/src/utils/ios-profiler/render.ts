@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import type { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
+import { demangleSymbol } from "../profiler-shared/demangle";
 import type {
   ProfilerPayload,
   Bottleneck,
@@ -227,7 +228,7 @@ function renderFullReport(
     cpuHotspots.forEach((b, i) => {
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${b.dominantFunction}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${demangleSymbol(b.dominantFunction)}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
 
@@ -236,7 +237,7 @@ function renderFullReport(
       : cpuHotspots;
     for (const b of hotspotDetailSlice) {
       lines.push(``);
-      lines.push(`### \`${b.dominantFunction}\` (${b.thread})`);
+      lines.push(`### \`${demangleSymbol(b.dominantFunction)}\` (${b.thread})`);
       lines.push(``);
 
       if (b.topCallChains && b.topCallChains.length > 0) {
@@ -384,7 +385,7 @@ function renderFullReport(
     lines.push(`### CPU Hotspots`, ``);
     for (const b of cpuHotspots) {
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${b.dominantFunction}\` on ${b.thread} (${b.weightPercentage}%): High CPU in this function — reduce view hierarchy depth or batch UI updates.`
+        `- ${severityEmoji(b.severity)} \`${demangleSymbol(b.dominantFunction)}\` on ${b.thread} (${b.weightPercentage}%): High CPU in this function — reduce view hierarchy depth or batch UI updates.`
       );
     }
     lines.push(``);
@@ -426,6 +427,8 @@ function renderFullReport(
   }
   if (cpuHotspots.length > 0) {
     const topHotspot = cpuHotspots[0]!;
+    // Keep the RAW (possibly mangled) name here: function_callers matches it as a
+    // SQL substring of the mangled frame, and a demangled name isn't a substring.
     lines.push(
       `   - mode=\`function_callers\` function_name=\`${topHotspot.dominantFunction}\` — who calls this hot function`
     );
