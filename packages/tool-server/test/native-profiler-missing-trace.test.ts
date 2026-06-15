@@ -9,10 +9,28 @@
  * The analyze tool must distinguish ENOENT/EACCES from "file exists but
  * has no findings" and surface the export failure via `exportErrors`.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+
+// The analyze tool gates the iOS path behind `ensureDeps(["xcrun"])`, but
+// analyzing an already-exported trace is pure XML parsing — it never shells out
+// to xcrun. The real probe makes this test pass only on a host with Xcode
+// installed (dev macOS) and fail on the Linux CI runner with `missing: [xcrun]`.
+// Stub the gate to a no-op so the test exercises the report logic it's about,
+// not the host's toolchain. Keep the rest of the module (DependencyMissingError,
+// the cache reset helper) intact via importOriginal.
+vi.mock("../src/utils/check-deps", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/utils/check-deps")>();
+  return {
+    ...actual,
+    ensureDeps: vi.fn(async () => {}),
+    ensureDep: vi.fn(async () => {}),
+  };
+});
+
 import { nativeProfilerAnalyzeTool } from "../src/tools/profiler/native-profiler/native-profiler-analyze";
 import type { NativeProfilerSessionApi } from "../src/blueprints/native-profiler-session";
 
@@ -35,9 +53,10 @@ describe("native-profiler-analyze: missing trace file", () => {
       // exportedFiles has a non-null CPU path, but the file does not exist.
       const session: NativeProfilerSessionApi = {
         deviceId: "TEST-DEVICE",
+        platform: "ios",
         appProcess: null,
-        xctracePid: null,
-        xctraceProcess: null,
+        capturePid: null,
+        captureProcess: null,
         traceFile,
         exportedFiles: { cpu: cpuPath, hangs: hangsPath, leaks: leaksPath },
         profilingActive: false,
@@ -47,11 +66,13 @@ describe("native-profiler-analyze: missing trace file", () => {
         recordingTimedOut: false,
         recordingExitedUnexpectedly: false,
         lastExitInfo: null,
+        androidOnDeviceTracePath: null,
       };
 
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
-        { device_id: "TEST-DEVICE" }
+        { device_id: "TEST-DEVICE" },
+        { artifacts: new ArtifactStore() }
       );
 
       // Bug: previously this rendered "All clear" with no warning because

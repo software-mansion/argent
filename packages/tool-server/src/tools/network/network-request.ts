@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
@@ -110,6 +111,8 @@ Returns request/response headers (sensitive headers redacted), status, timing, a
 Large response bodies are truncated. Use when you need headers, body, or timing for a specific request after listing logs.
 Returns an error message string if the requestId is not found — use view-network-logs to get valid requestId values.`,
   zodSchema,
+  // RN-only: companion to view-network-logs (same injected interceptor).
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}:${params.device_id}`,
   }),

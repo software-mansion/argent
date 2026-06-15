@@ -39,9 +39,10 @@ export function formatScreenshotDiffSummary(result: ScreenshotDiffSummaryInput):
   );
 
   if (result.diffPath || result.contextDiffPath) {
-    lines.push(`- diff_images:`);
-    if (result.diffPath) lines.push(`  - diff: ${result.diffPath}`);
-    if (result.contextDiffPath) lines.push(`  - context: ${result.contextDiffPath}`);
+    // Reference the result fields instead of embedding the paths: the client
+    // rewrites `diffPath`/`contextDiffPath` to paths on ITS machine, and a raw
+    // server path inlined here would dangle when the tool-server runs remotely.
+    lines.push(`- diff_images: see diffPath (full size) and contextDiffPath in this result`);
     lines.push(
       `  - legend: green=pixel brighter in current, red=pixel darker in current, yellow rectangles outline changed regions`
     );

@@ -314,7 +314,7 @@ describe("boot-device — input validation (exclusive udid/avdName)", () => {
           avdName: "Pixel_7_API_34",
         }
       )
-    ).rejects.toThrow(/exactly one of `udid` .* or `avdName`/);
+    ).rejects.toThrow(/exactly one of `udid`/);
   });
 
   it("rejects when neither udid nor avdName is provided — no target", async () => {

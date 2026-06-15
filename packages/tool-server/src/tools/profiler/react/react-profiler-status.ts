@@ -9,6 +9,7 @@ import {
   READ_STATE_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
 import type { ProfilerSessionOwner } from "../../../utils/react-profiler/session-ownership";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -49,6 +50,8 @@ export function createReactProfilerStatusTool(
     id: "react-profiler-status",
     description: `Check the state of the React profiler session without side effects. Use after an interruption (debugger disconnect, unexpected error, agent pause) to decide whether to continue with react-profiler-stop, start a new session, or reconnect the debugger. Ownership is verified server-side against this tool-server's in-memory session — no token-threading is required. Returns { session_status, is_running, current_owner, … }. If this tool-server process restarted after react-profiler-start, status will report 'taken_over'; use react-profiler-start { force: true } to reclaim.`,
     zodSchema,
+    // RN-only: companion to react-profiler-start.
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params): Promise<StatusResponse> {
       const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;

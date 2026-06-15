@@ -82,10 +82,13 @@ export function correlateHangsWithCpu(
     const startTimeFormatted = `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(ms).padStart(3, "0")}`;
 
     return {
-      type: "ios_ui_hang" as const,
+      type: "ui_hang" as const,
+      platform: "ios" as const,
       hangType: hang.hangType,
       durationMs,
       startTimeFormatted,
+      startNs: hang.startNs,
+      endNs: hang.startNs + hang.durationNs,
       suspectedFunctions,
       appCallChains,
       severity,
@@ -130,7 +133,8 @@ export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
   return [...groups.entries()]
     .sort((a, b) => b[1].totalSize - a[1].totalSize)
     .map(([objectType, g]) => ({
-      type: "ios_memory_leak" as const,
+      type: "memory_leak" as const,
+      platform: "ios" as const,
       objectType,
       totalSizeBytes: g.totalSize,
       count: g.count,

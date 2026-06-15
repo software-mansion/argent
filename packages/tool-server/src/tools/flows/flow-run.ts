@@ -1,7 +1,13 @@
 import { z } from "zod";
 import * as fs from "node:fs/promises";
-import type { Registry, ToolDefinition } from "@argent/registry";
-import { getFlowPath, parseFlow, setActiveProjectRoot, type FlowStep } from "./flow-utils";
+import type { FileInputSpec, Registry, ToolDefinition } from "@argent/registry";
+import {
+  assertSafeFlowName,
+  getFlowPath,
+  parseFlow,
+  setActiveProjectRoot,
+  type FlowStep,
+} from "./flow-utils";
 import { sleep } from "../../utils/timing";
 
 const zodSchema = z.object({
@@ -11,6 +17,12 @@ const zodSchema = z.object({
     .describe(
       "Absolute path to the project root directory that contains `.argent/flows/<name>.yaml`."
     ),
+  flow_file: z
+    .string()
+    .optional()
+    .describe(
+      "Path to the flow .yaml as readable by the tool-server. Internal — the argent client derives it from project_root and name automatically; leave unset."
+    ),
   prerequisiteAcknowledged: z
     .boolean()
     .optional()
@@ -18,6 +30,16 @@ const zodSchema = z.object({
       "Set to true to confirm the execution prerequisite has been met. Required when the flow defines an executionPrerequisite."
     ),
 });
+
+/**
+ * The flow YAML lives in the AGENT's project, so it crosses the boundary as a
+ * `file` input: read in place when this host can see it, materialized from the
+ * uploaded content when the tool-server is remote. Either way `flow_file`
+ * arrives as a path this process can read.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "flow_file", path: "${project_root}/.argent/flows/${name}.yaml", kind: "file" },
+];
 
 type StepResult =
   | { kind: "echo"; message: string }
@@ -53,10 +75,10 @@ set to true, the tool returns a notice with the prerequisite instead of running.
 Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
     longRunning: true,
     zodSchema,
+    fileInputs,
     services: () => ({}),
     async execute(_services, params) {
-      setActiveProjectRoot(params.project_root);
-      const filePath = getFlowPath(params.name);
+      const filePath = resolveFlowFilePath(params);
       const fileContent = await fs.readFile(filePath, "utf8");
       const flow = parseFlow(fileContent);
 
@@ -107,4 +129,21 @@ Use flow-read-prerequisite to inspect the prerequisite beforehand.`,
       };
     },
   };
+}
+
+/**
+ * Prefer the boundary-resolved `flow_file` (always a path this host can read);
+ * fall back to deriving the path from project_root + name for callers that
+ * predate the file boundary. The name is validated in both branches so an
+ * unsafe name can't reach error messages or the legacy path join.
+ */
+export function resolveFlowFilePath(params: {
+  name: string;
+  project_root: string;
+  flow_file?: string;
+}): string {
+  assertSafeFlowName(params.name);
+  if (params.flow_file) return params.flow_file;
+  setActiveProjectRoot(params.project_root);
+  return getFlowPath(params.name);
 }

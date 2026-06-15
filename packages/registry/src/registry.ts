@@ -9,7 +9,9 @@ import {
   RegistryEvents,
   URN,
   InvokeToolOptions,
+  ToolContext,
 } from "./types";
+import { ArtifactStore } from "./artifacts";
 import {
   ServiceNotFoundError,
   ServiceInitializationError,
@@ -24,6 +26,12 @@ export class Registry {
   private services = new Map<string, ServiceNode>();
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
+  /**
+   * Host files produced by tools, registered during `execute` and served by the
+   * `/artifacts/:id` route. Owned here (one per registry/process) so the tool
+   * path and the HTTP route resolve the same instance — no module singleton.
+   */
+  public readonly artifacts = new ArtifactStore();
   public readonly events = new TypedEventEmitter<RegistryEvents>();
 
   registerBlueprint<T, C>(blueprint: ServiceBlueprint<T, C>): void {
@@ -101,7 +109,11 @@ export class Registry {
         resolvedServices[alias] = await this.resolveService(urn, resolveOptions);
       }
 
-      const result = await definition.execute(resolvedServices, effectiveParams, options);
+      // Build the per-invocation context: caller options (e.g. signal) plus the
+      // registry-owned artifact store, so any tool can register host files via
+      // `ctx.artifacts` without declaring a per-tool service.
+      const ctx: ToolContext = { ...options, artifacts: this.artifacts };
+      const result = await definition.execute(resolvedServices, effectiveParams, ctx);
 
       const duration = performance.now() - startTime;
       this.events.emit("toolCompleted", id, duration);

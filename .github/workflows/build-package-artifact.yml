@@ -1,0 +1,90 @@
+name: Build npm package artifact
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@swmansion"
+
+      - name: Download signed simulator-server binary
+        run: bash scripts/download-simulator-server.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
+        run: bash scripts/download-native-binaries.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Perfetto trace-processor WASM artifacts
+        run: bash scripts/download-trace-processor.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npm ci
+
+      - run: npx tsc --build
+
+      - run: npm run build -w @swmansion/argent
+
+      # Keep the artifact build checks aligned with the publish workflow so the
+      # uploaded tarball has the same required runtime assets as an npm release.
+      - name: Verify per-platform simulator-server binaries
+        env:
+          ARGENT_REQUIRE_LINUX_BINARY: "0"
+        run: |
+          set -e
+          missing=0
+          echo "simulator-server inventory:"
+          for plat in darwin linux linux-arm64; do
+            p="packages/argent/bin/${plat}/simulator-server"
+            if [[ -x "$p" ]]; then
+              size=$(wc -c <"$p")
+              echo "  ok ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
+            else
+              echo "  missing ${plat}: ${p}"
+              if [[ "$plat" == "darwin" ]]; then missing=1; fi
+              if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+            fi
+          done
+          [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }
+      - run: test -x packages/argent/bin/darwin/ax-service
+      - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
+      - run: test -d packages/argent/assets/queries
+      - run: test -f packages/argent/assets/manifest.json
+      - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
+      - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
+      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test -f packages/argent/assets/trace-processor/LICENSE
+      - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
+      - run: ls packages/argent/bin/argent-android-devtools-*.apk
+
+      - name: Pack npm package
+        run: |
+          mkdir -p package-artifact
+          npm pack -w @swmansion/argent --pack-destination package-artifact
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: argent-main-npm-package
+          path: package-artifact/*.tgz
+          if-no-files-found: error
+          retention-days: 14

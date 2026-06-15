@@ -23,26 +23,6 @@ export function reactTimeToWallClock(reactMs: number, reactAnchor: TimeAnchor): 
 }
 
 /**
- * Convert a wall clock ms to iOS Instruments trace-relative nanoseconds.
- */
-export function wallClockToInstrumentsNs(wallMs: number, iosAnchor: TimeAnchor): number {
-  const elapsed = wallMs - iosAnchor.wallClockMs;
-  return (iosAnchor.monotonicStartMs + elapsed) * 1_000_000;
-}
-
-/**
- * Convert a React profiler timestamp directly to iOS Instruments nanoseconds.
- */
-export function reactTimeToInstrumentsNs(
-  reactMs: number,
-  reactAnchor: TimeAnchor,
-  iosAnchor: TimeAnchor
-): number {
-  const wallMs = reactTimeToWallClock(reactMs, reactAnchor);
-  return wallClockToInstrumentsNs(wallMs, iosAnchor);
-}
-
-/**
  * Convert iOS Instruments nanoseconds to wall clock ms.
  */
 export function instrumentsNsToWallClock(instrumentsNs: number, iosAnchor: TimeAnchor): number {
@@ -82,6 +62,18 @@ export function buildReactAnchor(
  * monotonicStartMs is 0 since xctrace timestamps are trace-relative (start at 0).
  */
 export function buildIosAnchor(wallClockStartMs: number): TimeAnchor {
+  return {
+    wallClockMs: wallClockStartMs,
+    monotonicStartMs: 0,
+  };
+}
+
+/**
+ * Build a TimeAnchor for an Android Perfetto recording. Like buildIosAnchor,
+ * perfetto timestamps are trace-relative (start at 0), so monotonicStartMs=0;
+ * kept as a named entry point so the platform branches read symmetrically.
+ */
+export function buildPerfettoAnchor(wallClockStartMs: number): TimeAnchor {
   return {
     wallClockMs: wallClockStartMs,
     monotonicStartMs: 0,
