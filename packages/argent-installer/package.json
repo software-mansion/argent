@@ -14,17 +14,17 @@
   "dependencies": {
     "@argent/tools-client": "file:../argent-tools-client",
     "@argent/update-core": "file:../update-core",
-    "@clack/prompts": "^1.4.0",
+    "@clack/prompts": "^1.5.1",
     "jsonc-parser": "^3.3.1",
     "picocolors": "^1.1.1",
-    "semver": "^7.8.0",
+    "semver": "^7.8.4",
     "smol-toml": "^1.6.1",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.0",
+    "@types/node": "^25.9.3",
     "@types/semver": "^7.7.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.8"
   }
 }
