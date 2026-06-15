@@ -10,6 +10,7 @@ import type {
   MemoryRssGrowth,
   NativeProfilerAnalyzeResult,
 } from "./types";
+import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
 
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
@@ -231,6 +232,17 @@ function renderFullReport(
       );
     });
 
+    const systemFrameCount = cpuHotspots.filter((b) => b.frameClass === "system").length;
+    if (systemFrameCount > 0) {
+      lines.push(
+        ``,
+        `> **Note:** ${systemFrameCount} of these ${systemFrameCount === 1 ? "hotspots is an emulator/kernel frame" : "hotspots are emulator/kernel frames"} ` +
+          `(e.g. \`goldfish_*\`, \`do_syscall_64\`, \`gup_*\`) — the QEMU GPU-transport pipe and Linux syscall paths, ` +
+          `not app code. They dominate RenderThread on the emulator and do not appear on physical devices. ` +
+          `Re-profile on a real device for representative app CPU numbers.`
+      );
+    }
+
     const hotspotDetailSlice = isFinite(cap.hotspotLimit)
       ? cpuHotspots.slice(0, cap.hotspotLimit)
       : cpuHotspots;
@@ -383,8 +395,12 @@ function renderFullReport(
   if (cpuHotspots.length > 0) {
     lines.push(`### CPU Hotspots`, ``);
     for (const b of cpuHotspots) {
+      const advice =
+        b.frameClass === "system"
+          ? `Emulator/kernel overhead (GPU-transport pipe or syscall), not app code — it does not appear on a physical device, so it is not directly actionable. Re-profile on a real device to see the app's own CPU cost.`
+          : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${b.dominantFunction}\` on ${b.thread} (${b.weightPercentage}%): High CPU in this function — reduce view hierarchy depth or batch UI updates.`
+        `- ${severityEmoji(b.severity)} \`${b.dominantFunction}\` on ${b.thread} (${b.weightPercentage}%): ${advice}`
       );
     }
     lines.push(``);
@@ -397,7 +413,7 @@ function renderFullReport(
         b.suspectedFunctions.length > 0 ? ` Likely caused by: \`${b.suspectedFunctions[0]}\`.` : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
-        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): Main thread blocked — move heavy work to background queue.${reasonNote}${funcNote}`
+        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
       );
     }
     lines.push(``);
@@ -421,7 +437,7 @@ function renderFullReport(
   );
   if (uiHangs.length > 0) {
     lines.push(
-      `   - mode=\`hang_stacks\` hang_index=0 — full native call chains during the worst hang`
+      `   - mode=\`hang_stacks\` hang_index=0 — main-thread state + any on-CPU stacks for the worst hang`
     );
   }
   if (cpuHotspots.length > 0) {
@@ -456,6 +472,38 @@ function renderExportErrors(exportErrors?: Record<string, string>): string[] {
     lines.push(`> - **${key}**: ${msg}`);
   }
   return lines;
+}
+
+/**
+ * Pick the core remediation sentence for a UI hang. On Android the main-thread
+ * state breakdown tells us whether the stall was CPU-bound work or a wait, so
+ * the advice must match: telling a developer to "move heavy work off the main
+ * thread" when the thread was asleep waiting on the GPU is actively misleading.
+ * iOS hangs carry no state breakdown, so they fall through to the generic line.
+ */
+function hangCoreAdvice(hang: UiHang): string {
+  const blocking = summarizeHangBlocking(hang.stateBreakdown);
+  if (!blocking) {
+    return "Main thread stalled past the frame budget — move heavy work off the main thread.";
+  }
+  switch (blocking.kind) {
+    case "blocked":
+      return (
+        `Main thread was off-CPU (state \`${blocking.dominantState}\`) for most of the hang — it was *waiting*, ` +
+        `not doing CPU work. Investigate what it is blocked on (GPU/vsync, a lock, binder IPC, or I/O) via ` +
+        "`hang_stacks`, rather than moving work off-thread."
+      );
+    case "runnable":
+      return (
+        `Main thread was runnable but not scheduled (state \`${blocking.dominantState}\`) for most of the hang — ` +
+        `ready to run but starved of CPU. Look for other busy threads or background work contending for cores.`
+      );
+    case "executing":
+      return (
+        "Main thread was executing (on-CPU) for most of the hang — genuine main-thread CPU work. " +
+        "Move heavy work off the main thread or reduce its cost."
+      );
+  }
 }
 
 function severityEmoji(severity: string): string {
