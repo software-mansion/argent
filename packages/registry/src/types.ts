@@ -1,5 +1,7 @@
 import { TypedEventEmitter } from "./event-emitter";
 import { z } from "zod";
+import type { ArtifactStore } from "./artifacts";
+import type { FileInputSpec, ResolvedFileInput } from "./file-inputs";
 
 // ── Service Types ──
 
@@ -58,13 +60,35 @@ export type ServiceRef = string | { urn: string; options?: Record<string, unknow
 /** Options passed to tool execution (e.g. AbortSignal for request cancellation). */
 export interface InvokeToolOptions {
   signal?: AbortSignal;
+  /**
+   * Resolution outcome for each declared {@link ToolDefinition.fileInputs}
+   * target the caller sent as a file-input wrapper, keyed by target arg name.
+   * Populated by the HTTP layer (which resolves wrappers before validation)
+   * and forwarded to the tool via {@link ToolContext}. Absent for plain-string
+   * args (older clients, direct invocations), so a missing entry means
+   * "legacy caller — behave exactly as before the file boundary existed".
+   */
+  fileInputs?: Record<string, ResolvedFileInput>;
+}
+
+/**
+ * What a tool's `execute` receives as its third argument. The registry builds
+ * this for every invocation: it carries the caller's {@link InvokeToolOptions}
+ * (e.g. `signal`) plus cross-cutting context the registry owns — currently the
+ * {@link ArtifactStore}, so any tool that produces a host file can register it
+ * (`ctx.artifacts.register(path)`) without declaring a per-tool service. The
+ * registry always populates `artifacts`; it is only ever absent when `execute`
+ * is called directly (bypassing `invokeTool`), e.g. in a unit test.
+ */
+export interface ToolContext extends InvokeToolOptions {
+  artifacts: ArtifactStore;
 }
 
 // ── Device + Capability Types ──
 
-export type Platform = "ios" | "android";
+export type Platform = "ios" | "android" | "chromium";
 
-export type DeviceKind = "simulator" | "emulator" | "device" | "unknown";
+export type DeviceKind = "simulator" | "emulator" | "device" | "app" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -94,6 +118,9 @@ export interface ToolCapability {
     emulator?: boolean;
     device?: boolean;
     unknown?: boolean;
+  };
+  chromium?: {
+    app?: boolean;
   };
   /** Optional refiner. Returns true if this device is supported. */
   supports?: (device: DeviceInfo) => boolean;
@@ -162,13 +189,16 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * resolved branch's deps after `classifyDevice`.
    */
   requires?: ToolDependency[];
+  /**
+   * Args that name files/directories on the CALLER's machine. Surfaced through
+   * `GET /tools` so the client can wrap them for the file boundary, and
+   * resolved back to server-readable paths before zod validation. See
+   * `file-inputs.ts` for the wire contract and kind semantics.
+   */
+  fileInputs?: FileInputSpec[];
   /** Returns alias → URN or { urn, options }; registry resolves each and passes alias → API into execute. */
   services: (params: TParams) => Record<string, ServiceRef>;
-  execute(
-    services: Record<string, unknown>,
-    params: TParams,
-    options?: InvokeToolOptions
-  ): Promise<TResult>;
+  execute(services: Record<string, unknown>, params: TParams, ctx?: ToolContext): Promise<TResult>;
 }
 
 export interface ToolRecord {

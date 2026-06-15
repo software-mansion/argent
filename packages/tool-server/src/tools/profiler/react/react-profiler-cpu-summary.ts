@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   HermesProfileNode,
@@ -124,6 +125,10 @@ Call react-profiler-stop first. Reads directly from the stored cpuProfile.
 Returns a markdown table of the top hotspot functions with self-time, total-time, and location.
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
+  // RN-only: reads a Hermes CPU profile captured via the React profiler
+  // session. Chromium's V8 Profiler emits a different sample format — see the
+  // PR description for the follow-up scope.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);

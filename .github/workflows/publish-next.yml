@@ -46,8 +46,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download signed native binaries (dylibs + ax-service)
+      - name: Download signed native binaries (dylibs, ax-service, Android helper APK)
         run: bash scripts/download-native-binaries.sh "${{ steps.binaries_tag.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Perfetto trace-processor WASM artifacts
+        run: bash scripts/download-trace-processor.sh "${{ steps.binaries_tag.outputs.tag }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -58,10 +63,11 @@ jobs:
       - run: npm run build -w @swmansion/argent
 
       # Per-platform bundle layout (commit 80e724a). darwin is always required;
-      # Linux is gated by ARGENT_REQUIRE_LINUX_BINARY so the existing release
-      # pipeline keeps working until radon's Linux artifact is reliably present
-      # — flip the env var to "1" once that lands. The inventory always logs
-      # what shipped so a silently-missing Linux binary shows up in the run.
+      # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
+      # ARGENT_REQUIRE_LINUX_BINARY so the existing release pipeline keeps
+      # working until radon's Linux artifacts are reliably present — flip the
+      # env var to "1" once that lands. The inventory always logs what shipped
+      # so a silently-missing Linux binary shows up in the run.
       - name: Verify per-platform simulator-server binaries
         env:
           ARGENT_REQUIRE_LINUX_BINARY: "0"
@@ -69,15 +75,15 @@ jobs:
           set -e
           missing=0
           echo "simulator-server inventory:"
-          for plat in darwin linux; do
+          for plat in darwin linux linux-arm64; do
             p="packages/argent/bin/${plat}/simulator-server"
             if [[ -x "$p" ]]; then
               size=$(wc -c <"$p")
-              echo "  ✓ ${plat}: ${p} (${size} bytes)"
+              echo "  ✓ ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
             else
               echo "  ✗ ${plat}: ${p} — missing"
               if [[ "$plat" == "darwin" ]]; then missing=1; fi
-              if [[ "$plat" == "linux" && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+              if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
             fi
           done
           [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }
@@ -85,6 +91,15 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
+      - run: test -d packages/argent/assets/queries
+      - run: test -f packages/argent/assets/manifest.json
+      - run: test -f packages/argent/assets/trace-processor/trace_processor.wasm
+      - run: test -f packages/argent/assets/trace-processor/engine_bundle.node.js
+      - run: test -f packages/argent/assets/trace-processor/engine.mjs
+      - run: test -f packages/argent/assets/trace-processor/LICENSE
+      - run: head -c4 packages/argent/assets/trace-processor/trace_processor.wasm | grep -q $'\x00asm'
+      - run: ls packages/argent/bin/argent-android-devtools-*.apk
       - run: npm pack --dry-run -w @swmansion/argent
 
       - run: npm publish -w @swmansion/argent --tag next

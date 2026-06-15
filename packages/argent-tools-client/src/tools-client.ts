@@ -1,15 +1,14 @@
-import {
-  ensureToolsServer,
-  AUTH_TOKEN_ENV,
-  type ToolsServerHandle,
-  type ToolsServerPaths,
-} from "./launcher.js";
+import { ensureToolsServer, type ToolsServerHandle, type ToolsServerPaths } from "./launcher.js";
+import { getResolvedToolsUrl } from "./link-config.js";
+import { prepareFileInputs, applyClientFileDirectives, type FileInputSpec } from "./file-inputs.js";
 
 export interface ToolMeta {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
   outputHint?: string;
+  /** Args that name files on the CALLER's machine — see file-inputs.ts. */
+  fileInputs?: FileInputSpec[];
   alwaysLoad?: boolean;
   searchHint?: string;
   longRunning?: boolean;
@@ -46,15 +45,15 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
   let cached: ToolsServerHandle | null = null;
 
   async function baseUrl(): Promise<ToolsServerHandle> {
-    if (process.env.ARGENT_TOOLS_URL) {
-      // External clients pass the URL via env; the matching auth token comes
-      // from the same env var the tool-server reads (ARGENT_AUTH_TOKEN).
-      // Empty/unset means the caller is responsible for an unauthenticated
-      // server (legacy / dev).
-      return {
-        url: process.env.ARGENT_TOOLS_URL,
-        token: process.env[AUTH_TOKEN_ENV] ?? "",
-      };
+    // Resolution precedence (ARGENT_TOOLS_URL env > ~/.argent/link.json > none)
+    // lives in getResolvedToolsUrl. When a remote target is configured, the
+    // matching auth token comes from ARGENT_AUTH_TOKEN — empty/unset means the
+    // caller owns an unauthenticated server (legacy / dev). With no override
+    // (the default when the user never ran `argent link`), fall through to a
+    // locally auto-spawned, token-authenticated tool-server.
+    const resolved = await getResolvedToolsUrl();
+    if (resolved.url) {
+      return { url: resolved.url, token: resolved.token ?? "" };
     }
     if (cached) return cached;
     if (!options.paths) {
@@ -81,10 +80,24 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
 
   async function callTool(name: string, args: unknown): Promise<ToolInvocationResult> {
     const { url, token } = await baseUrl();
+
+    // File boundary, outbound: wrap declared file-path args so the server can
+    // read them in place (co-located) or from inlined content (remote). The
+    // tool's advertised metadata drives this — an older server that doesn't
+    // declare fileInputs gets the args verbatim.
+    let finalArgs = args;
+    const meta = await fetchTool(name);
+    if (meta?.fileInputs?.length) {
+      const { url: routedUrl } = await getResolvedToolsUrl();
+      finalArgs = await prepareFileInputs(meta.fileInputs, args ?? {}, {
+        includeContent: routedUrl !== null,
+      });
+    }
+
     const res = await fetch(`${url}/tools/${encodeURIComponent(name)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...authHeaders(token) },
-      body: JSON.stringify(args ?? {}),
+      body: JSON.stringify(finalArgs ?? {}),
     });
     const json = (await res.json().catch(() => ({}))) as {
       data?: unknown;
@@ -95,7 +108,11 @@ export function createToolsClient(options: CreateToolsClientOptions = {}): Tools
     if (!res.ok) {
       throw new Error(json.error ?? json.message ?? `${res.status} ${res.statusText}`);
     }
-    return { data: json.data, note: json.note };
+    // File boundary, inbound: persist any client-write directives (files that
+    // belong in the caller's project, e.g. recorded flow YAMLs) and rewrite
+    // them to the written paths.
+    const { result: data } = await applyClientFileDirectives(json.data);
+    return { data, note: json.note };
   }
 
   return { fetchTools, fetchTool, callTool, baseUrl };

@@ -18,6 +18,7 @@ import {
   STOP_AND_READ_SCRIPT,
   RESOLVE_FIBER_META_SCRIPT,
 } from "../../../utils/react-profiler/scripts";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
@@ -162,6 +163,8 @@ Returns { duration_ms, sample_count, fiber_renders_captured, total_react_commits
 When any commit had fibers whose display name could not be resolved at stop time (typically transient components like modals/tooltips/animations that unmounted before stop), the response also includes { unattributed_ms, unattributed_fiber_count, unattributed_commit_count } — these quantify how much work is not accounted for in the per-component breakdown (the per-commit duration itself remains correct).
 Fails if no active profiling session exists or the CDP connection was lost during recording.`,
     zodSchema,
+    // RN-only: companion to react-profiler-start.
+    capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {
       const psUrn = `${REACT_PROFILER_SESSION_NAMESPACE}:${params.port}:${params.device_id}`;
@@ -186,15 +189,43 @@ Fails if no active profiling session exists or the CDP connection was lost durin
         );
       }
 
+      // The CPU sampler is enabled by react-profiler-start only after the
+      // DevTools-hook checks pass. If `profilingActive` is false, start
+      // either threw before `Profiler.start` (e.g. release build with
+      // React DevTools stripped) or never ran. Calling `Profiler.stop`
+      // against an un-started Hermes sampler returns an empty profile
+      // that would later crash `profile.samples.length` with a generic
+      // TypeError — detect it up front and explain.
+      if (!api.profilingActive) {
+        throw new Error(
+          "No active profiling run to stop. The session exists but Hermes CPU sampling was never started — typically because react-profiler-start failed before reaching the sampler (often on release builds without React DevTools). " +
+            "Check the error react-profiler-start returned, address the underlying cause (rebuild in dev mode, reconnect the debugger, etc.), then call react-profiler-start again."
+        );
+      }
+
       api.profilingActive = false; // reset BEFORE the CDP call so state is clean even if it throws
 
       const cpuResult = (await cdp.send("Profiler.stop")) as {
         profile?: HermesCpuProfile;
       };
       if (!cpuResult?.profile) {
-        throw new Error("Profiler returned no profile data.");
+        throw new Error(
+          "Hermes Profiler.stop returned no profile data. The CPU sampler may have been reset between start and stop (Metro reload, debugger disconnect). " +
+            "Call react-profiler-start to begin a fresh session."
+        );
       }
       const profile = cpuResult.profile;
+      if (
+        !Array.isArray(profile.samples) ||
+        !Array.isArray(profile.nodes) ||
+        !Array.isArray(profile.timeDeltas)
+      ) {
+        throw new Error(
+          "Hermes Profiler.stop returned a malformed profile (missing samples/nodes/timeDeltas). " +
+            "This usually means CPU sampling was never actually started for this session — most often a release build without React DevTools, or a Metro reload between start and stop. " +
+            "Call react-profiler-start on a dev build and retry."
+        );
+      }
 
       // Single evaluate: stop the backend profiler, read the live buffer, and
       // resolve every referenced fiberID to a displayName in one round-trip.

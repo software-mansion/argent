@@ -30,6 +30,17 @@ vi.mock("../src/utils/android-binary", () => ({
   __resetAndroidBinaryCacheForTesting: () => {},
 }));
 
+// Chromium discovery probes real TCP ports (9222 plus any persisted by a
+// previous tool-server on this machine). A developer actually running an
+// Chromium app would leak it into this test's device list — stub discovery
+// so the result only contains what the simctl / adb mocks define.
+vi.mock("../src/utils/chromium-discovery", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/chromium-discovery")>(
+    "../src/utils/chromium-discovery"
+  );
+  return { ...actual, discoverChromiumDevices: vi.fn(async () => []) };
+});
+
 import { listDevicesTool } from "../src/tools/devices/list-devices";
 
 function simctlJson(): string {

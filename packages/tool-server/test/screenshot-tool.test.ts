@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import { screenshotTool } from "../src/tools/screenshot";
 
 describe("screenshot tool", () => {
@@ -6,7 +7,7 @@ describe("screenshot tool", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns only url and path; includeImageInContext is an input-only flag handled by the MCP adapter", async () => {
+  it("returns an image artifact handle; includeImageInContext is an input-only flag handled by the MCP adapter", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -28,13 +29,18 @@ describe("screenshot tool", () => {
     const result = await screenshotTool.execute(
       { simulatorServer: { apiUrl: "http://localhost:4949" } },
       params,
-      {}
+      { artifacts: new ArtifactStore() }
     );
 
-    expect(result).toEqual({
-      url: "http://localhost/screenshot.png",
-      path: "/tmp/screenshot.png",
+    // The PNG is returned as an artifact handle the MCP client materializes —
+    // the unreachable `127.0.0.1` media URL is no longer surfaced.
+    expect(result.image).toMatchObject({
+      __argentArtifact: true,
+      filename: "screenshot.png",
+      mimeType: "image/png",
+      hostPath: "/tmp/screenshot.png",
     });
     expect(result).not.toHaveProperty("includeImageInContext");
+    expect(result).not.toHaveProperty("url");
   });
 });

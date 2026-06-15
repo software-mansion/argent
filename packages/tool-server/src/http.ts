@@ -1,5 +1,5 @@
 import express, { Request, Response } from "express";
-import type { Registry } from "@argent/registry";
+import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -7,12 +7,25 @@ import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
+import { makeArtifactRoute } from "./artifacts";
+import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
   NotImplementedOnPlatformError,
   UnsupportedOperationError,
 } from "./utils/capability";
 import { resolveDevice } from "./utils/device-info";
+import type { Server as HttpServer } from "node:http";
+import {
+  CHROMIUM_CDP_NAMESPACE,
+  chromiumCdpRef,
+  type ChromiumCdpApi,
+} from "./blueprints/chromium-cdp";
+import {
+  attachChromiumServerWebsocket,
+  createChromiumServerRouter,
+} from "./chromium-server/http-api";
+import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
@@ -53,6 +66,16 @@ export interface HttpAppOptions {
   idleTimeoutMs?: number;
   onIdle?: () => void;
   onShutdown?: () => void;
+  /**
+   * Address the server is bound to (the launcher's `ARGENT_HOST`). Defaults to
+   * loopback. When the operator deliberately binds to a routable address
+   * (`argent server start --host <ip>`), that host is added to the Host-header
+   * allow-list so legitimate remote clients aren't mistaken for DNS-rebinding.
+   * A wildcard bind (0.0.0.0 / ::) disables the guard entirely — the machine is
+   * reachable by addresses we can't enumerate, and the operator has explicitly
+   * opted into network exposure (and is warned at startup).
+   */
+  bindHost?: string;
 }
 
 export interface HttpAppHandle {
@@ -61,14 +84,31 @@ export interface HttpAppHandle {
   dispose: () => void;
   /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
   getLastActivityAt: () => number;
+  /** Attach the per-Chromium-device WebSocket upgrade handler to the live
+   * http.Server. Called once `app.listen()` has been invoked and the server
+   * is bound. Splitting this out from `createHttpApp` keeps construction
+   * synchronous — the WS upgrade is the only part that needs the Node server
+   * instance rather than the Express app. */
+  attachChromiumWebsockets: (server: HttpServer) => void;
 }
 
 // Loopback hostnames the browser is allowed to address us by. The
-// tool-server binds to 127.0.0.1 only, but a public attacker page that
+// tool-server binds to 127.0.0.1 by default, but a public attacker page that
 // briefly DNS-rebinds its own hostname to 127.0.0.1 can still reach us
 // — the Host header is the only signal that distinguishes that traffic
 // from a legitimate same-origin request, so we gate on it.
-const ALLOWED_HOSTNAMES = new Set(["127.0.0.1", "localhost", "::1"]);
+const LOOPBACK_HOSTNAMES = ["127.0.0.1", "localhost", "::1"];
+
+function isLoopbackHost(host: string): boolean {
+  return host === "" || LOOPBACK_HOSTNAMES.includes(host);
+}
+
+// Wildcard binds accept connections on every interface; a client can reach
+// them via any of the machine's addresses, which we can't enumerate — so the
+// Host guard can't be applied meaningfully and is disabled for this case.
+function isWildcardHost(host: string): boolean {
+  return host === "0.0.0.0" || host === "::" || host === "::0";
+}
 
 function extractHostname(host: string): string {
   // IPv6 literals are bracketed: "[::1]:8080" → "::1"
@@ -82,29 +122,49 @@ function extractHostname(host: string): string {
 
 export function createHttpApp(registry: Registry, options?: HttpAppOptions): HttpAppHandle {
   const app = express();
-  app.use(express.json());
+  // 48mb: file-input wrappers may inline base64 file content (saved PNG
+  // baselines, flow YAMLs) when the client is remote. Bounds the whole encoded
+  // request; the decoded per-file ceiling is enforced in file-inputs.ts.
+  app.use(express.json({ limit: "48mb" }));
 
   const idleTimer = createIdleTimer(options?.idleTimeoutMs ?? 0, options?.onIdle);
 
-  // Reject requests whose Host header points to anything other than a
-  // loopback hostname. Closes the DNS-rebinding bypass, where a public
+  // Hostnames a client is allowed to address us by. Always includes loopback;
+  // a non-loopback bind host (`argent server start --host <ip>`) is added so
+  // its legitimate clients pass the guard. A wildcard bind disables the guard.
+  const bindHost = options?.bindHost ?? "127.0.0.1";
+  const hostGuardDisabled = isWildcardHost(bindHost);
+  const allowedHostnames = new Set<string>(LOOPBACK_HOSTNAMES);
+  if (!isLoopbackHost(bindHost) && !isWildcardHost(bindHost)) {
+    allowedHostnames.add(bindHost);
+  }
+
+  // Reject requests whose Host header points to anything other than an
+  // allowed hostname. Closes the DNS-rebinding bypass, where a public
   // origin's hostname briefly resolves to 127.0.0.1 and the browser dutifully
   // forwards the rebound origin's cookies/CSRF state to us. Runs before the
   // auth gate so a rebound public origin doesn't even reach the token check.
   app.use((req, res, next) => {
+    // Server explicitly bound to all interfaces — the guard is moot (see
+    // isWildcardHost) and the operator opted into network exposure.
+    if (hostGuardDisabled) {
+      next();
+      return;
+    }
     const host = req.headers.host;
     if (!host) {
       res.status(400).json({ error: "Missing Host header" });
       return;
     }
     const hostname = extractHostname(host);
-    if (!ALLOWED_HOSTNAMES.has(hostname)) {
+    if (!allowedHostnames.has(hostname)) {
       res.status(403).json({
         error:
-          `Refusing request with Host "${host}". The tool-server only accepts ` +
-          `loopback hostnames (127.0.0.1, localhost, ::1) to defend against ` +
-          `DNS-rebinding. If you are reaching this from your own client, use ` +
-          `127.0.0.1 instead of a public hostname.`,
+          `Refusing request with Host "${host}". The tool-server accepts ` +
+          `loopback hostnames (127.0.0.1, localhost, ::1)` +
+          (isLoopbackHost(bindHost) ? "" : ` and its bind host (${bindHost})`) +
+          ` to defend against DNS-rebinding. If you are reaching this from ` +
+          `your own client, use one of those instead of a public hostname.`,
       });
       return;
     }
@@ -155,6 +215,47 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // MCP only consumes /tools and /tools/:name, so this subtree is invisible to agents.
   app.use("/preview", createPreviewRouter(registry));
 
+  // Artifact retrieval: streams files produced by tools (screenshots, profiler
+  // exports) over the remote-aware HTTP boundary so the MCP client can fetch
+  // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  app.get("/artifacts/:id", makeArtifactRoute(registry));
+
+  // Per-Chromium-device HTTP surface that mirrors sim-server's API: a
+  // `/chromium-server/:id/api/*` namespace plus `/stream.mjpeg` and `/viewport`.
+  // The router is mounted lazily — the first request for a given id resolves
+  // the registry service (kicking off the CDP connection) and then forwards
+  // every subsequent request to that already-warm session. Like /preview, this
+  // surface is NOT advertised to MCP agents; tools remain the canonical way to
+  // drive Chromium from an LLM. The HTTP surface is for non-agent consumers
+  // (preview UI, integration tests, custom dashboards).
+  app.use("/chromium-server/:deviceId", async (req: Request, res: Response, next) => {
+    idleTimer.touch();
+    const deviceId = req.params.deviceId!;
+    const device = resolveDevice(deviceId);
+    if (device.platform !== "chromium") {
+      res.status(400).json({
+        error: `Device id "${deviceId}" is not a Chromium device. Use list-devices to find one.`,
+      });
+      return;
+    }
+    let server: ChromiumCdpApi;
+    try {
+      const ref = chromiumCdpRef(device);
+      server = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
+    } catch (err) {
+      res.status(502).json({
+        error: `Could not resolve Chromium CDP session for ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return;
+    }
+    // Lazily build the router per-device. Each ChromiumServer is stable for
+    // the lifetime of the registry entry, so caching the router would only
+    // save a few object allocations per request; building inline keeps the
+    // code simple and the failure surface obvious.
+    const router = createChromiumServerRouter(server.server);
+    router(req, res, next);
+  });
+
   app.get("/registry/snapshot", (_req: Request, res: Response) => {
     const snapshot = registry.getSnapshot();
     const services: Record<string, { state: string; dependents: string[] }> = {};
@@ -178,6 +279,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         description: string;
         inputSchema: Record<string, unknown>;
         outputHint?: string;
+        fileInputs?: FileInputSpec[];
         alwaysLoad?: boolean;
         searchHint?: string;
         longRunning?: boolean;
@@ -187,6 +289,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
       };
       if (def?.outputHint) entry.outputHint = def.outputHint;
+      if (def?.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
       if (def?.alwaysLoad) entry.alwaysLoad = true;
       if (def?.searchHint) entry.searchHint = def.searchHint;
       if (def?.longRunning) entry.longRunning = true;
@@ -210,9 +313,31 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         return;
       }
 
-      let parsedData = req.body;
+      // File boundary: turn any client file-input wrappers back into plain
+      // server-readable paths BEFORE schema validation, so the tool's zod
+      // schema only ever sees the string params it declares. 422 on a file
+      // that is reachable neither in place nor via uploaded content.
+      let bodyArgs = req.body;
+      let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
+      try {
+        const resolved = await resolveFileInputs(def, req.body);
+        bodyArgs = resolved.args;
+        resolvedFileInputs = resolved.fileInputs;
+        // Materialized uploads are call-scoped: remove them once the response
+        // settles, whichever way it ends (success, validation failure, tool
+        // error, or client abort).
+        res.once("close", () => void resolved.cleanup());
+      } catch (err) {
+        if (err instanceof FileInputError) {
+          res.status(422).json({ error: err.message });
+          return;
+        }
+        throw err;
+      }
+
+      let parsedData = bodyArgs;
       if (def.zodSchema) {
-        const parseResult = def.zodSchema.safeParse(req.body);
+        const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
           res.status(400).json({ error: parseResult.error.message });
           return;
@@ -276,6 +401,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
+          ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
@@ -340,5 +466,33 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     app,
     dispose: () => idleTimer.dispose(),
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
+    attachChromiumWebsockets: (httpServer: HttpServer) => {
+      attachChromiumServerWebsocket(httpServer, "/chromium-server/", (req) => {
+        // URL shape: /chromium-server/<deviceId>/ws
+        const match = (req.url ?? "").match(/^\/chromium-server\/([^/]+)\/ws(?:[?#]|$)/);
+        if (!match) return null;
+        const deviceId = decodeURIComponent(match[1]!);
+        const device = resolveDeviceForWs(deviceId);
+        if (device.platform !== "chromium") return null;
+        // The CDP session must already be resolved (the per-device REST routes
+        // resolve it lazily on first hit). For the WS endpoint we look at the
+        // current registry snapshot — if no session is open, refuse the
+        // upgrade instead of triggering a slow CDP connect inside the upgrade
+        // handler (which would block the TCP socket).
+        const urn = `${CHROMIUM_CDP_NAMESPACE}:${deviceId}`;
+        const snapshot = registry.getSnapshot();
+        if (!snapshot.services.has(urn)) return null;
+        // Use the synchronous getter on the registry rather than the async
+        // resolveService — by this point the service is guaranteed to exist.
+        const node = (
+          registry as unknown as {
+            services: Map<string, { instance: { api: ChromiumCdpApi } | null }>;
+          }
+        ).services.get(urn);
+        const api = node?.instance?.api;
+        if (!api) return null;
+        return api.server;
+      });
+    },
   };
 }

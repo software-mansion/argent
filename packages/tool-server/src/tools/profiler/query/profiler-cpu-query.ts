@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
@@ -348,6 +349,9 @@ Use when investigating JS CPU hotspots or correlating CPU cost with specific com
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored — run react-profiler-stop first.`,
   zodSchema,
+  // RN-only: reads Hermes-format CPU profiles. Chromium's V8 sample format is
+  // different — see the PR description for the follow-up scope.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);

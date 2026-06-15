@@ -46,8 +46,11 @@ function extractFromFile(filePath) {
     // Look for description within the next 2000 chars (handles multi-line)
     const descWindow = afterId.slice(0, 2000);
 
-    // Template literal description
-    let descMatch = descWindow.match(/\bdescription:\s*`([\s\S]*?)`/);
+    // Template literal description.
+    // Allow escaped backticks (\`) inside the literal so inline code like
+    // `adb pull` doesn't truncate the captured description. The class matches
+    // either an escape sequence (\\.) or any char that isn't ` or \.
+    let descMatch = descWindow.match(/\bdescription:\s*`((?:\\.|[^`\\])*)`/);
     if (!descMatch) {
       // Double-quoted description
       descMatch = descWindow.match(/\bdescription:\s*"((?:[^"\\]|\\.)*)"/);
@@ -58,9 +61,12 @@ function extractFromFile(filePath) {
     }
 
     if (descMatch) {
+      // Unescape template-literal escapes (\` \$ \\) so the description reads
+      // as the rendered string, not the source form.
+      const description = descMatch[1].replace(/\\([`$\\])/g, "$1").trim();
       tools.push({
         name: id,
-        description: descMatch[1].trim(),
+        description,
       });
     }
   }

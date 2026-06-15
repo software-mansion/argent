@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
+import { RN_ONLY_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
@@ -75,6 +76,10 @@ Network interception is injected into the JS runtime — it captures fetch() cal
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
 Fails if the app is not connected or no network interceptor could be injected.`,
   zodSchema,
+  // RN-only: the interceptor monkey-patches global.fetch in the Hermes runtime.
+  // Chromium pages should be inspected via Chromium's Network domain instead,
+  // which is a different mechanism — out of scope for this port.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     inspector: `NetworkInspector:${params.port}:${params.device_id}`,
   }),

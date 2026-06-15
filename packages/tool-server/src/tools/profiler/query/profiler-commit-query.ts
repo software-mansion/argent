@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
   DevToolsFiberCommit,
@@ -327,6 +328,8 @@ Use when drilling into specific components or time windows after react-profiler-
 Returns a markdown table or tree of commit data matching the requested mode.
 Fails if react-profiler-stop has not been called or no commit data is stored.`,
   zodSchema,
+  // RN-only: reads React commit data captured via the React DevTools backend.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params) {
     const commitTree = await getCommitTree(params.port, params.device_id);

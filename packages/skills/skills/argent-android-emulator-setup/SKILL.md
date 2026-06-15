@@ -26,4 +26,4 @@ Pass the Android serial as `udid` to the unified interaction tools — `gesture-
 - Serials are the adb device id. iOS UDIDs and Android serials are not interchangeable, but you do NOT need to tell the tools which platform — dispatch is automatic.
 - `describe` on Android returns a shallower tree than iOS (no accessibility-service equivalent), but covers most tap-target discovery.
 - `reinstall-app` on Android always installs with `-g` so first-launch runtime permissions are pre-granted.
-- To kill the emulator when you're done, run `adb -s <serial> emu kill` from a shell.
+- To stop the emulator, run `adb -s <serial> emu kill` from a shell (clean shutdown). Never `pkill -9`/`kill -9` qemu — a hard kill leaves the userdata image dirty, after which cold boots can hang for many minutes doing recovery (runaway writes, `boot_completed` never flips). If an image gets into that state, boot once with `-wipe-data` to reset it.
