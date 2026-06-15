@@ -29,18 +29,6 @@ export interface ExportDiagnostics {
   errors: Record<string, string>;
 }
 
-function getXctraceVersion(): number {
-  try {
-    const output = execSyncWithTimeout("xctrace version 2>&1 || true", {
-      encoding: "utf-8",
-    }) as string;
-    const match = output.match(/(\d+)\./);
-    return match ? parseInt(match[1]!, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
 /**
  * Run `xctrace export --toc` to discover what tables/schemas exist in the trace.
  * Returns an array of schema names found in the TOC.
@@ -162,36 +150,16 @@ export function exportIosTraceData(traceFile: string): {
       continue;
     }
 
-    if (key === "leaks") {
-      const xcVersion = getXctraceVersion();
-      const halFlag = xcVersion >= 15 ? " --hal" : "";
-      try {
-        execSyncWithTimeout(
-          `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'${halFlag}`,
-          { stdio: "pipe" }
-        );
-        exportedFiles[key] = outPath;
-      } catch {
-        if (halFlag) {
-          try {
-            execSyncWithTimeout(
-              `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
-              { stdio: "pipe" }
-            );
-            exportedFiles[key] = outPath;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            diagnostics.errors[key] = msg;
-            exportedFiles[key] = null;
-          }
-        } else {
-          exportedFiles[key] = null;
-        }
-      }
-      continue;
-    }
-
-    // Default export (hangs, etc.)
+    // Default export (hangs + leaks).
+    //
+    // Leaks need no special handling: a single `xctrace export --xpath` of the
+    // `Leaks` track detail (EXPORTS.leaks). Unlike the CPU/hangs schema tables,
+    // that detail exports self-closing attribute rows — `<row
+    // leaked-object="…" size="…" responsible-frame="…" count="…"
+    // responsible-library="…" />` — which is exactly what parseLeaksXml
+    // matches. (A previous `--hal` gate here passed a flag that `xctrace
+    // export` does not accept; the first attempt always failed and fell back to
+    // this same plain export, so it has been removed.)
     try {
       execSyncWithTimeout(
         `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,

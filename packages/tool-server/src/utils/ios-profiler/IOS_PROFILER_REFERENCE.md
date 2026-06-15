@@ -74,7 +74,7 @@ All three are wired through `native-profiler-session` (per-device service, keyed
    - First call `xctrace export --toc` to discover what schemas the trace actually contains.
    - Pick the first match from `["time-profile", "cpu-profile", "time-sample"]` for CPU.
    - Fall back to brute-forcing each candidate if TOC parsing fails.
-   - For Leaks, append `--hal` on `xctrace` ≥ 15 (required by newer xctrace versions for the leaks export); retry without the flag on failure for backward compatibility.
+   - For Leaks, a single `xctrace export --xpath` of the `Leaks` track detail — no extra flags.
 3. Three XMLs land next to the `.trace` bundle:
    - `<base>_raw_cpu.xml` — `time-profile` table
    - `<base>_raw_hangs.xml` — `potential-hangs` table
@@ -214,7 +214,8 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 - **`xctrace` overhead.** Hermes runtime internals (`JSLexer`, `JSONEmitter`, etc.) dominating the JS thread usually means profiler overhead, not app work.
 - **Run-to-run variance.** Treat changes < ~15 % across a single run as noise.
 - **Live data variance.** Different API responses change rendering work — record a flow (`argent-create-flow`) for stable before/after comparisons.
-- **xctrace requirement.** Needs Xcode CLT installed (`xcrun xctrace version`). Some commands (`--hal` for leaks) gate on `xctrace ≥ 15`.
+- **xctrace requirement.** Needs Xcode CLT installed (`xcrun xctrace version`).
+- **Leak attribution is limited under `--attach`.** Argent attaches to the already-running app, so the `Leaks`/`Allocations` instruments have no malloc-stack history. On the simulator this means leaked objects come back with `responsible-frame = "<Call stack limit reached>"`, an empty library, and the list is dominated by untracked system allocations (`Malloc N Bytes`, `xpc_*`). Treat the simulator leak list as a coarse signal, not a set of attributed app bugs — actionable stacks need malloc stack logging enabled at launch.
 
 ---
 
