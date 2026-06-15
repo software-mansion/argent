@@ -67,8 +67,14 @@ Fails if either react-profiler-analyze or native-profiler-analyze has not been c
     let uiHangs: UiHang[];
     let memoryLeaks: MemoryLeak[];
     if (nativeApi.platform === "android") {
-      if (!nativeApi.traceFile) {
-        throw new Error("No native profiler data. Run native-profiler-analyze first.");
+      // Gate on the exported .pftrace (set at stop), not just traceFile (set at
+      // start) -- otherwise a session that started native profiling but never ran
+      // stop/analyze would silently render an empty "0 hangs" report instead of
+      // this clear error. Mirrors profiler-stack-query's Android gate.
+      if (!nativeApi.exportedFiles?.pftrace || !nativeApi.traceFile) {
+        throw new Error(
+          "No Android trace loaded. Run native-profiler-stop → native-profiler-analyze first."
+        );
       }
       const data = await loadAndroidCombinedData(nativeApi.traceFile, nativeApi.appProcess ?? "");
       uiHangs = data.uiHangs;
