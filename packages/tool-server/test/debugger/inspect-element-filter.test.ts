@@ -318,7 +318,18 @@ const params = {
 describe("debuggerInspectElementTool — raw fallback when symbolication fails", () => {
   it("retains the raw bundled frame location when symbolicate returns null", async () => {
     const { services, readSourceFragment } = fakeServices(
-      [{ name: "Screen", frame: { fn: "Screen", file: "http://localhost:8081/index.bundle", line: 4321, col: 17, original: false } }],
+      [
+        {
+          name: "Screen",
+          frame: {
+            fn: "Screen",
+            file: "http://localhost:8081/index.bundle",
+            line: 4321,
+            col: 17,
+            original: false,
+          },
+        },
+      ],
       async () => null // symbolication failed / echoed bundle URL
     );
 
@@ -341,7 +352,18 @@ describe("debuggerInspectElementTool — raw fallback when symbolication fails",
   it("uses the mapped location when symbolicate succeeds", async () => {
     const mapped = { file: "app/screen.tsx", line: 12, column: 4 };
     const { services, readSourceFragment } = fakeServices(
-      [{ name: "Screen", frame: { fn: "Screen", file: "http://localhost:8081/index.bundle", line: 4321, col: 17, original: false } }],
+      [
+        {
+          name: "Screen",
+          frame: {
+            fn: "Screen",
+            file: "http://localhost:8081/index.bundle",
+            line: 4321,
+            col: 17,
+            original: false,
+          },
+        },
+      ],
       async () => mapped
     );
 
