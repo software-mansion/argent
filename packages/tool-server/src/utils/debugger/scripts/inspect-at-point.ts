@@ -114,15 +114,23 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   }
 
   // Resolve the host instance to hand to getInspectorDataForViewAtPoint.
-  // Fabric: stateNode.canonical.publicInstance (ReactNativeElement).
-  // Paper with canonical: same publicInstance shape.
-  // Paper without canonical: the ReactNativeFiberHostComponent stateNode itself
-  // is a valid inspectedView -- it carries _internalFiberInstanceHandleDEV and
+  // When a canonical wrapper exists (Fabric, and newer Paper), its publicInstance
+  // IS the inspectedView -- return it as-is, even when null. On Fabric the
+  // publicInstance is realized lazily, so a freshly-mounted host fiber can have
+  // canonical.publicInstance === null; the prior code handed that null straight
+  // through (the renderer fast-fails into our try/catch). We must NOT substitute
+  // the raw stateNode on a canonical path -- a raw Fabric stateNode is not a valid
+  // inspectedView, so the renderer logs and never invokes the callback (the
+  // inspect request would hang). Returning publicInstance as-is preserves the
+  // prior behavior on every canonical path exactly.
+  // Paper without canonical: the bare ReactNativeFiberHostComponent stateNode is
+  // itself a valid inspectedView -- it carries _internalFiberInstanceHandleDEV and
   // findNodeHandle() reads its _nativeTag, which is exactly what the renderer's
-  // Paper branch (inspectedView._internalFiberInstanceHandleDEV path) needs.
+  // Paper branch needs. This is the RN 0.81 legacy-bridge case that previously
+  // produced 'no host fiber'.
   function getInspectRef(f) {
     var sn = f.stateNode;
-    if (sn.canonical && sn.canonical.publicInstance) return sn.canonical.publicInstance;
+    if (sn.canonical) return sn.canonical.publicInstance;
     return sn;
   }
 

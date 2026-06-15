@@ -175,3 +175,23 @@ describe("makeInspectScript — old-arch (Paper) host fiber resolution", () => {
     expect(out?.items?.map((i) => i.name)).toContain("HybridButton");
   });
 });
+
+describe("makeInspectScript — Fabric host fiber with unrealized public instance", () => {
+  it("passes canonical.publicInstance as-is (even null) on Fabric, never the raw stateNode", () => {
+    // On Fabric the publicInstance is realized lazily, so a freshly-mounted host
+    // fiber can legitimately have canonical.publicInstance === null. A raw stateNode
+    // is NOT a valid inspectedView on Fabric -- the renderer logs and never invokes
+    // the callback, hanging the inspect request. The _nativeTag raw-stateNode
+    // fallback is old-arch only; on any canonical path we hand back publicInstance
+    // exactly as the pre-fix code did (null fast-fails into our try/catch).
+    const host = hostFiber(null); // Fabric stateNode: { node, canonical: { publicInstance: null } }
+    const rnRoot = rootOf(comp("FreshButton", host));
+    const rn = makeRenderer(comp("FreshButton", null));
+
+    const out = runInspect(makeHook([[1, rn.renderer, [rnRoot]]])); // fabric: true (default)
+
+    expect(rn.fn).toHaveBeenCalledTimes(1);
+    expect(rn.fn.mock.calls[0][0]).toBe(null);
+    expect(rn.fn.mock.calls[0][0]).not.toBe(host.stateNode);
+  });
+});
