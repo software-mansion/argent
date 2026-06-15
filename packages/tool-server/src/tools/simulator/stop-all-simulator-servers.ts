@@ -3,13 +3,13 @@ import type { Registry, ToolDefinition } from "@argent/registry";
 import { SIMULATOR_SERVER_NAMESPACE } from "../../blueprints/simulator-server";
 import { NATIVE_DEVTOOLS_NAMESPACE } from "../../blueprints/native-devtools";
 import { ANDROID_DEVTOOLS_NAMESPACE } from "../../blueprints/android-devtools";
-import { ELECTRON_CDP_NAMESPACE } from "../../blueprints/electron-cdp";
+import { CHROMIUM_CDP_NAMESPACE } from "../../blueprints/chromium-cdp";
 
 const PREFIXES = [
   `${SIMULATOR_SERVER_NAMESPACE}:`,
   `${NATIVE_DEVTOOLS_NAMESPACE}:`,
   `${ANDROID_DEVTOOLS_NAMESPACE}:`,
-  `${ELECTRON_CDP_NAMESPACE}:`,
+  `${CHROMIUM_CDP_NAMESPACE}:`,
 ];
 
 export function createStopAllSimulatorServersTool(
@@ -17,7 +17,7 @@ export function createStopAllSimulatorServersTool(
 ): ToolDefinition<void, { stopped: string[] }> {
   return {
     id: "stop-all-simulator-servers",
-    description: `Stop all running simulator-server processes (iOS + Android), native devtools services, and Electron CDP sessions, freeing their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
+    description: `Stop all running simulator-server processes (iOS + Android), native devtools services, and Chromium CDP sessions, freeing their resources. Call this when your session ends or the user says they are done. Returns { stopped } — an array of URNs that were shut down. Fails silently if no servers are running.`,
     services: () => ({}),
     async execute() {
       const snapshot = registry.getSnapshot();

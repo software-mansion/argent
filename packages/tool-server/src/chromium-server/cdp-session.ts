@@ -26,7 +26,7 @@ export async function ensureCdpReachable(
 }
 
 /**
- * Probe a CDP endpoint for the renderer page we should drive. Electron
+ * Probe a CDP endpoint for the renderer page we should drive. Chromium
  * typically exposes one "page" target per BrowserWindow plus a few
  * service_worker / shared_worker entries we don't care about.
  *
@@ -38,13 +38,13 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
   const pages = targets.filter((t) => t.type === "page" && !!t.webSocketDebuggerUrl);
   if (pages.length === 0) {
     throw new Error(
-      `Electron CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`
+      `Chromium CDP on port ${port} reported no page targets. Is the app started with --remote-debugging-port=${port}?`
     );
   }
   const primary = pages.find((p) => !p.url.startsWith("devtools://"));
   if (!primary) {
     throw new Error(
-      `Electron CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +
+      `Chromium CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +
         `Bring the app window to the foreground and retry.`
     );
   }
@@ -54,7 +54,7 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(url, { signal });
   if (!res.ok) {
-    throw new Error(`Electron CDP discovery: GET ${url} failed (HTTP ${res.status})`);
+    throw new Error(`Chromium CDP discovery: GET ${url} failed (HTTP ${res.status})`);
   }
   return (await res.json()) as T;
 }
@@ -94,7 +94,7 @@ export async function enableCoreDomains(cdp: CDPClient): Promise<void> {
 
 /** Working directory for screenshots / video / clipboard staging. */
 export function mediaDir(): string {
-  const dir = path.join(os.tmpdir(), "argent-electron-media");
+  const dir = path.join(os.tmpdir(), "argent-chromium-media");
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

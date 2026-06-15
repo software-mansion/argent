@@ -25,7 +25,7 @@ let sharpLoadWarningEmitted = false;
  * fall back to writing the raw CDP screenshot bytes when it's missing, and
  * emit one warning so the user knows scale / rotation were ignored. Adding
  * sharp as a hard dep would bloat the tool-server install with a ~30 MB
- * native binary every consumer pays for whether they touch Electron or not.
+ * native binary every consumer pays for whether they touch Chromium or not.
  */
 function tryLoadSharp(): SharpModule | null {
   if (sharpCache !== undefined) return sharpCache;
@@ -44,7 +44,7 @@ function warnSharpMissingOnce(reason: string): void {
   if (sharpLoadWarningEmitted) return;
   sharpLoadWarningEmitted = true;
   process.stderr.write(
-    `[electron-screenshot] sharp is not installed — ${reason} ignored. ` +
+    `[chromium-screenshot] sharp is not installed — ${reason} ignored. ` +
       `Install it with \`npm install sharp\` in the tool-server's environment to enable image post-processing.\n`
   );
 }
@@ -90,7 +90,7 @@ export async function captureScreenshot(
     captureBeyondViewport: false,
   })) as { data?: string };
   if (!cdpResult.data) {
-    throw new Error("Electron CDP: Page.captureScreenshot returned no data.");
+    throw new Error("Chromium CDP: Page.captureScreenshot returned no data.");
   }
   let bytes = Buffer.from(cdpResult.data, "base64");
 
@@ -152,7 +152,7 @@ function readPngSize(buf: Buffer): { width: number; height: number } | null {
 
 /**
  * Sim-server can also copy a screenshot directly to the OS clipboard (handy
- * for "share this state with QA"). On Electron we go through the renderer's
+ * for "share this state with QA"). On Chromium we go through the renderer's
  * Clipboard API because CDP doesn't expose the OS clipboard. The path is
  * best-effort — if clipboard permission is denied the call rejects with the
  * underlying renderer error so callers can surface it.
@@ -166,7 +166,7 @@ export async function copyScreenshotToClipboard(
   const b64 = bytes.toString("base64");
 
   // Build a script that copies a PNG blob through the clipboard API. The
-  // renderer must support ClipboardItem (Chromium ≥ 79, every Electron we
+  // renderer must support ClipboardItem (Chromium ≥ 79, every Chromium we
   // care about) — older runtimes would throw, but the surrounding try/catch
   // surfaces that as a clear error rather than a silent no-op.
   const script = `(async () => {
@@ -193,7 +193,7 @@ export async function copyScreenshotToClipboard(
   const v = out.result?.value;
   if (!v?.ok) {
     throw new Error(
-      `Electron clipboard image copy failed: ${v?.error ?? "renderer rejected the write"}`
+      `Chromium clipboard image copy failed: ${v?.error ?? "renderer rejected the write"}`
     );
   }
 }

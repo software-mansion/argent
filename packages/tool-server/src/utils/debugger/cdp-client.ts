@@ -104,7 +104,7 @@ export class CDPClient {
     this.wsUrl = wsUrl;
     // Default true matches Metro / Expo. Chromium's devtools-target rejects
     // upgrade requests that carry an Origin header (since the protocol is
-    // meant for IDE clients, not pages), so Electron CDP callers must pass
+    // meant for IDE clients, not pages), so Chromium CDP callers must pass
     // `sendOrigin: false`.
     this.sendOrigin = options?.sendOrigin !== false;
   }
@@ -114,7 +114,7 @@ export class CDPClient {
       // RN >= 0.85 Metro requires an Origin header. Expo's dev server does an
       // exact match against its serverBaseUrl (127.0.0.1), so we normalize
       // localhost → 127.0.0.1 in the Origin to satisfy both servers.
-      // For Chromium CDP (Electron), the same header triggers a 403, so we
+      // For Chromium CDP (Chromium), the same header triggers a 403, so we
       // honour the constructor's `sendOrigin: false`.
       let headers: Record<string, string> | undefined;
       if (this.sendOrigin) {

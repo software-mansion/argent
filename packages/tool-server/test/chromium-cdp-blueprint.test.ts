@@ -3,12 +3,12 @@ import * as http from "node:http";
 import { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
 import {
-  ELECTRON_CDP_NAMESPACE,
+  CHROMIUM_CDP_NAMESPACE,
   discoverPrimaryPage,
-  electronCdpBlueprint,
-  electronCdpRef,
+  chromiumCdpBlueprint,
+  chromiumCdpRef,
   ensureCdpReachable,
-} from "../src/blueprints/electron-cdp";
+} from "../src/blueprints/chromium-cdp";
 import { resolveDevice } from "../src/utils/device-info";
 
 interface FakeCdp {
@@ -139,12 +139,12 @@ afterEach(async () => {
   for (const s of servers.splice(0)) await s.close();
 });
 
-describe("electronCdpBlueprint (smoke)", () => {
+describe("chromiumCdpBlueprint (smoke)", () => {
   it("namespace + URN are stable", () => {
-    expect(ELECTRON_CDP_NAMESPACE).toBe("ElectronCdp");
-    const ref = electronCdpRef(resolveDevice("electron-cdp-9222"));
-    expect(ref.urn).toBe("ElectronCdp:electron-cdp-9222");
-    expect(ref.options.device.platform).toBe("electron");
+    expect(CHROMIUM_CDP_NAMESPACE).toBe("ChromiumCdp");
+    const ref = chromiumCdpRef(resolveDevice("chromium-cdp-9222"));
+    expect(ref.urn).toBe("ChromiumCdp:chromium-cdp-9222");
+    expect(ref.options.device.platform).toBe("chromium");
   });
 
   it("discoverPrimaryPage returns the first non-devtools page target", async () => {
@@ -165,8 +165,8 @@ describe("electronCdpBlueprint (smoke)", () => {
   it("factory: connects, primes domains, exposes a working api", async () => {
     const s = await startFakeCdp();
     servers.push(s);
-    const device = resolveDevice(`electron-cdp-${s.port}`);
-    const instance = await electronCdpBlueprint.factory({}, device, { device });
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const instance = await chromiumCdpBlueprint.factory({}, device, { device });
 
     try {
       expect(instance.api.port).toBe(s.port);
@@ -183,9 +183,9 @@ describe("electronCdpBlueprint (smoke)", () => {
       expect(s.recordedMethods).toContain("Input.dispatchMouseEvent");
 
       // Screenshot — fake server returns a tiny PNG, we expect a real file
-      // path in the unified media dir maintained by the electron-server.
+      // path in the unified media dir maintained by the chromium-server.
       const shot = await instance.api.captureScreenshot();
-      expect(shot.path).toMatch(/argent-electron-media/);
+      expect(shot.path).toMatch(/argent-chromium-media/);
       expect(shot.path).toMatch(/argent-screenshot-/);
       expect(shot.url).toMatch(/^file:\/\//);
     } finally {
@@ -196,12 +196,12 @@ describe("electronCdpBlueprint (smoke)", () => {
   it("factory can synthesize the device from a string URN payload when no options.device is given", async () => {
     // This path matters for transitive dep resolution — see the registry's
     // _resolve, which only forwards the URN string into the factory, not the
-    // ServiceRef options. The ElectronJsRuntimeDebugger blueprint depends on
-    // ElectronCdp via getDependencies and reaches this branch.
+    // ServiceRef options. The ChromiumJsRuntimeDebugger blueprint depends on
+    // ChromiumCdp via getDependencies and reaches this branch.
     const s = await startFakeCdp();
     servers.push(s);
-    const payload = `electron-cdp-${s.port}`;
-    const instance = await electronCdpBlueprint.factory(
+    const payload = `chromium-cdp-${s.port}`;
+    const instance = await chromiumCdpBlueprint.factory(
       {},
       payload as unknown as ReturnType<typeof resolveDevice>,
       undefined as unknown as Record<string, unknown>
@@ -215,7 +215,7 @@ describe("electronCdpBlueprint (smoke)", () => {
 
   it("factory rejects when neither options.device nor a valid URN payload is given", async () => {
     await expect(
-      electronCdpBlueprint.factory(
+      chromiumCdpBlueprint.factory(
         {},
         undefined as unknown as ReturnType<typeof resolveDevice>,
         undefined as unknown as Record<string, unknown>
@@ -226,10 +226,10 @@ describe("electronCdpBlueprint (smoke)", () => {
   it("factory rejects when options.device.id disagrees with the URN payload", async () => {
     const s = await startFakeCdp();
     servers.push(s);
-    const device = resolveDevice(`electron-cdp-${s.port}`);
-    const otherPayload = `electron-cdp-${s.port + 1}`;
+    const device = resolveDevice(`chromium-cdp-${s.port}`);
+    const otherPayload = `chromium-cdp-${s.port + 1}`;
     await expect(
-      electronCdpBlueprint.factory(
+      chromiumCdpBlueprint.factory(
         {},
         otherPayload as unknown as ReturnType<typeof resolveDevice>,
         { device }

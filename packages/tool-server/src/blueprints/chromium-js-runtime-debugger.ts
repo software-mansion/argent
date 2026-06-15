@@ -6,7 +6,7 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { ELECTRON_CDP_NAMESPACE, type ElectronCdpApi } from "./electron-cdp";
+import { CHROMIUM_CDP_NAMESPACE, type ChromiumCdpApi } from "./chromium-cdp";
 import type { ConsoleAPICalledParams } from "../utils/debugger/cdp-client";
 import { SourceMapsRegistry } from "../utils/debugger/source-maps";
 import type { SourceResolver } from "../utils/debugger/source-resolver";
@@ -17,16 +17,16 @@ import {
   type JsRuntimeDebuggerApi,
 } from "./js-runtime-debugger";
 
-export const ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE = "ElectronJsRuntimeDebugger";
+export const CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE = "ChromiumJsRuntimeDebugger";
 
-type ElectronJsdFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+type ChromiumJsdFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
-export function electronJsRuntimeDebuggerRef(device: DeviceInfo): {
+export function chromiumJsRuntimeDebuggerRef(device: DeviceInfo): {
   urn: string;
-  options: ElectronJsdFactoryOptions;
+  options: ChromiumJsdFactoryOptions;
 } {
   return {
-    urn: `${ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE}:${device.id}`,
+    urn: `${CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE}:${device.id}`,
     options: { device },
   };
 }
@@ -84,15 +84,15 @@ function createConsoleLogServer(
 }
 
 // Stubs for fields only consumed by debugger-inspect-element, which is locked
-// out on Electron (it depends on the React Native internal
-// getInspectorDataForViewAtPoint). Keeping them shaped means electron and
+// out on Chromium (it depends on the React Native internal
+// getInspectorDataForViewAtPoint). Keeping them shaped means chromium and
 // metro paths can share a single api interface — tools that *don't* use them
-// work uniformly, and any future tool that calls one on an electron api hits a
+// work uniformly, and any future tool that calls one on an chromium api hits a
 // loud, clearly-named error instead of `undefined`.
 function makeStubSourceResolver(): SourceResolver {
   const unsupported = () => {
     throw new Error(
-      "SourceResolver is not implemented on Electron debugger sessions — Metro symbolicate is the only backing implementation."
+      "SourceResolver is not implemented on Chromium debugger sessions — Metro symbolicate is the only backing implementation."
     );
   };
   return {
@@ -107,51 +107,51 @@ class StubSourceMapsRegistry extends SourceMapsRegistry {
     super("");
   }
   override async waitForPending(): Promise<void> {
-    // No Metro source-map fetch loop on Electron — page scripts already carry
+    // No Metro source-map fetch loop on Chromium — page scripts already carry
     // their own //# sourceMappingURL=data:... or rely on the browser devtools'
     // own resolution path.
   }
 }
 
-export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
-  namespace: ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE,
+export const chromiumJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, string> = {
+  namespace: CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
 
   getURN(payload: string) {
-    return `${ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
+    return `${CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE}:${payload}`;
   },
 
   getDependencies(_payload: string) {
-    // The payload IS the device id (e.g. "electron-cdp-9222") so we depend on
-    // the matching ElectronCdp service. Keeping the device id in the payload —
+    // The payload IS the device id (e.g. "chromium-cdp-9222") so we depend on
+    // the matching ChromiumCdp service. Keeping the device id in the payload —
     // rather than passing through options — means the registry can compute
     // dependency URNs without needing the resolved DeviceInfo.
-    return { electron: `${ELECTRON_CDP_NAMESPACE}:${_payload}` };
+    return { chromium: `${CHROMIUM_CDP_NAMESPACE}:${_payload}` };
   },
 
   async factory(deps, payload, options) {
-    const opts = options as ElectronJsdFactoryOptions | undefined;
+    const opts = options as ChromiumJsdFactoryOptions | undefined;
     const device = opts?.device;
     if (!device) {
       throw new Error(
-        `${ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use electronJsRuntimeDebuggerRef(device) when registering the service ref.`
+        `${CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
+          `Use chromiumJsRuntimeDebuggerRef(device) when registering the service ref.`
       );
     }
     if (device.id !== payload) {
       throw new Error(
-        `${ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE}.factory: payload "${payload}" does not match options.device.id "${device.id}".`
+        `${CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE}.factory: payload "${payload}" does not match options.device.id "${device.id}".`
       );
     }
 
-    const electron = deps.electron as ElectronCdpApi;
-    const cdp = electron.cdp;
-    const port = electron.port;
+    const chromium = deps.chromium as ChromiumCdpApi;
+    const cdp = chromium.cdp;
+    const port = chromium.port;
 
     // Attach the terminated bridge *before* any awaits below. This is mainly
     // about post-factory disconnects: once the registry binds to our `events`
     // (after factory returns), a `disconnected` here translates cleanly to
     // `terminated` so the service is torn down. The disconnect-DURING-factory
-    // window is handled by the upstream ElectronCdp service, which has its own
+    // window is handled by the upstream ChromiumCdp service, which has its own
     // `terminated` event already bound to the registry — when it fires, the
     // registry cascades teardown into us. So this listener and the upstream
     // one cooperate: upstream covers the factory-init window; this one covers
@@ -160,7 +160,7 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     // our blueprint and would emit into a disposed event bus.
     const events = new TypedEventEmitter<ServiceEvents>();
     const onDisconnected = (error?: Error) => {
-      events.emit("terminated", error ?? new Error("Electron CDP disconnected"));
+      events.emit("terminated", error ?? new Error("Chromium CDP disconnected"));
     };
     cdp.events.on("disconnected", onDisconnected);
 
@@ -202,7 +202,7 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
     const consoleServer = await createConsoleLogServer(consoleEvents, logWriter);
 
     // Best-effort: bind a callback name so evaluateWithBinding works if a
-    // future Electron tool wants it. Failure is non-fatal — the existing
+    // future Chromium tool wants it. Failure is non-fatal — the existing
     // four ported tools don't use it. Future tools that DO use bindings must
     // re-attempt addBinding themselves and surface their own errors loudly.
     await cdp.addBinding("__argent_callback").catch(() => {});
@@ -212,14 +212,14 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
 
     const api: JsRuntimeDebuggerApi = {
       port,
-      // Electron apps have no Metro project root. Empty string keeps the
+      // Chromium apps have no Metro project root. Empty string keeps the
       // contract type-clean; callers that care (only inspect-element via the
       // source resolver) are gated out before they ever touch this field.
       projectRoot: "",
-      deviceName: device.name ?? "Electron",
-      appName: "Electron",
+      deviceName: device.name ?? "Chromium",
+      appName: "Chromium",
       logicalDeviceId: device.id,
-      // Electron always speaks the new CDP — there is no Hermes-legacy mode.
+      // Chromium always speaks the new CDP — there is no Hermes-legacy mode.
       isNewDebugger: true,
       cdp,
       sourceResolver,
@@ -236,7 +236,7 @@ export const electronJsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebug
         cdp.events.off("disconnected", onDisconnected);
         await consoleServer.close();
         logWriter.close();
-        // Do NOT disconnect the cdp — it belongs to the ElectronCdp service.
+        // Do NOT disconnect the cdp — it belongs to the ChromiumCdp service.
         // Disposing this blueprint must leave the underlying CDP session alive
         // for other consumers (screenshot, describe, gesture-tap, ...).
       },

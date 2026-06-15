@@ -7,42 +7,42 @@ import {
 } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import {
-  createElectronServer,
+  createChromiumServer,
   discoverPrimaryPage,
   ensureCdpReachable,
-  type ElectronServer,
+  type ChromiumServer,
   type MediaReady,
   type ScreencastFrame,
   type ScreencastOpts,
   type ScreencastSession,
   type ScreenshotOpts,
-} from "../electron-server";
-import { parseElectronCdpPort, resolveDevice } from "../utils/device-info";
+} from "../chromium-server";
+import { parseChromiumCdpPort, resolveDevice } from "../utils/device-info";
 
-export const ELECTRON_CDP_NAMESPACE = "ElectronCdp";
+export const CHROMIUM_CDP_NAMESPACE = "ChromiumCdp";
 
-type ElectronFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
+type ChromiumFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
 /**
- * Build the `ServiceRef` for an Electron CDP session keyed by an already-resolved
+ * Build the `ServiceRef` for an Chromium CDP session keyed by an already-resolved
  * `DeviceInfo`. Tool `services()` callbacks call this rather than hand-building
  * the URN string so the blueprint factory always receives the device through
  * the registry's `options` channel and never has to reclassify.
  */
-export function electronCdpRef(device: DeviceInfo): {
+export function chromiumCdpRef(device: DeviceInfo): {
   urn: string;
-  options: ElectronFactoryOptions;
+  options: ChromiumFactoryOptions;
 } {
   return {
-    urn: `${ELECTRON_CDP_NAMESPACE}:${device.id}`,
+    urn: `${CHROMIUM_CDP_NAMESPACE}:${device.id}`,
     options: { device },
   };
 }
 
 // ── Legacy compatibility surface ─────────────────────────────────────────────
-// The first cut of Electron support exposed a thin `ElectronCdpApi` directly
+// The first cut of Chromium support exposed a thin `ChromiumCdpApi` directly
 // off the blueprint. Existing tools (gesture-tap, screenshot, describe,
-// keyboard, run-sequence, etc.) still consume that shape. The full ElectronServer
+// keyboard, run-sequence, etc.) still consume that shape. The full ChromiumServer
 // is now the source of truth, and these legacy types are kept so the blueprint
 // can publish *both* the new abstraction (`server`) and the original ergonomic
 // methods without forcing a callsite-by-callsite migration.
@@ -75,7 +75,7 @@ export interface ViewportSize {
   devicePixelRatio: number;
 }
 
-export interface ElectronAxNode {
+export interface ChromiumAxNode {
   nodeId: string;
   role?: string;
   name?: string;
@@ -87,8 +87,8 @@ export interface ElectronAxNode {
   properties?: Array<{ name: string; value: { value?: unknown; type: string } }>;
 }
 
-export interface ElectronCdpApi {
-  /** CDP port the Electron app exposed. */
+export interface ChromiumCdpApi {
+  /** CDP port the Chromium app exposed. */
   port: number;
   /** Underlying CDP client connected to the primary page target. */
   cdp: CDPClient;
@@ -97,7 +97,7 @@ export interface ElectronCdpApi {
   /** Backend node id of the document (used as the root for AX queries). */
   rootDomNodeId: number | null;
   /** The full sim-server-equivalent abstraction layer. New callers should use this. */
-  server: ElectronServer;
+  server: ChromiumServer;
   /** Re-read the page viewport so normalized → CSS pixel math stays accurate after window resizes. */
   refreshViewport(): Promise<ViewportSize>;
   /** Cached viewport from the most recent connect / refresh. */
@@ -108,7 +108,7 @@ export interface ElectronCdpApi {
    * Supports the sim-server-style options (rotation, scale, downscaler) when sharp is installed. */
   captureScreenshot(opts?: ScreenshotOpts): Promise<MediaReady>;
   /** Returns the accessibility tree rooted at the document. */
-  getAxTree(): Promise<ElectronAxNode[]>;
+  getAxTree(): Promise<ChromiumAxNode[]>;
   /** Navigate the renderer to a URL. */
   navigate(url: string): Promise<void>;
   /** Evaluate JS in the renderer. Resolves to the serialized value when `returnByValue` is true. */
@@ -134,57 +134,57 @@ async function getDocumentNodeId(cdp: CDPClient): Promise<number | null> {
   }
 }
 
-export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> = {
-  namespace: ELECTRON_CDP_NAMESPACE,
+export const chromiumCdpBlueprint: ServiceBlueprint<ChromiumCdpApi, DeviceInfo> = {
+  namespace: CHROMIUM_CDP_NAMESPACE,
   getURN(device: DeviceInfo) {
-    return `${ELECTRON_CDP_NAMESPACE}:${device.id}`;
+    return `${CHROMIUM_CDP_NAMESPACE}:${device.id}`;
   },
   async factory(_deps, payload, options) {
     // Two routes into this factory:
-    //   1) A tool's `services()` callback uses electronCdpRef(device) and we
+    //   1) A tool's `services()` callback uses chromiumCdpRef(device) and we
     //      get options.device for free.
-    //   2) Another blueprint declares `ElectronCdp:<id>` as a transitive dep
+    //   2) Another blueprint declares `ChromiumCdp:<id>` as a transitive dep
     //      (registry resolves deps via URN strings only, no options channel
     //      — see Registry._resolve). In that case we synthesize DeviceInfo
     //      from the URN payload, which IS the device id.
     // Both paths must agree on the device id; if a caller passed an explicit
     // options.device whose id doesn't match the URN, that's a wiring bug
     // worth surfacing loudly.
-    const opts = options as unknown as ElectronFactoryOptions | undefined;
+    const opts = options as unknown as ChromiumFactoryOptions | undefined;
     const deviceFromOpts = opts?.device;
     const payloadStr = typeof payload === "string" ? payload : (payload as DeviceInfo)?.id;
     if (deviceFromOpts && payloadStr && deviceFromOpts.id !== payloadStr) {
       throw new Error(
-        `${ELECTRON_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
+        `${CHROMIUM_CDP_NAMESPACE}.factory: options.device.id "${deviceFromOpts.id}" disagrees with URN payload "${payloadStr}".`
       );
     }
     const device = deviceFromOpts ?? (payloadStr ? resolveDevice(payloadStr) : null);
     if (!device) {
       throw new Error(
-        `${ELECTRON_CDP_NAMESPACE}.factory could not determine the device — pass it via electronCdpRef(device).options or via the URN payload.`
+        `${CHROMIUM_CDP_NAMESPACE}.factory could not determine the device — pass it via chromiumCdpRef(device).options or via the URN payload.`
       );
     }
-    const port = parseElectronCdpPort(device.id);
+    const port = parseChromiumCdpPort(device.id);
     if (port == null) {
       throw new Error(
-        `${ELECTRON_CDP_NAMESPACE}.factory got a malformed device id "${device.id}". ` +
-          `Expected "electron-cdp-<port>".`
+        `${CHROMIUM_CDP_NAMESPACE}.factory got a malformed device id "${device.id}". ` +
+          `Expected "chromium-cdp-<port>".`
       );
     }
 
-    const server = await createElectronServer({ deviceId: device.id, port });
+    const server = await createChromiumServer({ deviceId: device.id, port });
     const rootDomNodeId = await getDocumentNodeId(server.cdp);
 
     const events = new TypedEventEmitter<ServiceEvents>();
     server.events.on("terminated", (err) => {
-      events.emit("terminated", err ?? new Error(`Electron CDP on port ${port} disconnected`));
+      events.emit("terminated", err ?? new Error(`Chromium CDP on port ${port} disconnected`));
     });
 
     // Legacy adapter — translates the original `dispatchMouseEvent` and
     // `dispatchKeyEvent` calls into the new server's wire formats. Keeping
     // these one-liners means we don't have to rewrite every tool right now;
     // they can migrate to `api.server.send*` at their own pace.
-    const api: ElectronCdpApi = {
+    const api: ChromiumCdpApi = {
       port,
       cdp: server.cdp,
       pageWebSocketUrl: server.pageWebSocketUrl,
@@ -195,7 +195,7 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
       dispatchMouseEvent: async (event: MouseEventArgs) => {
         if (!Number.isFinite(event.x) || !Number.isFinite(event.y)) {
           throw new Error(
-            `Electron CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`
+            `Chromium CDP: dispatchMouseEvent received non-finite coords x=${event.x}, y=${event.y}.`
           );
         }
         const button = event.button ?? (event.type === "mouseMoved" ? "none" : "left");
@@ -226,7 +226,7 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
       captureScreenshot: (opts2?: ScreenshotOpts) => server.captureScreenshot(opts2),
       getAxTree: async () => {
         const out = (await server.cdp.send("Accessibility.getFullAXTree", {})) as {
-          nodes?: ElectronAxNode[];
+          nodes?: ChromiumAxNode[];
         };
         return out.nodes ?? [];
       },
@@ -237,7 +237,7 @@ export const electronCdpBlueprint: ServiceBlueprint<ElectronCdpApi, DeviceInfo> 
       getLastFrame: () => server.getLastFrame(),
     };
 
-    const instance: ServiceInstance<ElectronCdpApi> = {
+    const instance: ServiceInstance<ChromiumCdpApi> = {
       api,
       dispose: async () => {
         await server.dispose();

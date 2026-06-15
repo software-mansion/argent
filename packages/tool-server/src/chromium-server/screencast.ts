@@ -4,7 +4,7 @@ import type { FpsTracker } from "./fps";
 import type { ScreencastFrame, ScreencastOpts, ScreencastSession, ServerEvents } from "./types";
 
 /**
- * Manages a single Chromium screencast session per Electron device, with
+ * Manages a single Chromium screencast session per Chromium device, with
  * refcounted consumers. Sim-server's MJPEG service spins up a JPEG encoder
  * only while at least one client is connected; we do the same — `start()` is
  * idempotent for additional callers and only triggers `Page.startScreencast`
@@ -48,7 +48,7 @@ export class ScreencastManager {
       // format / quality / size the first caller chose. Forcing a restart
       // would tear down the first caller's stream mid-frame.
       process.stderr.write(
-        `[electron-screencast] additional caller requested screencast opts that differ from the active session; ignoring (first writer wins).\n`
+        `[chromium-screencast] additional caller requested screencast opts that differ from the active session; ignoring (first writer wins).\n`
       );
     }
 

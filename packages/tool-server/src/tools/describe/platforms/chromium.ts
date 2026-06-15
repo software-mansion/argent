@@ -1,4 +1,4 @@
-import type { ElectronCdpApi } from "../../../blueprints/electron-cdp";
+import type { ChromiumCdpApi } from "../../../blueprints/chromium-cdp";
 import type { DescribeNode, DescribeTreeData } from "../contract";
 
 /**
@@ -6,11 +6,11 @@ import type { DescribeNode, DescribeTreeData } from "../contract";
  * collect ARIA role / accessible name, interactivity flags, and bounding
  * rects normalized to fractions of window.innerWidth/innerHeight (matching
  * the iOS/Android describe contract, so the same frame-centre tap math
- * applies on Electron).
+ * applies on Chromium).
  *
  * Choices:
  *  - Walk children plus open shadow roots and same-origin iframe documents so
- *    modern Electron apps (VS Code, Slack, custom-element-heavy SPAs) don't
+ *    modern Chromium apps (VS Code, Slack, custom-element-heavy SPAs) don't
  *    appear as empty pages.
  *  - Skip purely structural wrappers (anonymous single-child divs) so the
  *    tree stays small.
@@ -216,7 +216,7 @@ const DESCRIBE_DOM_SCRIPT = `(() => {
   return JSON.stringify({ tree: root, truncated });
 })()`;
 
-export async function describeElectron(api: ElectronCdpApi): Promise<DescribeTreeData> {
+export async function describeChromium(api: ChromiumCdpApi): Promise<DescribeTreeData> {
   // Make sure the cached viewport is fresh — the script normalizes frames by
   // the live window dimensions, so any rescroll between calls is reflected.
   await api.refreshViewport();
@@ -229,33 +229,33 @@ export async function describeElectron(api: ElectronCdpApi): Promise<DescribeTre
   };
   if (raw.exceptionDetails) {
     throw new Error(
-      `Electron describe failed: ${raw.exceptionDetails.text ?? "renderer evaluation threw"}`
+      `Chromium describe failed: ${raw.exceptionDetails.text ?? "renderer evaluation threw"}`
     );
   }
   const payload = raw.result?.value;
   if (typeof payload !== "string") {
-    throw new Error("Electron describe: renderer returned no value");
+    throw new Error("Chromium describe: renderer returned no value");
   }
   let parsed: { tree?: DescribeNode | null; truncated?: boolean; error?: string };
   try {
     parsed = JSON.parse(payload);
   } catch (err) {
     throw new Error(
-      `Electron describe: could not parse renderer payload: ${err instanceof Error ? err.message : String(err)}`
+      `Chromium describe: could not parse renderer payload: ${err instanceof Error ? err.message : String(err)}`
     );
   }
   if (parsed.error) {
-    throw new Error(`Electron describe: ${parsed.error}`);
+    throw new Error(`Chromium describe: ${parsed.error}`);
   }
   if (!parsed.tree) {
-    throw new Error("Electron describe: empty tree");
+    throw new Error("Chromium describe: empty tree");
   }
   if (parsed.truncated) {
     // Surface a server-side warning so a partial tree is visible to ops.
     // A flag in DescribeTreeData would be cleaner but the contract is shared
-    // with iOS/Android and we don't want to widen it just for Electron.
+    // with iOS/Android and we don't want to widen it just for Chromium.
     process.stderr.write(
-      `[electron-describe] tree truncated at MAX_NODES — page exceeds the walker's budget; consider scoping the inspection.\n`
+      `[chromium-describe] tree truncated at MAX_NODES — page exceeds the walker's budget; consider scoping the inspection.\n`
     );
   }
   return { tree: parsed.tree, source: "cdp-dom" };

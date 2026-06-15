@@ -54,7 +54,7 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
 // Where the tree came from. "ax-service" / "native-devtools" come from iOS;
 // Where the tree came from. "ax-service" / "native-devtools" come from iOS;
 // "uiautomator" / "android-devtools" come from Android; "cdp-dom" is the
-// Electron branch's DOM walk over Chrome DevTools Protocol. Agents that branch
+// Chromium branch's DOM walk over Chrome DevTools Protocol. Agents that branch
 // on `source` (e.g. to decide whether to also call `native-find-views` for a
 // richer tree) need to distinguish each provider — which a shared label would
 // hide.

@@ -1,13 +1,13 @@
 ---
 name: argent-metro-debugger
-description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive an Electron app's renderer through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
+description: Debug a JS runtime via CDP using argent debugger tools. Primary path is React Native via Metro (iOS / Android); a subset of the tools (debugger-connect, debugger-status, debugger-evaluate, debugger-log-registry) also drive a Chromium (CDP) app's renderer (an Electron app, or any Chromium browser exposing CDP) through the same surface. Use when connecting to the runtime, inspecting React components, reading console logs, or evaluating JavaScript.
 ---
 
 ## 1. Prerequisites
 
 For **React Native (iOS / Android)**: requires **Metro dev server running** (default `localhost:8081`) and **a React Native app connected to Metro** (at least one CDP target). Verify via `debugger-status`.
 
-For **Electron**: requires an Electron app already booted via `boot-device` with `electronAppPath`. The debugger re-uses the page CDP session that boot opens — `port` is ignored, `device_id` is the `electron-cdp-<port>` value returned by `boot-device`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, and `debugger-log-registry` work on Electron; `debugger-component-tree`, `debugger-reload-metro`, `debugger-inspect-element`, the `view-network-*` tools, and the `react-profiler-*` / `profiler-*` tools are RN-only and reject Electron at the capability gate with `Tool 'X' is not supported on electron app`.
+For **Chromium (CDP)**: requires a Chromium/CDP app already available — an Electron app booted via `boot-device` with `electronAppPath`, or any Chromium browser exposing a CDP port (auto-discovered by `list-devices` on `9222` / `ARGENT_CHROMIUM_PORTS`). The debugger re-uses the page CDP session — `port` is ignored, `device_id` is the `chromium-cdp-<port>` value from `list-devices` / `boot-device`. Only `debugger-connect`, `debugger-status`, `debugger-evaluate`, and `debugger-log-registry` work on Chromium; `debugger-component-tree`, `debugger-reload-metro`, `debugger-inspect-element`, the `view-network-*` tools, and the `react-profiler-*` / `profiler-*` tools are RN-only and reject Chromium at the capability gate with `Tool 'X' is not supported on chromium app`.
 
 ### Android: reverse port for Metro
 
@@ -29,8 +29,8 @@ One Metro port can serve multiple connected devices (e.g. two simulators on `loc
 
 | Tool               | Purpose                                                                                                                                                                                                                                                                                            |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugger-connect` | Connect to the JS runtime's CDP (Metro on iOS / Android; the page CDP session on Electron). Returns port, projectRoot (empty on Electron), deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger call. |
-| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady (no-op on Electron). **Use to diagnose.**                                                                                                                                                                                             |
+| `debugger-connect` | Connect to the JS runtime's CDP (Metro on iOS / Android; the page CDP session on Chromium). Returns port, projectRoot (empty on Chromium), deviceName, appName, `logicalDeviceId`, isNewDebugger, connected. The returned `logicalDeviceId` is the `device_id` for every subsequent debugger call. |
+| `debugger-status`  | Like connect + loadedScripts, enabledDomains, sourceMapReady (no-op on Chromium). **Use to diagnose.**                                                                                                                                                                                             |
 
 ### Reload & recovery
 
@@ -120,7 +120,7 @@ When reading from the log file:
 | Action                            | Tool                                                                |
 | --------------------------------- | ------------------------------------------------------------------- |
 | Diagnose / check connection       | `debugger-status`                                                   |
-| Connect to CDP (Metro / Electron) | `debugger-connect`                                                  |
+| Connect to CDP (Metro / Chromium) | `debugger-connect`                                                  |
 | Reload JS (already connected)     | `debugger-reload-metro`                                             |
 | Relaunch app on device            | `restart-app`                                                       |
 | Inspect component at point        | `debugger-inspect-element`                                          |

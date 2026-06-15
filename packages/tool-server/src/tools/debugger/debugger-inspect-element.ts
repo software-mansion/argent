@@ -176,7 +176,7 @@ Set includeSkipped=true to see filtered items annotated with skip reasons.
 Use when you need the source file and line for a component at a tap coordinate. Fails if the app is not connected or the coordinate is outside the screen.`,
   zodSchema,
   // RN-only: uses React Native's internal getInspectorDataForViewAtPoint and
-  // Metro's /symbolicate endpoint. Electron's CDP has DOM.getNodeForLocation
+  // Metro's /symbolicate endpoint. Chromium's CDP has DOM.getNodeForLocation
   // for "what's here?" but the source-map flow would need a complete rewrite —
   // out of scope for this port.
   capability: RN_ONLY_TOOL_CAPABILITY,

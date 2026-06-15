@@ -9,7 +9,7 @@ import { ScreencastManager } from "./screencast";
 import { captureScreenshot, copyScreenshotToClipboard } from "./screenshot";
 import type {
   ButtonType,
-  ElectronServer,
+  ChromiumServer,
   KeyDirection,
   MediaReady,
   Point,
@@ -27,7 +27,7 @@ import { readViewport } from "./viewport";
 export type {
   ButtonType,
   DownscalerType,
-  ElectronServer,
+  ChromiumServer,
   FpsReport,
   KeyDirection,
   MediaReady,
@@ -44,15 +44,15 @@ export type {
 
 export { sendCharInsert } from "./input";
 
-export interface CreateElectronServerOpts {
+export interface CreateChromiumServerOpts {
   /** Argent device id, used for screenshot filename prefix + diagnostics. */
   deviceId: string;
-  /** CDP port the Electron process exposed via --remote-debugging-port. */
+  /** CDP port the Chromium process exposed via --remote-debugging-port. */
   port: number;
 }
 
 /**
- * Compose the per-device ElectronServer. Connects CDP, primes core domains,
+ * Compose the per-device ChromiumServer. Connects CDP, primes core domains,
  * reads the initial viewport, and wires every subsystem (input, screenshot,
  * screencast, fps, clipboard, navigation, events) onto one CDP session.
  *
@@ -60,9 +60,9 @@ export interface CreateElectronServerOpts {
  * leaving an active screencast running would emit phantom frame events after
  * the consumer dropped its ref.
  */
-export async function createElectronServer(
-  opts: CreateElectronServerOpts
-): Promise<ElectronServer> {
+export async function createChromiumServer(
+  opts: CreateChromiumServerOpts
+): Promise<ChromiumServer> {
   const { cdp, wsUrl } = await connectCdp(opts.port);
   await enableCoreDomains(cdp);
 
@@ -73,10 +73,10 @@ export async function createElectronServer(
   const clipboardSync = new ClipboardSyncState();
 
   cdp.events.on("disconnected", (err) => {
-    events.emit("terminated", err ?? new Error(`Electron CDP on port ${opts.port} disconnected`));
+    events.emit("terminated", err ?? new Error(`Chromium CDP on port ${opts.port} disconnected`));
   });
 
-  const server: ElectronServer = {
+  const server: ChromiumServer = {
     port: opts.port,
     cdp,
     pageWebSocketUrl: wsUrl,
@@ -96,7 +96,7 @@ export async function createElectronServer(
     sendRotate: (direction: Rotation) => sendRotate(cdp, viewport, direction),
     sendWheel: (point: Point, dx: number, dy: number) => sendWheel(cdp, viewport, point, dx, dy),
     setClipboardSync: async (enabled: boolean) => {
-      // No native bridge today; record intent so a future Electron-side helper
+      // No native bridge today; record intent so a future Chromium-side helper
       // can wire it up. We still resolve so callers don't have to special-case
       // the not-yet-implemented path.
       clipboardSync.set(enabled);
@@ -159,7 +159,7 @@ export async function createElectronServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 
 // Re-exported so the http-api / blueprint can call them directly without
-// pulling them out of an ElectronServer instance.
+// pulling them out of an ChromiumServer instance.
 export { setClipboardText } from "./clipboard";
 
 // Internal re-export so tests can stub these without going through the full factory.

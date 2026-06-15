@@ -180,7 +180,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       await ensureDep("adb");
     } else {
       // The simulator-server binary only knows iOS and Android. Other platforms
-      // (Electron) have their own blueprints (electron-cdp); reaching this
+      // (Chromium) have their own blueprints (chromium-cdp); reaching this
       // factory with one means a tool's services() wired the wrong ref.
       throw new Error(
         `${SIMULATOR_SERVER_NAMESPACE}.factory does not support platform "${device.platform}". Use the platform-specific service blueprint instead.`

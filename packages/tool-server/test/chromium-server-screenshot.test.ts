@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
-import { __resetSharpCacheForTests, captureScreenshot } from "../src/electron-server/screenshot";
+import { __resetSharpCacheForTests, captureScreenshot } from "../src/chromium-server/screenshot";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
 
 // 1×1 transparent PNG — small enough to embed inline, valid IHDR so the
@@ -29,13 +29,13 @@ afterEach(() => {
   }
 });
 
-describe("electron-server/screenshot", () => {
+describe("chromium-server/screenshot", () => {
   it("writes a PNG and returns file:// url + absolute path", async () => {
     const cdp = stubCdp();
-    const out = await captureScreenshot({ cdp, deviceId: "electron-cdp-12345" });
+    const out = await captureScreenshot({ cdp, deviceId: "chromium-cdp-12345" });
     filesToCleanup.push(out.path);
-    expect(out.path).toMatch(/argent-electron-media/);
-    expect(out.path).toMatch(/argent-screenshot-electron-cdp-12345-/);
+    expect(out.path).toMatch(/argent-chromium-media/);
+    expect(out.path).toMatch(/argent-screenshot-chromium-cdp-12345-/);
     expect(out.url).toBe(`file://${out.path}`);
     expect(fs.existsSync(out.path)).toBe(true);
   });
@@ -87,7 +87,7 @@ describe("electron-server/screenshot", () => {
       filesToCleanup.push(out.path);
       const warnings = stderr.mock.calls
         .map((args) => String(args[0]))
-        .filter((s) => s.includes("[electron-screenshot]"));
+        .filter((s) => s.includes("[chromium-screenshot]"));
       expect(warnings.length).toBeGreaterThanOrEqual(1);
       expect(warnings[0]).toMatch(/sharp is not installed/);
     } finally {
@@ -104,7 +104,7 @@ describe("electron-server/screenshot", () => {
       filesToCleanup.push(out.path);
       const warnings = stderr.mock.calls
         .map((args) => String(args[0]))
-        .filter((s) => s.includes("[electron-screenshot]"));
+        .filter((s) => s.includes("[chromium-screenshot]"));
       expect(warnings.length).toBe(0);
     } finally {
       stderr.mockRestore();

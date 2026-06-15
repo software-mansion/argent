@@ -133,10 +133,10 @@ export function start(): void {
         );
         process.exit(1);
       });
-      // Bolt the per-Electron-device WebSocket upgrade handler onto the live
+      // Bolt the per-Chromium-device WebSocket upgrade handler onto the live
       // server. Must happen AFTER `listen()` so the http.Server instance
       // exists; the handler is process-wide so attaching once is enough.
-      httpHandle.attachElectronWebsockets(server);
+      httpHandle.attachChromiumWebsockets(server);
     })
     .catch((err) => {
       process.stderr.write(

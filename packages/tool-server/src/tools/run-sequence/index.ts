@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import type { ServiceRef } from "@argent/registry";
 import { simulatorServerRef } from "../../blueprints/simulator-server";
-import { electronCdpRef } from "../../blueprints/electron-cdp";
+import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
@@ -24,7 +24,7 @@ const zodSchema = z.object({
   udid: z
     .string()
     .describe(
-      "Target device id from `list-devices` (iOS UDID, Android serial, or Electron id) — shared across all steps."
+      "Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id) — shared across all steps."
     ),
   steps: z
     .array(
@@ -67,7 +67,7 @@ type RunSequenceResult = {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
 export function createRunSequenceTool(
@@ -75,7 +75,7 @@ export function createRunSequenceTool(
 ): ToolDefinition<Params, RunSequenceResult> {
   return {
     id: "run-sequence",
-    description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, or Electron app).
+    description: `Execute multiple device interaction steps in a single call (iOS simulator, Android emulator, or Chromium app).
 Use when you need sequential actions and do NOT need to observe the screen between them
 (e.g. scrolling multiple times, typing then pressing enter, rotating back and forth).
 Returns { completed, total, steps } with per-step results. Fails if an unrecognised tool name is used in a step (error returned at that step, execution stops).
@@ -87,18 +87,18 @@ a prior tap), use individual tool calls instead.
 
 Allowed tools and their args (udid is auto-injected, do NOT include it in args):
 
-  gesture-tap:    { x: number, y: number }                                                                              [ios/android/electron]
+  gesture-tap:    { x: number, y: number }                                                                              [ios/android/chromium]
   gesture-swipe:  { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [ios/android]
-  gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [electron only]
-  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [electron only]
+  gesture-scroll: { x: number, y: number, deltaX?: number, deltaY?: number, durationMs?: number }                       [chromium only]
+  gesture-drag:   { fromX: number, fromY: number, toX: number, toY: number, durationMs?: number }                       [chromium only]
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }              [ios only]
   gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }                    [ios only]
   button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }                                                     [ios/android/electron]
+  keyboard:       { text?: string, key?: string, delayMs?: number }                                                     [ios/android/chromium]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
 
-Example — scroll down three times (use gesture-scroll with positive deltaY on Electron):
+Example — scroll down three times (use gesture-scroll with positive deltaY on Chromium):
   { "udid": "<UDID>", "steps": [
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
     { "tool": "gesture-swipe", "args": { "fromX": 0.5, "fromY": 0.7, "toX": 0.5, "toY": 0.3 } },
@@ -119,11 +119,11 @@ Stops on the first error and returns partial results.`,
     capability,
     // Eagerly hold a reference to the device's transport service so the
     // sub-tool invocations don't pay the spawn / connect cost on the first
-    // step. iOS / Android use simulator-server; Electron uses CDP.
+    // step. iOS / Android use simulator-server; Chromium uses CDP.
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
-      if (device.platform === "electron") {
-        return { electron: electronCdpRef(device) };
+      if (device.platform === "chromium") {
+        return { chromium: chromiumCdpRef(device) };
       }
       return { simulatorServer: simulatorServerRef(device) };
     },
@@ -143,9 +143,9 @@ Stops on the first error and returns partial results.`,
 
         // Pre-flight the sub-tool's capability gate. Registry.invokeTool does
         // NOT call assertSupported (the HTTP layer does), so without this
-        // check a mobile-only step like `button` on an Electron device would
+        // check a mobile-only step like `button` on an Chromium device would
         // descend into the simulator-server blueprint factory and surface as
-        // a generic 500 instead of a clean "not supported on electron".
+        // a generic 500 instead of a clean "not supported on chromium".
         const subTool = registry.getTool(step.tool);
         if (subTool?.capability) {
           try {

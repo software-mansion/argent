@@ -1,12 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { IncomingMessage, Server } from "node:http";
-import type { ButtonType, ElectronServer, KeyDirection, Rotation, TouchType } from "./types";
+import type { ButtonType, ChromiumServer, KeyDirection, Rotation, TouchType } from "./types";
 
 /**
- * Express router mirroring sim-server's HTTP surface, scoped per Electron
- * device id. Mounted under `/electron-server/:id/...` by the tool-server so
- * the preview UI / external consumers can drive an Electron app the same way
+ * Express router mirroring sim-server's HTTP surface, scoped per Chromium
+ * device id. Mounted under `/chromium-server/:id/...` by the tool-server so
+ * the preview UI / external consumers can drive an Chromium app the same way
  * they drive a simulator. Endpoints intentionally mirror sim-server names so
  * a generic client can be written once.
  *
@@ -24,7 +24,7 @@ import type { ButtonType, ElectronServer, KeyDirection, Rotation, TouchType } fr
  * `attachMjpegEndpoint` helper because Express+streaming response bodies are
  * awkward without manually flushing.
  */
-export function createElectronServerRouter(server: ElectronServer): Router {
+export function createChromiumServerRouter(server: ChromiumServer): Router {
   const router = Router();
   router.use((req, _res, next) => {
     // JSON parsing isn't pre-wired on this sub-router — the tool-server uses
@@ -195,7 +195,7 @@ interface WsRequest {
 }
 
 /**
- * Attach a WebSocket endpoint at `<base>/ws` for the given Electron server.
+ * Attach a WebSocket endpoint at `<base>/ws` for the given Chromium server.
  * Mirrors sim-server's WS contract: each message is `{ id, cmd, ...payload }`
  * and the response is `{ id, status: "ok"|"error", message? }`. Server-pushed
  * events (FPS reports) are JSON-encoded with the original event name.
@@ -203,10 +203,10 @@ interface WsRequest {
  * Lives in this file rather than the Express router because Express doesn't
  * own the HTTP upgrade handshake — the `ws` library does.
  */
-export function attachElectronServerWebsocket(
+export function attachChromiumServerWebsocket(
   httpServer: Server,
   basePath: string,
-  resolveServer: (req: IncomingMessage) => ElectronServer | null
+  resolveServer: (req: IncomingMessage) => ChromiumServer | null
 ): WebSocketServer {
   // noServer mode: we handle the upgrade ourselves so we can route by URL.
   const wss = new WebSocketServer({ noServer: true });
@@ -226,7 +226,7 @@ export function attachElectronServerWebsocket(
   return wss;
 }
 
-function bindWsToServer(ws: WebSocket, server: ElectronServer): void {
+function bindWsToServer(ws: WebSocket, server: ChromiumServer): void {
   const sendJson = (payload: unknown) => {
     try {
       ws.send(JSON.stringify(payload));
@@ -269,7 +269,7 @@ function bindWsToServer(ws: WebSocket, server: ElectronServer): void {
 
 async function handleWsCommand(
   msg: WsRequest,
-  server: ElectronServer
+  server: ChromiumServer
 ): Promise<Record<string, unknown>> {
   switch (msg.cmd) {
     case "touch": {

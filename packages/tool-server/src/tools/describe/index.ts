@@ -4,8 +4,8 @@ import type { DescribeResult, DescribeTreeData } from "./contract";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
 import { describeAndroid, androidRequires } from "./platforms/android";
 import { iosRequires, describeIos } from "./platforms/ios";
-import { describeElectron } from "./platforms/electron";
-import { electronCdpRef, type ElectronCdpApi } from "../../blueprints/electron-cdp";
+import { describeChromium } from "./platforms/chromium";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { formatDescribeTree } from "./format-tree";
 
@@ -28,14 +28,14 @@ const zodSchema = z.object({
   udid: z
     .string()
     .min(1)
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Electron id)."),
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
   bundleId: z
     .string()
     .optional()
     .describe(
       "Optional app bundle ID. Used as a target hint on iOS when the AX-service returns no elements " +
         "and the describe tool falls back to native-devtools inspection. " +
-        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Electron."
+        "If omitted, the fallback auto-detects the frontmost connected app. Ignored on Android / Chromium."
     ),
 });
 
@@ -44,11 +44,11 @@ type Params = z.infer<typeof zodSchema>;
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
-interface ElectronServices {
-  electron: ElectronCdpApi;
+interface ChromiumServices {
+  chromium: ChromiumCdpApi;
 }
 
 // `describe` doesn't fit dispatchByPlatform's standard service-typed
@@ -56,7 +56,7 @@ interface ElectronServices {
 // `registry` (closed over below) rather than via the registry's services()
 // declaration. We still feed `iosRequires` / `androidRequires` to the
 // dispatcher so the per-branch host-binary preflight fires uniformly. The
-// Electron branch *does* go through services() since the CDP session lives in
+// Chromium branch *does* go through services() since the CDP session lives in
 // the registry as a normal service blueprint.
 export function createDescribeTool(registry: Registry): ToolDefinition<Params, DescribeResult> {
   return {
@@ -64,7 +64,7 @@ export function createDescribeTool(registry: Registry): ToolDefinition<Params, D
     description: `Get the accessibility / DOM element tree for the current screen.
 On iOS, uses the AXRuntime accessibility service to inspect whatever is currently visible — including
 system dialogs, permission prompts, and any foreground app content. On Android, runs \`uiautomator dump\`.
-On Electron, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
+On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 
 When a system dialog is visible, describe returns the dialog's interactive elements (buttons, text)
@@ -83,13 +83,13 @@ For app-scoped inspection with full UIKit properties (accessibilityIdentifier, v
 use native-describe-screen with an explicit bundleId instead (iOS only).
 For React Native apps, debugger-component-tree returns React component names with tap coordinates.`,
     alwaysLoad: true,
-    searchHint: "accessibility element tree ui hierarchy tap coordinates ios android electron dom",
+    searchHint: "accessibility element tree ui hierarchy tap coordinates ios android chromium dom",
     zodSchema,
     capability,
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
-      if (device.platform === "electron") {
-        return { electron: electronCdpRef(device) };
+      if (device.platform === "chromium") {
+        return { chromium: chromiumCdpRef(device) };
       }
       return {};
     },
@@ -98,7 +98,7 @@ For React Native apps, debugger-component-tree returns React component names wit
       Record<string, unknown>,
       Params,
       DescribeResult,
-      ElectronServices
+      ChromiumServices
     >({
       toolId: "describe",
       capability,
@@ -112,8 +112,8 @@ For React Native apps, debugger-component-tree returns React component names wit
         handler: async (_services, params) =>
           withDescription(await describeAndroid(registry, params.udid, params.bundleId)),
       },
-      electron: {
-        handler: async (services) => withDescription(await describeElectron(services.electron)),
+      chromium: {
+        handler: async (services) => withDescription(await describeChromium(services.chromium)),
       },
     }),
   };

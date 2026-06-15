@@ -8,13 +8,13 @@
 // the deprecated keyCode API (e.g. React Native Web's Pressable) need all
 // three set or they will see `keyCode === 0` and silently drop the event.
 
-export interface ElectronNamedKey {
+export interface ChromiumNamedKey {
   key: string;
   code: string;
   windowsVirtualKeyCode: number;
 }
 
-export const ELECTRON_NAMED_KEYS: Record<string, ElectronNamedKey> = {
+export const CHROMIUM_NAMED_KEYS: Record<string, ChromiumNamedKey> = {
   "enter": { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
   "return": { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 },
   "escape": { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 },
@@ -48,7 +48,7 @@ export const ELECTRON_NAMED_KEYS: Record<string, ElectronNamedKey> = {
  * even though `text` alone would suffice on most pages — apps listening to
  * the legacy `keydown.keyCode` need it.
  */
-export function charToElectronKey(char: string): {
+export function charToChromiumKey(char: string): {
   key: string;
   code: string;
   text: string;

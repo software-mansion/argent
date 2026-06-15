@@ -4,12 +4,12 @@ import {
   RN_ONLY_TOOL_CAPABILITY,
   debuggerServiceRef,
 } from "../src/tools/debugger/debugger-service-ref";
-import { ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE } from "../src/blueprints/electron-js-runtime-debugger";
+import { CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE } from "../src/blueprints/chromium-js-runtime-debugger";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 
-// All tools that must reject Electron at the HTTP capability gate. Pull the
-// ToolDefinition directly so any future drift (someone re-adds an `electron:`
+// All tools that must reject Chromium at the HTTP capability gate. Pull the
+// ToolDefinition directly so any future drift (someone re-adds an `chromium:`
 // block on one of these) breaks this single test instead of slipping into a
 // release. Kept exhaustive on purpose — a per-tool assertion is cheap and the
 // list is the contract.
@@ -29,16 +29,16 @@ import { profilerStackQueryTool } from "../src/tools/profiler/query/profiler-sta
 import { profilerLoadTool } from "../src/tools/profiler/query/profiler-load";
 import { profilerCombinedReportTool } from "../src/tools/profiler/combined/profiler-combined-report";
 
-const ELECTRON_ID = "electron-cdp-19222";
+const CHROMIUM_ID = "chromium-cdp-19222";
 const IOS_ID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const ANDROID_ID = "emulator-5554";
 
 describe("debuggerServiceRef — platform dispatch", () => {
-  it("routes an Electron device id to the ElectronJsRuntimeDebugger blueprint", () => {
-    const ref = debuggerServiceRef({ port: 8081, device_id: ELECTRON_ID });
+  it("routes an Chromium device id to the ChromiumJsRuntimeDebugger blueprint", () => {
+    const ref = debuggerServiceRef({ port: 8081, device_id: CHROMIUM_ID });
     expect(ref).toMatchObject({
-      urn: `${ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE}:${ELECTRON_ID}`,
-      options: { device: resolveDevice(ELECTRON_ID) },
+      urn: `${CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE}:${CHROMIUM_ID}`,
+      options: { device: resolveDevice(CHROMIUM_ID) },
     });
   });
 
@@ -54,7 +54,7 @@ describe("debuggerServiceRef — platform dispatch", () => {
 
   it("tolerates a missing device_id — falls back to Metro URN so existing callers don't crash", () => {
     // Mirrors the original template-literal behavior: `JsRuntimeDebugger:8081:undefined`
-    // is ugly but doesn't blow up at the dispatch site. Pre-electron tests
+    // is ugly but doesn't blow up at the dispatch site. Pre-chromium tests
     // hit this path and relied on it.
     const ref = debuggerServiceRef({ port: 8081 });
     expect(typeof ref).toBe("string");
@@ -62,13 +62,13 @@ describe("debuggerServiceRef — platform dispatch", () => {
   });
 });
 
-describe("debugger tool capability gating — electron", () => {
-  const electronDevice = resolveDevice(ELECTRON_ID);
+describe("debugger tool capability gating — chromium", () => {
+  const chromiumDevice = resolveDevice(CHROMIUM_ID);
   const iosDevice = resolveDevice(IOS_ID);
 
-  it("DEBUGGER_TOOL_CAPABILITY admits an Electron device (ported tools)", () => {
+  it("DEBUGGER_TOOL_CAPABILITY admits an Chromium device (ported tools)", () => {
     expect(() =>
-      assertSupported("debugger-evaluate", DEBUGGER_TOOL_CAPABILITY, electronDevice)
+      assertSupported("debugger-evaluate", DEBUGGER_TOOL_CAPABILITY, chromiumDevice)
     ).not.toThrow();
   });
 
@@ -78,30 +78,30 @@ describe("debugger tool capability gating — electron", () => {
     ).not.toThrow();
   });
 
-  it("RN_ONLY_TOOL_CAPABILITY rejects an Electron device (locked-out tools)", () => {
+  it("RN_ONLY_TOOL_CAPABILITY rejects an Chromium device (locked-out tools)", () => {
     expect(() =>
-      assertSupported("debugger-component-tree", RN_ONLY_TOOL_CAPABILITY, electronDevice)
+      assertSupported("debugger-component-tree", RN_ONLY_TOOL_CAPABILITY, chromiumDevice)
     ).toThrow(UnsupportedOperationError);
   });
 
   it("RN_ONLY_TOOL_CAPABILITY's rejection message names the tool and platform", () => {
     try {
-      assertSupported("react-profiler-renders", RN_ONLY_TOOL_CAPABILITY, electronDevice);
+      assertSupported("react-profiler-renders", RN_ONLY_TOOL_CAPABILITY, chromiumDevice);
       throw new Error("expected throw");
     } catch (err) {
       const msg = (err as Error).message;
       expect(msg).toContain("react-profiler-renders");
-      expect(msg).toContain("electron");
+      expect(msg).toContain("chromium");
       expect(msg).toContain("app");
     }
   });
 });
 
-describe("RN-only tool registry — every locked tool actually rejects Electron", () => {
-  const electronDevice = resolveDevice("electron-cdp-19222");
+describe("RN-only tool registry — every locked tool actually rejects Chromium", () => {
+  const chromiumDevice = resolveDevice("chromium-cdp-19222");
 
   // Source of truth for what must stay locked. If a tool is added/removed
-  // here, the maintainer is making an explicit Electron-support decision.
+  // here, the maintainer is making an explicit Chromium-support decision.
   const LOCKED_TOOLS = [
     debuggerComponentTreeTool,
     debuggerReloadMetroTool,
@@ -121,10 +121,10 @@ describe("RN-only tool registry — every locked tool actually rejects Electron"
   ];
 
   it.each(LOCKED_TOOLS.map((t) => [t.id, t] as const))(
-    "%s declares a capability and rejects Electron",
+    "%s declares a capability and rejects Chromium",
     (_id, tool) => {
       expect(tool.capability).toBeDefined();
-      expect(() => assertSupported(tool.id, tool.capability!, electronDevice)).toThrow(
+      expect(() => assertSupported(tool.id, tool.capability!, chromiumDevice)).toThrow(
         UnsupportedOperationError
       );
     }

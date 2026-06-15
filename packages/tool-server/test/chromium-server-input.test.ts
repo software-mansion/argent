@@ -5,7 +5,7 @@ import {
   sendRotate,
   sendTouch,
   sendWheel,
-} from "../src/electron-server/input";
+} from "../src/chromium-server/input";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
 
 function stubCdp() {
@@ -15,7 +15,7 @@ function stubCdp() {
 
 const viewport = { width: 800, height: 600, devicePixelRatio: 1 };
 
-describe("electron-server/input", () => {
+describe("chromium-server/input", () => {
   describe("sendTouch", () => {
     it("converts a normalized Down to mousePressed at CSS pixels", async () => {
       const cdp = stubCdp();

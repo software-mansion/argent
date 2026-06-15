@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { goBack, goForward, navigate, reload } from "../src/electron-server/navigation";
+import { goBack, goForward, navigate, reload } from "../src/chromium-server/navigation";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
 
 function stubCdp(history?: {
@@ -13,7 +13,7 @@ function stubCdp(history?: {
   return { send } as unknown as CDPClient;
 }
 
-describe("electron-server/navigation", () => {
+describe("chromium-server/navigation", () => {
   it("navigate: forwards to Page.navigate", async () => {
     const cdp = stubCdp();
     await navigate(cdp, "https://example.com");

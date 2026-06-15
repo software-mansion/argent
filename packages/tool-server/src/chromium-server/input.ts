@@ -5,7 +5,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function clampPx(value: number, max: number): number {
   if (!Number.isFinite(value)) {
-    throw new Error(`Electron input: non-finite coordinate ${value}`);
+    throw new Error(`Chromium input: non-finite coordinate ${value}`);
   }
   return Math.max(0, Math.min(max, value));
 }
@@ -109,7 +109,7 @@ const BUTTON_TO_KEY: Record<ButtonType, { key: string; codeName: string; vk: num
 /**
  * Best-effort hardware-button translation. Only `Back` has a sane
  * desktop-renderer equivalent (Alt+Left to walk navigation history). The
- * others throw; callers that rely on them on Electron should switch to a
+ * others throw; callers that rely on them on Chromium should switch to a
  * dedicated tool.
  */
 export async function sendButton(
@@ -153,7 +153,7 @@ export async function sendButton(
     return;
   }
   throw new Error(
-    `Electron does not support the "${button}" hardware button. ` +
+    `Chromium does not support the "${button}" hardware button. ` +
       `Use a keyboard shortcut via the keyboard tool, or invoke an app-level handler via the debugger.`
   );
 }
@@ -171,7 +171,7 @@ export async function sendWheel(
   dy: number
 ): Promise<void> {
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
-    throw new Error(`Electron wheel: non-finite delta dx=${dx}, dy=${dy}`);
+    throw new Error(`Chromium wheel: non-finite delta dx=${dx}, dy=${dy}`);
   }
   if (dx === 0 && dy === 0) return;
   const pixel = toCssPixels(point, viewport);

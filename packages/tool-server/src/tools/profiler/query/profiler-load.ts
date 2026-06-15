@@ -406,7 +406,7 @@ Returns a summary of the loaded session or a session list for the list mode.
 Fails if the session_id is not found or required XML files are missing from disk.`,
   zodSchema,
   // Loads Hermes-format React traces or iOS xctrace XML — neither maps onto
-  // Electron yet. The gate keeps the error close to the call site instead of
+  // Chromium yet. The gate keeps the error close to the call site instead of
   // letting it surface from inside the trace parser.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => {

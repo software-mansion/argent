@@ -15,7 +15,7 @@ export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
   const raw = out.result?.value;
   if (typeof raw !== "string") {
     throw new Error(
-      "Electron CDP: Runtime.evaluate for viewport returned no value. The renderer may be navigating or its main world is detached."
+      "Chromium CDP: Runtime.evaluate for viewport returned no value. The renderer may be navigating or its main world is detached."
     );
   }
   let parsed: { w: number; h: number; dpr: number };
@@ -23,12 +23,12 @@ export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
     parsed = JSON.parse(raw) as { w: number; h: number; dpr: number };
   } catch (err) {
     throw new Error(
-      `Electron CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`
+      `Chromium CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`
     );
   }
   if (!parsed.w || !parsed.h) {
     throw new Error(
-      `Electron CDP: viewport reported zero dimensions (w=${parsed.w}, h=${parsed.h}). The BrowserWindow may be hidden.`
+      `Chromium CDP: viewport reported zero dimensions (w=${parsed.w}, h=${parsed.h}). The BrowserWindow may be hidden.`
     );
   }
   return { width: parsed.w, height: parsed.h, devicePixelRatio: parsed.dpr || 1 };

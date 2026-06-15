@@ -126,7 +126,7 @@ Returns a markdown table of the top hotspot functions with self-time, total-time
 Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   zodSchema,
   // RN-only: reads a Hermes CPU profile captured via the React profiler
-  // session. Electron's V8 Profiler emits a different sample format — see the
+  // session. Chromium's V8 Profiler emits a different sample format — see the
   // PR description for the follow-up scope.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),

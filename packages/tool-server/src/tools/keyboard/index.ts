@@ -1,17 +1,17 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { electronCdpRef, type ElectronCdpApi } from "../../blueprints/electron-cdp";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
-import { ELECTRON_NAMED_KEYS, charToElectronKey } from "./electron-keys";
+import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "./chromium-keys";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Electron id)."),
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
   text: z
     .string()
     .optional()
@@ -37,18 +37,18 @@ interface Result {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
-async function runElectron(api: ElectronCdpApi, params: Params): Promise<Result> {
+async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result> {
   const delay = params.delayMs ?? 50;
   let keysPressed = 0;
 
   if (params.key) {
-    const named = ELECTRON_NAMED_KEYS[params.key.toLowerCase()];
+    const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
     if (!named) {
       throw new Error(
-        `Unknown key "${params.key}". Supported: ${Object.keys(ELECTRON_NAMED_KEYS).join(", ")}`
+        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
       );
     }
     await api.dispatchKeyEvent({
@@ -69,7 +69,7 @@ async function runElectron(api: ElectronCdpApi, params: Params): Promise<Result>
 
   if (params.text) {
     for (const char of params.text) {
-      const desc = charToElectronKey(char);
+      const desc = charToChromiumKey(char);
       if (!desc) {
         throw new Error(`No CDP key descriptor for character "${char}"`);
       }
@@ -98,9 +98,9 @@ async function runElectron(api: ElectronCdpApi, params: Params): Promise<Result>
 
 export const keyboardTool: ToolDefinition<Params, Result> = {
   id: "keyboard",
-  description: `Type text or press special keys on the device (iOS simulator, Android emulator, or Electron app) using keyboard events.
+  description: `Type text or press special keys on the device (iOS simulator, Android emulator, or Chromium app) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
-Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Electron CDP is not reachable for the given device.
+Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
 Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
@@ -108,16 +108,16 @@ Provide text, key, or both. Use instead of paste when paste is unreliable or uns
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    if (device.platform === "electron") {
-      return { electron: electronCdpRef(device) };
+    if (device.platform === "chromium") {
+      return { chromium: chromiumCdpRef(device) };
     }
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
     const device = resolveDevice(params.udid);
-    if (device.platform === "electron") {
-      const electron = services.electron as ElectronCdpApi;
-      return runElectron(electron, params);
+    if (device.platform === "chromium") {
+      const chromium = services.chromium as ChromiumCdpApi;
+      return runChromium(chromium, params);
     }
     const api = services.simulatorServer as SimulatorServerApi;
     const delay = params.delayMs ?? 50;

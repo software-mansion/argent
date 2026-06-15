@@ -7,22 +7,22 @@ import type { ToolCapability } from "@argent/registry";
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
 const iosUdid = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const androidUdid = "emulator-5554";
-const electronUdid = "electron-cdp-19222";
+const chromiumUdid = "chromium-cdp-19222";
 
 beforeEach(() => {
   __resetDepCacheForTests();
 });
 
-describe("dispatchByPlatform (electron branch)", () => {
-  it("routes electron udids to the electron handler", async () => {
+describe("dispatchByPlatform (chromium branch)", () => {
+  it("routes chromium udids to the chromium handler", async () => {
     const ios = vi.fn().mockResolvedValue("ios");
     const android = vi.fn().mockResolvedValue("android");
-    const electron = vi.fn().mockResolvedValue("electron");
+    const chromium = vi.fn().mockResolvedValue("chromium");
     const execute = dispatchByPlatform<
       Record<string, never>,
       Record<string, never>,
@@ -34,18 +34,18 @@ describe("dispatchByPlatform (electron branch)", () => {
       capability,
       ios: { handler: ios },
       android: { handler: android },
-      electron: { handler: electron },
+      chromium: { handler: chromium },
     });
-    expect(await execute({}, { udid: electronUdid })).toBe("electron");
+    expect(await execute({}, { udid: chromiumUdid })).toBe("chromium");
     expect(ios).not.toHaveBeenCalled();
     expect(android).not.toHaveBeenCalled();
-    expect(electron).toHaveBeenCalledOnce();
+    expect(chromium).toHaveBeenCalledOnce();
   });
 
-  it("still routes ios / android correctly when an electron branch exists", async () => {
+  it("still routes ios / android correctly when an chromium branch exists", async () => {
     const ios = vi.fn().mockResolvedValue("ios");
     const android = vi.fn().mockResolvedValue("android");
-    const electron = vi.fn().mockResolvedValue("electron");
+    const chromium = vi.fn().mockResolvedValue("chromium");
     const execute = dispatchByPlatform<
       Record<string, never>,
       Record<string, never>,
@@ -57,14 +57,14 @@ describe("dispatchByPlatform (electron branch)", () => {
       capability,
       ios: { handler: ios },
       android: { handler: android },
-      electron: { handler: electron },
+      chromium: { handler: chromium },
     });
     expect(await execute({}, { udid: iosUdid })).toBe("ios");
     expect(await execute({}, { udid: androidUdid })).toBe("android");
-    expect(electron).not.toHaveBeenCalled();
+    expect(chromium).not.toHaveBeenCalled();
   });
 
-  it("throws NotImplementedOnPlatformError on electron when no electron branch is wired", async () => {
+  it("throws NotImplementedOnPlatformError on chromium when no chromium branch is wired", async () => {
     const execute = dispatchByPlatform<
       Record<string, never>,
       Record<string, never>,
@@ -76,7 +76,7 @@ describe("dispatchByPlatform (electron branch)", () => {
       ios: { handler: async () => "ios" },
       android: { handler: async () => "android" },
     });
-    await expect(execute({}, { udid: electronUdid })).rejects.toBeInstanceOf(
+    await expect(execute({}, { udid: chromiumUdid })).rejects.toBeInstanceOf(
       NotImplementedOnPlatformError
     );
   });

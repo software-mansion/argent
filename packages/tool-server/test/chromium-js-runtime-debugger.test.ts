@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
 import {
-  electronJsRuntimeDebuggerBlueprint,
-  electronJsRuntimeDebuggerRef,
-  ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE,
-} from "../src/blueprints/electron-js-runtime-debugger";
+  chromiumJsRuntimeDebuggerBlueprint,
+  chromiumJsRuntimeDebuggerRef,
+  CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE,
+} from "../src/blueprints/chromium-js-runtime-debugger";
 import { resolveDevice } from "../src/utils/device-info";
-import type { ElectronCdpApi } from "../src/blueprints/electron-cdp";
+import type { ChromiumCdpApi } from "../src/blueprints/chromium-cdp";
 import type { CDPClientEvents } from "../src/utils/debugger/cdp-client";
 
-function makeFakeElectronCdpApi(): {
-  api: ElectronCdpApi;
+function makeFakeChromiumCdpApi(): {
+  api: ChromiumCdpApi;
   events: TypedEventEmitter<CDPClientEvents>;
   sendSpy: ReturnType<typeof vi.fn>;
   addBindingSpy: ReturnType<typeof vi.fn>;
@@ -32,34 +32,34 @@ function makeFakeElectronCdpApi(): {
   const api = {
     port: 19222,
     cdp,
-  } as unknown as ElectronCdpApi;
+  } as unknown as ChromiumCdpApi;
   return { api, events, sendSpy, addBindingSpy };
 }
 
-describe("ElectronJsRuntimeDebugger blueprint", () => {
-  const electronDevice = resolveDevice("electron-cdp-19222");
+describe("ChromiumJsRuntimeDebugger blueprint", () => {
+  const chromiumDevice = resolveDevice("chromium-cdp-19222");
 
   it("namespace + URN + ref are stable", () => {
-    expect(ELECTRON_JS_RUNTIME_DEBUGGER_NAMESPACE).toBe("ElectronJsRuntimeDebugger");
-    expect(electronJsRuntimeDebuggerBlueprint.namespace).toBe("ElectronJsRuntimeDebugger");
-    expect(electronJsRuntimeDebuggerBlueprint.getURN("electron-cdp-9222")).toBe(
-      "ElectronJsRuntimeDebugger:electron-cdp-9222"
+    expect(CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE).toBe("ChromiumJsRuntimeDebugger");
+    expect(chromiumJsRuntimeDebuggerBlueprint.namespace).toBe("ChromiumJsRuntimeDebugger");
+    expect(chromiumJsRuntimeDebuggerBlueprint.getURN("chromium-cdp-9222")).toBe(
+      "ChromiumJsRuntimeDebugger:chromium-cdp-9222"
     );
-    const ref = electronJsRuntimeDebuggerRef(electronDevice);
-    expect(ref.urn).toBe("ElectronJsRuntimeDebugger:electron-cdp-19222");
-    expect(ref.options.device).toEqual(electronDevice);
+    const ref = chromiumJsRuntimeDebuggerRef(chromiumDevice);
+    expect(ref.urn).toBe("ChromiumJsRuntimeDebugger:chromium-cdp-19222");
+    expect(ref.options.device).toEqual(chromiumDevice);
   });
 
-  it("declares ElectronCdp as its dep so the registry resolves the page session first", () => {
-    const deps = electronJsRuntimeDebuggerBlueprint.getDependencies!("electron-cdp-19222");
-    expect(deps).toEqual({ electron: "ElectronCdp:electron-cdp-19222" });
+  it("declares ChromiumCdp as its dep so the registry resolves the page session first", () => {
+    const deps = chromiumJsRuntimeDebuggerBlueprint.getDependencies!("chromium-cdp-19222");
+    expect(deps).toEqual({ chromium: "ChromiumCdp:chromium-cdp-19222" });
   });
 
   it("factory rejects without options.device", async () => {
     await expect(
-      electronJsRuntimeDebuggerBlueprint.factory(
-        { electron: makeFakeElectronCdpApi().api },
-        "electron-cdp-19222",
+      chromiumJsRuntimeDebuggerBlueprint.factory(
+        { chromium: makeFakeChromiumCdpApi().api },
+        "chromium-cdp-19222",
         undefined
       )
     ).rejects.toThrow(/requires a resolved DeviceInfo/);
@@ -67,25 +67,25 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
 
   it("factory rejects when options.device.id disagrees with the payload", async () => {
     await expect(
-      electronJsRuntimeDebuggerBlueprint.factory(
-        { electron: makeFakeElectronCdpApi().api },
-        "electron-cdp-19222",
-        { device: resolveDevice("electron-cdp-9999") }
+      chromiumJsRuntimeDebuggerBlueprint.factory(
+        { chromium: makeFakeChromiumCdpApi().api },
+        "chromium-cdp-19222",
+        { device: resolveDevice("chromium-cdp-9999") }
       )
     ).rejects.toThrow(/payload .* does not match/);
   });
 
   it("factory: produces a JsRuntimeDebuggerApi-shaped object and subscribes to consoleAPICalled", async () => {
-    const fake = makeFakeElectronCdpApi();
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     try {
       expect(instance.api.port).toBe(19222);
       expect(instance.api.projectRoot).toBe("");
-      expect(instance.api.logicalDeviceId).toBe("electron-cdp-19222");
+      expect(instance.api.logicalDeviceId).toBe("chromium-cdp-19222");
       expect(instance.api.isNewDebugger).toBe(true);
       expect(instance.api.cdp).toBe(fake.api.cdp);
       // sourceResolver / sourceMaps stubs exist (only used by locked-out
@@ -114,11 +114,11 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
   });
 
   it("dispose unsubscribes from the underlying CDP — events do NOT keep firing", async () => {
-    const fake = makeFakeElectronCdpApi();
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     const received: unknown[] = [];
     instance.api.consoleEvents.on("log", (entry) => received.push(entry));
@@ -131,26 +131,26 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
     expect(received).toHaveLength(0);
   });
 
-  it("dispose does NOT disconnect the underlying CDP — that belongs to ElectronCdp", async () => {
-    const fake = makeFakeElectronCdpApi();
+  it("dispose does NOT disconnect the underlying CDP — that belongs to ChromiumCdp", async () => {
+    const fake = makeFakeChromiumCdpApi();
     // Track whether anything calls disconnect on the cdp.
     const disconnect = vi.fn();
     (fake.api.cdp as unknown as { disconnect: typeof disconnect }).disconnect = disconnect;
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     await instance.dispose();
     expect(disconnect).not.toHaveBeenCalled();
   });
 
   it("cdp.disconnected → events.terminated propagation, with the original error preserved", async () => {
-    const fake = makeFakeElectronCdpApi();
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     try {
       const terminated: Array<Error | undefined> = [];
@@ -165,11 +165,11 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
   });
 
   it("cdp.disconnected with no error still emits a terminated event with a synthetic Error", async () => {
-    const fake = makeFakeElectronCdpApi();
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     try {
       const terminated: Array<Error | undefined> = [];
@@ -177,18 +177,18 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
       fake.events.emit("disconnected", undefined);
       expect(terminated).toHaveLength(1);
       expect(terminated[0]).toBeInstanceOf(Error);
-      expect((terminated[0] as Error).message).toMatch(/Electron CDP disconnected/);
+      expect((terminated[0] as Error).message).toMatch(/Chromium CDP disconnected/);
     } finally {
       await instance.dispose();
     }
   });
 
   it("dispose detaches the disconnected listener — no terminated emission after dispose", async () => {
-    const fake = makeFakeElectronCdpApi();
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     const terminated: unknown[] = [];
     instance.events.on("terminated", (err) => terminated.push(err));
@@ -198,11 +198,11 @@ describe("ElectronJsRuntimeDebugger blueprint", () => {
   });
 
   it("a non-finite consoleAPICalled.timestamp is coerced — entry is captured, not silently dropped", async () => {
-    const fake = makeFakeElectronCdpApi();
-    const instance = await electronJsRuntimeDebuggerBlueprint.factory(
-      { electron: fake.api },
-      "electron-cdp-19222",
-      { device: electronDevice }
+    const fake = makeFakeChromiumCdpApi();
+    const instance = await chromiumJsRuntimeDebuggerBlueprint.factory(
+      { chromium: fake.api },
+      "chromium-cdp-19222",
+      { device: chromiumDevice }
     );
     try {
       const received: Array<{ message: string; timestamp: number }> = [];

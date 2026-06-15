@@ -3,16 +3,16 @@ import { gestureDragTool } from "../src/tools/gesture-drag";
 import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 
-// gesture-drag is the third electron verb: swipe = touch (ios/android),
-// scroll = wheel (electron), drag = left-button mouse drag (electron).
+// gesture-drag is the third chromium verb: swipe = touch (ios/android),
+// scroll = wheel (chromium), drag = left-button mouse drag (chromium).
 // These tests pin the press → interpolated moves → release sequence and
-// the electron-only capability fence.
+// the chromium-only capability fence.
 
-const electronDevice = resolveDevice("electron-cdp-19222");
+const chromiumDevice = resolveDevice("chromium-cdp-19222");
 const iosDevice = resolveDevice("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
 const androidDevice = resolveDevice("emulator-5554");
 
-function fakeElectronApi() {
+function fakeChromiumApi() {
   return {
     getViewport: () => ({ width: 800, height: 600, devicePixelRatio: 2 }),
     dispatchMouseEvent: vi.fn().mockResolvedValue(undefined),
@@ -21,11 +21,11 @@ function fakeElectronApi() {
 
 describe("gesture-drag", () => {
   it("presses at the start, interpolates moves, releases at the end (viewport px)", async () => {
-    const api = fakeElectronApi();
+    const api = fakeChromiumApi();
     const result = await gestureDragTool.execute(
-      { electron: api } as never,
+      { chromium: api } as never,
       {
-        udid: "electron-cdp-19222",
+        udid: "chromium-cdp-19222",
         fromX: 0.25,
         fromY: 0.5,
         toX: 0.75,
@@ -55,9 +55,9 @@ describe("gesture-drag", () => {
     }
   });
 
-  it("is electron-only: capability gate rejects iOS and Android targets", () => {
+  it("is chromium-only: capability gate rejects iOS and Android targets", () => {
     expect(() =>
-      assertSupported("gesture-drag", gestureDragTool.capability!, electronDevice)
+      assertSupported("gesture-drag", gestureDragTool.capability!, chromiumDevice)
     ).not.toThrow();
     expect(() => assertSupported("gesture-drag", gestureDragTool.capability!, iosDevice)).toThrow(
       UnsupportedOperationError

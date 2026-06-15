@@ -2,12 +2,18 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { ensureCdpReachable } from "../../blueprints/electron-cdp";
-import { electronIdFromPort } from "../../utils/device-info";
-import { trackElectronPort } from "../../utils/electron-discovery";
+import { ensureCdpReachable } from "../../blueprints/chromium-cdp";
+import { chromiumIdFromPort } from "../../utils/device-info";
+import { trackChromiumPort } from "../../utils/chromium-discovery";
 
+// Booting an Electron app is one way to produce a Chromium/CDP device: the
+// launched process is a Chromium runtime exposing a CDP endpoint, so the
+// resulting device id, platform, and tool surface are all the generic
+// `chromium` ones. This file stays "electron"-named because the *launcher*
+// is Electron-specific (it resolves an Electron binary / .app bundle); the
+// device it yields is not.
 export interface ElectronBootResult {
-  platform: "electron";
+  platform: "chromium";
   id: string;
   port: number;
   pid: number;
@@ -215,7 +221,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // Forward Electron stderr to our stderr so launch failures are visible to
   // the user / agent. Drop stdout (renderer chatter) to keep tool-server logs clean.
   child.stderr?.on("data", (chunk: Buffer) => {
-    process.stderr.write(`[electron-cdp-${port}] ${chunk}`);
+    process.stderr.write(`[chromium-cdp-${port}] ${chunk}`);
   });
   child.unref();
 
@@ -240,7 +246,7 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     const reason = signal ? `signal ${signal}` : `code ${code ?? "?"}`;
     earlyExitReject(
       new Error(
-        `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [electron-cdp-${port}] stderr above for the cause.`
+        `Electron boot: child process exited with ${reason} before CDP was ready. Inspect [chromium-cdp-${port}] stderr above for the cause.`
       )
     );
   };
@@ -277,11 +283,11 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
   // to whatever code subsequently manages the session, not to this boot fn.
   detachBootListeners();
 
-  trackElectronPort(port);
+  trackChromiumPort(port);
 
   return {
-    platform: "electron",
-    id: electronIdFromPort(port),
+    platform: "chromium",
+    id: chromiumIdFromPort(port),
     port,
     pid: child.pid,
     appPath: path.resolve(options.appPath),

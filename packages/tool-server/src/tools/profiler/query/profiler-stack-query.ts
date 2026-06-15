@@ -358,7 +358,7 @@ Returns a markdown report with native call stacks, thread weights, or leak detai
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
   // iOS-only: reads xctrace output. Android native profiling is on the roadmap;
-  // Electron has no native trace capture.
+  // Chromium has no native trace capture.
   capability: { apple: { simulator: true, device: true } },
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),

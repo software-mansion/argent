@@ -77,7 +77,7 @@ const zodSchema = z.object({
     .max(65535)
     .optional()
     .describe(
-      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `electron-cdp-<port>`."
+      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
     ),
   electronArgs: z
     .array(z.string())
@@ -1029,7 +1029,7 @@ function createEarlyExitRacer(getExit: () => Error | null): {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
 export function createBootDeviceTool(
@@ -1040,7 +1040,7 @@ export function createBootDeviceTool(
     description: `Start an iOS simulator, launch an Android emulator, or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'electron', id, port, pid, booted }.
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
 Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. If any boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
     alwaysLoad: true,
     searchHint: "boot start launch simulator emulator avd device session ios android cold hot",

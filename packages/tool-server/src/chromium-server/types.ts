@@ -1,5 +1,5 @@
 /**
- * Shared types for the Electron server abstraction layer. Mirrors the
+ * Shared types for the Chromium server abstraction layer. Mirrors the
  * sim-server's domain model (Touch / Button / Rotate / Wheel) so callers can be
  * written against a single conceptual surface regardless of platform — the
  * adapter layer translates them into CDP wire payloads.
@@ -12,7 +12,7 @@ export type TouchType = "Down" | "Up" | "Move";
 export type KeyDirection = "Down" | "Up";
 
 /** Sim-server's hardware buttons. iOS/Android map to OS-level events; on
- * Electron most are inert — only ones that correspond to keyboard chords (Home,
+ * Chromium most are inert — only ones that correspond to keyboard chords (Home,
  * Back via browser-history, AppSwitch ≈ Cmd-Tab) are best-effort implemented.
  */
 export type ButtonType =
@@ -118,11 +118,11 @@ export type ServerEvents = {
 };
 
 /**
- * Public Electron-server contract. The blueprint resolves an instance per
+ * Public Chromium-server contract. The blueprint resolves an instance per
  * device id; tools and HTTP routers consume it.
  */
-export interface ElectronServer {
-  /** CDP port the Electron process is exposing (extracted from device.id). */
+export interface ChromiumServer {
+  /** CDP port the Chromium process is exposing (extracted from device.id). */
   readonly port: number;
   /** Underlying CDP client connected to the primary page target. */
   readonly cdp: CDPClient;
@@ -143,7 +143,7 @@ export interface ElectronServer {
     direction: KeyDirection,
     key: { code?: number; key?: string; text?: string; codeName?: string }
   ): Promise<void>;
-  /** Hardware button. Best-effort on Electron; throws "not supported" for
+  /** Hardware button. Best-effort on Chromium; throws "not supported" for
    * buttons with no browser equivalent. */
   sendButton(button: ButtonType, direction: KeyDirection): Promise<void>;
   /** Rotate the viewport. Uses Emulation.setDeviceMetricsOverride. */

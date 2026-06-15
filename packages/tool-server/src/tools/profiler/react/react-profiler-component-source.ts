@@ -33,7 +33,7 @@ Returns found: false if the component is not found in user-owned code (e.g. live
   // though the HTTP gate is a no-op here (the tool takes no device_id, so
   // there's nothing for the gate to inspect). An LLM agent reading the tool
   // catalogue should see this is paired with the other react-profiler tools
-  // and not reach for it on an Electron app.
+  // and not reach for it on an Chromium app.
   capability: RN_ONLY_TOOL_CAPABILITY,
   fileInputs,
   services: () => ({}),

@@ -77,7 +77,7 @@ Use when inspecting outbound HTTP traffic or debugging API calls in the running 
 Fails if the app is not connected or no network interceptor could be injected.`,
   zodSchema,
   // RN-only: the interceptor monkey-patches global.fetch in the Hermes runtime.
-  // Electron pages should be inspected via Chromium's Network domain instead,
+  // Chromium pages should be inspected via Chromium's Network domain instead,
   // which is a different mechanism — out of scope for this port.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({

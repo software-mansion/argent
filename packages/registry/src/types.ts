@@ -86,7 +86,7 @@ export interface ToolContext extends InvokeToolOptions {
 
 // ── Device + Capability Types ──
 
-export type Platform = "ios" | "android" | "electron";
+export type Platform = "ios" | "android" | "chromium";
 
 export type DeviceKind = "simulator" | "emulator" | "device" | "app" | "unknown";
 
@@ -119,7 +119,7 @@ export interface ToolCapability {
     device?: boolean;
     unknown?: boolean;
   };
-  electron?: {
+  chromium?: {
     app?: boolean;
   };
   /** Optional refiner. Returns true if this device is supported. */

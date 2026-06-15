@@ -88,7 +88,7 @@ Use when the profiling session is complete and you need to interpret the collect
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
   // RN-only: operates on profiler trace files captured via the React DevTools
-  // backend's commit recording, which is not present on Electron.
+  // backend's commit recording, which is not present on Chromium.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params, ctx) {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
-import { electronCdpRef, type ElectronCdpApi } from "../../blueprints/electron-cdp";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -9,7 +9,7 @@ const zodSchema = z
   .object({
     udid: z
       .string()
-      .describe("Target Electron device id from `list-devices` (electron-cdp-<port>)."),
+      .describe("Target Chromium device id from `list-devices` (chromium-cdp-<port>)."),
     x: z
       .number()
       .describe(
@@ -46,31 +46,31 @@ interface Result {
   timestampMs: number;
 }
 
-// Electron only. Touch platforms scroll with `gesture-swipe`; a desktop
+// Chromium only. Touch platforms scroll with `gesture-swipe`; a desktop
 // renderer scrolls with wheel events, which is exactly what this dispatches.
 // Keeping the two as separate tools (instead of overloading swipe) means each
 // platform has one obvious scroll verb and the capability gate explains the
 // other one.
 const capability: ToolCapability = {
-  electron: { app: true },
+  chromium: { app: true },
 };
 
 export const gestureScrollTool: ToolDefinition<Params, Result> = {
   id: "gesture-scroll",
-  description: `Scroll content in an Electron app by dispatching mouse-wheel events at a point. Anchor x/y are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Deltas are fractions of the window too: deltaY 0.5 scrolls down half a window; negative scrolls back up.
-Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Electron only — on iOS/Android use gesture-swipe.
-Returns { scrolled: true, timestampMs }. Fails if the Electron CDP session is not reachable for the given device.`,
+  description: `Scroll content in an Chromium app by dispatching mouse-wheel events at a point. Anchor x/y are normalized 0.0–1.0 (fractions of the window, not pixels), same coordinate space as gesture-tap and describe. Deltas are fractions of the window too: deltaY 0.5 scrolls down half a window; negative scrolls back up.
+Use when content is below/above the fold (describe shows off-screen elements with zero height) or a list needs scrolling. Chromium only — on iOS/Android use gesture-swipe.
+Returns { scrolled: true, timestampMs }. Fails if the Chromium CDP session is not reachable for the given device.`,
   alwaysLoad: true,
-  searchHint: "scroll wheel list page electron mouse down up content fold",
+  searchHint: "scroll wheel list page chromium mouse down up content fold",
   zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => ({
-    electron: electronCdpRef(resolveDevice(params.udid)),
+    chromium: chromiumCdpRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
     const timestampMs = Date.now();
-    const electron = services.electron as ElectronCdpApi;
-    const vp = electron.getViewport();
+    const chromium = services.chromium as ChromiumCdpApi;
+    const vp = chromium.getViewport();
     const totalDx = (params.deltaX ?? 0) * vp.width;
     const totalDy = (params.deltaY ?? 0) * vp.height;
     const durationMs = params.durationMs ?? 300;
@@ -80,7 +80,7 @@ Returns { scrolled: true, timestampMs }. Fails if the Electron CDP session is no
     const steps = Math.max(1, Math.round(durationMs / 16));
     const point = { x: params.x, y: params.y };
     for (let i = 0; i < steps; i++) {
-      await electron.server.sendWheel(point, totalDx / steps, totalDy / steps);
+      await chromium.server.sendWheel(point, totalDx / steps, totalDy / steps);
       if (i < steps - 1) await sleep(16);
     }
     return { scrolled: true, timestampMs };

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { TypedEventEmitter } from "@argent/registry";
-import { FpsTracker } from "../src/electron-server/fps";
-import { ScreencastManager } from "../src/electron-server/screencast";
+import { FpsTracker } from "../src/chromium-server/fps";
+import { ScreencastManager } from "../src/chromium-server/screencast";
 import type { CDPClient } from "../src/utils/debugger/cdp-client";
-import type { ScreencastFrame, ServerEvents } from "../src/electron-server/types";
+import type { ScreencastFrame, ServerEvents } from "../src/chromium-server/types";
 
 interface FakeCdp {
   send: ReturnType<typeof vi.fn>;
@@ -36,7 +36,7 @@ function makeFakeCdp(): FakeCdp {
   };
 }
 
-describe("electron-server/screencast", () => {
+describe("chromium-server/screencast", () => {
   it("starts CDP screencast on the first subscriber and stops on the last", async () => {
     const cdp = makeFakeCdp();
     const events = new TypedEventEmitter<ServerEvents>();
@@ -103,7 +103,7 @@ describe("electron-server/screencast", () => {
   });
 });
 
-describe("electron-server/fps", () => {
+describe("chromium-server/fps", () => {
   it("emits fpsReport once per second when enabled", async () => {
     vi.useFakeTimers();
     try {

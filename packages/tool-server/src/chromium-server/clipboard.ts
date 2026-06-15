@@ -2,7 +2,7 @@ import type { CDPClient } from "../utils/debugger/cdp-client";
 
 /**
  * Set the renderer's clipboard text. CDP doesn't expose the OS clipboard
- * directly — sim-server has access via NSPasteboard on iOS, but for Electron
+ * directly — sim-server has access via NSPasteboard on iOS, but for Chromium
  * we have to go through the renderer's `navigator.clipboard.writeText`.
  *
  * That API requires the document to have user-activation focus (Chromium's
@@ -52,15 +52,15 @@ export async function setClipboardText(cdp: CDPClient, text: string): Promise<vo
   const result = out.result?.value;
   if (!result?.ok) {
     throw new Error(
-      `Electron clipboard set failed: ${result?.error ?? "renderer rejected the write"}`
+      `Chromium clipboard set failed: ${result?.error ?? "renderer rejected the write"}`
     );
   }
 }
 
 /**
- * Sim-server has bidirectional clipboard sync (OS ↔ device). On Electron the
+ * Sim-server has bidirectional clipboard sync (OS ↔ device). On Chromium the
  * direction that matters is "set the renderer's clipboard from a tool call",
- * which `setClipboardText` covers. A true sync would require the Electron app
+ * which `setClipboardText` covers. A true sync would require the Chromium app
  * to opt in via main-process IPC — outside what CDP can offer. This is a
  * no-op stub that records the desired state so future native-side coordination
  * has a place to hook in.
