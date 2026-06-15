@@ -233,9 +233,12 @@ async function runInjectedScript() {
         cb(r.x, r.y, r.w, r.h, r.px, r.py);
       },
     },
-    __r: Object.assign((_id: number) => ({ Dimensions: { get: () => ({ width: 400, height: 800 }) } }), {
-      getModules: () => [[0, { isInitialized: true }]],
-    }),
+    __r: Object.assign(
+      (_id: number) => ({ Dimensions: { get: () => ({ width: 400, height: 800 }) } }),
+      {
+        getModules: () => [[0, { isInitialized: true }]],
+      }
+    ),
     __argent_callback: (json: string) => {
       captured = JSON.parse(json);
     },
@@ -248,13 +251,21 @@ async function runInjectedScript() {
     "__argent_callback",
     `return ${script}`
   );
-  await runner(sandbox.window, sandbox.nativeFabricUIManager, sandbox.__r, sandbox.__argent_callback);
+  await runner(
+    sandbox.window,
+    sandbox.nativeFabricUIManager,
+    sandbox.__r,
+    sandbox.__argent_callback
+  );
 
   if (!captured) throw new Error("script did not invoke __argent_callback");
   return JSON.parse(captured.result) as {
     screenW: number;
     screenH: number;
-    components: Array<{ name: string; rect: { x: number; y: number; w: number; h: number } | null }>;
+    components: Array<{
+      name: string;
+      rect: { x: number; y: number; w: number; h: number } | null;
+    }>;
   };
 }
 
