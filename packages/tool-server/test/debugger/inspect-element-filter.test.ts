@@ -315,6 +315,41 @@ const params = {
   includeSkipped: false,
 };
 
+describe("filterInspectItems — raw bundle-URL fallback must not defeat skip pruning", () => {
+  // When symbolication fails, debuggerInspectElementTool falls back to the raw
+  // bundle frame as `source` (file: "http://localhost:8081/index.bundle"). That
+  // URL is not an openable source (readSourceFragment rejects it, code stays
+  // null), so the skip filter must still prune framework/navigation wrappers —
+  // otherwise the whole hierarchy leaks through in exactly the failure mode the
+  // fallback exists to handle.
+  const BUNDLE = "http://localhost:8081/index.bundle";
+
+  it("prunes a skip-rule wrapper whose only source is an unresolved bundle URL (Pass 1)", () => {
+    const items = [
+      item("Button", src("btn.tsx", 10)),
+      item("ScrollViewContext", src(BUNDLE, 200)),
+      item("SignInPage", src(BUNDLE, 220)),
+    ];
+    const result = filterInspectItems(items);
+    expect(result.map((i) => i.name)).toEqual(["Button", "SignInPage"]);
+  });
+
+  it("prunes an anonymous View whose only source is an unresolved bundle URL (Pass 3)", () => {
+    const items = [item("Button", src("btn.tsx", 10)), item("View", src(BUNDLE, 300))];
+    const result = filterInspectItems(items);
+    expect(result.map((i) => i.name)).toEqual(["Button"]);
+  });
+
+  it("keeps a real (non-bundle) source so genuine app components still surface", () => {
+    const items = [
+      item("Button", src("btn.tsx", 10)),
+      item("SignInPage", src("SignInPage.tsx", 5)),
+    ];
+    const result = filterInspectItems(items);
+    expect(result.map((i) => i.name)).toEqual(["Button", "SignInPage"]);
+  });
+});
+
 describe("debuggerInspectElementTool — raw fallback when symbolication fails", () => {
   it("retains the raw bundled frame location when symbolicate returns null", async () => {
     const { services, readSourceFragment } = fakeServices(
