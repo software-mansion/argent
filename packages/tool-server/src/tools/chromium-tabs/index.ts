@@ -39,12 +39,13 @@ const capability: ToolCapability = {
 
 export const chromiumTabsTool: ToolDefinition<Params, Result> = {
   id: "chromium-tabs",
-  description: `Manage tabs / windows of a Chromium (CDP) app — an Electron app's BrowserWindows or a Chromium browser's tabs.
+  description: `List and switch the tabs / windows of a Chromium (CDP) app (an Electron app's BrowserWindows or a Chromium browser's tabs), and open or close them.
 - action="list": enumerate page targets with stable ids (\`t1\`, \`t2\`, …), title, url, and which is active.
 - action="select" (tab=<tabId|label>): make that tab the active one. The active tab is what describe / gesture-tap / screenshot / debugger-evaluate / open-url all operate on, so switch before driving a different tab.
 - action="new" (url?, label?): open a new tab/page and activate it.
 - action="close" (tab?=<tabId|label>): close a tab (defaults to the active one); if the active tab is closed, another live tab becomes active.
-tabIds are stable for the session and never reused. Returns { tabs: [{ tabId, targetId, title, url, active, label? }] }. Chromium-only.`,
+Use when an app exposes multiple windows or tabs and you need to inspect or drive one other than the current page, or to open/close a page during a flow. tabIds are stable for the session and never reused.
+Returns { tabs: [{ tabId, targetId, title, url, active, label? }] }. Fails if the device is not a Chromium (CDP) device, or the requested tabId/label no longer matches a live tab. Chromium-only.`,
   searchHint: "tab tabs window windows switch select close new open multi-tab chromium electron",
   zodSchema,
   capability,
