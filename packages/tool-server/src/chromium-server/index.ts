@@ -187,6 +187,7 @@ export async function createChromiumServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 export type { TabInfo, TabsManager } from "./tabs";
 export type { NetworkManager, NetworkRequestRecord } from "./network";
+export type { Cookie, SetCookieParams, DeleteCookieParams, StorageType } from "./storage";
 
 // Re-exported so the http-api / blueprint can call them directly without
 // pulling them out of a ChromiumServer instance.

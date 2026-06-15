@@ -74,6 +74,8 @@ import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
+import { chromiumCookiesTool } from "../tools/chromium-cookies";
+import { chromiumStorageTool } from "../tools/chromium-storage";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -99,6 +101,8 @@ export function createRegistry(): Registry {
   registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(chromiumTabsTool);
+  registry.registerTool(chromiumCookiesTool);
+  registry.registerTool(chromiumStorageTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureScrollTool);
   registry.registerTool(gestureDragTool);
