@@ -17,7 +17,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { parseLeaksXml } from "../src/utils/ios-profiler/pipeline/xml-parser";
-import { aggregateLeaks } from "../src/utils/ios-profiler/pipeline/01-correlate";
+import { aggregateLeaks, isLeakAttributed } from "../src/utils/ios-profiler/pipeline/01-correlate";
 
 const REAL_LEAKS_XML = `<?xml version="1.0"?>
 <trace-query-result>
@@ -61,33 +61,53 @@ describe("parseLeaksXml", () => {
 });
 
 describe("aggregateLeaks", () => {
-  it("groups by object type, sums size*count, sorts by total size desc, all RED", () => {
+  it("groups by type, marks attributed RED + unattributed YELLOW, sorts attributed first", () => {
     const leaks = aggregateLeaks(parseLeaksXml(REAL_LEAKS_XML));
 
-    // 3 distinct object types: dispatch_mach_msg_t, Malloc 16 Bytes, MyModel.
+    // The attributed leak sorts ahead of the (larger) unattributed ones; within
+    // each attribution bucket, by total size desc.
     expect(leaks.map((l) => l.objectType)).toEqual([
-      "dispatch_mach_msg_t", // 2 × 512 = 1024
-      "MyModel", //            3 × 128 = 384
-      "Malloc 16 Bytes", //    3 × 16  = 48
+      "MyModel", //             attributed,   3 × 128 = 384
+      "dispatch_mach_msg_t", // unattributed, 2 × 512 = 1024
+      "Malloc 16 Bytes", //     unattributed, 3 × 16  = 48
     ]);
 
-    const dispatch = leaks[0];
-    expect(dispatch.type).toBe("memory_leak");
-    expect(dispatch.platform).toBe("ios");
-    expect(dispatch.count).toBe(2);
-    expect(dispatch.totalSizeBytes).toBe(1024);
-    expect(dispatch.severity).toBe("RED");
-
-    const myModel = leaks[1];
+    const myModel = leaks[0];
+    expect(myModel.type).toBe("memory_leak");
+    expect(myModel.platform).toBe("ios");
     expect(myModel.count).toBe(3);
     expect(myModel.totalSizeBytes).toBe(384);
     expect(myModel.responsibleFrame).toBe("-[MyViewController loadData]");
     expect(myModel.responsibleLibrary).toBe("MyApp");
+    expect(myModel.attributed).toBe(true);
+    expect(myModel.severity).toBe("RED");
 
-    expect(leaks.every((l) => l.severity === "RED")).toBe(true);
+    const dispatch = leaks[1];
+    expect(dispatch.count).toBe(2);
+    expect(dispatch.totalSizeBytes).toBe(1024);
+    expect(dispatch.attributed).toBe(false);
+    expect(dispatch.severity).toBe("YELLOW");
+
+    // Every `<Call stack limit reached>` leak is demoted — never a confident RED.
+    const unattributed = leaks.filter((l) => !l.attributed);
+    expect(unattributed).toHaveLength(2);
+    expect(unattributed.every((l) => l.severity === "YELLOW")).toBe(true);
   });
 
   it("returns [] for no leaks", () => {
     expect(aggregateLeaks([])).toEqual([]);
+  });
+});
+
+describe("isLeakAttributed", () => {
+  it("treats xctrace's no-stack sentinels (and empty/Unknown) as unattributed", () => {
+    expect(isLeakAttributed("<Call stack limit reached>")).toBe(false);
+    expect(isLeakAttributed("")).toBe(false);
+    expect(isLeakAttributed("Unknown")).toBe(false);
+  });
+
+  it("treats a real responsible frame as attributed", () => {
+    expect(isLeakAttributed("-[MyViewController loadData]")).toBe(true);
+    expect(isLeakAttributed("MyApp`closure #1")).toBe(true);
   });
 });
