@@ -31,13 +31,15 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
  * by name — it correctly resolves fibers when multiple components share a name
  * (e.g. several <Button /> instances in different parents).
  *
- * Supports both Fabric (new architecture) and Paper (old architecture).
- * On Fabric, host fibers have stateNode.node (shadow node) and the stateNode
- * itself serves as the public instance for getInspectorDataForViewAtPoint.
- * On Paper, host fibers either have stateNode.canonical (newer RN) with nativeTag
- * and publicInstance, or a bare ReactNativeFiberHostComponent stateNode whose
- * native tag lives on stateNode._nativeTag (RN 0.81 on the legacy bridge). The
- * stateNode itself is then a valid inspectedView for getInspectorDataForViewAtPoint.
+ * Supports both Fabric (new architecture) and Paper (old architecture), across
+ * RN versions whose getInspectorDataForViewAtPoint contract differs:
+ * - Anchor: Fabric uses the host fiber's public instance; Paper anchors at the
+ *   FiberRoot container (its native tag) because the first host fiber is often a
+ *   sibling subtree that does not contain the point, so findSubviewIn would
+ *   resolve nothing. (Older Paper builds without a containerTag fall back to the
+ *   host fiber, recognised via stateNode.canonical or stateNode._nativeTag.)
+ * - Result: older RN returns a walkable data.closestInstance; RN 0.81+ returns
+ *   data.componentStack (a stack string) instead -- both are handled.
  *
  * Source resolution: tries _debugStack first (bundled frame needing symbolication),
  * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
@@ -166,10 +168,53 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
     return null;
   }
 
-  var hostFiber = findHostFiber(root.current.child, 0);
-  if (!hostFiber) { __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
+  // RN 0.81+ getInspectorDataForViewAtPoint no longer returns a walkable
+  // data.closestInstance; instead it returns data.componentStack -- a React
+  // component-stack STRING whose lines look like:
+  //   "    at View (http://.../index.bundle//...:10685:19)"
+  //   "    at RCTView (<anonymous>)"
+  // Parse the component frames out of it. Bundle locations (file:line:col) are
+  // handed back as unsymbolicated frames so the tool layer /symbolicate's them
+  // exactly like _debugStack frames. Host primitives (<anonymous>, no source)
+  // are dropped, matching the closestInstance walk which skips host fibers.
+  function itemsFromComponentStack(cs) {
+    var out = [];
+    var lines = cs.split('\\n');
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\\s*at (.+) \\(([^()]*)\\)\\s*$/);
+      if (!m) continue;
+      var lm = m[2].match(/^(.*):(\\d+):(\\d+)$/);
+      if (!lm) continue;
+      out.push({ name: m[1], frame: { fn: m[1], file: lm[1], line: parseInt(lm[2]), col: parseInt(lm[3]) } });
+    }
+    return out;
+  }
 
-  var inspectRef = getInspectRef(hostFiber);
+  // Choose the anchor view for getInspectorDataForViewAtPoint.
+  // On Paper (old arch) the FiberRoot container is the universal ancestor of the
+  // app's views, so findSubviewIn scoped to it hit-tests the whole screen. The
+  // first host fiber is NOT a safe anchor on RN 0.81: it is frequently a sibling
+  // subtree (a gesture / overlay root) that does not contain the touch point, so
+  // findSubviewIn then returns nothing for EVERY coordinate. Anchor at the
+  // container's native tag (with the root fiber as the handle the renderer's
+  // old-arch branch guard checks). Fabric keeps the host-fiber path (its
+  // container shape differs); older Paper builds without a containerTag also fall
+  // back to the host fiber.
+  // foundAnchor distinguishes "no anchor at all" (real 'no host fiber') from
+  // "anchor found but ref is intentionally null" (Fabric host fiber whose
+  // publicInstance is not yet realized -- we pass null through unchanged, as the
+  // pre-container-anchor code did, rather than reporting no host fiber).
+  var inspectRef = null;
+  var foundAnchor = false;
+  var containerInfo = root.current && root.current.stateNode && root.current.stateNode.containerInfo;
+  if (!useFabric && containerInfo && typeof containerInfo.containerTag === 'number') {
+    inspectRef = { _nativeTag: containerInfo.containerTag, _internalFiberInstanceHandleDEV: root.current };
+    foundAnchor = true;
+  } else {
+    var hostFiber = findHostFiber(root.current.child, 0);
+    if (hostFiber) { inspectRef = getInspectRef(hostFiber); foundAnchor = true; }
+  }
+  if (!foundAnchor) { __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
 
   renderer.rendererConfig.getInspectorDataForViewAtPoint(
     inspectRef, ${Math.round(x)}, ${Math.round(y)},
@@ -188,6 +233,8 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
           f = f.return;
           depth++;
         }
+      } else if (typeof data.componentStack === 'string' && data.componentStack.length > 0) {
+        items = itemsFromComponentStack(data.componentStack);
       } else {
         var hi = data.hierarchy || [];
         for (var i = 0; i < hi.length; i++) {

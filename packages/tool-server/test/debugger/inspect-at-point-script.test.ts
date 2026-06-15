@@ -66,7 +66,11 @@ function makeHook(entries: Array<[number, unknown, unknown[]]>) {
 function runInspect(
   hook: unknown,
   opts: { fabric?: boolean } = {}
-): { type: string; items?: Array<{ name: string }>; error?: string } | null {
+): {
+  type: string;
+  items?: Array<{ name: string; frame?: { file: string; line: number; col: number } | null }>;
+  error?: string;
+} | null {
   const fabric = opts.fabric ?? true;
   const g = globalThis as Record<string, unknown>;
   const saved = {
@@ -173,6 +177,47 @@ describe("makeInspectScript — old-arch (Paper) host fiber resolution", () => {
     expect(out?.error).toBeUndefined();
     expect(rn.fn.mock.calls[0][0]).toBe(pi);
     expect(out?.items?.map((i) => i.name)).toContain("HybridButton");
+  });
+});
+
+describe("makeInspectScript — RN 0.81 container anchor + componentStack", () => {
+  it("anchors at the FiberRoot container and parses componentStack into items", () => {
+    // RN 0.81 getInspectorDataForViewAtPoint returns a componentStack STRING and
+    // no closestInstance; findSubviewIn only resolves when anchored at the root
+    // container, not the first host fiber. Mirrors the shapes observed live.
+    const B = "http://10.0.2.2:8081/index.bundle//&platform=android";
+    const stack = [
+      "    at RCTView (<anonymous>)",
+      "    at View (" + B + ":10685:19)",
+      "    at AnimatedComponent(View) (" + B + ":125621:37)",
+      "    at LoggedOut (" + B + ":200000:10)",
+    ].join("\n");
+    const fn = vi.fn((_ref: any, _x: number, _y: number, cb: (d: unknown) => void) =>
+      cb({ componentStack: stack, closestInstance: undefined, hierarchy: [] })
+    );
+    const renderer = { rendererConfig: { getInspectorDataForViewAtPoint: fn } };
+    // FiberRoot exposes containerInfo.containerTag (Paper); the child host fiber
+    // must be IGNORED as the anchor in favor of the container.
+    const root = {
+      current: {
+        type: null,
+        stateNode: { containerInfo: { containerTag: 11 } },
+        child: paperHostFiber(13),
+        sibling: null,
+      },
+    };
+    const hook = { renderers: new Map([[1, renderer]]), getFiberRoots: () => new Set([root]) };
+
+    const out = runInspect(hook, { fabric: false });
+
+    expect(out?.error).toBeUndefined();
+    // Anchored at the container (tag 11), NOT the first host fiber (tag 13).
+    expect((fn.mock.calls[0][0] as { _nativeTag: number })._nativeTag).toBe(11);
+    const names = out?.items?.map((i) => i.name);
+    expect(names).toEqual(["View", "AnimatedComponent(View)", "LoggedOut"]);
+    expect(names).not.toContain("RCTView"); // host primitive (<anonymous>) dropped
+    const loggedOut = out?.items?.find((i) => i.name === "LoggedOut");
+    expect(loggedOut?.frame).toMatchObject({ file: B, line: 200000, col: 10 });
   });
 });
 
