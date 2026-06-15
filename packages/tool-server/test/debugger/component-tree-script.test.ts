@@ -287,3 +287,51 @@ describe("makeComponentTreeScript — Fabric measurement", () => {
     expect(distinctY.size).toBe(3);
   });
 });
+
+describe("makeComponentTreeScript — Fabric hosts WITHOUT a numeric nativeTag (WeakMap fallback)", () => {
+  // fabricKey() keys the per-host measure cache by 'f'+nativeTag, but when a
+  // Fabric host has no numeric nativeTag it MUST fall back to a stable
+  // WeakMap-by-identity id ('fo'+seq) so distinct shadow nodes never share a key.
+  // Every other committed test gives its hosts numeric nativeTags, so they only
+  // exercise the 'f'+tag fast path — yet the WeakMap fallback is the part that
+  // actually prevents the "[object Object]" key collapse this PR fixes. Force it.
+  function taglessHostFiber(rect: Rect) {
+    const measureInWindow = (cb: (x: number, y: number, w: number, h: number) => void) =>
+      cb(rect.x, rect.y, rect.w, rect.h);
+    // canonical present (Fabric) but NO nativeTag -> fabricKey takes the WeakMap path.
+    return {
+      type: "RCTView",
+      stateNode: { node: {}, canonical: { publicInstance: { measureInWindow } } },
+      memoizedProps: {},
+      child: null,
+      sibling: null,
+    };
+  }
+
+  it("gives each tagless Fabric host its own rect instead of collapsing onto one", async () => {
+    const rn = rootOf(
+      comp(
+        "CardA",
+        "a",
+        taglessHostFiber({ x: 0, y: 10, w: 100, h: 40 }),
+        comp(
+          "CardB",
+          "b",
+          taglessHostFiber({ x: 0, y: 110, w: 100, h: 40 }),
+          comp("CardC", "c", taglessHostFiber({ x: 0, y: 210, w: 100, h: 40 }))
+        )
+      )
+    );
+    // nativeFabricUIManager = {} (bridgeless) -> measurement runs through
+    // publicInstance.measureInWindow, the same path real new-arch apps use.
+    const comps = components(await runScript(makeHook({ 3: [rn] }), {}));
+    const byId = Object.fromEntries(comps.map((c) => [c.testID, c.rect]));
+    expect(byId.a).toEqual({ x: 0, y: 10, w: 100, h: 40 });
+    expect(byId.b).toEqual({ x: 0, y: 110, w: 100, h: 40 });
+    expect(byId.c).toEqual({ x: 0, y: 210, w: 100, h: 40 });
+    // If the WeakMap fallback were broken (constant/absent key), all three would
+    // collapse onto the first host's rect.
+    const distinctY = new Set(comps.map((c) => c.rect?.y).filter((y) => y != null));
+    expect(distinctY.size).toBe(3);
+  });
+});
