@@ -8,6 +8,7 @@
 import type { TypedEventEmitter } from "@argent/registry";
 import type { CDPClient } from "../utils/debugger/cdp-client";
 import type { TabsManager } from "./tabs";
+import type { NetworkManager } from "./network";
 
 export type TouchType = "Down" | "Up" | "Move";
 export type KeyDirection = "Down" | "Up";
@@ -173,6 +174,9 @@ export interface ChromiumServer {
   /** Multi-tab / window management. The active tab is the one `cdp` (and every
    * page-scoped tool) is connected to; switching re-points `cdp` in place. */
   readonly tabs: TabsManager;
+  /** Network request recording (capped ring buffer) + Fetch-based routing +
+   * HAR export, scoped to the active page. */
+  readonly network: NetworkManager;
   /** Event bus mirroring sim-server's broadcast channel. */
   readonly events: TypedEventEmitter<ServerEvents>;
   /** Tear down — closes CDP, stops screencast, removes listeners. */
