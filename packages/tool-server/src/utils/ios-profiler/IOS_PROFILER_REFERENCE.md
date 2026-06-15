@@ -116,7 +116,7 @@ RawLeak   = { objectType, sizeBytes, responsibleFrame, responsibleLibrary, count
 ### Stage 1 — Correlate (`pipeline/01-correlate.ts`)
 
 - **Hang ↔ CPU correlation.** For each hang, filter CPU samples whose `timestampNs` ∈ `[startNs, startNs + durationNs]`. Within that window, count the **dominant function** of every sample and the **app call chain** (system + hex frames stripped). Top 5 functions and top 3 chains attach to the hang. Their timestamps are also returned in `hangSampleTimestamps` so Stage 2 can flag overlapping CPU hotspots.
-- **Leak aggregation.** Group raw leaks by `objectType`, summing `sizeBytes * count`. Sorted by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently and always RED.)
+- **Leak aggregation.** Group raw leaks by `objectType`, summing `sizeBytes * count`. Attributed leaks (a resolved responsible frame) sort first, then by total size descending. (Leaks have no timestamps, so they cannot be correlated with CPU samples — they are reported independently.) Severity follows attribution: a resolved responsible frame ⇒ RED, the `<Call stack limit reached>` sentinel under `--attach` ⇒ a low-confidence YELLOW (see `isLeakAttributed`).
 - Hang severity is classified from the type string: contains `severe` or equals `hang` ⇒ RED; `microhang` ⇒ YELLOW.
 
 ### Stage 2 — Aggregate CPU (`pipeline/02-aggregate.ts`)
@@ -189,7 +189,7 @@ For each iOS hang the tool maps `[hangStart, hangEnd]` → wall-clock and looks 
 
 - **Hang ↔ Commit correlations** — top overlapping commit per hang with its root-cause component, top components, JS CPU hotspots, and native CPU "suspects".
 - **Hangs without React commit match** — likely pure native work.
-- **Memory leaks** — heuristically flagged when `objectType` or `responsibleFrame` matches a recently-mounted React component name.
+- **Memory leaks** — same attribution split as the analyze report: attributed leaks are listed individually (and heuristically tied to a recently-mounted React component when `objectType`/`responsibleFrame` matches its name), while unattributed leaks collapse into a single low-confidence YELLOW caveat.
 
 ---
 
