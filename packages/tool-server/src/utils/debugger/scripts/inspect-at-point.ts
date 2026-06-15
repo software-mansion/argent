@@ -34,7 +34,10 @@ export const INSPECT_NO_FIBER_ROOT_ERROR =
  * Supports both Fabric (new architecture) and Paper (old architecture).
  * On Fabric, host fibers have stateNode.node (shadow node) and the stateNode
  * itself serves as the public instance for getInspectorDataForViewAtPoint.
- * On Paper, host fibers have stateNode.canonical with nativeTag and publicInstance.
+ * On Paper, host fibers either have stateNode.canonical (newer RN) with nativeTag
+ * and publicInstance, or a bare ReactNativeFiberHostComponent stateNode whose
+ * native tag lives on stateNode._nativeTag (RN 0.81 on the legacy bridge). The
+ * stateNode itself is then a valid inspectedView for getInspectorDataForViewAtPoint.
  *
  * Source resolution: tries _debugStack first (bundled frame needing symbolication),
  * then falls back to _debugSource ({ fileName, lineNumber, columnNumber } from
@@ -100,9 +103,27 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
     if (!f || d > 30) return null;
     if (typeof f.type === 'string' && f.stateNode) {
       if (useFabric && f.stateNode.node) return f;
-      if (!useFabric && f.stateNode.canonical) return f;
+      // Old-arch (Paper) host fibers may expose stateNode.canonical (newer RN)
+      // OR a bare ReactNativeFiberHostComponent whose native tag lives directly
+      // on stateNode._nativeTag (RN 0.81 on the legacy bridge). Recognise both,
+      // mirroring component-tree.ts getHostInfo. Without the _nativeTag fallback
+      // findHostFiber returns nothing and the script throws 'no host fiber'.
+      if (!useFabric && (f.stateNode.canonical || typeof f.stateNode._nativeTag === 'number')) return f;
     }
     return findHostFiber(f.child, d + 1) || null;
+  }
+
+  // Resolve the host instance to hand to getInspectorDataForViewAtPoint.
+  // Fabric: stateNode.canonical.publicInstance (ReactNativeElement).
+  // Paper with canonical: same publicInstance shape.
+  // Paper without canonical: the ReactNativeFiberHostComponent stateNode itself
+  // is a valid inspectedView -- it carries _internalFiberInstanceHandleDEV and
+  // findNodeHandle() reads its _nativeTag, which is exactly what the renderer's
+  // Paper branch (inspectedView._internalFiberInstanceHandleDEV path) needs.
+  function getInspectRef(f) {
+    var sn = f.stateNode;
+    if (sn.canonical && sn.canonical.publicInstance) return sn.canonical.publicInstance;
+    return sn;
   }
 
   function getCompName(f) {
@@ -140,7 +161,7 @@ export function makeInspectScript(x: number, y: number, requestId: string): stri
   var hostFiber = findHostFiber(root.current.child, 0);
   if (!hostFiber) { __argent_callback(JSON.stringify({requestId:'${requestId}',type:'inspect_result',error:'no host fiber'})); return; }
 
-  var inspectRef = hostFiber.stateNode.canonical.publicInstance;
+  var inspectRef = getInspectRef(hostFiber);
 
   renderer.rendererConfig.getInspectorDataForViewAtPoint(
     inspectRef, ${Math.round(x)}, ${Math.round(y)},
