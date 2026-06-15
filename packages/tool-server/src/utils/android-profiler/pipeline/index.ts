@@ -9,6 +9,7 @@ import { runTpQuery } from "./run-tp";
 import { foldHangAnnotations } from "./hang-fold";
 import { runBatchedHangFolds, type HangWindowInput } from "./hang-folds-batched";
 import { sanitizeProcessName, sanitizeIdentifier } from "./sql-safety";
+import { demangleSymbol, demangleCallstackText } from "../../profiler-shared/demangle";
 import type {
   AndroidCpuHotspotRow,
   AndroidJankRow,
@@ -290,10 +291,11 @@ async function renderHangStacksAndroid(
     const uniqueStacks = new Map<string, { stack: string; count: number }>();
     for (const row of sampleRows) {
       if (!row.callstack_text) continue;
-      const key = row.callstack_text;
-      const ex = uniqueStacks.get(key);
+      // Demangle for display; identical demangled stacks fold together.
+      const demangled = demangleCallstackText(row.callstack_text);
+      const ex = uniqueStacks.get(demangled);
       if (ex) ex.count++;
-      else uniqueStacks.set(key, { stack: row.callstack_text, count: 1 });
+      else uniqueStacks.set(demangled, { stack: demangled, count: 1 });
     }
     const sorted = [...uniqueStacks.values()].sort((a, b) => b.count - a.count).slice(0, opts.topN);
     for (const { stack, count } of sorted) {
@@ -361,7 +363,7 @@ async function renderFunctionCallersAndroid(
   if (!rows.some((r) => r.is_exact) || distinctMatched.length > 1) {
     lines.push(
       `_Substring match: \`${opts.functionName}\` hit ${distinctMatched.length} leaf symbol(s):_`,
-      ...distinctMatched.slice(0, 10).map((m) => `- \`${m}\``),
+      ...distinctMatched.slice(0, 10).map((m) => `- \`${demangleSymbol(m)}\``),
       ...(distinctMatched.length > 10 ? [`- …and ${distinctMatched.length - 10} more`] : []),
       ""
     );
@@ -373,7 +375,9 @@ async function renderFunctionCallersAndroid(
     // tag each block with its owning thread (raw name — copy it back as a filter).
     const tag = allThreads ? ` [${row.thread_name}${row.is_main_thread ? " (main)" : ""}]` : "";
     lines.push(`(${row.occurrences}×)${tag}`);
-    lines.push(row.callstack_text ?? "<no callstack>");
+    // Demangle each frame for readability; matching upstream is still done on the
+    // raw mangled names in SQL, so this is display-only.
+    lines.push(row.callstack_text ? demangleCallstackText(row.callstack_text) : "<no callstack>");
     lines.push("```");
   }
   return lines.join("\n");
