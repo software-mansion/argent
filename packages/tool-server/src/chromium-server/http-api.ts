@@ -6,7 +6,7 @@ import type { ButtonType, ChromiumServer, KeyDirection, Rotation, TouchType } fr
 /**
  * Express router mirroring sim-server's HTTP surface, scoped per Chromium
  * device id. Mounted under `/chromium-server/:id/...` by the tool-server so
- * the preview UI / external consumers can drive an Chromium app the same way
+ * the preview UI / external consumers can drive a Chromium app the same way
  * they drive a simulator. Endpoints intentionally mirror sim-server names so
  * a generic client can be written once.
  *

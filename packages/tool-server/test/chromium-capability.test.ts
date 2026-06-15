@@ -7,12 +7,12 @@ const chromiumDevice = resolveDevice("chromium-cdp-19222");
 const iosDevice = resolveDevice("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
 
 describe("assertSupported (chromium)", () => {
-  it("accepts an chromium device when capability declares chromium.app", () => {
+  it("accepts a chromium device when capability declares chromium.app", () => {
     const cap: ToolCapability = { chromium: { app: true } };
     expect(() => assertSupported("test", cap, chromiumDevice)).not.toThrow();
   });
 
-  it("rejects an chromium device when capability omits chromium", () => {
+  it("rejects a chromium device when capability omits chromium", () => {
     const cap: ToolCapability = { apple: { simulator: true } };
     expect(() => assertSupported("test", cap, chromiumDevice)).toThrow(UnsupportedOperationError);
   });
@@ -22,7 +22,7 @@ describe("assertSupported (chromium)", () => {
     expect(() => assertSupported("test", cap, iosDevice)).toThrow(UnsupportedOperationError);
   });
 
-  it("rejects an chromium device when chromium block is empty (kind 'app' not enabled)", () => {
+  it("rejects a chromium device when chromium block is empty (kind 'app' not enabled)", () => {
     const cap: ToolCapability = { chromium: {} };
     expect(() => assertSupported("test", cap, chromiumDevice)).toThrow(UnsupportedOperationError);
   });

@@ -24,7 +24,7 @@ export const CHROMIUM_CDP_NAMESPACE = "ChromiumCdp";
 type ChromiumFactoryOptions = Record<string, unknown> & { device: DeviceInfo };
 
 /**
- * Build the `ServiceRef` for an Chromium CDP session keyed by an already-resolved
+ * Build the `ServiceRef` for a Chromium CDP session keyed by an already-resolved
  * `DeviceInfo`. Tool `services()` callbacks call this rather than hand-building
  * the URN string so the blueprint factory always receives the device through
  * the registry's `options` channel and never has to reclassify.

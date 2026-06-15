@@ -47,7 +47,7 @@ export interface PlatformImpl<Services, Params, Result> {
  * see real names (e.g. `services.simulatorServer`) instead of the raw
  * `Record<string, unknown>` the registry hands in.
  *
- * The `chromium` branch is optional. When omitted, an chromium device triggers
+ * The `chromium` branch is optional. When omitted, a chromium device triggers
  * `NotImplementedOnPlatformError` — the capability gate normally fires first,
  * so this only matters for tools that declare chromium support without wiring
  * a handler.

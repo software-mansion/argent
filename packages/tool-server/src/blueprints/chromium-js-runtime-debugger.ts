@@ -87,7 +87,7 @@ function createConsoleLogServer(
 // out on Chromium (it depends on the React Native internal
 // getInspectorDataForViewAtPoint). Keeping them shaped means chromium and
 // metro paths can share a single api interface — tools that *don't* use them
-// work uniformly, and any future tool that calls one on an chromium api hits a
+// work uniformly, and any future tool that calls one on a chromium api hits a
 // loud, clearly-named error instead of `undefined`.
 function makeStubSourceResolver(): SourceResolver {
   const unsupported = () => {

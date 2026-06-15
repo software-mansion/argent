@@ -42,7 +42,7 @@ describe("dispatchByPlatform (chromium branch)", () => {
     expect(chromium).toHaveBeenCalledOnce();
   });
 
-  it("still routes ios / android correctly when an chromium branch exists", async () => {
+  it("still routes ios / android correctly when a chromium branch exists", async () => {
     const ios = vi.fn().mockResolvedValue("ios");
     const android = vi.fn().mockResolvedValue("android");
     const chromium = vi.fn().mockResolvedValue("chromium");

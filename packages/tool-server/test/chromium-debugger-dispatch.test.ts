@@ -34,7 +34,7 @@ const IOS_ID = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
 const ANDROID_ID = "emulator-5554";
 
 describe("debuggerServiceRef — platform dispatch", () => {
-  it("routes an Chromium device id to the ChromiumJsRuntimeDebugger blueprint", () => {
+  it("routes a Chromium device id to the ChromiumJsRuntimeDebugger blueprint", () => {
     const ref = debuggerServiceRef({ port: 8081, device_id: CHROMIUM_ID });
     expect(ref).toMatchObject({
       urn: `${CHROMIUM_JS_RUNTIME_DEBUGGER_NAMESPACE}:${CHROMIUM_ID}`,
@@ -66,7 +66,7 @@ describe("debugger tool capability gating — chromium", () => {
   const chromiumDevice = resolveDevice(CHROMIUM_ID);
   const iosDevice = resolveDevice(IOS_ID);
 
-  it("DEBUGGER_TOOL_CAPABILITY admits an Chromium device (ported tools)", () => {
+  it("DEBUGGER_TOOL_CAPABILITY admits a Chromium device (ported tools)", () => {
     expect(() =>
       assertSupported("debugger-evaluate", DEBUGGER_TOOL_CAPABILITY, chromiumDevice)
     ).not.toThrow();
@@ -78,7 +78,7 @@ describe("debugger tool capability gating — chromium", () => {
     ).not.toThrow();
   });
 
-  it("RN_ONLY_TOOL_CAPABILITY rejects an Chromium device (locked-out tools)", () => {
+  it("RN_ONLY_TOOL_CAPABILITY rejects a Chromium device (locked-out tools)", () => {
     expect(() =>
       assertSupported("debugger-component-tree", RN_ONLY_TOOL_CAPABILITY, chromiumDevice)
     ).toThrow(UnsupportedOperationError);

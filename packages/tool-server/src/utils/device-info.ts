@@ -31,7 +31,7 @@ export function resolveDevice(udid: string): DeviceInfo {
   return { id: udid, platform, kind };
 }
 
-/** Parses the CDP port out of an chromium device id. Returns null if the id is malformed. */
+/** Parses the CDP port out of a chromium device id. Returns null if the id is malformed. */
 export function parseChromiumCdpPort(udid: string): number | null {
   if (!udid.startsWith(CHROMIUM_ID_PREFIX)) return null;
   const tail = udid.slice(CHROMIUM_ID_PREFIX.length);

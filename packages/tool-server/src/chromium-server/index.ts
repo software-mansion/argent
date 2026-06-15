@@ -159,7 +159,7 @@ export async function createChromiumServer(
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
 
 // Re-exported so the http-api / blueprint can call them directly without
-// pulling them out of an ChromiumServer instance.
+// pulling them out of a ChromiumServer instance.
 export { setClipboardText } from "./clipboard";
 
 // Internal re-export so tests can stub these without going through the full factory.

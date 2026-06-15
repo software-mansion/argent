@@ -234,7 +234,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     const device = resolveDevice(deviceId);
     if (device.platform !== "chromium") {
       res.status(400).json({
-        error: `Device id "${deviceId}" is not an Chromium device. Use list-devices to find one.`,
+        error: `Device id "${deviceId}" is not a Chromium device. Use list-devices to find one.`,
       });
       return;
     }

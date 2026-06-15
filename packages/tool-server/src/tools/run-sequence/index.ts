@@ -143,7 +143,7 @@ Stops on the first error and returns partial results.`,
 
         // Pre-flight the sub-tool's capability gate. Registry.invokeTool does
         // NOT call assertSupported (the HTTP layer does), so without this
-        // check a mobile-only step like `button` on an Chromium device would
+        // check a mobile-only step like `button` on a Chromium device would
         // descend into the simulator-server blueprint factory and surface as
         // a generic 500 instead of a clean "not supported on chromium".
         const subTool = registry.getTool(step.tool);
