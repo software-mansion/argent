@@ -73,6 +73,7 @@ import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-dat
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { chromiumTabsTool } from "../tools/chromium-tabs";
 
 export function createRegistry(): Registry {
   const registry = new Registry();
@@ -97,6 +98,7 @@ export function createRegistry(): Registry {
   registry.registerTool(screenshotTool);
   registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
+  registry.registerTool(chromiumTabsTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureScrollTool);
   registry.registerTool(gestureDragTool);

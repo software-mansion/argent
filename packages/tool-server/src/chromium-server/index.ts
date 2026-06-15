@@ -7,6 +7,7 @@ import { sendButton, sendKey, sendRotate, sendTouch, sendWheel, sendCharInsert }
 import { goBack, goForward, navigate, reload } from "./navigation";
 import { ScreencastManager } from "./screencast";
 import { captureScreenshot, copyScreenshotToClipboard } from "./screenshot";
+import { createTabsManager } from "./tabs";
 import type {
   ButtonType,
   ChromiumServer,
@@ -63,7 +64,7 @@ export interface CreateChromiumServerOpts {
 export async function createChromiumServer(
   opts: CreateChromiumServerOpts
 ): Promise<ChromiumServer> {
-  const { cdp, wsUrl } = await connectCdp(opts.port);
+  const { cdp, wsUrl, target } = await connectCdp(opts.port);
   await enableCoreDomains(cdp);
 
   let viewport: ViewportSize = await readViewport(cdp);
@@ -74,6 +75,20 @@ export async function createChromiumServer(
 
   cdp.events.on("disconnected", (err) => {
     events.emit("terminated", err ?? new Error(`Chromium CDP on port ${opts.port} disconnected`));
+  });
+
+  // Multi-tab: the manager re-points `cdp` in place when the active tab
+  // changes, so every page-scoped subsystem below (which captured `cdp`)
+  // automatically follows. After a switch we re-prime the page's core domains
+  // and refresh the cached viewport for the new document.
+  const tabs = createTabsManager({
+    cdp,
+    port: opts.port,
+    initialTargetId: target.id,
+    onActivated: async () => {
+      await enableCoreDomains(cdp);
+      viewport = await readViewport(cdp);
+    },
   });
 
   const server: ChromiumServer = {
@@ -123,6 +138,7 @@ export async function createChromiumServer(
       await goForward(cdp);
     },
     setFpsReporting: (enabled: boolean) => fps.setEnabled(enabled),
+    tabs,
     evaluate: async (
       expression: string,
       options?: { returnByValue?: boolean }
@@ -157,6 +173,7 @@ export async function createChromiumServer(
 
 // Re-exported for use from the blueprint when we need a low-level CDP handle.
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
+export type { TabInfo, TabsManager } from "./tabs";
 
 // Re-exported so the http-api / blueprint can call them directly without
 // pulling them out of a ChromiumServer instance.
