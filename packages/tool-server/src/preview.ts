@@ -287,8 +287,18 @@ export function createPreviewRouter(registry: Registry): Router {
   // Failures are non-fatal for the UI (it falls back to corner notifications).
   router.get("/describe/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
+    const device = resolveDevice(udid);
+    if (device.platform === "chromium") {
+      // No structured tree for Chromium here: this route only dispatches the
+      // iOS / Android describe adapters. Reject loudly instead of letting a
+      // chromium id fall through to describeAndroid (which would shell `adb`
+      // against a non-existent serial and 500 with a misleading message).
+      res.status(400).json({
+        error: `describe is not available for Chromium devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
+      });
+      return;
+    }
     try {
-      const device = resolveDevice(udid);
       const data: DescribeTreeData =
         device.platform === "ios"
           ? await describeIos(registry, device, {})

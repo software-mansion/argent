@@ -24,6 +24,8 @@ const mockedAndroid = describeAndroid as unknown as Mock;
 // serial -> "android". No simulator/emulator is touched by this unit test.
 const IOS_UDID = "00000000-0000-0000-0000-000000000000";
 const ANDROID_SERIAL = "emulator-5554";
+// `chromium-cdp-<port>` is classified as platform "chromium" by shape alone.
+const CHROMIUM_ID = "chromium-cdp-9222";
 
 const TREE = {
   role: "AXGroup",
@@ -89,6 +91,18 @@ describe("GET /preview/describe/:udid (describe-based; post-#197 text-contract r
 
     expect(res.status).toBe(200);
     expect(res.body.should_restart).toBe(true);
+  });
+
+  it("Chromium id -> 400 { error }; neither describe adapter is touched", async () => {
+    const res = await request(makeApp()).get(`/describe/${CHROMIUM_ID}`);
+
+    // A chromium id must be rejected before dispatch — otherwise it falls into
+    // the else-branch and shells `adb` against a non-existent serial, 500ing
+    // with a misleading message. Mirrors the /simulator-server/:udid guard.
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Chromium");
+    expect(mockedIos).not.toHaveBeenCalled();
+    expect(mockedAndroid).not.toHaveBeenCalled();
   });
 
   it("adapter throw -> 500 { error } (non-fatal: UI skips the !d.ok branch)", async () => {

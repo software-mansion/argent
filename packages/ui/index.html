@@ -264,15 +264,6 @@
         position: relative;
         overflow: hidden;
       }
-      .viewport {
-        flex: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: var(--pad-view);
-        min-height: 0;
-        position: relative;
-      }
       /* `.hidden-badge` surfaces proposals whose element isn't on screen and
          whose location is unknown (never matched). A floating accent pill so it
          reads as a signal (the user has things they can't see), not metadata. */
@@ -554,6 +545,16 @@
            neighbouring cards in the same column to compress to make room. */
         resize: none;
         min-height: var(--cmt-min-h);
+      }
+
+      /* Soft nudge when an element was proposed with a single variant — a
+         lone variant isn't a real choice. Block-level, in normal card flow
+         (between body and comment), so it never overlaps the floating layout. */
+      .vcard-hint {
+        padding: var(--pad-cmt);
+        border-top: var(--border-hairline) solid var(--color-border);
+        color: var(--color-muted);
+        font-size: var(--fs-note);
       }
 
       /* Element-inspector spotlight: ONE blur+dim layer over the stream with
@@ -2537,6 +2538,15 @@
           body.appendChild(row);
         }
         el.appendChild(body);
+
+        // A choice needs at least two options — flag a lone-variant element so
+        // the human (and the watching agent) sees it isn't actually a choice.
+        if (p.variants.length < 2) {
+          const hint = document.createElement("div");
+          hint.className = "vcard-hint";
+          hint.textContent = "Only one variant — a choice needs at least two.";
+          el.appendChild(hint);
+        }
 
         const cmt = document.createElement("textarea");
         cmt.className = "vcard-cmt";
