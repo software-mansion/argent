@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator and Android emulator control. Argent MCP tools are the preferred form of interaction with the application.
+Argent MCP tools are available in this project for iOS simulator, Android emulator, and Chromium (CDP) app control. Argent MCP tools are the preferred form of interaction with the application. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -17,6 +17,7 @@ Use cases:
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
 - Running, debugging, or testing a React Native app (iOS or Android)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
+- Running, debugging, or testing a Chromium (CDP) app — an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only
   </description>
 
 <tapping_rule>
@@ -44,7 +45,7 @@ Before booting, running, or interacting with any app, call `list-devices` first 
 Decision order:
 
 1. **Explicit user intent** - choose the user named platform or device. Look for words "simulator" and "emulator".
-2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`.
+2. **Prefer a running device.** iOS simulators - state `Booted` and Android devices - `state: "device"` come first in `list-devices`; Chromium (CDP) apps appear as `platform: "chromium"`, `state: "Running"`.
 3. **Single-platform project:** (per `argent-environment-inspector` flags `is_native_ios`/`is_native_android`, or RN with only one platform configured) → boot that platform.
    </device_selection_rule>
 

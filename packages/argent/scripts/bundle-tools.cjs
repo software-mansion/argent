@@ -75,7 +75,9 @@ const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
-const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux"];
+// Host platform keys (see hostPlatformKey() in @argent/native-devtools-ios):
+// darwin is a universal binary; Linux ships one single-arch ELF per key.
+const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64"];
 // Generated module pinning the Perfetto version that stamps the bundled
 // trace_processor.wasm. esbuild inlines it into every bundle via the
 // @argent/native-devtools-android alias.

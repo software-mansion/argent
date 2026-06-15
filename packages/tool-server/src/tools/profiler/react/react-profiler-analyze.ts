@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { promises as fsPromises } from "fs";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   type ProfilerSessionPaths,
   getCachedProfilerPaths,
@@ -86,6 +87,9 @@ is returned by react-profiler-start.
 Use when the profiling session is complete and you need to interpret the collected data.
 Fails if react-profiler-stop has not been called or no profiling data is stored.`,
   zodSchema,
+  // RN-only: operates on profiler trace files captured via the React DevTools
+  // backend's commit recording, which is not present on Chromium.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),
   async execute(_services, params, ctx) {
     const sessionPaths: ProfilerSessionPaths | undefined = getCachedProfilerPaths(

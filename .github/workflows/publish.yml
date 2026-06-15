@@ -53,10 +53,11 @@ jobs:
       - run: npm run build -w @swmansion/argent
 
       # Per-platform bundle layout (commit 80e724a). darwin is always required;
-      # Linux is gated by ARGENT_REQUIRE_LINUX_BINARY so the existing release
-      # pipeline keeps working until radon's Linux artifact is reliably present
-      # — flip the env var to "1" once that lands. The inventory always logs
-      # what shipped so a silently-missing Linux binary shows up in the run.
+      # both Linux keys (x86_64 "linux" and arm64 "linux-arm64") are gated by
+      # ARGENT_REQUIRE_LINUX_BINARY so the existing release pipeline keeps
+      # working until radon's Linux artifacts are reliably present — flip the
+      # env var to "1" once that lands. The inventory always logs what shipped
+      # so a silently-missing Linux binary shows up in the run.
       - name: Verify per-platform simulator-server binaries
         env:
           ARGENT_REQUIRE_LINUX_BINARY: "0"
@@ -64,15 +65,15 @@ jobs:
           set -e
           missing=0
           echo "simulator-server inventory:"
-          for plat in darwin linux; do
+          for plat in darwin linux linux-arm64; do
             p="packages/argent/bin/${plat}/simulator-server"
             if [[ -x "$p" ]]; then
               size=$(wc -c <"$p")
-              echo "  ✓ ${plat}: ${p} (${size} bytes)"
+              echo "  ✓ ${plat}: ${p} (${size} bytes; $(file -b "$p"))"
             else
               echo "  ✗ ${plat}: ${p} — missing"
               if [[ "$plat" == "darwin" ]]; then missing=1; fi
-              if [[ "$plat" == "linux" && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
+              if [[ "$plat" == linux* && "${ARGENT_REQUIRE_LINUX_BINARY}" == "1" ]]; then missing=1; fi
             fi
           done
           [[ "$missing" == "0" ]] || { echo "::error::required simulator-server binary missing"; exit 1; }

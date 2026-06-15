@@ -56,31 +56,53 @@ export function createPreviewRouter(registry: Registry): Router {
               model?: string;
               sdkLevel?: number | null;
             }
+          | { platform: "chromium"; id: string; title: string; port: number }
         >;
       }>(listDevicesTool.id);
       // The preview UI keys off `udid` and `state === "Booted"`, which are
       // iOS terminology. Map Android serials to the same shape so the same
       // dropdown can target both platforms — `simulator-server/:udid` already
       // accepts Android serials via `resolveDevice(udid)`.
-      const simulators = data.devices.map((d) => {
+      //
+      // Chromium is intentionally excluded: the preview UI streams frames
+      // through simulator-server's WebSocket, which only exists for iOS /
+      // Android. Surfacing chromium entries would let the UI offer a target
+      // it can't actually drive. Chromium consumers should use the MCP tools
+      // (screenshot, describe, gesture-*) directly.
+      type PreviewEntry = {
+        udid: string;
+        name: string;
+        state: string;
+        runtime: string;
+        isAvailable: boolean;
+        platform: "ios" | "android";
+      };
+      const simulators = data.devices.flatMap<PreviewEntry>((d) => {
         if (d.platform === "ios") {
-          return {
-            udid: d.udid,
-            name: d.name,
-            state: d.state,
-            runtime: d.runtime,
-            isAvailable: true,
-            platform: "ios" as const,
-          };
+          return [
+            {
+              udid: d.udid,
+              name: d.name,
+              state: d.state,
+              runtime: d.runtime,
+              isAvailable: true,
+              platform: "ios",
+            },
+          ];
         }
-        return {
-          udid: d.serial,
-          name: d.avdName ?? d.model ?? d.serial,
-          state: d.state === "device" ? "Booted" : d.state,
-          runtime: d.sdkLevel != null ? `Android API ${d.sdkLevel}` : "Android",
-          isAvailable: true,
-          platform: "android" as const,
-        };
+        if (d.platform === "android") {
+          return [
+            {
+              udid: d.serial,
+              name: d.avdName ?? d.model ?? d.serial,
+              state: d.state === "device" ? "Booted" : d.state,
+              runtime: d.sdkLevel != null ? `Android API ${d.sdkLevel}` : "Android",
+              isAvailable: true,
+              platform: "android",
+            },
+          ];
+        }
+        return [];
       });
       res.json({ simulators });
     } catch (err) {
@@ -90,6 +112,17 @@ export function createPreviewRouter(registry: Registry): Router {
 
   router.get("/simulator-server/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
+    const device = resolveDevice(udid);
+    if (device.platform === "chromium") {
+      // The preview UI only knows how to render simulator-server's frame stream,
+      // and Chromium drives the renderer over CDP instead. Fail loudly here so a
+      // forged URL doesn't quietly spawn a simulator-server process for an
+      // Chromium device id.
+      res.status(400).json({
+        error: `Preview is not available for Chromium devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
+      });
+      return;
+    }
     try {
       // This endpoint is reachable without the auth token (the preview UI is
       // browser-loaded and tokenless). Bind the spawn to an actually-present
@@ -108,7 +141,7 @@ export function createPreviewRouter(registry: Registry): Router {
           .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
         return;
       }
-      const { urn, options } = simulatorServerRef(resolveDevice(udid));
+      const { urn, options } = simulatorServerRef(device);
       const api = await registry.resolveService<SimulatorServerApi>(urn, options);
       res.json({
         udid,

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { stringify as yamlStringify, parse as yamlParse } from "yaml";
+import { CLIENT_FILE_MARKER, type ClientFileDirective } from "@argent/registry";
 
 const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
@@ -10,6 +11,32 @@ const FLOWS_DIR_NAME = path.join(".argent", "flows");
 
 let activeFlowName: string | null = null;
 let activeProjectRoot: string | null = null;
+
+/**
+ * Where the active recording's YAML is persisted:
+ * - `"host"`   — this process writes `<project_root>/.argent/flows/<name>.yaml`
+ *                directly (the original behavior; correct whenever the caller's
+ *                project root is on this machine).
+ * - `"client"` — the caller's project root is NOT on this machine (remote
+ *                tool-server). The flow lives in memory here and every mutating
+ *                tool returns a {@link ClientFileDirective} so the *client*
+ *                writes the YAML into the agent's project.
+ */
+export type FlowPersistMode = "host" | "client";
+
+export interface RecordingSession {
+  persist: FlowPersistMode;
+  /**
+   * Absolute path of the flow file as the CALLER knows it. A real host path in
+   * "host" mode; in "client" mode it is only echoed back inside the directive
+   * (it names a file on the client's machine, never touched here).
+   */
+  filePath: string;
+  /** In-memory flow content — authoritative in "client" mode. */
+  flow: FlowFile;
+}
+
+let recordingSession: RecordingSession | null = null;
 
 export function setActiveProjectRoot(root: string): void {
   if (!path.isAbsolute(root)) {
@@ -73,6 +100,23 @@ export function setActiveFlow(name: string): void {
   activeFlowName = name;
 }
 
+/** Begin a recording session (replacing any abandoned one). */
+export function startRecordingSession(name: string, session: RecordingSession): void {
+  activeFlowName = name;
+  recordingSession = session;
+}
+
+export function getRecordingSession(): RecordingSession | null {
+  return recordingSession;
+}
+
+function requireRecordingSession(): RecordingSession {
+  if (!activeFlowName || !recordingSession) {
+    throw new Error("No active flow. Call flow-start-recording first.");
+  }
+  return recordingSession;
+}
+
 /** Returns the active flow name, or null if none is active. */
 export function getActiveFlowOrNull(): string | null {
   return activeFlowName;
@@ -87,6 +131,7 @@ export function getActiveFlow(): string {
 
 export function clearActiveFlow(): void {
   activeFlowName = null;
+  recordingSession = null;
 }
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -183,4 +228,37 @@ export async function appendStep(filePath: string, step: FlowStep): Promise<stri
   const updated = serializeFlow(flow);
   await fs.writeFile(filePath, updated, "utf8");
   return updated;
+}
+
+export function clientFileDirective(filePath: string, content: string): ClientFileDirective {
+  return { [CLIENT_FILE_MARKER]: true, path: filePath, content };
+}
+
+/**
+ * How a mutating flow tool reports persistence: a plain host path in "host"
+ * mode (nothing for the client to do), or a {@link ClientFileDirective} the
+ * client resolves by writing the YAML into the agent's project. Either way the
+ * field reads as the flow file's path once the client has processed the result.
+ */
+export type FlowSavedTo = string | ClientFileDirective;
+
+/**
+ * Append a step to the active recording and persist it. In "host" mode the
+ * file on disk is re-read first (the original behavior — a manual edit made
+ * mid-recording is honored); in "client" mode this process never sees the
+ * client's disk, so the in-memory copy is authoritative and the updated YAML
+ * travels back in the directive.
+ */
+export async function appendStepToActiveFlow(
+  step: FlowStep
+): Promise<{ flowFile: string; savedTo: FlowSavedTo; session: RecordingSession }> {
+  const session = requireRecordingSession();
+  if (session.persist === "host") {
+    const flowFile = await appendStep(session.filePath, step);
+    session.flow = parseFlow(flowFile);
+    return { flowFile, savedTo: session.filePath, session };
+  }
+  session.flow.steps.push(step);
+  const flowFile = serializeFlow(session.flow);
+  return { flowFile, savedTo: clientFileDirective(session.filePath, flowFile), session };
 }

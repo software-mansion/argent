@@ -25,6 +25,10 @@ interface Result {
   timestampMs: number;
 }
 
+// Touch platforms only. A desktop renderer has no touch swipe: a mouse drag
+// selects text instead of scrolling, so Chromium callers use the dedicated
+// `gesture-scroll` tool (wheel-based) and the capability gate rejects this
+// one with a clear error rather than silently doing the wrong thing.
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
@@ -32,11 +36,10 @@ const capability: ToolCapability = {
 
 export const gestureSwipeTool: ToolDefinition<Params, Result> = {
   id: "gesture-swipe",
-  description: `Execute a smooth swipe gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap and simulator-server touch.
+  description: `Execute a smooth swipe / drag touch gesture between two points on the device (iOS simulator or Android emulator). All from/to positions are normalized 0.0–1.0 (fractions of screen width/height, not pixels), same as gesture-tap.
 Generates interpolated Move events for a natural feel (~60fps).
 Swipe up (fromY > toY) to scroll content down.
-Swipe down (fromY < toY) to scroll content up.
-Use when you need to scroll a list, dismiss a modal, or navigate between pages. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+Use when you need to scroll a list, dismiss a modal, drag an element, or navigate between pages. Not supported on Chromium — use gesture-scroll there instead. Returns { swiped: true, timestampMs }. Fails if the simulator-server / emulator backend is not reachable for the given device.`,
   alwaysLoad: true,
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
@@ -45,17 +48,16 @@ Use when you need to scroll a list, dismiss a modal, or navigate between pages. 
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
   async execute(services, params) {
-    const api = services.simulatorServer as SimulatorServerApi;
     const duration = params.durationMs ?? 300;
+    const timestampMs = Date.now();
+    const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
-    let timestampMs = 0;
 
     for (let i = 0; i <= steps; i++) {
       const t = i / steps;
       const x = params.fromX + (params.toX - params.fromX) * t;
       const y = params.fromY + (params.toY - params.fromY) * t;
       const type = i === 0 ? "Down" : i === steps ? "Up" : "Move";
-      if (i === 0) timestampMs = Date.now();
       sendCommand(api, {
         cmd: "touch",
         type,

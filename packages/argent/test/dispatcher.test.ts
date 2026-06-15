@@ -32,17 +32,26 @@ beforeEach(() => {
   }
 });
 
+// Mirrors the dispatcher's host platform key: process.platform, except
+// "linux-arm64" on arm64 Linux. Keeps the suite green on every host the
+// dispatcher itself supports.
+const HOST_PLATFORM_KEY =
+  process.platform === "linux" && process.arch === "arm64" ? "linux-arm64" : process.platform;
+
 /**
  * Stage a tmp dispatcher dir. Returns the path to the copied dispatcher .cjs
  * (suitable to pass to `node`) and the per-platform bin dir where the caller
  * should drop a fake simulator-server.
  */
-function stageDispatcher(): { dispatcher: string; platformDir: string } {
+function stageDispatcher(platformKey: string = HOST_PLATFORM_KEY): {
+  dispatcher: string;
+  platformDir: string;
+} {
   const dir = fs.mkdtempSync(path.join(tmpRoot, "case-"));
   sessionTmpDirs.push(dir);
   const dispatcher = path.join(dir, "argent-simulator-server.cjs");
   fs.copyFileSync(DISPATCHER_SRC, dispatcher);
-  const platformDir = path.join(dir, process.platform);
+  const platformDir = path.join(dir, platformKey);
   fs.mkdirSync(platformDir, { recursive: true });
   return { dispatcher, platformDir };
 }
@@ -105,6 +114,34 @@ describe("argent-simulator-server dispatcher", () => {
     expect(result.stderr).toContain("argent-simulator-server: no binary");
     expect(result.stderr).toContain(process.platform);
     expect(result.stderr).toContain("Supported hosts today: darwin, linux");
+  });
+
+  it("resolves the linux-arm64 binary when running on arm64 Linux", async () => {
+    // The dispatcher reads process.platform / process.arch at require time,
+    // so the test fakes both inside a child process (via `node -e`) before
+    // requiring the dispatcher — exercising the real resolution logic on any
+    // host. The fake binary is a bash script, so executing it works even
+    // though the staged directory is named for a different platform.
+    const { dispatcher, platformDir } = stageDispatcher("linux-arm64");
+    writeFakeBinary(platformDir, "#!/usr/bin/env bash\necho arm64-ok\nexit 0\n");
+    const stub =
+      'Object.defineProperty(process, "platform", { value: "linux" });' +
+      'Object.defineProperty(process, "arch", { value: "arm64" });' +
+      "require(process.argv[1]);";
+    const result = await new Promise<RunResult>((resolve, reject) => {
+      const child = spawn(process.execPath, ["-e", stub, dispatcher], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (c) => (stdout += c.toString()));
+      child.stderr.on("data", (c) => (stderr += c.toString()));
+      child.on("error", reject);
+      child.on("exit", (code, signal) => resolve({ exitCode: code, signal, stdout, stderr }));
+    });
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("arm64-ok");
+    expect(result.exitCode).toBe(0);
   });
 
   it("propagates the child's exit code on a clean exit", async () => {

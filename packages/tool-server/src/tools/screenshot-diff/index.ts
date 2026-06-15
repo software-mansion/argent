@@ -1,16 +1,19 @@
 import crypto from "node:crypto";
 import fs from "fs/promises";
+import os from "node:os";
 import path from "path";
 import { z } from "zod";
 import type {
-  InvokeToolOptions,
+  FileInputSpec,
   ServiceRef,
+  ToolContext,
   ToolCapability,
   ToolDefinition,
 } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
+import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 import { diffPngFiles } from "./screenshot-diff";
 
 const zodSchema = z
@@ -45,7 +48,13 @@ const zodSchema = z
       .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
       .optional()
       .describe("Orientation override for live baseline/current captures."),
-    outputDir: z.string().min(1).describe("Directory where diff artifacts should be written."),
+    outputDir: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Directory where diff artifacts should be written. Optional — defaults to a temp directory; the diff images are returned in the result either way."
+      ),
   })
   .strict();
 
@@ -53,8 +62,13 @@ type Params = z.infer<typeof zodSchema>;
 
 export interface ScreenshotDiffResult {
   summary: string;
-  diffPath?: string;
-  contextDiffPath?: string;
+  /**
+   * Artifact handles (not raw host paths): the client materializes the diff
+   * images to files on ITS machine, so the agent can open them — and the MCP
+   * adapter can inline `contextDiff` — even when the tool-server is remote.
+   */
+  diffPath?: ArtifactHandle;
+  contextDiffPath?: ArtifactHandle;
 }
 
 type CaptureScreenshot = typeof httpScreenshot;
@@ -63,6 +77,19 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
+
+/**
+ * The saved PNGs live on the AGENT's machine (typically materialized there by
+ * an earlier full-res `screenshot` call), so both path params cross the file
+ * boundary as `file` inputs. `outputDir` is only probed: when the agent-chosen
+ * directory doesn't exist on this host (remote mode), the tool quietly falls
+ * back to its temp default rather than recreating an agent-side path here.
+ */
+const fileInputs: FileInputSpec[] = [
+  { target: "baselinePath", path: "${baselinePath}", kind: "file", optional: true },
+  { target: "currentPath", path: "${currentPath}", kind: "file", optional: true },
+  { target: "outputDir", path: "${outputDir}", kind: "probe", optional: true },
+];
 
 export const screenshotDiffTool: ToolDefinition<Params, ScreenshotDiffResult> = {
   id: "screenshot-diff",
@@ -77,6 +104,7 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
     "compare screenshots png diff visual UI changes UI regression visual regression screenshot diff changed regions text ocr live capture",
   zodSchema,
   capability,
+  fileInputs,
   services: (params): Record<string, ServiceRef> => ({
     simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
   }),
@@ -88,12 +116,15 @@ Fails if the input sources are invalid, PNG files cannot be read, outputDir cann
 export async function executeScreenshotDiffTool(
   services: Record<string, unknown>,
   params: Params,
-  options?: InvokeToolOptions,
+  options?: Partial<ToolContext>,
   captureScreenshot: CaptureScreenshot = httpScreenshot
 ): Promise<ScreenshotDiffResult> {
+  const outputDir = await resolveOutputDir(params, options);
+
   const { baselinePath, currentPath } = await resolveInputPaths(
     services,
     params,
+    outputDir,
     options,
     captureScreenshot
   );
@@ -101,20 +132,51 @@ export async function executeScreenshotDiffTool(
   const result = await diffPngFiles({
     baselinePath,
     currentPath,
-    outputDir: params.outputDir,
+    outputDir,
   });
 
+  const artifacts = requireArtifacts(options);
   return {
     summary: result.summary,
-    ...(result.diffPath ? { diffPath: result.diffPath } : {}),
-    ...(result.contextDiffPath ? { contextDiffPath: result.contextDiffPath } : {}),
+    ...(result.diffPath
+      ? { diffPath: await artifacts.register(result.diffPath, { mimeType: "image/png" }) }
+      : {}),
+    ...(result.contextDiffPath
+      ? {
+          contextDiffPath: await artifacts.register(result.contextDiffPath, {
+            mimeType: "image/png",
+          }),
+        }
+      : {}),
   };
+}
+
+/**
+ * Where diff artifacts (and live-capture intermediates) are written on this
+ * host. An agent-supplied outputDir is honored when it is usable here — i.e.
+ * not flagged absent by the boundary probe (a remote client's local directory).
+ * Everything else gets a per-call temp dir; the diff images travel back as
+ * artifacts, so the directory's location no longer matters to the agent.
+ */
+async function resolveOutputDir(params: Params, options?: Partial<ToolContext>): Promise<string> {
+  const probe = options?.fileInputs?.outputDir;
+  if (params.outputDir && (probe === undefined || probe.presentOnHost)) {
+    return params.outputDir;
+  }
+  const dir = path.join(
+    os.tmpdir(),
+    "argent-screenshot-diff",
+    crypto.randomBytes(6).toString("hex")
+  );
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
 }
 
 async function resolveInputPaths(
   services: Record<string, unknown>,
   params: Params,
-  options: InvokeToolOptions | undefined,
+  outputDir: string,
+  options: Partial<ToolContext> | undefined,
   captureScreenshot: CaptureScreenshot
 ): Promise<{ baselinePath: string; currentPath: string }> {
   validateInputSources(params);
@@ -122,7 +184,7 @@ async function resolveInputPaths(
   const baselinePath = params.captureBaseline
     ? await captureLiveInput({
         api: services.simulatorServer as SimulatorServerApi,
-        outputDir: params.outputDir,
+        outputDir,
         name: "baseline",
         rotation: params.rotation,
         signal: options?.signal,
@@ -133,7 +195,7 @@ async function resolveInputPaths(
   const currentPath = params.captureCurrent
     ? await captureLiveInput({
         api: services.simulatorServer as SimulatorServerApi,
-        outputDir: params.outputDir,
+        outputDir,
         name: "current",
         rotation: params.rotation,
         signal: options?.signal,

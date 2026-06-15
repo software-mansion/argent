@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as crypto from "node:crypto";
 import type { ToolDefinition } from "@argent/registry";
+import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { makeComponentTreeScript } from "../../utils/debugger/scripts/component-tree";
 
@@ -538,6 +539,10 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
   alwaysLoad: true,
   searchHint: "react native component tree discovery tap coordinates",
   zodSchema,
+  // RN-only: depends on the React DevTools backend that ships with the JS
+  // bundle in dev builds. Chromium has no equivalent — use `describe` instead
+  // for DOM-tree discovery on Chromium.
+  capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),

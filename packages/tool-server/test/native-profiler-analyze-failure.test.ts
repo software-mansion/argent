@@ -11,6 +11,7 @@
  * (empty-but-readable) file so the existence guard passes.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -142,7 +143,8 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
 
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
-        { device_id: "emulator-5554" }
+        { device_id: "emulator-5554" },
+        { artifacts: new ArtifactStore() }
       );
 
       expect(result.status).toBe("ok");
@@ -175,7 +177,8 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
 
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
-        { device_id: "emulator-5554" }
+        { device_id: "emulator-5554" },
+        { artifacts: new ArtifactStore() }
       );
 
       expect(result.status).toBe("analysis_failed");
@@ -225,7 +228,8 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
 
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
-        { device_id: "emulator-5554" }
+        { device_id: "emulator-5554" },
+        { artifacts: new ArtifactStore() }
       );
 
       expect(result.status).toBe("analysis_failed");
@@ -261,7 +265,8 @@ describe("native-profiler-analyze: status + exportErrors envelope (Bug 4)", () =
 
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
-        { device_id: "emulator-5554" }
+        { device_id: "emulator-5554" },
+        { artifacts: new ArtifactStore() }
       );
 
       expect(result.status).toBe("analysis_failed");

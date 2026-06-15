@@ -117,10 +117,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 // ── screenshot-diff adapter ──────────────────────────────────────────
 
+/**
+ * `diffPath` / `contextDiffPath` are artifact handles on current tool-servers
+ * and raw host-path strings on older ones; both shapes render here.
+ */
 export interface ScreenshotDiffResult {
   summary: string;
-  diffPath?: string;
-  contextDiffPath?: string;
+  diffPath?: unknown;
+  contextDiffPath?: unknown;
 }
 
 export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffResult {
@@ -128,19 +132,47 @@ export function isScreenshotDiffResult(value: unknown): value is ScreenshotDiffR
   return typeof value.summary === "string";
 }
 
-// Render a screenshot-diff tool result as MCP content blocks.
+// Render a screenshot-diff tool result as MCP content blocks: the downscaled
+// context-diff image inline, then the textual summary.
 export async function screenshotDiffToMcpContent(
-  result: ScreenshotDiffResult
+  result: ScreenshotDiffResult,
+  ctx?: ContentContext
 ): Promise<ContentBlock[]> {
   const blocks: ContentBlock[] = [];
 
-  if (typeof result.contextDiffPath === "string") {
-    const buf = await readFile(result.contextDiffPath);
-    blocks.push({
-      type: "image" as const,
-      data: buf.toString("base64"),
-      mimeType: "image/png" as const,
-    });
+  // Resolve artifact handles to local files first; the context diff's bytes
+  // come back in `images` whether the file was already on this machine or was
+  // downloaded from a remote tool-server.
+  let contextDiffPath = result.contextDiffPath;
+  let materializedImages: { localPath: string; data: Buffer; mimeType: string }[] = [];
+  if (ctx) {
+    const { result: rewritten, images } = await materializeArtifacts(result, ctx);
+    contextDiffPath = (rewritten as ScreenshotDiffResult).contextDiffPath;
+    materializedImages = images;
+  }
+
+  if (typeof contextDiffPath === "string") {
+    const fromMaterializer = materializedImages.find((img) => img.localPath === contextDiffPath);
+    if (fromMaterializer) {
+      blocks.push({
+        type: "image" as const,
+        data: fromMaterializer.data.toString("base64"),
+        mimeType: fromMaterializer.mimeType,
+      });
+    } else {
+      // Legacy tool-server: a raw host path the materializer passed through.
+      // Only readable when co-located — exactly the old behavior.
+      try {
+        const buf = await readFile(contextDiffPath);
+        blocks.push({
+          type: "image" as const,
+          data: buf.toString("base64"),
+          mimeType: "image/png" as const,
+        });
+      } catch {
+        // Image unavailable; the summary below still renders.
+      }
+    }
   }
 
   blocks.push({ type: "text" as const, text: result.summary });

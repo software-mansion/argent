@@ -48,6 +48,9 @@ Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
+  // iOS-only: combines React (Hermes) + iOS native (xctrace) traces. The
+  // capture half exists on neither Android nor Chromium.
+  capability: { apple: { simulator: true, device: true } },
   services: (params) => ({
     nativeSession: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),

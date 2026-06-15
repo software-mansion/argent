@@ -10,6 +10,7 @@
  * has no findings" and surface the export failure via `exportErrors`.
  */
 import { describe, it, expect, vi } from "vitest";
+import { ArtifactStore } from "@argent/registry";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -70,7 +71,8 @@ describe("native-profiler-analyze: missing trace file", () => {
 
       const result = await nativeProfilerAnalyzeTool.execute(
         { session },
-        { device_id: "TEST-DEVICE" }
+        { device_id: "TEST-DEVICE" },
+        { artifacts: new ArtifactStore() }
       );
 
       // Bug: previously this rendered "All clear" with no warning because

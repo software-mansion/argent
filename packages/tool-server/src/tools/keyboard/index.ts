@@ -1,13 +1,17 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { charToKeyPress, NAMED_KEYS, SHIFT_KEYCODE } from "./key-codes";
+import { CHROMIUM_NAMED_KEYS, charToChromiumKey } from "./chromium-keys";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
-  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
+  udid: z
+    .string()
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
   text: z
     .string()
     .optional()
@@ -33,22 +37,88 @@ interface Result {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  chromium: { app: true },
 };
+
+async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result> {
+  const delay = params.delayMs ?? 50;
+  let keysPressed = 0;
+
+  if (params.key) {
+    const named = CHROMIUM_NAMED_KEYS[params.key.toLowerCase()];
+    if (!named) {
+      throw new Error(
+        `Unknown key "${params.key}". Supported: ${Object.keys(CHROMIUM_NAMED_KEYS).join(", ")}`
+      );
+    }
+    await api.dispatchKeyEvent({
+      type: "keyDown",
+      key: named.key,
+      code: named.code,
+      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+    });
+    await sleep(delay);
+    await api.dispatchKeyEvent({
+      type: "keyUp",
+      key: named.key,
+      code: named.code,
+      windowsVirtualKeyCode: named.windowsVirtualKeyCode,
+    });
+    keysPressed++;
+  }
+
+  if (params.text) {
+    for (const char of params.text) {
+      const desc = charToChromiumKey(char);
+      if (!desc) {
+        throw new Error(`No CDP key descriptor for character "${char}"`);
+      }
+      await api.dispatchKeyEvent({
+        type: "keyDown",
+        key: desc.key,
+        code: desc.code,
+        windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
+      });
+      // `char` delivers the actual codepoint to the focused input; without
+      // this the field receives no value.
+      await api.dispatchKeyEvent({ type: "char", text: desc.text });
+      await api.dispatchKeyEvent({
+        type: "keyUp",
+        key: desc.key,
+        code: desc.code,
+        windowsVirtualKeyCode: desc.windowsVirtualKeyCode,
+      });
+      keysPressed++;
+      await sleep(delay);
+    }
+  }
+
+  return { typed: params.text ?? params.key ?? "", keys: keysPressed };
+}
 
 export const keyboardTool: ToolDefinition<Params, Result> = {
   id: "keyboard",
-  description: `Type text or press special keys on the device (iOS simulator or Android emulator) using keyboard events.
+  description: `Type text or press special keys on the device (iOS simulator, Android emulator, or Chromium app) using keyboard events.
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys.
-Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend is not reachable for the given device.
+Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
 Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    if (device.platform === "chromium") {
+      return { chromium: chromiumCdpRef(device) };
+    }
+    return { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    if (device.platform === "chromium") {
+      const chromium = services.chromium as ChromiumCdpApi;
+      return runChromium(chromium, params);
+    }
     const api = services.simulatorServer as SimulatorServerApi;
     const delay = params.delayMs ?? 50;
     let keysPressed = 0;

@@ -3,6 +3,8 @@ import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
 import { axServiceBlueprint } from "../blueprints/ax-service";
+import { chromiumCdpBlueprint } from "../blueprints/chromium-cdp";
+import { chromiumJsRuntimeDebuggerBlueprint } from "../blueprints/chromium-js-runtime-debugger";
 import { nativeDevtoolsStatusTool } from "../tools/native-devtools/native-devtools-status";
 import { nativeNetworkLogsTool } from "../tools/native-devtools/native-network-logs";
 import { nativeFindViewsTool } from "../tools/native-devtools/native-find-views";
@@ -22,6 +24,8 @@ import { openUrlTool } from "../tools/open-url";
 import { screenshotTool } from "../tools/screenshot";
 import { gestureTapTool } from "../tools/gesture-tap";
 import { gestureSwipeTool } from "../tools/gesture-swipe";
+import { gestureScrollTool } from "../tools/gesture-scroll";
+import { gestureDragTool } from "../tools/gesture-drag";
 import { gestureCustomTool } from "../tools/gesture-custom";
 import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
@@ -83,6 +87,8 @@ export function createRegistry(): Registry {
   registry.registerBlueprint(nativeDevtoolsBlueprint);
   registry.registerBlueprint(androidDevtoolsBlueprint);
   registry.registerBlueprint(axServiceBlueprint);
+  registry.registerBlueprint(chromiumCdpBlueprint);
+  registry.registerBlueprint(chromiumJsRuntimeDebuggerBlueprint);
 
   registry.registerTool(listDevicesTool);
   registry.registerTool(createBootDeviceTool(registry));
@@ -94,6 +100,8 @@ export function createRegistry(): Registry {
   registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
   registry.registerTool(gestureSwipeTool);
+  registry.registerTool(gestureScrollTool);
+  registry.registerTool(gestureDragTool);
   registry.registerTool(gestureCustomTool);
   registry.registerTool(gesturePinchTool);
   registry.registerTool(gestureRotateTool);
