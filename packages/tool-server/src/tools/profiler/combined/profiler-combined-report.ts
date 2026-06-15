@@ -25,7 +25,7 @@ import { readCpuProfile, readCommitTree } from "../../../utils/react-profiler/de
 
 const zodSchema = z.object({
   port: z.coerce.number().default(8081).describe("Metro server port"),
-  device_id: z.string().describe("iOS Simulator or device UDID"),
+  device_id: z.string().describe("iOS Simulator/device UDID or Android serial"),
 });
 
 interface HangCommitCorrelation {
@@ -48,9 +48,13 @@ Call this tool when both profilers were run in parallel on the same session.
 Returns a markdown report correlating hangs with React commits, memory leaks, and investigation hints.
 Fails if either react-profiler-analyze or native-profiler-analyze has not been called first.`,
   zodSchema,
-  // iOS-only: combines React (Hermes) + iOS native (xctrace) traces. The
-  // capture half exists on neither Android nor Chromium.
-  capability: { apple: { simulator: true, device: true } },
+  // Combines React (Hermes) + native traces. iOS reads xctrace output;
+  // Android re-queries the Perfetto .pftrace via loadAndroidCombinedData. The
+  // capture half exists on neither platform's Chromium.
+  capability: {
+    apple: { simulator: true, device: true },
+    android: { emulator: true, device: true, unknown: true },
+  },
   services: (params) => ({
     nativeSession: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
