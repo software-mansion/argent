@@ -147,4 +147,39 @@ describe("renderNativeProfilerReport — Android advice", () => {
     expect(report).toMatch(/on-CPU|executing/);
     expect(report).toContain("Move heavy work off the main thread");
   });
+
+  it("Next Steps function_callers skips a leading system hotspot and picks the first app frame", async () => {
+    const report = await reportFor([
+      hotspot({ dominantFunction: "goldfish_pipe_read_write", frameClass: "system" }),
+      hotspot({ dominantFunction: "do_syscall_64", frameClass: "system" }),
+      hotspot({ dominantFunction: "myAppHotFunction", thread: "JS/Hermes", frameClass: "app" }),
+    ]);
+    // The callers suggestion must not point at a system frame the report just
+    // flagged as not directly actionable.
+    expect(report).toContain("mode=`function_callers` function_name=`myAppHotFunction`");
+    expect(report).not.toContain("function_name=`goldfish_pipe_read_write`");
+    expect(report).not.toContain("function_name=`do_syscall_64`");
+  });
+
+  it("Next Steps omits function_callers when every hotspot is a system frame", async () => {
+    const report = await reportFor([
+      hotspot({ dominantFunction: "goldfish_pipe_read_write", frameClass: "system" }),
+      hotspot({ dominantFunction: "do_syscall_64", frameClass: "system" }),
+    ]);
+    // All system → no actionable callers target, so omit the line entirely
+    // rather than contradict the "not directly actionable" note above.
+    expect(report).not.toContain("function_callers");
+    // Sibling Next Steps guidance is still present.
+    expect(report).toContain("mode=`thread_breakdown`");
+  });
+
+  it("Next Steps suggests the top hotspot on iOS (no frameClass) — unchanged", async () => {
+    const report = await reportFor([
+      hotspot({ platform: "ios", dominantFunction: "iosTopFn", frameClass: undefined }),
+      hotspot({ platform: "ios", dominantFunction: "iosSecondFn", frameClass: undefined }),
+    ]);
+    // undefined frameClass is treated as non-system, so iOS keeps using [0].
+    expect(report).toContain("mode=`function_callers` function_name=`iosTopFn`");
+    expect(report).not.toContain("function_name=`iosSecondFn`");
+  });
 });

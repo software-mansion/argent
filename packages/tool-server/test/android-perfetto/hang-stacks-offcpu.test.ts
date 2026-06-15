@@ -66,6 +66,33 @@ describe("hang_stacks — off-CPU explanation", () => {
     expect(out).toContain("`S`");
   });
 
+  it("does not dangle an 'above' reference when no state breakdown was captured", async () => {
+    queryResponses.push(
+      {
+        name: "ui-hangs.sql",
+        rows: [{ kind: "jank", ts_ns: 0, dur_ns: 48 * MS, reason: "App Deadline Missed" }],
+      },
+      // hang-state-breakdown: empty → no "Main-thread State Breakdown" header.
+      { name: "hang-state-breakdown.sql", rows: [] },
+      // hang-main-thread-samples: also empty (off-CPU).
+      { name: "hang-main-thread-samples.sql", rows: [] }
+    );
+
+    const out = await runAndroidStackQuery({
+      tracePath: "/fake.pftrace",
+      mode: "hang_stacks",
+      appPackage: "com.example.app",
+      hangIndex: 0,
+      topN: 15,
+    });
+
+    // The empty result is still explained...
+    expect(out).toMatch(/No on-CPU stack samples/);
+    // ...but there is no state breakdown above, so it must not be referenced.
+    expect(out).not.toContain("Main-thread State Breakdown");
+    expect(out).not.toMatch(/breakdown above|state breakdown above/);
+  });
+
   it("renders the on-CPU stacks when samples exist", async () => {
     queryResponses.push(
       {

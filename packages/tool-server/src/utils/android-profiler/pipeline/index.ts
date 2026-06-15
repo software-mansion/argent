@@ -334,11 +334,19 @@ async function renderHangStacksAndroid(
           `**wait**, not CPU-bound work: look at what it is blocked on (GPU/vsync, a lock, binder IPC, ` +
           `or I/O) using the state breakdown above, not at a CPU call stack._`
       );
-    } else {
+    } else if (stateRows.length > 0) {
       lines.push(
         `_No on-CPU stack samples were captured during this hang. The main thread spent the window ` +
           `off-CPU or runnable-but-not-scheduled, so there is no CPU call stack to show; see the state ` +
           `breakdown above._`
+      );
+    } else {
+      // No samples *and* no state rows: there is no "breakdown above" to point
+      // at, so don't dangle a reference to it.
+      lines.push(
+        `_No on-CPU stack samples were captured during this hang, and no main-thread state was ` +
+          `captured for this window either. The main thread was likely off-CPU (sleeping/blocked) or ` +
+          `runnable-but-not-scheduled, so there is no CPU call stack to show._`
       );
     }
   }

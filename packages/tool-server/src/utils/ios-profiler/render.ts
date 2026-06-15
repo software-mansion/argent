@@ -441,10 +441,18 @@ function renderFullReport(
     );
   }
   if (cpuHotspots.length > 0) {
-    const topHotspot = cpuHotspots[0]!;
-    lines.push(
-      `   - mode=\`function_callers\` function_name=\`${topHotspot.dominantFunction}\` — who calls this hot function`
-    );
+    // Prefer the top *app* hotspot for the callers suggestion: on Android the
+    // leading hotspot is often a `system` (emulator/kernel) frame, which the
+    // CPU Hotspots note and Suggested Improvements already flag as not directly
+    // actionable — suggesting `function_callers` on it would contradict that.
+    // iOS hotspots have no `frameClass` (undefined ≠ "system"), so they keep
+    // using cpuHotspots[0] unchanged.
+    const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system");
+    if (callerHotspot) {
+      lines.push(
+        `   - mode=\`function_callers\` function_name=\`${callerHotspot.dominantFunction}\` — who calls this hot function`
+      );
+    }
     lines.push(`   - mode=\`thread_breakdown\` — CPU distribution across threads`);
   }
   if (memoryLeaks.length > 0) {
