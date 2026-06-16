@@ -97,6 +97,66 @@ describe("ArtifactStore", () => {
     });
     expect(handle.archive).toBe("tar.gz");
   });
+
+  it("lists safe metadata for registered artifacts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "artifact-list-store-"));
+    try {
+      const filePath = join(dir, "shot.png");
+      await writeFile(filePath, "png");
+      const store = new ArtifactStore();
+      const handle = await store.register(filePath, { mimeType: "image/png" });
+
+      expect(store.list()).toEqual([
+        {
+          id: handle.id,
+          filename: "shot.png",
+          mimeType: "image/png",
+          size: 3,
+          isDirectory: false,
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("GET /artifacts", () => {
+  let handle: HttpAppHandle | null = null;
+
+  afterEach(() => {
+    handle?.dispose();
+    handle = null;
+  });
+
+  it("returns registered artifact metadata without host paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "artifact-list-route-"));
+    try {
+      const filePath = join(dir, "img.png");
+      await writeFile(filePath, "image");
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register(filePath, { mimeType: "image/png" });
+
+      handle = createHttpApp(registry);
+      const res = await supertest(handle.app).get("/artifacts");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        artifacts: [
+          {
+            id: artifact.id,
+            filename: "img.png",
+            mimeType: "image/png",
+            size: 5,
+            isDirectory: false,
+          },
+        ],
+      });
+      expect(JSON.stringify(res.body)).not.toContain(filePath);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GET /artifacts/:id", () => {
