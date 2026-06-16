@@ -243,11 +243,11 @@ function renderFullReport(
       if (b.topCallChains && b.topCallChains.length > 0) {
         lines.push(`**Call chains:**`);
         for (const { chain, count } of b.topCallChains) {
-          lines.push(`- (${count}×) \`${chain.join(" > ")}\``);
+          lines.push(`- (${count}×) \`${chain.map(demangleSymbol).join(" > ")}\``);
         }
         lines.push(``);
       } else if (b.topCallChain.length > 0) {
-        lines.push(`**Call chain:** \`${b.topCallChain.join(" > ")}\``);
+        lines.push(`**Call chain:** \`${b.topCallChain.map(demangleSymbol).join(" > ")}\``);
         lines.push(``);
       }
 
