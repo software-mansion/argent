@@ -26,6 +26,17 @@ interface InlineCap {
 }
 
 /**
+ * A leak whose allocation backtrace was never captured: Instruments emits
+ * `<Call stack limit reached>` (malloc stack logging off) or `(null)`. Used to
+ * swap the raw placeholder for an actionable hint instead of surfacing it like a
+ * real frame.
+ */
+function isUnattributableLeakFrame(frame: string): boolean {
+  const f = (frame ?? "").trim().toLowerCase();
+  return f === "" || f === "(null)" || f === "unknown" || f.includes("call stack limit reached");
+}
+
+/**
  * Render a native profiler analysis report for iOS or Android payloads —
  * bottleneck rows are platform-agnostic, branching on `b.platform`/`b.type`
  * for Android-specific row text (jank reason, state breakdown, RSS growth).
@@ -354,10 +365,23 @@ function renderFullReport(
       `|---|---|---|---|---|---|---|`
     );
     memoryLeaks.forEach((b, i) => {
+      const unattributed = isUnattributableLeakFrame(b.responsibleFrame);
+      const frameCell = unattributed ? "_no allocation stack_" : `\`${b.responsibleFrame}\``;
+      const libCell = unattributed ? "—" : b.responsibleLibrary || "—";
       lines.push(
-        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${b.responsibleFrame}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | ${frameCell} | ${libCell} | ${severityEmoji(b.severity)} |`
       );
     });
+    if (memoryLeaks.some((b) => isUnattributableLeakFrame(b.responsibleFrame))) {
+      lines.push(
+        ``,
+        `> ⚠️ Leaks marked _no allocation stack_ were detected but can't be attributed: the ` +
+          `profiler attached to an already-running app, so Instruments has no allocation backtrace ` +
+          `(it reports \`<Call stack limit reached>\`). Re-run \`native-profiler-start\` with ` +
+          `\`malloc_stack_logging: true\` to cold-launch the app with Malloc Stack Logging — leaks ` +
+          `will then carry the responsible frame and library.`
+      );
+    }
   }
 
   // RSS Growth section (Android-only weak signal)
@@ -406,8 +430,11 @@ function renderFullReport(
   if (memoryLeaks.length > 0) {
     lines.push(`### Memory Leaks`, ``);
     for (const b of memoryLeaks) {
+      const via = isUnattributableLeakFrame(b.responsibleFrame)
+        ? `(no allocation stack — re-run with \`malloc_stack_logging: true\` to attribute)`
+        : `via \`${b.responsibleFrame}\``;
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${b.responsibleFrame}\`: Check for retain cycles or strong delegate references.`
+        `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) ${via}: Check for retain cycles or strong delegate references.`
       );
     }
     lines.push(``);

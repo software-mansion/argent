@@ -29,6 +29,16 @@ const zodSchema = z.object({
       "iOS-only: path to an Instruments .tracetemplate file (defaults to bundled Argent template). " +
         "Ignored on Android."
     ),
+  malloc_stack_logging: z
+    .boolean()
+    .optional()
+    .describe(
+      "iOS-only. When true, cold-launches the app under the profiler with Malloc Stack Logging " +
+        "enabled so memory leaks carry an allocation backtrace (responsible frame + library). " +
+        "Without it, leaks are still detected but unattributable — Instruments reports " +
+        "'<Call stack limit reached>'. Trade-offs: this RESTARTS the app (current state is lost) " +
+        "and adds memory/CPU overhead, so leave it off for pure CPU/hang profiling. Ignored on Android."
+    ),
 });
 
 const capability = {

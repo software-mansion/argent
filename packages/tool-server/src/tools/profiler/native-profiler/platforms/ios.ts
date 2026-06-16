@@ -189,6 +189,78 @@ function resolveExplicitApp(udid: string, name: string): DetectedApp {
   return { executable: name, pid: null };
 }
 
+function getInstalledApps(udid: string): Record<string, AppInfo> {
+  let listAppsOutput: string;
+  try {
+    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
+    );
+  }
+  return JSON.parse(listAppsOutput);
+}
+
+/** Resolve the .app bundle path xctrace's `--launch` needs (malloc_stack_logging mode). */
+function getAppBundlePath(udid: string, bundleId: string): string {
+  try {
+    return execSync(`xcrun simctl get_app_container ${udid} ${bundleId} app`, {
+      encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    }).trim();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Failed to resolve the .app bundle path for "${bundleId}" on simulator ${udid} ` +
+        `(required to cold-launch with malloc_stack_logging). Underlying error: ${msg}`,
+      { cause: err }
+    );
+  }
+}
+
+/**
+ * malloc_stack_logging cold-launches the app by .app path, which needs the bundle
+ * id. Resolve the target AppInfo: an explicit app_process is matched against
+ * installed user apps by CFBundleExecutable or display name; otherwise fall back
+ * to the single running user app (same disambiguation as detectRunningApp).
+ */
+function resolveAppForLaunch(udid: string, appProcess?: string): AppInfo {
+  if (appProcess) {
+    const installed = getInstalledApps(udid);
+    for (const [, info] of Object.entries(installed)) {
+      if (
+        info.ApplicationType === "User" &&
+        (info.CFBundleExecutable === appProcess || info.CFBundleDisplayName === appProcess)
+      ) {
+        return info;
+      }
+    }
+    throw new Error(
+      `No installed user app matching "${appProcess}" found on simulator ${udid}. ` +
+        `Pass the exact CFBundleExecutable or display name, or omit app_process to auto-detect the running app.`
+    );
+  }
+  const runningUserApps = enumerateRunningUserApps(udid);
+  if (runningUserApps.length > 1) {
+    const appList = runningUserApps
+      .map(
+        ({ info }) =>
+          `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
+      )
+      .join("\n");
+    throw new Error(
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`
+    );
+  }
+  return runningUserApps[0].info;
+}
+
 async function registerStartupNotify(name: string): Promise<NotifyHandle | null> {
   let handle: NotifyHandle;
   try {
@@ -245,6 +317,7 @@ export interface IosStartParams {
   device_id: string;
   app_process?: string;
   template_path?: string;
+  malloc_stack_logging?: boolean;
 }
 
 export async function startNativeProfilerIos(
@@ -256,13 +329,40 @@ export async function startNativeProfilerIos(
   }
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
-  const detected = params.app_process
-    ? resolveExplicitApp(params.device_id, params.app_process)
-    : detectRunningApp(params.device_id);
-  const appProcess = detected.executable;
-  // Attach by PID when we know it (immune to Xcode 26.5's display-name `--attach`
-  // matching); fall back to the name when the target isn't running yet.
-  const attachTarget = detected.pid != null ? String(detected.pid) : appProcess;
+
+  // Default flow attaches to the running app (preserves state, no overhead).
+  // malloc_stack_logging mode instead cold-launches the app *under* xctrace with
+  // MallocStackLogging=1 so the malloc library records allocation backtraces from
+  // the first allocation — without that, leaks are detected but unattributable
+  // ("<Call stack limit reached>"). `--env` is only honoured with `--launch`,
+  // which needs the .app path rather than the executable name or PID.
+  const useMallocStackLogging = params.malloc_stack_logging === true;
+  let appProcess: string;
+  let attachTarget: string | null = null;
+  let launchBundlePath: string | null = null;
+  if (useMallocStackLogging) {
+    const info = resolveAppForLaunch(params.device_id, params.app_process);
+    appProcess = info.CFBundleExecutable;
+    launchBundlePath = getAppBundlePath(params.device_id, info.CFBundleIdentifier);
+    // Terminate any running instance so xctrace owns a clean cold launch with the
+    // env var set from process start (best-effort; not-running is fine).
+    try {
+      execSync(`xcrun simctl terminate ${params.device_id} ${info.CFBundleIdentifier}`, {
+        timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+        stdio: "ignore",
+      });
+    } catch {
+      // app was not running — nothing to terminate
+    }
+  } else {
+    const detected = params.app_process
+      ? resolveExplicitApp(params.device_id, params.app_process)
+      : detectRunningApp(params.device_id);
+    appProcess = detected.executable;
+    // Attach by PID when we know it (immune to Xcode 26.5's display-name `--attach`
+    // matching); fall back to the name when the target isn't running yet.
+    attachTarget = detected.pid != null ? String(detected.pid) : appProcess;
+  }
 
   const debugDir = await getDebugDir();
   const timestamp = new Date()
@@ -282,20 +382,26 @@ export async function startNativeProfilerIos(
     const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
     const notify = await registerStartupNotify(notifyName);
 
-    const xctraceArgs = [
-      "record",
-      "--template",
-      templatePath,
-      "--device",
-      params.device_id,
-      "--attach",
-      attachTarget,
-      "--output",
-      outputFile,
-      "--no-prompt",
-    ];
-    if (notify) {
-      xctraceArgs.push("--notify-tracing-started", notifyName);
+    const xctraceArgs = ["record", "--template", templatePath, "--device", params.device_id];
+    if (launchBundlePath) {
+      // `--env` only applies to `--launch`, and the launched command must be the
+      // final argument (everything after `--` is the target plus its args).
+      xctraceArgs.push("--output", outputFile, "--no-prompt", "--env", "MallocStackLogging=1");
+      if (notify) {
+        xctraceArgs.push("--notify-tracing-started", notifyName);
+      }
+      xctraceArgs.push("--launch", "--", launchBundlePath);
+    } else {
+      xctraceArgs.push(
+        "--attach",
+        attachTarget ?? appProcess,
+        "--output",
+        outputFile,
+        "--no-prompt"
+      );
+      if (notify) {
+        xctraceArgs.push("--notify-tracing-started", notifyName);
+      }
     }
 
     const xctraceProcess = spawn("xctrace", xctraceArgs, {
