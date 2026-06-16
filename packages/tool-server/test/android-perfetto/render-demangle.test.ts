@@ -1,11 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { renderNativeProfilerReport } from "../../src/utils/ios-profiler/render";
-import type { CpuHotspot, ProfilerPayload } from "../../src/utils/ios-profiler/types";
+import type {
+  CpuHotspot,
+  MemoryLeak,
+  ProfilerPayload,
+  UiHang,
+} from "../../src/utils/ios-profiler/types";
 
 // A mangled nested name that the conservative demangler understands:
 // _ZN16GrDrawingManager5flushE... → GrDrawingManager::flush (argument list dropped).
 const MANGLED = "_ZN16GrDrawingManager5flushE6SkSpanIP14GrSurfaceProxyE";
 const DEMANGLED = "GrDrawingManager::flush";
+
+// A second, distinct mangled nested name → MyClass::doWork. Used to prove the
+// `responsibleFrame` / leak sites demangle independently of the hang sites.
+const MANGLED_LEAK = "_ZN7MyClass6doWorkEv";
+const DEMANGLED_LEAK = "MyClass::doWork";
 
 function cpuHotspot(overrides: Partial<CpuHotspot> = {}): CpuHotspot {
   return {
@@ -94,5 +104,112 @@ describe("renderNativeProfilerReport — CPU Hotspots leaf demangling", () => {
     });
     expect(report).toContain(`| 1 | \`${ios}\` |`);
     expect(report).toContain(`### \`${ios}\` (Main Thread)`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// General demangling: hang appCallChains / suspectedFunctions, and memory-leak
+// responsibleFrame — in both the detail section AND Suggested Improvements.
+// iOS frames are the realistic carrier of mangled C++ names here (Android hang
+// appCallChains/suspectedFunctions are hardcoded empty; the SQL path already
+// demangles its own callstack text), so these payloads are iOS-flavoured.
+// ---------------------------------------------------------------------------
+
+function uiHang(overrides: Partial<UiHang> = {}): UiHang {
+  return {
+    type: "ui_hang",
+    platform: "ios",
+    hangType: "hang",
+    durationMs: 850,
+    startTimeFormatted: "00:01.500",
+    startNs: 1_500_000_000,
+    endNs: 2_350_000_000,
+    suspectedFunctions: [],
+    appCallChains: [],
+    severity: "RED",
+    ...overrides,
+  };
+}
+
+function memoryLeak(overrides: Partial<MemoryLeak> = {}): MemoryLeak {
+  return {
+    type: "memory_leak",
+    platform: "ios",
+    objectType: "MyLeakyObject",
+    totalSizeBytes: 4 * 1024 * 1024,
+    count: 128,
+    responsibleFrame: MANGLED_LEAK,
+    responsibleLibrary: "MyApp",
+    severity: "RED",
+    ...overrides,
+  };
+}
+
+function payloadOf(bottlenecks: ProfilerPayload["bottlenecks"]): ProfilerPayload {
+  return {
+    metadata: { traceFile: null, platform: "ios", timestamp: "2026-01-01T00:00:00Z" },
+    bottlenecks,
+  };
+}
+
+describe("renderNativeProfilerReport — general native-frame demangling", () => {
+  it("demangles a hang's appCallChains frames in the detail section", async () => {
+    const { report } = await renderNativeProfilerReport({
+      payload: payloadOf([
+        uiHang({ appCallChains: [{ chain: [MANGLED, MANGLED_LEAK], sampleCount: 40 }] }),
+      ]),
+      traceFile: null,
+    });
+    // Detail: `1. `GrDrawingManager::flush > MyClass::doWork` (40 samples)`
+    expect(report).toContain(`1. \`${DEMANGLED} > ${DEMANGLED_LEAK}\` (40 samples)`);
+    expect(report).not.toContain(MANGLED);
+    expect(report).not.toContain(MANGLED_LEAK);
+  });
+
+  it("demangles a hang's suspectedFunctions in BOTH the detail list and Suggested Improvements", async () => {
+    const { report } = await renderNativeProfilerReport({
+      payload: payloadOf([uiHang({ suspectedFunctions: [MANGLED, MANGLED_LEAK] })]),
+      traceFile: null,
+    });
+    // Detail bullet (the `else if (suspectedFunctions)` branch, no appCallChains):
+    expect(report).toContain(`- \`${DEMANGLED}\``);
+    expect(report).toContain(`- \`${DEMANGLED_LEAK}\``);
+    // Suggested Improvements → UI Hangs "Likely caused by: `…`" uses [0].
+    expect(report).toContain(`Likely caused by: \`${DEMANGLED}\`.`);
+    // No mangled name anywhere in the report.
+    expect(report).not.toContain(MANGLED);
+    expect(report).not.toContain(MANGLED_LEAK);
+  });
+
+  it("demangles a memory leak's responsibleFrame in BOTH the table and Suggested Improvements", async () => {
+    const { report } = await renderNativeProfilerReport({
+      payload: payloadOf([memoryLeak({ responsibleFrame: MANGLED_LEAK })]),
+      traceFile: null,
+    });
+    // Memory-Leaks table cell.
+    expect(report).toContain(`\`${DEMANGLED_LEAK}\` | MyApp |`);
+    // Suggested Improvements → Memory Leaks "via `…`".
+    expect(report).toContain(`via \`${DEMANGLED_LEAK}\`:`);
+    expect(report).not.toContain(MANGLED_LEAK);
+  });
+
+  it("leaves already-readable (iOS-style) frames untouched at every general site (no-op)", async () => {
+    const hangFn = "-[DataStore loadAll]";
+    const leakFrame = "-[ImageCache store:]";
+    const { report } = await renderNativeProfilerReport({
+      payload: payloadOf([
+        uiHang({
+          appCallChains: [{ chain: [hangFn], sampleCount: 12 }],
+          suspectedFunctions: [hangFn],
+        }),
+        memoryLeak({ responsibleFrame: leakFrame }),
+      ]),
+      traceFile: null,
+    });
+    // appCallChains detail, Suggested-Improvements hang note, leak table + via — all verbatim.
+    expect(report).toContain(`1. \`${hangFn}\` (12 samples)`);
+    expect(report).toContain(`Likely caused by: \`${hangFn}\`.`);
+    expect(report).toContain(`\`${leakFrame}\` | MyApp |`);
+    expect(report).toContain(`via \`${leakFrame}\`:`);
   });
 });

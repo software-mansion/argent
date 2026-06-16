@@ -319,20 +319,24 @@ function renderFullReport(
           lines.push(``);
           lines.push(`App call chains during this hang:`);
           hang.appCallChains.forEach((entry, i) => {
-            lines.push(`${i + 1}. \`${entry.chain.join(" > ")}\` (${entry.sampleCount} samples)`);
+            lines.push(
+              `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+            );
           });
         }
       } else if (hang.appCallChains.length > 0) {
         lines.push(``);
         lines.push(`${header} — app call chains during this hang:`);
         hang.appCallChains.forEach((entry, i) => {
-          lines.push(`${i + 1}. \`${entry.chain.join(" > ")}\` (${entry.sampleCount} samples)`);
+          lines.push(
+            `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+          );
         });
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
         for (const fn of hang.suspectedFunctions) {
-          lines.push(`- \`${fn}\``);
+          lines.push(`- \`${demangleSymbol(fn)}\``);
         }
       } else {
         lines.push(``);
@@ -356,7 +360,7 @@ function renderFullReport(
     );
     memoryLeaks.forEach((b, i) => {
       lines.push(
-        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${b.responsibleFrame}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
       );
     });
   }
@@ -395,7 +399,9 @@ function renderFullReport(
     lines.push(`### UI Hangs`, ``);
     for (const b of uiHangs) {
       const funcNote =
-        b.suspectedFunctions.length > 0 ? ` Likely caused by: \`${b.suspectedFunctions[0]}\`.` : "";
+        b.suspectedFunctions.length > 0
+          ? ` Likely caused by: \`${demangleSymbol(b.suspectedFunctions[0]!)}\`.`
+          : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
         `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): Main thread blocked — move heavy work to background queue.${reasonNote}${funcNote}`
@@ -408,7 +414,7 @@ function renderFullReport(
     lines.push(`### Memory Leaks`, ``);
     for (const b of memoryLeaks) {
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${b.responsibleFrame}\`: Check for retain cycles or strong delegate references.`
+        `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
     }
     lines.push(``);
