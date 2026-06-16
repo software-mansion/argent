@@ -1,4 +1,5 @@
 import { Registry } from "@argent/registry";
+import { isFlagEnabled } from "@argent/cli";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
@@ -77,7 +78,11 @@ import { createProposeVariantTool } from "../tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 
 export function createRegistry(): Registry {
-  const registry = new Registry();
+  // Inject the real feature-flag check so the gate is enforced for EVERY
+  // dispatch path (flow-execute, flow-add-step, run-sequence) — not only the
+  // HTTP edge in http.ts. Re-read per invocation, so `argent enable/disable
+  // <flag>` takes effect without restarting the long-lived tool-server.
+  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);

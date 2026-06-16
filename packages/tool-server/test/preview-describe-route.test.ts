@@ -35,9 +35,22 @@ const TREE = {
   ],
 };
 
-function makeApp() {
+// The route now guards the udid against the live device list (mirrors
+// /simulator-server/:udid) before dispatching the describe adapter — so the
+// fake registry must answer list-devices. By default it reports BOTH the iOS
+// udid and the Android serial as present, so the existing dispatch tests keep
+// passing; the unknown-device test overrides this with an empty list.
+function makeApp(
+  devices: unknown[] = [
+    { platform: "ios", udid: IOS_UDID },
+    { platform: "android", serial: ANDROID_SERIAL },
+  ]
+) {
+  const registry = {
+    invokeTool: vi.fn(async () => ({ devices })),
+  } as unknown as Registry;
   const app = express();
-  app.use(createPreviewRouter({} as unknown as Registry));
+  app.use(createPreviewRouter(registry));
   return app;
 }
 
@@ -112,5 +125,20 @@ describe("GET /preview/describe/:udid (describe-based; post-#197 text-contract r
 
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("ax-service query timed out");
+  });
+
+  it("unknown udid -> 400; no describe adapter (no xcrun/adb subprocess) is touched", async () => {
+    // This route is auth-exempt and `describeIos`/`describeAndroid` shell out
+    // to xcrun/adb. An unknown id must be rejected BEFORE dispatch so a flood
+    // of distinct ids can't amplify into unbounded subprocess spawns. The udid
+    // is shape-valid (so it isn't the chromium branch) but absent from the
+    // device list the mock returns (empty).
+    const res = await request(makeApp([])).get(`/describe/${IOS_UDID}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("Unknown device");
+    expect(res.body.error).toContain("/preview/simulators");
+    expect(mockedIos).not.toHaveBeenCalled();
+    expect(mockedAndroid).not.toHaveBeenCalled();
   });
 });

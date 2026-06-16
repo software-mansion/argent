@@ -275,6 +275,49 @@ describe("VariantProposalStore — timeout / abort / lifecycle", () => {
   });
 });
 
+describe("VariantProposalStore — comment length caps (unauth selection route)", () => {
+  // The selection route (POST /preview/variants/selection) is unauthenticated,
+  // so every free-text field is capped on ingestion to bound memory. The cap
+  // (2000 chars) matches the one annotations already used.
+  const CAP = 2_000;
+
+  it("truncates a selection comment, the globalComment, and an annotation comment to the cap", async () => {
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    const foo = s.snapshot().proposals[0]!;
+
+    const huge = "x".repeat(CAP + 500);
+    const p = s.awaitSelection({ timeoutMs: 2000 });
+    s.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id, comment: huge }],
+      globalComment: huge,
+      annotations: [{ target: "Bar", match: { by: "text", value: "Bar" }, comment: huge }],
+    });
+    const out = await p;
+    if (out.status !== "completed") throw new Error("unreachable");
+
+    const sel = out.selections.find((x) => x.element === "Foo")!;
+    expect(sel.comment).toHaveLength(CAP);
+    expect(out.globalComment).toHaveLength(CAP);
+    expect(out.annotations[0]!.comment).toHaveLength(CAP);
+  });
+
+  it("leaves a comment shorter than the cap unchanged", async () => {
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    const foo = s.snapshot().proposals[0]!;
+    const p = s.awaitSelection({ timeoutMs: 2000 });
+    s.submitSelection({
+      selections: [{ elementId: foo.id, variantId: foo.variants[0]!.id, comment: "go big" }],
+      globalComment: "ship it",
+    });
+    const out = await p;
+    if (out.status !== "completed") throw new Error("unreachable");
+    expect(out.selections.find((x) => x.element === "Foo")!.comment).toBe("go big");
+    expect(out.globalComment).toBe("ship it");
+  });
+});
+
 describe("VariantProposalStore — preview-window lifecycle events", () => {
   it("emits awaitParked exactly when a waiter parks (not on fast-path returns)", async () => {
     const s = new VariantProposalStore();

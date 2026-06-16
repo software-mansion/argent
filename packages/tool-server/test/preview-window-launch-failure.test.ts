@@ -37,12 +37,28 @@ interface FakeChild extends EventEmitter {
   kill: () => boolean;
   exitCode: number | null;
   killed: boolean;
+  /** Parsed `{cmd,...}` messages sent over stdin. */
+  sent: Array<{ cmd: string; [k: string]: unknown }>;
 }
 
 function makeFakeChild(): FakeChild {
   const ee = new EventEmitter() as FakeChild;
   ee.pid = 4242;
-  ee.stdin = { write: () => true, destroyed: false };
+  ee.sent = [];
+  ee.stdin = {
+    write: (s: string) => {
+      // The manager writes line-delimited JSON; record the parsed command.
+      for (const line of s.split("\n").filter(Boolean)) {
+        try {
+          ee.sent.push(JSON.parse(line));
+        } catch {
+          /* ignore non-JSON */
+        }
+      }
+      return true;
+    },
+    destroyed: false,
+  };
   ee.stderr = new EventEmitter();
   ee.kill = () => true;
   ee.exitCode = null;
@@ -148,5 +164,105 @@ describe("createPreviewWindowManager — onLaunchFailure", () => {
 
     expect(spawnMock).toHaveBeenCalledTimes(1);
     expect(failures).toHaveLength(0);
+  });
+});
+
+/**
+ * Regression for the close-animation race (PR #271 FIX 4): if a new round parks
+ * (ensureOpen) while the window is mid-close — `requestClose()` sent `close` but
+ * the child hasn't exited yet — the manager must spawn a FRESH window instead of
+ * foregrounding the about-to-quit child (which would leave the new round
+ * windowless until its timeout). Normal reuse and close must keep working.
+ */
+describe("createPreviewWindowManager — close-animation race", () => {
+  function newMgr() {
+    return createPreviewWindowManager({
+      electronBinaryPath: "/fake/electron",
+      mainScript: "/fake/main.cjs",
+      onError: () => {},
+    });
+  }
+
+  it("ensureOpen during a pending close RESPAWNS rather than reusing the doomed child", () => {
+    const first = makeFakeChild();
+    const second = makeFakeChild();
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const mgr = newMgr();
+
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/"); // spawns `first`
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+
+    // Close is requested; `first` is still alive (animating), exitCode null.
+    mgr.requestClose();
+    expect(first.sent.map((m) => m.cmd)).toContain("close");
+
+    // A fresh round parks BEFORE `first` exited. Must spawn `second`, not
+    // foreground the doomed `first`.
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/?udid=x");
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    // `first` was never told to foreground after the close — it stays doomed.
+    expect(first.sent.filter((m) => m.cmd === "foreground")).toHaveLength(0);
+    // `second` is the live window for the new round.
+    expect(second.sent.filter((m) => m.cmd === "foreground")).toHaveLength(0); // freshly spawned, no foreground msg needed
+  });
+
+  it("the doomed child exiting after a respawn does NOT clobber the new live child", () => {
+    const first = makeFakeChild();
+    const second = makeFakeChild();
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const mgr = newMgr();
+
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/");
+    mgr.requestClose();
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/?udid=x"); // spawns `second`
+
+    // The old (closing) child finally exits. `second` is now current, so this
+    // late exit must not null it out.
+    first.exitCode = 0;
+    first.emit("exit");
+
+    // A subsequent ensureOpen should REUSE `second` (foreground), not respawn —
+    // proving `second` is still the live handle and not `closing`.
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/?udid=y");
+    expect(spawnMock).toHaveBeenCalledTimes(2); // no third spawn
+    expect(second.sent.filter((m) => m.cmd === "foreground")).toHaveLength(1);
+  });
+
+  it("normal reuse (no close in between) still foregrounds, never respawns", () => {
+    const child = makeFakeChild();
+    spawnMock.mockReturnValue(child);
+    const mgr = newMgr();
+
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/");
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/?udid=x");
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/?udid=y");
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(child.sent.filter((m) => m.cmd === "foreground")).toHaveLength(2);
+  });
+
+  it("after the (only) child exits, a fresh round spawns a NEW window (closing flag reset)", () => {
+    const first = makeFakeChild();
+    const second = makeFakeChild();
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const mgr = newMgr();
+
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/");
+    mgr.requestClose();
+    // The window actually exits (close animation finished).
+    first.exitCode = 0;
+    first.emit("exit");
+
+    // Next round: the manager must spawn fresh (child was reset, not stuck in
+    // a `closing` state that would mis-trigger anything).
+    mgr.ensureOpen("http://127.0.0.1:1234/preview/?udid=x");
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("requestClose is a no-op when no window is alive", () => {
+    const mgr = newMgr();
+    // Never opened — must not throw and must not spawn.
+    expect(() => mgr.requestClose()).not.toThrow();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

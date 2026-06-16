@@ -44,6 +44,13 @@ export function createPreviewWindowManager(
   opts: PreviewWindowManagerOptions = {}
 ): PreviewWindowManager {
   let child: ChildProcess | null = null;
+  // True between `requestClose()` and the child actually exiting — the window
+  // is playing its close animation and will quit shortly. A child in this state
+  // must NOT be reused: foregrounding it would hand a doomed window to a fresh
+  // round, which then quits under the user (the round is left windowless until
+  // its await times out). `ensureOpen` treats a still-alive-but-closing child as
+  // not-reusable and respawns. Cleared on a fresh spawn and on child `exit`.
+  let closing = false;
 
   const reportError = (err: Error): void => {
     if (opts.onError) opts.onError(err);
@@ -86,7 +93,10 @@ export function createPreviewWindowManager(
     c !== null && c.exitCode === null && !c.killed;
 
   const ensureOpen = (url: string): void => {
-    if (isAlive(child)) {
+    // Reuse the window only if it is alive AND not mid-close. A closing child is
+    // about to quit, so foregrounding it would strand this round — spawn a fresh
+    // one instead. The closing child quits on its own (it already got `close`).
+    if (isAlive(child) && !closing) {
       send({ cmd: "foreground", url });
       return;
     }
@@ -110,27 +120,42 @@ export function createPreviewWindowManager(
     // `ensureOpen` retries cleanly instead of no-oping against a dead handle
     // that hasn't yet emitted `exit`.
     next.on("error", (err) => {
-      if (child === next) child = null;
+      if (child === next) {
+        child = null;
+        closing = false;
+      }
       reportError(err);
       opts.onLaunchFailure?.(err);
     });
     next.on("exit", () => {
-      if (child === next) child = null;
+      // Only the CURRENT child's exit resets state. If a respawn already
+      // replaced this handle (a new round opened while this one was closing),
+      // `child` points at the newer child and its `closing` is its own.
+      if (child === next) {
+        child = null;
+        closing = false;
+      }
     });
     next.stderr?.on("data", (chunk: Buffer) => {
       process.stderr.write(`[preview-window] ${chunk}`);
     });
     child = next;
+    // This is a freshly-spawned, live window — not closing.
+    closing = false;
   };
 
   const requestClose = (): void => {
     if (!isAlive(child)) return;
+    // Mark the window as closing so a round that parks during the close
+    // animation respawns instead of reusing this about-to-quit child.
+    closing = true;
     send({ cmd: "close" });
   };
 
   const dispose = (): void => {
     if (isAlive(child)) child.kill();
     child = null;
+    closing = false;
   };
 
   return { ensureOpen, requestClose, dispose };

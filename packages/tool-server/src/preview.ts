@@ -299,6 +299,24 @@ export function createPreviewRouter(registry: Registry): Router {
       return;
     }
     try {
+      // Like /simulator-server/:udid, this route is reachable without the auth
+      // token. `describeIos`/`describeAndroid` shell out to `xcrun`/`adb`, so
+      // bind the dispatch to an actually-present device — otherwise an
+      // unauthenticated caller could flood distinct ids and amplify into
+      // unbounded subprocess spawns. The UI only ever requests ids returned by
+      // /preview/simulators — no regression.
+      const deviceList = await registry.invokeTool<{
+        devices: Array<{ platform: "ios"; udid: string } | { platform: "android"; serial: string }>;
+      }>(listDevicesTool.id);
+      const known = deviceList.devices.some(
+        (d) => (d.platform === "ios" ? d.udid : d.serial) === udid
+      );
+      if (!known) {
+        res
+          .status(400)
+          .json({ error: `Unknown device "${udid}". Use a udid/serial from /preview/simulators.` });
+        return;
+      }
       const data: DescribeTreeData =
         device.platform === "ios"
           ? await describeIos(registry, device, {})

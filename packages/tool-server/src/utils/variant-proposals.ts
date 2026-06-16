@@ -163,6 +163,14 @@ interface Waiter {
   settle: (outcome: AwaitOutcome) => void;
 }
 
+/**
+ * Max stored length for any user-supplied free-text comment (a selection's
+ * comment, an annotation's comment, or the round-wide globalComment). The
+ * selection route (`POST /preview/variants/selection`) is unauthenticated, so
+ * everything ingested here is capped to bound memory regardless of caller —
+ * the same cap annotations already used. */
+const MAX_COMMENT_LENGTH = 2_000;
+
 function slug(s: string): string {
   return s
     .toLowerCase()
@@ -368,18 +376,22 @@ export class VariantProposalStore {
       .map((a) => ({
         target: String(a.target ?? "").slice(0, 200) || "(element)",
         match: a.match,
-        comment: a.comment.trim().slice(0, 2_000),
+        comment: a.comment.trim().slice(0, MAX_COMMENT_LENGTH),
       }));
     // A round with neither proposals nor any inspector comment has nothing to
     // deliver. Annotations alone ARE deliverable (free-form element feedback).
     if (this.proposals.length === 0 && cleanAnnotations.length === 0) {
       throw new Error("Nothing to submit — no proposals and no comments.");
     }
-    this.submitted = input.selections.filter((s) =>
-      this.proposals.some((p) => p.id === s.elementId)
-    );
+    // Cap each selection's comment on ingestion (the route is unauthenticated),
+    // mirroring the annotation-comment cap above.
+    this.submitted = input.selections
+      .filter((s) => this.proposals.some((p) => p.id === s.elementId))
+      .map((s) =>
+        s.comment === undefined ? s : { ...s, comment: s.comment.slice(0, MAX_COMMENT_LENGTH) }
+      );
     this.submittedAnnotations = cleanAnnotations;
-    this.globalComment = (input.globalComment ?? "").trim();
+    this.globalComment = (input.globalComment ?? "").trim().slice(0, MAX_COMMENT_LENGTH);
     this.completed = true;
     this.consumed = false;
     // Freeze the outcome once so every parked waiter (and any later fast-path
