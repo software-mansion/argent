@@ -194,6 +194,48 @@ describe("VariantProposalStore — timeout / abort / lifecycle", () => {
     expect(s.snapshot().proposals.map((x) => x.element)).toEqual(["New"]);
   });
 
+  it("notifyWindowUnavailable settles a parked waiter with a pending fallback message", async () => {
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    s.proposeVariant({ element: "Bar", variant: variant("Tall") });
+    const p = s.awaitSelection({ timeoutMs: 5000 });
+    expect(s.snapshot().agentWaiting).toBe(true);
+
+    s.notifyWindowUnavailable("electron not found", "http://127.0.0.1:9999/preview/");
+
+    const out = await p; // must not hang for the full timeout
+    expect(out.status).toBe("pending");
+    if (out.status !== "pending") throw new Error("unreachable");
+    expect(out.message).toContain("http://127.0.0.1:9999/preview/");
+    expect(out.message).toContain("electron");
+    expect(out.message).toMatch(/await_user_selection again/i);
+    expect(out.proposedElements).toEqual([
+      { element: "Foo", variantCount: 1 },
+      { element: "Bar", variantCount: 1 },
+    ]);
+    expect(s.snapshot().agentWaiting).toBe(false);
+  });
+
+  it("notifyWindowUnavailable falls back to a generic URL hint when url is null", async () => {
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    const p = s.awaitSelection({ timeoutMs: 5000 });
+    s.notifyWindowUnavailable("spawn ENOENT", null);
+    const out = await p;
+    if (out.status !== "pending") throw new Error("unreachable");
+    expect(out.message).toContain("the tool-server /preview/ URL");
+    expect(out.message).toContain("spawn ENOENT");
+  });
+
+  it("notifyWindowUnavailable is a no-op when nothing is parked", () => {
+    const s = new VariantProposalStore();
+    s.proposeVariant({ element: "Foo", variant: variant("Bold") });
+    // No await parked → must not throw and must leave the round intact.
+    expect(() => s.notifyWindowUnavailable("electron not found", null)).not.toThrow();
+    expect(s.snapshot().completed).toBe(false);
+    expect(s.snapshot().agentWaiting).toBe(false);
+  });
+
   it("wakes a parked waiter when the round is superseded by reset()", async () => {
     const s = new VariantProposalStore();
     s.proposeVariant({ element: "Foo", variant: variant("Bold") });

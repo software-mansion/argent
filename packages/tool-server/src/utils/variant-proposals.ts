@@ -234,6 +234,39 @@ export class VariantProposalStore {
     this.events.emit("closeRequested");
   }
 
+  /**
+   * Called when the native preview window could not be launched (e.g. the
+   * optional `electron` dependency is absent on a headless/CI host). Settles
+   * every currently-parked, unsettled waiter with a `pending` outcome whose
+   * message points the agent at the browser fallback URL, rather than letting
+   * the await park for the full timeout with no window and no feedback. The
+   * proposals stay live, so the agent can relay the URL and re-await. No-ops
+   * when nothing is parked.
+   */
+  notifyWindowUnavailable(reason: string, url: string | null): void {
+    const toSettle = this.waitersList.filter((w) => !w.settled);
+    if (toSettle.length === 0) return;
+    this.waitersList = this.waitersList.filter((w) => w.settled);
+    const proposedElements = this.proposals.map((p) => ({
+      element: p.element,
+      variantCount: p.variants.length,
+    }));
+    const message =
+      `⚠️ The native preview window could not open (${reason}). The proposed variants ` +
+      `are live — open ${url ?? "the tool-server /preview/ URL"} in a browser to make your ` +
+      `selection, then call await_user_selection again. (Install the optional \`electron\` ` +
+      `dependency to get the native window.)`;
+    for (const w of toSettle) {
+      w.settled = true;
+      w.settle({
+        status: "pending",
+        round: w.round,
+        message,
+        proposedElements,
+      });
+    }
+  }
+
   private autoRollIfConsumed(): void {
     // A completed round that has already been handed to the agent is closed —
     // the next proposal starts a clean round automatically.

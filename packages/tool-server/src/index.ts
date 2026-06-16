@@ -98,7 +98,15 @@ export function start(): void {
   // `await_user_selection` parks, and asked to animate-close itself when the
   // user submits. The same child is reused across rounds within one
   // tool-server lifetime.
-  const previewWindow = createPreviewWindowManager();
+  const previewWindow = createPreviewWindowManager({
+    // If Electron can't launch (it's an optionalDependency — absent on
+    // headless/CI hosts), fail fast: unblock any parked await_user_selection
+    // with the browser fallback URL instead of stranding it for the full
+    // timeout. `previewWindowBaseUrl` (declared just below) is only read when
+    // this fires at runtime, long after module init.
+    onLaunchFailure: (err) =>
+      variantProposalStore.notifyWindowUnavailable(err.message, previewWindowBaseUrl()),
+  });
   const previewWindowBaseUrl = (): string | null => {
     if (!server) return null;
     const addr = server.address();

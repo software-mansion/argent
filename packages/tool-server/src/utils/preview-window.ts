@@ -29,6 +29,15 @@ export interface PreviewWindowManagerOptions {
   mainScript?: string;
   /** Optional error sink — defaults to stderr. */
   onError?: (err: Error) => void;
+  /**
+   * Called specifically when the window FAILS TO LAUNCH — either the
+   * synchronous electron/main-script resolve throws (the common
+   * electron-absent case, since `electron` is an optionalDependency) or the
+   * spawned child emits `error` (ENOENT / EACCES). NOT called for failures
+   * after the window is already up. Lets callers fail fast with actionable
+   * guidance instead of leaving a parked `await_user_selection` to time out.
+   */
+  onLaunchFailure?: (err: Error) => void;
 }
 
 export function createPreviewWindowManager(
@@ -87,7 +96,9 @@ export function createPreviewWindowManager(
       electronBin = resolveElectronBin();
       mainScript = resolveMainScript();
     } catch (err) {
-      reportError(err instanceof Error ? err : new Error(String(err)));
+      const e = err instanceof Error ? err : new Error(String(err));
+      reportError(e);
+      opts.onLaunchFailure?.(e);
       return;
     }
     const next = spawn(electronBin, [mainScript], {
@@ -101,6 +112,7 @@ export function createPreviewWindowManager(
     next.on("error", (err) => {
       if (child === next) child = null;
       reportError(err);
+      opts.onLaunchFailure?.(err);
     });
     next.on("exit", () => {
       if (child === next) child = null;
