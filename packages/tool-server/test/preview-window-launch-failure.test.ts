@@ -57,11 +57,10 @@ beforeEach(() => {
 describe("createPreviewWindowManager — onLaunchFailure", () => {
   it("(a) fires onLaunchFailure when the sync electron-binary resolve throws", () => {
     const failures: Error[] = [];
-    // `electronBinaryPath` resolves fine, but `mainScript` is left unset so it
-    // falls through to `resolveMainScript`. We force the sync resolve to throw
-    // by overriding the electron-binary resolver via a throwing accessor on the
-    // options object — simplest hermetic trigger of the try/catch around the
-    // resolve step.
+    // Force the synchronous resolve step to throw — the common electron-absent
+    // case where `require("electron")` fails. A throwing getter on
+    // `electronBinaryPath` is the simplest hermetic trigger of the try/catch
+    // around the resolve, exactly where the optional dependency would blow up.
     const mgr = createPreviewWindowManager({
       get electronBinaryPath(): string {
         throw new Error("Cannot find module 'electron'");
