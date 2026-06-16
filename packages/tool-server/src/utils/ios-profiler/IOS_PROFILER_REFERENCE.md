@@ -35,14 +35,14 @@ Three concerns are captured: **CPU hotspots**, **UI hangs**, and **memory leaks*
 
 `Argent.tracetemplate` enables the following Instruments. Identifiers are taken from the binary plist (`com.apple.xray.instrument-type.*` / `com.apple.dt-perfteam.*`):
 
-| Instrument identifier                                 | Common name                                         | Used by Argent's pipeline?                                     |
-| ----------------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------------- |
-| `com.apple.xray.instrument-type.coresampler2`         | **Time Profiler** (kernel-driven sampling profiler) | **Yes** — exported as the `time-profile` table → CPU hotspots. |
-| `com.apple.dt-perfteam.hangs`                         | **Hangs** (main-thread responsiveness detector)     | **Yes** — exported as the `potential-hangs` table → UI hangs.  |
-| `com.apple.xray.instrument-type.homeleaks`            | **Leaks** (periodic leak scan)                      | **Yes** — exported via the `Leaks` track → memory leaks.       |
-| `com.apple.xray.instrument-type.oa`                   | **Allocations** (object lifetime + alloc tree)      | Recorded but currently not consumed.                           |
-| `com.apple.xray.instrument-type.poi`                  | **Points of Interest** (`os_signpost`)              | Recorded but not consumed.                                     |
-| `com.apple.xray.instrument-type.device-thermal-state` | **Thermal State**                                   | Recorded but not consumed.                                     |
+| Instrument identifier                                 | Common name                                         | Used by Argent's pipeline?                                                                                                                                                          |
+| ----------------------------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `com.apple.xray.instrument-type.coresampler2`         | **Time Profiler** (kernel-driven sampling profiler) | **Yes** — exported as the `time-profile` table → CPU hotspots.                                                                                                                      |
+| `com.apple.dt-perfteam.hangs`                         | **Hangs** (main-thread responsiveness detector)     | **Yes** — exported as the `potential-hangs` table → UI hangs.                                                                                                                       |
+| `com.apple.xray.instrument-type.homeleaks`            | **Leaks** (periodic leak scan)                      | **Yes** — exported via the `Leaks` track → memory leaks. Responsible frame/library is populated only when recorded with `malloc_stack_logging` (else `<Call stack limit reached>`). |
+| `com.apple.xray.instrument-type.oa`                   | **Allocations** (object lifetime + alloc tree)      | Recorded but not consumed directly; with `malloc_stack_logging` it supplies the allocation backtraces that make leaks attributable.                                                 |
+| `com.apple.xray.instrument-type.poi`                  | **Points of Interest** (`os_signpost`)              | Recorded but not consumed.                                                                                                                                                          |
+| `com.apple.xray.instrument-type.device-thermal-state` | **Thermal State**                                   | Recorded but not consumed.                                                                                                                                                          |
 
 > The hangs Instrument is the same engine that powers Xcode's "hang reports" — Apple's term for any stretch of time the main thread fails to service the run loop.
 
@@ -56,14 +56,27 @@ All three are wired through `native-profiler-session` (per-device service, keyed
 
 1. **Detect the target app** — runs `xcrun simctl spawn <udid> launchctl list`, parses `UIKitApplication:<bundleId>` lines, cross-references with `simctl listapps` to keep only `User` apps. Fails fast if zero or more than one app match.
 2. **Resolve the template** — defaults to bundled `Argent.tracetemplate`, override via `template_path`.
-3. **Spawn `xctrace record`**:
+3. **Spawn `xctrace record`** — by default **attaches** to the running app:
    ```
    xctrace record \
      --template <Argent.tracetemplate> \
      --device <udid> \
      --attach <CFBundleExecutable> \
-     --output <tmpdir>/argent-profiler-cwd/ios-profiler-<ts>.trace
+     --output <tmpdir>/argent-profiler-cwd/native-profiler-<ts>.trace
    ```
+   With `malloc_stack_logging: true`, it instead **cold-launches** the app so the
+   malloc library records allocation backtraces from the first allocation —
+   required for attributable leaks. `--env` is only honoured with `--launch`, and
+   the launched target must be the final argument:
+   ```
+   xctrace record --template <…> --device <udid> \
+     --env MallocStackLogging=1 --output <…> --no-prompt \
+     --launch -- <path/to/App.app>
+   ```
+   The `.app` path is resolved via `simctl get_app_container`, and any running
+   instance is terminated first for a clean cold start. Trade-off: this restarts
+   the app and adds allocator overhead, so it stays opt-in — leave it off for
+   pure CPU/hang work, where attach (no relaunch, no overhead) is preferable.
 4. **Start gating** — only resolves the tool call once `xctrace` prints `Starting recording` / `Ctrl-C to stop` on stdout. At that point Argent records `Date.now()` (`wallClockStartMs`) — the anchor used later for cross-tool time alignment.
 5. **Safety timeout** — auto-SIGINTs after 10 minutes if `stop` is never called.
 
