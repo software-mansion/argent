@@ -25,6 +25,41 @@ describe("formatTraceFreshness", () => {
     const note = formatTraceFreshness(NOW - 5 * 60 * MIN, NOW);
     expect(note).toMatch(/5 hours ago/);
   });
+
+  it("warns in minutes for a 45-min-old trace (over the 30-min threshold)", () => {
+    const note = formatTraceFreshness(NOW - 45 * MIN, NOW);
+    expect(note).toMatch(/Stale trace/);
+    expect(note).toMatch(/45 minutes ago/);
+  });
+
+  it("flags the exact 30-min boundary as stale (ageMs === STALE_AFTER_MS, not < it)", () => {
+    const note = formatTraceFreshness(NOW - 30 * MIN, NOW);
+    expect(note).toMatch(/30 minutes ago/);
+    // One ms under the boundary is still fresh.
+    expect(formatTraceFreshness(NOW - (30 * MIN - 1), NOW)).toBeNull();
+  });
+
+  it("uses the singular unit at exactly one hour", () => {
+    expect(formatTraceFreshness(NOW - 60 * MIN, NOW)).toMatch(/1 hour ago/);
+  });
+
+  it("switches minutes→hours at 60 min and hours→days at 48 h", () => {
+    // The hours bucket runs up to 47 h (round(2820/60)=47); 48 h rounds into
+    // the days bucket as "2 days" — so a singular "1 day" never renders, by
+    // construction. Pinning the transition guards the formatAge thresholds.
+    expect(formatTraceFreshness(NOW - 47 * 60 * MIN, NOW)).toMatch(/47 hours ago/);
+    expect(formatTraceFreshness(NOW - 48 * 60 * MIN, NOW)).toMatch(/2 days ago/);
+  });
+
+  it("guards non-finite capture times — never renders NaN / Invalid Date / throws", () => {
+    for (const bad of [NaN, Infinity, -Infinity, 0]) {
+      expect(formatTraceFreshness(bad, NOW)).toBeNull();
+    }
+  });
+
+  it("treats a future capture time as fresh (negative age)", () => {
+    expect(formatTraceFreshness(NOW + 5 * MIN, NOW)).toBeNull();
+  });
 });
 
 // --- app_process validation (adb mocked) ------------------------------------
@@ -72,10 +107,23 @@ describe("validateAndroidAppProcess", () => {
       /Could not verify app_process .* device offline/
     );
   });
+
+  it("treats a thrown pidof (e.g. pidof absent) as 'no running process' and rejects", async () => {
+    // The pidof fallback is .catch(() => "")-guarded: a thrown pidof must not
+    // crash validation, it just means "no matching process" → not-found error.
+    adbShell
+      .mockResolvedValueOnce("package:com.example.app\n") // pm list: target absent
+      .mockRejectedValueOnce(new Error("pidof: not found")); // pidof itself throws
+    await expect(
+      validateAndroidAppProcess("emulator-5554", "com.totally.nonexistent.app")
+    ).rejects.toThrow(/was not found on emulator-5554/);
+  });
 });
 
 describe("renderNativeProfilerReport — freshness note", () => {
-  it("renders the stale-trace warning in the report header when provided", async () => {
+  const NOTE = "> ⚠️ **Stale trace:** this recording was captured 3 days ago";
+
+  it("renders the stale-trace warning in the all-clear (zero-bottleneck) header when provided", async () => {
     const { renderNativeProfilerReport } = await import("../../src/utils/ios-profiler/render");
     const { report } = await renderNativeProfilerReport({
       payload: {
@@ -83,8 +131,57 @@ describe("renderNativeProfilerReport — freshness note", () => {
         bottlenecks: [],
       },
       traceFile: null,
-      freshnessNote: "> ⚠️ **Stale trace:** this recording was captured 3 days ago",
+      freshnessNote: NOTE,
     });
     expect(report).toContain("Stale trace");
+  });
+
+  it("renders the stale-trace warning in the FULL report header (with bottlenecks present)", async () => {
+    const { renderNativeProfilerReport } = await import("../../src/utils/ios-profiler/render");
+    const { report } = await renderNativeProfilerReport({
+      payload: {
+        metadata: {
+          traceFile: "/tmp/native-profiler-x.pftrace",
+          platform: "Android",
+          timestamp: "2026-01-01T00:00:00.000Z",
+        },
+        // One real CPU hotspot → the renderer takes the full-report branch
+        // (renderFullReport), which is where the second freshnessNote push lives.
+        bottlenecks: [
+          {
+            type: "cpu_hotspot",
+            platform: "android",
+            dominantFunction: "doFrame",
+            totalWeightMs: 120,
+            weightPercentage: 42,
+            sampleCount: 12,
+            thread: "Main Thread",
+            severity: "RED",
+            topCallChain: ["doFrame"],
+            topCallChains: [{ chain: ["doFrame"], count: 12 }],
+            duringHang: false,
+            timeRangeMs: { first: 0, last: 500 },
+            burstWindows: [],
+          },
+        ],
+      },
+      traceFile: "/tmp/native-profiler-x.pftrace",
+      freshnessNote: NOTE,
+    });
+    expect(report).toContain("Stale trace");
+    expect(report).toContain("## Summary"); // confirms we hit the full-report path
+  });
+
+  it("omits the freshness header entirely when no note is supplied (fresh trace)", async () => {
+    const { renderNativeProfilerReport } = await import("../../src/utils/ios-profiler/render");
+    const { report } = await renderNativeProfilerReport({
+      payload: {
+        metadata: { traceFile: null, platform: "Android", timestamp: "2026-01-01T00:00:00.000Z" },
+        bottlenecks: [],
+      },
+      traceFile: null,
+      // no freshnessNote
+    });
+    expect(report).not.toContain("Stale trace");
   });
 });
