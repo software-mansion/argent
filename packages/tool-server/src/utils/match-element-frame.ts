@@ -91,6 +91,9 @@ export async function captureElementFrame(
 ): Promise<NormalizedFrame | null> {
   try {
     const device = resolveDevice(udid);
+    // Chromium (CDP) devices have no adb/sim-server describe path; skip frame
+    // auto-capture rather than shelling adb against a non-existent serial.
+    if (device.platform === "chromium") return null;
     const data =
       device.platform === "ios"
         ? await describeIos(registry, device, {})
