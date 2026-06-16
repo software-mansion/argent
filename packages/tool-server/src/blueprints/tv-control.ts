@@ -301,6 +301,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         const r = (await sendJson(axSock, `setfocus ${label}`)) as {
           ok?: boolean;
           message?: string;
+          matchedLabel?: string;
         };
         if (r.ok) return { ok: true, message: r.message ?? "Focus set successfully" };
         // The native setNativeFocus returns NO when the element is already focused
@@ -309,9 +310,16 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         const state = await api.describe();
         const focused = state.focused;
         const normalise = (s: string) => s.toLowerCase().trim();
-        const labelNorm = normalise(label);
-        const focusedLabel = focused?.label ? normalise(focused.label.split("\n")[0] ?? "") : null;
-        if (focusedLabel === labelNorm) {
+        const firstLine = (s: string) => normalise(s.split("\n")[0] ?? "");
+        // Compare against the element the native matcher actually chose
+        // (`matchedLabel`), not the raw query: a tiered match can resolve via an
+        // annotation substring (e.g. query "Lander" hitting "Home\n…Lander…"), in
+        // which case the focused first line is "Home" and would never equal the
+        // query. Falling back to the query keeps exact-name calls working when the
+        // daemon doesn't echo a matchedLabel.
+        const targetLabel = r.matchedLabel ? firstLine(r.matchedLabel) : normalise(label);
+        const focusedLabel = focused?.label ? firstLine(focused.label) : null;
+        if (focusedLabel === targetLabel) {
           return { ok: true, message: "Already focused" };
         }
         return { ok: false, message: r.message ?? "" };
