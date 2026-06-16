@@ -58,11 +58,22 @@ export function start(): void {
   // The tool server should exit on uncaught errors (state may be corrupted),
   // but attempt graceful cleanup first so child processes are not orphaned.
   let shuttingDown = false;
+  let crashing = false;
+  // Module-scoped so a crash that overlaps an in-flight graceful shutdown can
+  // escalate it: shutdown() exits with finalExitCode (read at the actual
+  // process.exit), not the argument it was first invoked with. Without this a
+  // crash arriving mid-shutdown would be swallowed by the re-entrancy guard and
+  // the in-flight shutdown(0) would exit 0, hiding the crash from supervisors.
+  let finalExitCode = 0;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
   function crashShutdown(label: string, detail: string): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
+    // A second fatal event must not re-run teardown or schedule a second timer.
+    if (crashing) return;
+    crashing = true;
     shutdownReason = "crash";
+    finalExitCode = 1;
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -165,6 +176,9 @@ export function start(): void {
   // `shutdown` closes over `server` by reference — reads the current value when
   // called, so it works correctly whether server has started yet or not.
   shutdown = async (exitCode = 0) => {
+    // Escalate before the re-entrancy guard can short-circuit a later,
+    // higher-severity call (e.g. a crash overlapping a graceful shutdown).
+    if (exitCode > finalExitCode) finalExitCode = exitCode;
     if (shuttingDown) return;
     shuttingDown = true;
 
@@ -192,11 +206,11 @@ export function start(): void {
 
     await registry.dispose();
     if (server) {
-      const forceExit = setTimeout(() => process.exit(exitCode), PROCESS_TIMEOUT_MS);
+      const forceExit = setTimeout(() => process.exit(finalExitCode), PROCESS_TIMEOUT_MS);
       await new Promise<void>((resolve) => server!.close(() => resolve()));
       clearTimeout(forceExit);
     }
-    process.exit(exitCode);
+    process.exit(finalExitCode);
   };
 
   const httpHandle = createHttpApp(registry, {

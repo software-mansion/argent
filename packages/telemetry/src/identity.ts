@@ -3,12 +3,23 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { argentHomeDir, identityFilePath } from "./paths.js";
 
+// In-memory cache of the resolved id. The anon id never changes once written,
+// so the long-lived tool-server (which calls this on every tracked event)
+// avoids re-reading the file each time. Keyed by the resolved path so a process
+// whose home dir changes (e.g. tests scoping HOME) doesn't serve a stale id.
+let cached: { path: string; id: string } | null = null;
+
 // Read or atomically create the anonymous id. link(2) prevents concurrent
 // first-run processes from overwriting each other.
 export function readOrCreateAnonId(): string {
   const finalPath = identityFilePath();
+  if (cached && cached.path === finalPath) return cached.id;
+
   const existing = tryReadId(finalPath);
-  if (existing) return existing;
+  if (existing) {
+    cached = { path: finalPath, id: existing };
+    return existing;
+  }
 
   fs.mkdirSync(argentHomeDir(), { recursive: true });
 
@@ -37,11 +48,15 @@ export function readOrCreateAnonId(): string {
     try {
       // POSIX rename() would replace; link() gives us no-overwrite publish.
       fs.linkSync(tmpPath, finalPath);
+      cached = { path: finalPath, id: uuid };
       return uuid;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
         const beatUs = tryReadId(finalPath);
-        if (beatUs) return beatUs;
+        if (beatUs) {
+          cached = { path: finalPath, id: beatUs };
+          return beatUs;
+        }
         // Final file vanished between link and read; retry.
         continue;
       }
@@ -59,11 +74,17 @@ export function readOrCreateAnonId(): string {
 
 /** Delete the identity file. Used by uninstall cleanup. */
 export function deleteAnonId(): void {
+  cached = null;
   try {
     fs.unlinkSync(identityFilePath());
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+}
+
+/** Test seam: drop the in-memory id cache. */
+export function _resetIdentityCacheForTest(): void {
+  cached = null;
 }
 
 function tryReadId(filePath: string): string | null {

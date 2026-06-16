@@ -196,8 +196,10 @@ export async function init(args: string[]): Promise<void> {
       try {
         latest = getLatestVersion();
       } catch {
-        await trackPackageAction("update_skipped", packageActionStartedAt, false);
-        // Registry unreachable - silently skip
+        // Registry unreachable — silently skip. The `already_installed`
+        // package_action above already records this step; a failed update
+        // *check* is not a second package action, and reusing "update_skipped"
+        // here would conflate it with the user explicitly choosing Skip.
       }
       spinner.stop(pc.dim("Version check complete."));
 

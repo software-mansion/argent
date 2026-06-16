@@ -81,6 +81,18 @@ describe("telemetry public surface", () => {
     expect(isEnabled()).toBe(false);
   });
 
+  it("does not provision the anon-id file when the PostHog key is unusable", () => {
+    // An intentionally-disabled/empty key means nothing can ever transmit, so
+    // track() must not write a persistent identifier to the user's disk.
+    (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "";
+    resetClient();
+
+    track("toolserver:start", {});
+
+    expect(posthogMock.instances).toHaveLength(0);
+    expect(status().hasAnonIdOnDisk).toBe(false);
+  });
+
   it("track queues without flushing so command shutdown drains later", async () => {
     track("toolserver:start", {});
     track("toolserver:stop", {

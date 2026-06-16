@@ -1,6 +1,12 @@
 // Typed telemetry event names and property shapes. sanitize.ts enforces the
 // same surface at runtime.
 
+// Single source of truth for the device platform enum: the TS union below and
+// sanitize.ts's runtime allowlist both derive from this tuple, so adding a
+// platform can't silently drift the two apart.
+export const PLATFORMS = ["ios", "android", "chromium"] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
 // Installation events
 
 export interface InstallationCliInitStartProps {
@@ -89,20 +95,20 @@ export interface InstallationCliUninstallCompleteProps {
 export interface ToolInvokeProps {
   tool: string;
   tool_invocation_id: string;
-  platform?: "ios" | "android" | "chromium";
+  platform?: Platform;
 }
 
 export interface ToolCompleteProps {
   tool: string;
   tool_invocation_id: string;
-  platform?: "ios" | "android" | "chromium";
+  platform?: Platform;
   duration_ms: number;
 }
 
 export interface ToolFailProps {
   tool: string;
   tool_invocation_id: string;
-  platform?: "ios" | "android" | "chromium";
+  platform?: Platform;
   duration_ms: number;
 }
 

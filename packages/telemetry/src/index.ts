@@ -83,6 +83,13 @@ function buildPayload(
 export function track<E extends EventName>(event: E, props: EventPropertyMap[E]): void {
   try {
     if (!consentIsEnabled()) return;
+    // Resolve the client before buildPayload(): buildPayload creates/persists
+    // the anon-id file, and there's no reason to provision a persistent
+    // identifier on disk for an event that can never be transmitted (no usable
+    // PostHog key).
+    const client = getClient();
+    if (!client) return;
+
     const built = buildPayload(event, props as Record<string, unknown>);
     if (!built) return;
 
@@ -95,8 +102,6 @@ export function track<E extends EventName>(event: E, props: EventPropertyMap[E])
       });
     }
 
-    const client = getClient();
-    if (!client) return;
     try {
       client.capture({
         distinctId: built.distinctId,

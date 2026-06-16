@@ -1,4 +1,4 @@
-import type { EventName } from "./events.js";
+import { PLATFORMS, type EventName, type EventPropertyMap } from "./events.js";
 
 // Per-event property allowlist and validators. Unknown keys and invalid values
 // are dropped before anything reaches PostHog.
@@ -39,7 +39,7 @@ const arrayOf =
 // Shared validators
 
 const TOOL_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
-const PLATFORM = oneOf(["ios", "android", "chromium"] as const);
+const PLATFORM = oneOf(PLATFORMS);
 const UUID = matches(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   36
@@ -63,8 +63,17 @@ const DURATION_MS = finiteNonNeg();
 const MAJOR_VERSION = finiteNonNeg(9999);
 
 // Per-event validators
+//
+// The type forces one validator per declared property of every event (`-?`
+// keeps optional props like `platform` required here), and forbids validators
+// for properties the event type doesn't declare. So adding/removing a field in
+// events.ts that isn't mirrored here is a compile error — the runtime allowlist
+// can't silently drift from the typed event surface.
+type ValidatorMap = {
+  [E in EventName]: { [K in keyof EventPropertyMap[E]]-?: Validator };
+};
 
-export const ALLOWED: Record<EventName, Record<string, Validator>> = {
+export const ALLOWED: ValidatorMap = {
   "installation:cli_init_start": {
     package_manager: PACKAGE_MANAGER,
     is_non_interactive: bool,

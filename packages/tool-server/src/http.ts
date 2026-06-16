@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID } from "node:crypto";
-import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
+import type { FileInputSpec, Platform, Registry, ResolvedFileInput } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -81,7 +81,7 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: "ios" | "android" | "chromium" };
+type InvocationMeta = { platform?: Platform };
 
 function extractInvocationMeta(hasCapability: boolean, data: unknown): InvocationMeta | null {
   if (!hasCapability || !data || typeof data !== "object") return null;

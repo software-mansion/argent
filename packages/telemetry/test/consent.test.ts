@@ -120,6 +120,29 @@ describe("consent", () => {
     }
   });
 
+  it("re-reads on an opt-out even if the mtime is unchanged (size busts the cache)", () => {
+    const restore = restoreEnv();
+    try {
+      _resetConsentCacheForTest();
+      writeConsentFlag(true);
+      expect(isEnabled(emptyEnv())).toBe(true);
+
+      // Pin the mtime: simulate a coarse-granularity filesystem / same-tick
+      // in-place edit where the mtime does NOT advance. Toggling enabled
+      // true→false still changes the byte length, so the cache must invalidate.
+      const stat = fs.statSync(configFilePath());
+      fs.writeFileSync(
+        configFilePath(),
+        JSON.stringify({ telemetry: { enabled: false } }, null, 2) + "\n"
+      );
+      fs.utimesSync(configFilePath(), stat.atime, stat.mtime);
+
+      expect(isEnabled(emptyEnv())).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it("treats a malformed config.json as no override (does NOT enable silently)", () => {
     const restore = restoreEnv();
     try {

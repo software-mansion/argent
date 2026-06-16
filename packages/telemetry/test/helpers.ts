@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { _resetConsentCacheForTest } from "../src/consent.js";
+import { _resetIdentityCacheForTest } from "../src/identity.js";
 
 let savedHome: string | undefined;
 let savedUserProfile: string | undefined;
@@ -28,6 +29,7 @@ export function restoreHome(tmp: string): void {
     /* best-effort */
   }
   _resetConsentCacheForTest();
+  _resetIdentityCacheForTest();
 }
 
 export function scopeHome(): { tmp: () => string } {

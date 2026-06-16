@@ -42,7 +42,12 @@ function readConfigOverride(): boolean | null {
     return null;
   }
 
-  const fingerprint = `${stats.dev}:${stats.ino}`;
+  // Include size so a same-mtime edit (coarse filesystem mtime granularity, or
+  // a same-millisecond in-place write that preserves the inode) still busts the
+  // cache. Toggling telemetry.enabled true↔false always changes the byte length,
+  // so a long-lived tool-server can't keep serving a stale "enabled" after the
+  // user opts out within the same mtime tick.
+  const fingerprint = `${stats.dev}:${stats.ino}:${stats.size}`;
   const mtimeMs = stats.mtimeMs;
 
   if (
