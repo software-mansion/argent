@@ -125,4 +125,74 @@ describe("hang_stacks — off-CPU explanation", () => {
     expect(out).toMatch(/\(2×\)/);
     expect(out).not.toMatch(/No on-CPU stack samples/);
   });
+
+  it("explains an empty sample set as un-unwound CPU work when the thread was executing", async () => {
+    queryResponses.push(
+      {
+        name: "ui-hangs.sql",
+        rows: [{ kind: "jank", ts_ns: 0, dur_ns: 50 * MS, reason: "App Deadline Missed" }],
+      },
+      // hang-state-breakdown: Running-dominant → summarizeHangBlocking ⇒ kind "executing".
+      {
+        name: "hang-state-breakdown.sql",
+        rows: [
+          { state: "Running", blocked_function: null, total_dur_ns: 46 * MS, occurrences: 1 },
+          { state: "S", blocked_function: null, total_dur_ns: 4 * MS, occurrences: 1 },
+        ],
+      },
+      // hang-main-thread-samples: none unwound (e.g. stripped/missing frame symbols).
+      { name: "hang-main-thread-samples.sql", rows: [{ ts_ns: 1 * MS, callstack_text: null }] }
+    );
+
+    const out = await runAndroidStackQuery({
+      tracePath: "/fake.pftrace",
+      mode: "hang_stacks",
+      appPackage: "com.example.app",
+      hangIndex: 0,
+      topN: 15,
+    });
+
+    expect(out).toContain("Main-thread State Breakdown");
+    expect(out).toMatch(/No usable on-CPU stack samples/);
+    // The thread was on-CPU/executing — this is genuine CPU work, not a wait.
+    expect(out).toMatch(/on-CPU/);
+    expect(out).toMatch(/executing/);
+    expect(out).toContain("`Running`");
+    // It must NOT be mislabelled as off-CPU / runnable-but-not-scheduled.
+    expect(out).not.toMatch(/off-CPU or runnable-but-not-scheduled/);
+    // The corrected copy explicitly frames this as CPU work, "not a wait".
+    expect(out).toMatch(/not a wait/);
+  });
+
+  it("explains an empty sample set as starvation when the thread was runnable", async () => {
+    queryResponses.push(
+      {
+        name: "ui-hangs.sql",
+        rows: [{ kind: "jank", ts_ns: 0, dur_ns: 50 * MS, reason: "App Deadline Missed" }],
+      },
+      // hang-state-breakdown: R-dominant → summarizeHangBlocking ⇒ kind "runnable".
+      {
+        name: "hang-state-breakdown.sql",
+        rows: [
+          { state: "R", blocked_function: null, total_dur_ns: 45 * MS, occurrences: 1 },
+          { state: "Running", blocked_function: null, total_dur_ns: 5 * MS, occurrences: 1 },
+        ],
+      },
+      { name: "hang-main-thread-samples.sql", rows: [] }
+    );
+
+    const out = await runAndroidStackQuery({
+      tracePath: "/fake.pftrace",
+      mode: "hang_stacks",
+      appPackage: "com.example.app",
+      hangIndex: 0,
+      topN: 15,
+    });
+
+    // Runnable (R/R+) still uses the generic off-CPU-or-runnable copy, unchanged.
+    expect(out).toMatch(/No on-CPU stack samples/);
+    expect(out).toMatch(/off-CPU or runnable-but-not-scheduled/);
+    expect(out).not.toMatch(/No usable on-CPU stack samples/);
+    expect(out).not.toMatch(/executing/);
+  });
 });

@@ -334,6 +334,13 @@ async function renderHangStacksAndroid(
           `**wait**, not CPU-bound work: look at what it is blocked on (GPU/vsync, a lock, binder IPC, ` +
           `or I/O) using the state breakdown above, not at a CPU call stack._`
       );
+    } else if (blocking && blocking.kind === "executing") {
+      lines.push(
+        `_No usable on-CPU stack samples were captured during this hang, even though the main thread ` +
+          `was on-CPU (state \`${blocking.dominantState}\`, executing) for most of the window — the ` +
+          `sampler could not unwind a call stack (commonly stripped or missing frame symbols). This is ` +
+          `genuine main-thread CPU work, not a wait; see the state breakdown above._`
+      );
     } else if (stateRows.length > 0) {
       lines.push(
         `_No on-CPU stack samples were captured during this hang. The main thread spent the window ` +
