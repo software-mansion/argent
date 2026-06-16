@@ -336,7 +336,7 @@ export function renderCombinedMemoryLeaks(
   const lines: string[] = ["---", "## Memory Leaks (from Instruments)", ""];
 
   if (attributedLeaks.length > 0) {
-    for (const leak of attributedLeaks.slice(0, 10)) {
+    for (const leak of attributedLeaks) {
       const possibleComponent = [...mountComponents].find(
         (name) =>
           leak.objectType.toLowerCase().includes(name.toLowerCase()) ||

@@ -88,6 +88,32 @@ describe("renderCombinedMemoryLeaks", () => {
     expect(out).toContain("may relate to `MyModel` mount/unmount");
   });
 
+  it("lists ALL attributed leaks individually — no cap — matching the analyze report", () => {
+    // 12 distinct attributed (RED) leaks: more than the old hardcoded cap of 10.
+    const attributed = Array.from({ length: 12 }, (_, i) =>
+      leak({
+        objectType: `LeakModel${i}`,
+        totalSizeBytes: 128 + i,
+        count: i + 1,
+        responsibleFrame: `-[Leaker${i} retainSomething]`,
+        responsibleLibrary: "MyApp",
+        attributed: true,
+        severity: "RED",
+      })
+    );
+
+    const out = renderCombinedMemoryLeaks(attributed, new Set()).join("\n");
+
+    // Every one of the 12 attributed leaks must be rendered as its own row.
+    for (let i = 0; i < 12; i++) {
+      expect(out).toContain(`**\`LeakModel${i}\`**`);
+      expect(out).toContain(`-[Leaker${i} retainSomething]`);
+    }
+    // Count the rendered per-leak rows: exactly 12, not capped at 10.
+    const rowCount = out.split("\n").filter((l) => /^- \*\*`LeakModel\d+`\*\*/.test(l)).length;
+    expect(rowCount).toBe(12);
+  });
+
   it("returns nothing for an empty leak list", () => {
     expect(renderCombinedMemoryLeaks([], new Set())).toEqual([]);
   });
