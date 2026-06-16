@@ -2,7 +2,7 @@ import { promises as fs } from "fs";
 import { join } from "path";
 
 // Tree-sitter requires native bindings loaded via require (CJS context)
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+
 const _require = require;
 
 export interface TreeSitterNode {
@@ -61,16 +61,14 @@ function loadTreeSitter(): {
   _treeSitterLoaded = true;
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const TSModule = _require("tree-sitter");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+
     _ParserClass = (TSModule.default ?? TSModule) as ParserCtor;
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const TSLang = _require("tree-sitter-typescript");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+
     _tsLanguage = TSLang.typescript ?? TSLang.default?.typescript;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+
     _tsxLanguage = TSLang.tsx ?? TSLang.default?.tsx;
   } catch {
     // tree-sitter not available

@@ -92,7 +92,8 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
-        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
     );
   }
 
@@ -100,7 +101,7 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
   // (PID, status, label). Only lines with a numeric PID are actually running.
   const runningPids = new Map<string, number>();
   for (const line of launchctlOutput.split("\n")) {
-    const match = line.match(/^\s*(\d+)\s+\S+\s+UIKitApplication:([^\[]+)/);
+    const match = line.match(/^\s*(\d+)\s+\S+\s+UIKitApplication:([^[]+)/);
     if (match) {
       runningPids.set(match[2], Number(match[1]));
     }
@@ -122,7 +123,8 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
-        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
     );
   }
 

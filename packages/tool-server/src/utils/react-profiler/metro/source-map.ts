@@ -34,7 +34,6 @@ function tryLoadLib(): SourceMapLib | null {
   libLoadAttempted = true;
   for (const pkg of ["source-map-js", "source-map"]) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       lib = require(pkg) as SourceMapLib;
       return lib;
     } catch {

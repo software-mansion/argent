@@ -13,7 +13,6 @@ import type {
   ButtonType,
   ChromiumServer,
   KeyDirection,
-  MediaReady,
   Point,
   Rotation,
   ScreencastFrame,

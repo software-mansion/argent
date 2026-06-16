@@ -101,7 +101,7 @@ function withMockedConsole(fn: () => void): { stdout: string; stderr: string; th
 
 function captureConsole(fn: () => void): CapturedConsole {
   const { stdout, stderr, threw } = withMockedConsole(fn);
-  if (threw !== undefined) throw threw;
+  if (threw !== undefined) throw threw as Error;
   return { stdout, stderr };
 }
 
