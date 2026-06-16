@@ -11,8 +11,12 @@ export function formatErrorForAgent(err: unknown): string {
   if (!(err instanceof Error)) return String(err);
 
   const parts: string[] = [err.message];
+  const seen = new Set<unknown>([err]);
   let current = err.cause;
-  while (current instanceof Error) {
+  // Bounded walk with a cycle guard: a self-referential `.cause` (e.g. an error
+  // re-wrapped as its own ancestor) would otherwise loop forever.
+  for (let depth = 0; depth < 8 && current instanceof Error && !seen.has(current); depth++) {
+    seen.add(current);
     const msg = current.message;
     if (!parts.some((p) => p.includes(msg))) {
       parts.push(msg);

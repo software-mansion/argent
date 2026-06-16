@@ -200,4 +200,37 @@ describe("Registry — failure signals", () => {
       failure_spawn_code: "ENOENT",
     });
   });
+
+  it("finds a signal attached to a wrapped cause", () => {
+    const inner = withFailureSignal(new Error("inner"), {
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "inner_stage",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
+    const outer = new Error("outer", { cause: inner });
+
+    expect(getFailureSignal(outer)?.error_code).toBe(FAILURE_CODES.TOOL_DEPENDENCY_MISSING);
+  });
+
+  it("finds a signal attached to an AggregateError sub-error", () => {
+    const sub = withFailureSignal(new Error("sub"), {
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "sub_stage",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
+    const aggregate = new AggregateError([new Error("noise"), sub], "all failed");
+
+    expect(getFailureSignal(aggregate)?.error_code).toBe(FAILURE_CODES.TOOL_DEPENDENCY_MISSING);
+  });
+
+  it("terminates on a cyclic cause chain", () => {
+    const a = new Error("a");
+    const b = new Error("b");
+    (a as Error & { cause?: unknown }).cause = b;
+    (b as Error & { cause?: unknown }).cause = a;
+
+    expect(getFailureSignal(a)).toBeNull();
+  });
 });

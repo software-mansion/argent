@@ -57,6 +57,13 @@ const UPDATE_INSTALLED_VERSION_DETECT_FAILED: InstallerFailureSignal = {
   error_kind: "unknown",
 };
 
+const UPDATE_INVALID_TARGET_VERSION: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UPDATE_INVALID_TARGET_VERSION,
+  failure_stage: "installer_update_validate_target",
+  failure_area: "installer",
+  error_kind: "validation",
+};
+
 const UPDATE_REGISTRY_CHECK_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.UPDATE_REGISTRY_CHECK_FAILED,
   failure_stage: "installer_update_registry_check",
@@ -110,7 +117,7 @@ export async function update(args: string[]): Promise<void> {
   const trigger = getUpdateTriggerFromEnv();
   telemetryInit("installer");
   const updateStartTime = performance.now();
-  await track("installation:cli_update_start", {});
+  track("installation:cli_update_start", {});
   let telemetryFinalized = false;
 
   const trackPackageAction = async (
@@ -119,7 +126,7 @@ export async function update(args: string[]): Promise<void> {
     isSuccess: boolean,
     failureSignal?: InstallerFailureSignal
   ): Promise<void> => {
-    await track("installation:package_action", {
+    track("installation:package_action", {
       trigger,
       action,
       is_success: isSuccess,
@@ -189,9 +196,9 @@ export async function update(args: string[]): Promise<void> {
           "update_failed",
           updateStartTime,
           false,
-          UPDATE_REGISTRY_CHECK_FAILED
+          UPDATE_INVALID_TARGET_VERSION
         );
-        await failUpdateTelemetry(UPDATE_REGISTRY_CHECK_FAILED);
+        await failUpdateTelemetry(UPDATE_INVALID_TARGET_VERSION);
         p.log.error(`Requested version is not a stable semver: ${requestedVersion}`);
         process.exit(1);
       }
@@ -390,7 +397,7 @@ export async function update(args: string[]): Promise<void> {
     }
     const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
     if (skillTelemetrySummary.scope_count > 0) {
-      await track("installation:skill_refresh_result", {
+      track("installation:skill_refresh_result", {
         is_success: skillTelemetrySummary.failed_count === 0,
         ...skillTelemetrySummary,
         ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),

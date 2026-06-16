@@ -119,11 +119,22 @@ export function withFailureSignal<T extends Error>(error: T, signal: FailureSign
 }
 
 export function getFailureSignal(error: unknown): FailureSignal | null {
-  let current: unknown = error;
-  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+  // Bounded breadth-first walk so the shallowest (outermost) signal still wins,
+  // while also descending into AggregateError.errors — a signal attached to an
+  // aggregated sub-error would otherwise be missed. The visited set guards
+  // against cyclic `.cause`/`.errors` references.
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+  for (let visited = 0; visited < 16 && queue.length > 0; visited++) {
+    const current = queue.shift();
+    if (!(current instanceof Error) || seen.has(current)) continue;
+    seen.add(current);
     const signal = (current as Error & { [FAILURE_SIGNAL]?: FailureSignal })[FAILURE_SIGNAL];
     if (signal) return signal;
-    current = current.cause;
+    if (current.cause !== undefined) queue.push(current.cause);
+    if (current instanceof AggregateError) {
+      for (const aggregated of current.errors) queue.push(aggregated);
+    }
   }
   return null;
 }

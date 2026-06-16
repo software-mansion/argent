@@ -230,8 +230,10 @@ export function parseFlow(content: string): FlowFile {
   }
 
   const steps = parsed.steps.map((raw) => {
-    if ("echo" in raw) return fromYamlStep(raw);
-    if ("tool" in raw) return fromYamlStep(raw);
+    if (raw !== null && typeof raw === "object") {
+      if ("echo" in raw) return fromYamlStep(raw);
+      if ("tool" in raw) return fromYamlStep(raw);
+    }
     throw new FailureError(`Unrecognized flow entry: ${JSON.stringify(raw)}`, {
       error_code: FAILURE_CODES.FLOW_ENTRY_UNRECOGNIZED,
       failure_stage: "flow_file_parse_step",

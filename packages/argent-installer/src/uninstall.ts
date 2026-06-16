@@ -306,7 +306,7 @@ export async function uninstall(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
 
   telemetryInit("installer");
-  await track("installation:cli_uninstall_start", {});
+  track("installation:cli_uninstall_start", {});
 
   let telemetryFinalized = false;
   const finalizeUninstallTelemetry = async (

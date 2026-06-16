@@ -497,16 +497,20 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
             res.status(400).json({ error: err.message });
             return;
           }
+          // Reaching here means resolveDevice/assertSupported threw something
+          // other than UnsupportedOperationError (today only a custom supports()
+          // refiner can) — an internal fault, not a client validation error, so
+          // surface it as 500/unknown rather than mislabeling it 400/validation.
           emitHttpFailure(
             {
               error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
               failure_stage: "http_capability_device_resolution",
               failure_area: "http",
-              error_kind: "validation",
+              error_kind: "unknown",
             },
             parsedData
           );
-          res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
           return;
         }
       }
