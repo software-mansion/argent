@@ -7,6 +7,7 @@ import {
   getProjectSkillLockPath,
   listArgentSkillsInLock,
   listBundledSkills,
+  withNpmForce,
   SKILLS_DIR,
 } from "./utils.js";
 
@@ -84,7 +85,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (bundled.size > 0) {
       try {
-        execFileSync("npx", spec.buildAddArgs(primarySource), {
+        execFileSync("npx", withNpmForce(spec.buildAddArgs(primarySource)), {
           stdio: ["ignore", "pipe", "pipe"],
         });
         result.synced = bundled.size;
@@ -94,7 +95,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
             primaryErr instanceof Error ? primaryErr.message.split("\n")[0] : String(primaryErr);
         } else {
           try {
-            execFileSync("npx", spec.buildAddArgs(SKILLS_DIR), {
+            execFileSync("npx", withNpmForce(spec.buildAddArgs(SKILLS_DIR)), {
               stdio: ["ignore", "pipe", "pipe"],
             });
             result.synced = bundled.size;
@@ -110,7 +111,7 @@ export function refreshArgentSkills(projectRoot: string): SkillScopeResult[] {
 
     if (orphaned.length > 0) {
       try {
-        execFileSync("npx", [...spec.removeArgs, ...orphaned], {
+        execFileSync("npx", withNpmForce([...spec.removeArgs, ...orphaned]), {
           stdio: ["ignore", "pipe", "pipe"],
         });
         result.pruned = orphaned;

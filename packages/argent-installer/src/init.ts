@@ -25,6 +25,7 @@ import {
   globalInstallCommand,
   formatShellCommand,
   resolveProjectRoot,
+  withNpmForce,
   type ShellCommand,
 } from "./utils.js";
 import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
@@ -495,9 +496,13 @@ export async function init(args: string[]): Promise<void> {
       skillsArgs.push("--skill", "*", "-y");
     }
 
-    const npxArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
+    const baseArgs = offlineWithCache ? ["--no-install", ...skillsArgs] : skillsArgs;
+    // The spawned command carries `--force` to soften the host project's npm
+    // engine gate (see withNpmForce / issue #298). The displayed and
+    // manual-fallback commands stay clean so users see the real `npx skills`.
+    const npxArgs = withNpmForce(baseArgs);
 
-    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(npxArgs.join(" "))}`);
+    p.log.info(`Running: ${pc.dim("npx")} ${pc.cyan(baseArgs.join(" "))}`);
 
     const spinner = p.spinner();
     if (skillsMethod === "default") {
