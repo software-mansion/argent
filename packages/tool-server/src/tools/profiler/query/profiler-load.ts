@@ -94,21 +94,28 @@ async function listSessions(debugDir: string): Promise<string> {
     }
   }
 
-  // Android .pftrace sessions live next to the iOS-style XML sessions but with
-  // a different extension. The serial may include a port (`emulator-5554`), so
-  // the filename pattern doesn't constrain it — anything ending in .pftrace
-  // under the canonical timestamp prefix counts.
+  // `nativeSessions` collected every native-profiler-* file regardless of
+  // extension. Classify each session by the platform-specific artifacts it
+  // holds: a `.pftrace` (or its `.metadata.json` sidecar) is Android; an
+  // xctrace `.trace` bundle or `_raw_*.xml` is iOS. A session can legitimately
+  // hold both (iOS + Android captured in the same second share one
+  // discriminator-free session id), so it may appear under BOTH headings —
+  // each listing only its own files — instead of one platform hiding the
+  // other. A lone `-report.md` with no platform artifacts defaults to iOS.
+  const iosSessions = new Map<string, string[]>();
   const androidSessions = new Map<string, string[]>();
-  for (const entry of entries) {
-    const m = entry.match(/^native-profiler-(\d{8}-?\d{6})\.pftrace$/);
-    if (m) {
-      const sid = m[1];
-      if (!androidSessions.has(sid)) androidSessions.set(sid, []);
-      androidSessions.get(sid)!.push(entry);
-    }
+  for (const [sid, files] of nativeSessions) {
+    const androidFiles = files.filter(
+      (f) => f.endsWith(".pftrace") || f.endsWith(".pftrace.metadata.json")
+    );
+    const iosFiles = files.filter((f) => f.endsWith(".trace") || f.includes("_raw_"));
+    const sharedFiles = files.filter((f) => f.includes("-report.md"));
+    if (androidFiles.length > 0) androidSessions.set(sid, [...androidFiles, ...sharedFiles]);
+    if (iosFiles.length > 0) iosSessions.set(sid, [...iosFiles, ...sharedFiles]);
+    if (androidFiles.length === 0 && iosFiles.length === 0) iosSessions.set(sid, files);
   }
 
-  if (reactSessions.size === 0 && nativeSessions.size === 0 && androidSessions.size === 0) {
+  if (reactSessions.size === 0 && nativeSessions.size === 0) {
     return "_No profiling sessions found in the debug directory._";
   }
 
@@ -141,11 +148,11 @@ async function listSessions(debugDir: string): Promise<string> {
     lines.push("");
   }
 
-  if (nativeSessions.size > 0) {
+  if (iosSessions.size > 0) {
     lines.push("### Native Profiler Sessions (iOS)", "");
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
-    for (const [sid, files] of [...nativeSessions.entries()].sort().reverse()) {
+    for (const [sid, files] of [...iosSessions.entries()].sort().reverse()) {
       const hasCpu = files.some((f) => f.includes("_raw_cpu.xml"));
       const hasHangs = files.some((f) => f.includes("_raw_hangs.xml"));
       const hasLeaks = files.some((f) => f.includes("_raw_leaks.xml"));
@@ -164,8 +171,11 @@ async function listSessions(debugDir: string): Promise<string> {
     lines.push("### Native Profiler Sessions (Android)", "");
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
-    for (const [sid] of [...androidSessions.entries()].sort().reverse()) {
-      lines.push(`| \`${sid}\` | pftrace |`);
+    for (const [sid, files] of [...androidSessions.entries()].sort().reverse()) {
+      const parts: string[] = [];
+      if (files.some((f) => f.endsWith(".pftrace"))) parts.push("pftrace");
+      if (files.some((f) => f.includes("-report.md"))) parts.push("report");
+      lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
     }
     lines.push("");
   }
