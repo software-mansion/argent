@@ -57,6 +57,35 @@ describe("formatTraceFreshness", () => {
     }
   });
 
+  it("guards an out-of-range epoch (|ms| > max valid Date) — returns null, never throws RangeError", () => {
+    // A finite-but-corrupt capturedAtEpochMs (e.g. from a hand-edited
+    // .pftrace.metadata.json) past the max valid JS Date ms (8.64e15) would
+    // reach `new Date(x).toISOString()` and throw "Invalid time value".
+    // Both signs must be guarded.
+    expect(() => formatTraceFreshness(9e15, NOW)).not.toThrow();
+    expect(() => formatTraceFreshness(-9e15, NOW)).not.toThrow();
+    expect(formatTraceFreshness(9e15, NOW)).toBeNull();
+    expect(formatTraceFreshness(-9e15, NOW)).toBeNull();
+
+    // Pin the guard against the age-gate masking it: choose a `now` that puts
+    // each out-of-range epoch firmly in the "stale" path (positive age past the
+    // threshold), so the value genuinely reaches the toISOString() guard, not
+    // the earlier `ageMs < STALE_AFTER_MS` short-circuit.
+    expect(() => formatTraceFreshness(9e15, 9e15 + 24 * 60 * MIN)).not.toThrow();
+    expect(formatTraceFreshness(9e15, 9e15 + 24 * 60 * MIN)).toBeNull();
+    expect(() => formatTraceFreshness(-9e15, -9e15 + 24 * 60 * MIN)).not.toThrow();
+    expect(formatTraceFreshness(-9e15, -9e15 + 24 * 60 * MIN)).toBeNull();
+  });
+
+  it("does NOT over-guard: the exact max valid Date boundary (8.64e15) still renders", () => {
+    // 8.64e15 ms is a valid Date (+275760-09-13); the guard uses strict `>`,
+    // so the boundary itself must NOT be dropped. Drive it into the stale path
+    // and confirm it renders a normal warning without throwing.
+    const captured = 8.64e15;
+    expect(() => formatTraceFreshness(captured, captured + 60 * MIN)).not.toThrow();
+    expect(formatTraceFreshness(captured, captured + 60 * MIN)).toMatch(/Stale trace/);
+  });
+
   it("treats a future capture time as fresh (negative age)", () => {
     expect(formatTraceFreshness(NOW + 5 * MIN, NOW)).toBeNull();
   });
@@ -108,15 +137,36 @@ describe("validateAndroidAppProcess", () => {
     );
   });
 
-  it("treats a thrown pidof (e.g. pidof absent) as 'no running process' and rejects", async () => {
-    // The pidof fallback is .catch(() => "")-guarded: a thrown pidof must not
-    // crash validation, it just means "no matching process" → not-found error.
+  it("models a genuine not-match as pidof RESOLVING empty (`|| true`) → still 'was not found'", async () => {
+    // `pidof <missing> || true` exits 0 with empty stdout when nothing matches,
+    // so the real adbShell RESOLVES "" rather than rejecting. That still means
+    // "no running process" → the actionable not-found error.
     adbShell
       .mockResolvedValueOnce("package:com.example.app\n") // pm list: target absent
-      .mockRejectedValueOnce(new Error("pidof: not found")); // pidof itself throws
+      .mockResolvedValueOnce("\n"); // pidof || true: no match, empty stdout
     await expect(
       validateAndroidAppProcess("emulator-5554", "com.totally.nonexistent.app")
     ).rejects.toThrow(/was not found on emulator-5554/);
+  });
+
+  it("propagates a pidof transport error as 'Could not verify' — NOT 'was not found'", async () => {
+    // With `|| true`, a non-zero exit from a genuine not-match becomes a resolved
+    // empty stdout; so a REJECTION here is a real adb/device failure (e.g. the
+    // device dropped). Per this function's contract that must propagate with
+    // context, not be misread as "process not running".
+    adbShell
+      .mockResolvedValueOnce("package:com.example.app\n") // pm list: target absent
+      .mockRejectedValueOnce(new Error("device offline")); // pidof: real adb failure
+    let caught: Error | undefined;
+    try {
+      await validateAndroidAppProcess("emulator-5554", "com.totally.nonexistent.app");
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught?.message).toMatch(/Could not verify app_process .* device offline/);
+    // The whole point: a transport error must NOT be misreported as not-found.
+    expect(caught?.message).not.toMatch(/was not found/);
   });
 });
 

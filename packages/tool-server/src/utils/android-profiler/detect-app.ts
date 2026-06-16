@@ -28,9 +28,21 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
   if (parseUserPackages(packagesOut).has(appProcess)) return;
 
   // Not an installed package — maybe a bare process name that is running.
-  const pidOut = await adbShell(serial, `pidof ${shellQuote(appProcess)}`, {
-    timeoutMs: DETECT_TIMEOUT_MS,
-  }).catch(() => "");
+  // `pidof` exits non-zero when nothing matches; `|| true` makes that an empty
+  // stdout so a genuine adb/device failure still propagates (per this
+  // function's contract) instead of being misread as "process not running".
+  let pidOut: string;
+  try {
+    pidOut = await adbShell(serial, `pidof ${shellQuote(appProcess)} || true`, {
+      timeoutMs: DETECT_TIMEOUT_MS,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
+        `Check the device is booted and responsive, then retry.`
+    );
+  }
   if (pidOut.trim().length > 0) return;
 
   throw new Error(

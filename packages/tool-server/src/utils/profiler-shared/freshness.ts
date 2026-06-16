@@ -32,7 +32,12 @@ export function formatTraceFreshness(
   capturedAtEpochMs: number | null | undefined,
   nowMs: number
 ): string | null {
-  if (!capturedAtEpochMs || !Number.isFinite(capturedAtEpochMs)) return null;
+  if (
+    !capturedAtEpochMs ||
+    !Number.isFinite(capturedAtEpochMs) ||
+    Math.abs(capturedAtEpochMs) > 8.64e15
+  )
+    return null;
   const ageMs = nowMs - capturedAtEpochMs;
   if (ageMs < STALE_AFTER_MS) return null;
   const captured = new Date(capturedAtEpochMs).toISOString();
