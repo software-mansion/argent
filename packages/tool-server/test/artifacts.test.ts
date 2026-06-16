@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import supertest from "supertest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -7,6 +7,8 @@ import { execFileSync } from "node:child_process";
 import { createHttpApp, type HttpAppHandle } from "../src/http";
 import { ArtifactStore } from "@argent/registry";
 import type { Registry } from "@argent/registry";
+
+const isFlagEnabledMock = vi.hoisted(() => vi.fn(() => false));
 
 // supertest/superagent doesn't buffer binary bodies (gzip) by default.
 function binaryParser(res: NodeJS.ReadableStream, cb: (err: Error | null, body: Buffer) => void) {
@@ -24,6 +26,10 @@ vi.mock("../src/utils/update-checker", () => ({
   })),
   isUpdateNoteSuppressed: vi.fn(() => true),
   suppressUpdateNote: vi.fn(),
+}));
+
+vi.mock("@argent/configuration-core", () => ({
+  isFlagEnabled: isFlagEnabledMock,
 }));
 
 // A minimal Registry carrying a real ArtifactStore — the `/artifacts/:id` route
@@ -96,6 +102,79 @@ describe("ArtifactStore", () => {
       archive: "tar.gz",
     });
     expect(handle.archive).toBe("tar.gz");
+  });
+
+  it("lists safe metadata for registered artifacts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "artifact-list-store-"));
+    try {
+      const filePath = join(dir, "shot.png");
+      await writeFile(filePath, "png");
+      const store = new ArtifactStore();
+      const handle = await store.register(filePath, { mimeType: "image/png" });
+
+      expect(store.list()).toEqual([
+        {
+          id: handle.id,
+          filename: "shot.png",
+          mimeType: "image/png",
+          size: 3,
+          isDirectory: false,
+        },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("GET /artifacts", () => {
+  let handle: HttpAppHandle | null = null;
+
+  beforeEach(() => {
+    isFlagEnabledMock.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    handle?.dispose();
+    handle = null;
+    isFlagEnabledMock.mockReset();
+  });
+
+  it("is hidden unless the artifact list endpoint flag is enabled", async () => {
+    handle = createHttpApp(stubRegistry());
+    const res = await supertest(handle.app).get("/artifacts");
+
+    expect(res.status).toBe(404);
+  });
+
+  it("returns registered artifact metadata without host paths", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "artifact-list-route-"));
+    try {
+      const filePath = join(dir, "img.png");
+      await writeFile(filePath, "image");
+      const registry = stubRegistry();
+      const artifact = await registry.artifacts.register(filePath, { mimeType: "image/png" });
+      isFlagEnabledMock.mockReturnValue(true);
+
+      handle = createHttpApp(registry);
+      const res = await supertest(handle.app).get("/artifacts");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        artifacts: [
+          {
+            id: artifact.id,
+            filename: "img.png",
+            mimeType: "image/png",
+            size: 5,
+            isDirectory: false,
+          },
+        ],
+      });
+      expect(JSON.stringify(res.body)).not.toContain(filePath);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -48,6 +48,10 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "disable-auto-screenshot",
     description: "Disable the automatic screenshot captured after interaction tools.",
   },
+  {
+    name: "artifacts-list-endpoint",
+    description: "Expose GET /artifacts for remote artifact inventory consumers.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

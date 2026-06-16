@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import { isFlagEnabled } from "@argent/configuration-core";
 import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
@@ -7,7 +8,7 @@ import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
-import { makeArtifactRoute } from "./artifacts";
+import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
@@ -31,6 +32,7 @@ const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
+const ARTIFACTS_LIST_ENDPOINT_FLAG = "artifacts-list-endpoint";
 
 // Constant-time comparison so a leaked token can't be recovered byte-by-byte
 // via response-timing measurements. Both strings must be the same length to
@@ -218,6 +220,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Artifact retrieval: streams files produced by tools (screenshots, profiler
   // exports) over the remote-aware HTTP boundary so the MCP client can fetch
   // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  if (isFlagEnabled(ARTIFACTS_LIST_ENDPOINT_FLAG)) {
+    app.get("/artifacts", makeArtifactListRoute(registry));
+  }
   app.get("/artifacts/:id", makeArtifactRoute(registry));
 
   // Per-Chromium-device HTTP surface that mirrors sim-server's API: a
