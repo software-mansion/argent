@@ -95,19 +95,24 @@ async function listSessions(debugDir: string): Promise<string> {
   }
 
   // `nativeSessions` collected every native-profiler-* file regardless of
-  // extension, so split it by platform: a session with a .pftrace is Android,
-  // anything else (xctrace XML, or a leftover -report.md) is iOS. Classifying
-  // here — rather than re-scanning with separate regexes — stops an Android
-  // session (whose -report.md also matches the native prefix) from showing up
-  // under BOTH the iOS and Android headings.
+  // extension. Classify each session by the platform-specific artifacts it
+  // holds: a `.pftrace` (or its `.metadata.json` sidecar) is Android; an
+  // xctrace `.trace` bundle or `_raw_*.xml` is iOS. A session can legitimately
+  // hold both (iOS + Android captured in the same second share one
+  // discriminator-free session id), so it may appear under BOTH headings —
+  // each listing only its own files — instead of one platform hiding the
+  // other. A lone `-report.md` with no platform artifacts defaults to iOS.
   const iosSessions = new Map<string, string[]>();
   const androidSessions = new Map<string, string[]>();
   for (const [sid, files] of nativeSessions) {
-    if (files.some((f) => f.endsWith(".pftrace"))) {
-      androidSessions.set(sid, files);
-    } else {
-      iosSessions.set(sid, files);
-    }
+    const androidFiles = files.filter(
+      (f) => f.endsWith(".pftrace") || f.endsWith(".pftrace.metadata.json")
+    );
+    const iosFiles = files.filter((f) => f.endsWith(".trace") || f.includes("_raw_"));
+    const sharedFiles = files.filter((f) => f.includes("-report.md"));
+    if (androidFiles.length > 0) androidSessions.set(sid, [...androidFiles, ...sharedFiles]);
+    if (iosFiles.length > 0) iosSessions.set(sid, [...iosFiles, ...sharedFiles]);
+    if (androidFiles.length === 0 && iosFiles.length === 0) iosSessions.set(sid, files);
   }
 
   if (reactSessions.size === 0 && nativeSessions.size === 0) {
@@ -167,7 +172,8 @@ async function listSessions(debugDir: string): Promise<string> {
     lines.push("| Session ID | Files |");
     lines.push("|---|---|");
     for (const [sid, files] of [...androidSessions.entries()].sort().reverse()) {
-      const parts: string[] = ["pftrace"];
+      const parts: string[] = [];
+      if (files.some((f) => f.endsWith(".pftrace"))) parts.push("pftrace");
       if (files.some((f) => f.includes("-report.md"))) parts.push("report");
       lines.push(`| \`${sid}\` | ${parts.join(", ")} |`);
     }

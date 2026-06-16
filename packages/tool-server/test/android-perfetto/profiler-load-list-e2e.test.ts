@@ -297,6 +297,87 @@ describe("profiler-load list — E2E against real on-disk fixtures (no mocks)", 
     expect(countOccurrences(out, "20260505-050505")).toBe(1);
   });
 
+  // ---- Matrix case 7: co-timed iOS + Android under ONE session id ----
+  it("case 7 — co-timed: ONE session id with both iOS and Android artifacts appears under BOTH headings (M1)", async () => {
+    // iOS + Android captured in the same UTC second share one second-granular,
+    // discriminator-free session id in the shared debug dir. Pre-fix the whole
+    // group routed to Android and the iOS heading was HIDDEN (a visibility
+    // regression). The session must now surface under BOTH headings, each
+    // listing only its own artifacts.
+    const ts = "20260615-112028";
+    // iOS artifacts (xctrace .trace bundle + a raw CPU export).
+    await fs.mkdir(path.join(debugDir, `native-profiler-${ts}.trace`), { recursive: true });
+    await fs.writeFile(
+      path.join(debugDir, `native-profiler-${ts}_raw_cpu.xml`),
+      "<trace-query-result></trace-query-result>"
+    );
+    // Android artifacts (.pftrace + metadata sidecar).
+    await fs.writeFile(path.join(debugDir, `native-profiler-${ts}.pftrace`), "\x0a\x00bytes");
+    await fs.writeFile(
+      path.join(debugDir, `native-profiler-${ts}.pftrace.metadata.json`),
+      `${JSON.stringify(
+        { platform: "android", appProcess: "com.example.app", wallClockStartMs: 1710000000000 },
+        null,
+        2
+      )}\n`
+    );
+    // A single shared -report.md (matches the native prefix; both headings show it).
+    await fs.writeFile(path.join(debugDir, `native-profiler-${ts}-report.md`), "# report\n");
+
+    const out = await runList();
+    console.log(
+      "\n===== co-timed iOS+Android (M1) — real list output =====\n" +
+        out +
+        "\n========================================================\n"
+    );
+
+    const iosIdx = out.indexOf("### Native Profiler Sessions (iOS)");
+    const androidIdx = out.indexOf("### Native Profiler Sessions (Android)");
+    // BOTH headings present (pre-fix the iOS heading was missing entirely).
+    expect(iosIdx).toBeGreaterThan(-1);
+    expect(androidIdx).toBeGreaterThan(iosIdx);
+
+    const iosSection = out.slice(iosIdx, androidIdx);
+    const androidSection = out.slice(androidIdx);
+
+    // The iOS row shows its own files (CPU + shared report), NOT pftrace.
+    expect(iosSection).toContain(`\`${ts}\` | CPU, report |`);
+    expect(iosSection).not.toContain("pftrace");
+    // The Android row shows its own files (pftrace + shared report), NOT CPU.
+    expect(androidSection).toContain(`\`${ts}\` | pftrace, report |`);
+    expect(androidSection).not.toContain("CPU");
+
+    // The session id appears under each heading exactly once (twice overall).
+    expect(countOccurrences(out, ts)).toBe(2);
+  });
+
+  // ---- Matrix case 8: lone .pftrace.metadata.json (no bare .pftrace) ----
+  it("case 8 — lone .pftrace.metadata.json (no bare .pftrace) classifies as Android, not iOS (L1)", async () => {
+    // The metadata sidecar does NOT end in `.pftrace`, so the old
+    // `.endsWith(".pftrace")` check misclassified a session whose only Android
+    // marker was the sidecar as iOS. The `.pftrace.metadata.json` matcher fixes
+    // this; the Android Files tag must omit the (absent) bare-pftrace tag.
+    const ts = "20260707-070707";
+    await fs.writeFile(
+      path.join(debugDir, `native-profiler-${ts}.pftrace.metadata.json`),
+      `${JSON.stringify({ platform: "android", appProcess: "com.example.app" })}\n`
+    );
+    await fs.writeFile(path.join(debugDir, `native-profiler-${ts}-report.md`), "# report\n");
+
+    const out = await runList();
+    console.log(
+      "\n===== lone .pftrace.metadata.json (L1) — real list output =====\n" +
+        out +
+        "\n===============================================================\n"
+    );
+
+    expect(out).toContain("### Native Profiler Sessions (Android)");
+    expect(out).not.toContain("### Native Profiler Sessions (iOS)");
+    // No bare .pftrace on disk → the tag is just "report", never "pftrace".
+    expect(out).toContain(`\`${ts}\` | report |`);
+    expect(countOccurrences(out, ts)).toBe(1);
+  });
+
   it("case 6c — debug dir missing entirely is recreated by getDebugDir, reports no sessions, no throw", async () => {
     // Remove the debug dir. Through the real execute() entry point, getDebugDir()
     // does `fs.mkdir(dir, { recursive: true })` BEFORE listSessions reads it, so
