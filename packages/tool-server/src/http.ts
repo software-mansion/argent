@@ -81,7 +81,7 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: "ios" | "android" };
+type InvocationMeta = { platform?: "ios" | "android" | "chromium" };
 
 function extractInvocationMeta(hasCapability: boolean, data: unknown): InvocationMeta | null {
   if (!hasCapability || !data || typeof data !== "object") return null;

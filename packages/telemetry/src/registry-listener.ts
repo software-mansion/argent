@@ -4,7 +4,7 @@ import { track } from "./index.js";
 // HTTP captures request-only metadata here so registry lifecycle events can
 // include platform context without carrying raw params.
 export interface InvocationMeta {
-  platform?: "ios" | "android";
+  platform?: "ios" | "android" | "chromium";
 }
 
 interface AttachHandle {

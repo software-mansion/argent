@@ -39,7 +39,7 @@ const arrayOf =
 // Shared validators
 
 const TOOL_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
-const PLATFORM = oneOf(["ios", "android"] as const);
+const PLATFORM = oneOf(["ios", "android", "chromium"] as const);
 const UUID = matches(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   36

@@ -89,20 +89,20 @@ export interface InstallationCliUninstallCompleteProps {
 export interface ToolInvokeProps {
   tool: string;
   tool_invocation_id: string;
-  platform?: "ios" | "android";
+  platform?: "ios" | "android" | "chromium";
 }
 
 export interface ToolCompleteProps {
   tool: string;
   tool_invocation_id: string;
-  platform?: "ios" | "android";
+  platform?: "ios" | "android" | "chromium";
   duration_ms: number;
 }
 
 export interface ToolFailProps {
   tool: string;
   tool_invocation_id: string;
-  platform?: "ios" | "android";
+  platform?: "ios" | "android" | "chromium";
   duration_ms: number;
 }
 
