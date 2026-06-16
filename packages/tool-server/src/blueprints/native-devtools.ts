@@ -146,6 +146,15 @@ export interface NativeDevtoolsApi {
   isEnvSetup(): boolean;
   readonly socketPath: string;
   ensureEnvReady(): Promise<void>;
+  /**
+   * Force a fresh `ensureEnv` pass, bypassing the one-shot `ensureEnvReady`
+   * latch. `ensureEnvReady` caches success and never runs again, so it cannot
+   * notice that an out-of-band simulator reboot wiped `DYLD_INSERT_LIBRARIES`
+   * from launchd. Callers that have evidence the env may be stale (e.g. a
+   * running app that isn't connected) use this to re-apply it. `ensureEnv` is
+   * idempotent, so this is a cheap no-op when the env is already correct.
+   */
+  reverifyEnv(): Promise<void>;
   getInitFailure(): NativeDevtoolsInitFailure | null;
 
   // App-level — all keyed by bundleId
@@ -396,8 +405,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       process.stderr.write(message);
     };
 
-    const ensureEnvReady = (): Promise<void> => {
-      if (envSetup || initFailure?.givenUp) return Promise.resolve();
+    // Runs `ensureEnv` under the in-flight concurrency guard with no latch
+    // check. Overlapping callers collapse onto the same promise.
+    const runEnsureEnv = (): Promise<void> => {
       if (inFlight) return inFlight;
 
       inFlight = Promise.resolve()
@@ -415,6 +425,21 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         });
 
       return inFlight;
+    };
+
+    // Hot path: skip the simctl round-trips once the env has been applied
+    // successfully (or we've given up). Most tool calls hit this.
+    const ensureEnvReady = (): Promise<void> => {
+      if (envSetup || initFailure?.givenUp) return Promise.resolve();
+      return runEnsureEnv();
+    };
+
+    // Recovery path: re-apply the env even when the latch says it's already
+    // set, so a sim reboot that cleared DYLD_INSERT_LIBRARIES is repaired.
+    // Still honours the give-up guard so a hard-failed sim doesn't spin.
+    const reverifyEnv = (): Promise<void> => {
+      if (initFailure?.givenUp) return Promise.resolve();
+      return runEnsureEnv();
     };
 
     const isAppRunning = async (bundleId: string): Promise<boolean> => {
@@ -558,6 +583,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       isEnvSetup: () => envSetup,
       socketPath,
       ensureEnvReady,
+      reverifyEnv,
       getInitFailure: () => initFailure,
 
       isConnected: (bundleId) => connections.has(bundleId),
@@ -567,8 +593,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       async requiresAppRestart(bundleId) {
         if (connections.has(bundleId)) return false;
         // Re-verify and re-set env — handles the case where the simulator was
-        // rebooted and launchd cleared DYLD_INSERT_LIBRARIES
-        await ensureEnvReady();
+        // rebooted and launchd cleared DYLD_INSERT_LIBRARIES. Must use
+        // reverifyEnv (not ensureEnvReady): the latter latches after the first
+        // success and would skip re-applying the wiped env.
+        await reverifyEnv();
         return true;
       },
 
