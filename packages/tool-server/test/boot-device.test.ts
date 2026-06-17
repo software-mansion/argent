@@ -333,7 +333,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
@@ -347,7 +350,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
@@ -360,7 +366,10 @@ describe("boot-device — iOS path", () => {
   it("does NOT dispose TvControl for an iOS (non-tv) sim boot — that daemon self-heals", async () => {
     // Default mock list has no runtimeKind:"tv" entry, so the iOS path must
     // never touch disposeService.
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
@@ -375,7 +384,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => {
       throw new ServiceNotFoundError(`TvControl:${TV_UDID}`);
     });
@@ -400,7 +412,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
@@ -414,7 +429,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Booted", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
@@ -430,7 +448,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async (_urn: string) => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async (_urn: string) => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async (_urn: string) => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);
@@ -451,7 +472,10 @@ describe("boot-device — iOS path", () => {
     listIosSimulatorsMock.mockResolvedValueOnce([
       { udid: TV_UDID, state: "Shutdown", runtimeKind: "tv" },
     ]);
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async (urn: string) => {
       // Both TvControl and NativeDevtools may be uncached on a fresh boot; the
       // ND not-found must not fail boot any more than the TvControl one does.
@@ -475,7 +499,10 @@ describe("boot-device — iOS path", () => {
     // The validated repro is tvOS-only and the iOS boot path is heavily
     // exercised by callers passing a registry without disposeService — the
     // gate must keep the iOS path untouched.
-    const resolveService = vi.fn(async () => ({ getInitFailure: () => null }));
+    const resolveService = vi.fn(async () => ({
+      getInitFailure: () => null,
+      reverifyEnv: async () => {},
+    }));
     const disposeService = vi.fn(async () => undefined);
     const registry = { resolveService, disposeService } as unknown as Registry;
     const tool = createBootDeviceTool(registry);

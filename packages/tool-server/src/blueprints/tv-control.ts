@@ -222,7 +222,7 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // exist: respawn if the process happens to have exited (rare), and an
     // on-demand `recycleAx()` that kills + respawns to drop a stale cache.
     let axExited = false;
-    const onAxExit = (code: number | null) => {
+    const onAxExit = (_code: number | null) => {
       if (disposed) return;
       axExited = true;
     };
@@ -257,7 +257,8 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         axProc.kill("SIGKILL");
       }
       axExited = false;
-      try { fs.unlinkSync(axSock); } catch {}
+      // Best-effort: the socket file may not exist yet on first spawn.
+      try { fs.unlinkSync(axSock); } catch { /* no stale socket to remove */ }
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
       await waitForSocket(axSock, axProc, 15_000);
@@ -359,7 +360,9 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
         for (const p of [axSock, hidSock]) {
           try {
             fs.unlinkSync(p);
-          } catch {}
+          } catch {
+            /* socket already gone — nothing to clean up */
+          }
         }
       },
       events,

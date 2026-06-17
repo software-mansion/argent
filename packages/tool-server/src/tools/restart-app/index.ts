@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { RestartAppParams, RestartAppResult } from "./types";
+import type { RestartAppResult } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 

@@ -3,7 +3,7 @@ import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@arge
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { LaunchAppParams, LaunchAppResult } from "./types";
+import type { LaunchAppResult } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
