@@ -12,7 +12,7 @@ import { isEnabled } from "./consent.js";
 export const TELEMETRY_OPT_OUT_COMMAND = "argent telemetry disable";
 
 /** Link to the full privacy notice. */
-export const TELEMETRY_DETAILS_URL = "https://swmansion.com/privacy/argent-telemetry";
+export const TELEMETRY_DETAILS_URL = "https://swmansion.com/legal/argent/privacy-notice/";
 
 /**
  * The descriptive body, one entry per rendered line. The opt-out command and
