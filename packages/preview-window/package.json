@@ -8,8 +8,8 @@
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc"
   },
   "devDependencies": {
-    "electron": "^31.7.7",
     "@types/node": "^25.9.0",
+    "electron": "^42.4.1",
     "typescript": "^6.0.3"
   }
 }
