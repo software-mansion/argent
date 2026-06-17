@@ -1,5 +1,5 @@
 import { Registry } from "@argent/registry";
-import { isFlagEnabled } from "@argent/cli";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";

@@ -179,12 +179,13 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    */
   longRunning?: boolean;
   /**
-   * Gates this tool behind a feature flag (a name in @argent/cli's FLAG_REGISTRY).
-   * When set, the HTTP layer hides the tool from `GET /tools` and rejects
-   * `POST /tools/:name` with 404 unless the flag is enabled — re-checked on every
-   * request, so toggling `argent enable/disable <flag>` takes effect on the next
-   * `tools/list` without restarting the long-lived tool-server. The tool is still
-   * registered; gating happens at the exposure boundary, not at registration.
+   * Gates this tool behind a feature flag (a name in @argent/configuration-core's
+   * FLAG_REGISTRY). Enforced in TWO places, both re-checked on every request so
+   * `argent enable/disable <flag>` takes effect without restarting the long-lived
+   * tool-server: (1) the HTTP layer hides the tool from `GET /tools` and rejects
+   * `POST /tools/:name` with 404, and (2) `Registry.invokeTool` rejects it so
+   * internal dispatch paths (flows, run-sequence) can't bypass the gate. The tool
+   * is still registered; gating happens at invocation, not at registration.
    */
   featureFlag?: string;
   /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */

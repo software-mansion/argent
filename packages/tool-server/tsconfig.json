@@ -11,8 +11,7 @@
     { "path": "../registry" },
     { "path": "../update-core" },
     { "path": "../native-devtools-ios" },
-    { "path": "../native-devtools-android" },
-    { "path": "../argent-cli" }
+    { "path": "../native-devtools-android" }
   ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

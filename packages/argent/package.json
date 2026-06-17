@@ -41,8 +41,7 @@
     "scripts/postinstall.cjs"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.0",
-    "electron": "^31.7.7"
+    "@modelcontextprotocol/sdk": "^1.20.0"
   },
   "optionalDependencies": {
     "electron": "^31.7.7"

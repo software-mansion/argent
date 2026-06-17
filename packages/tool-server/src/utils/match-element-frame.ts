@@ -26,7 +26,7 @@ function normLabel(s: string | undefined): string {
 // Matches above this fraction of the screen are treated as containers (a
 // proposal accidentally resolving to a root view), not the target element —
 // mirrors the UI's `spotMaxFrameArea` guard.
-const MAX_FRAME_AREA = 0.8;
+const MAX_FRAME_AREA = 0.85;
 
 function nodeMatches(n: DescribeNode, match: VariantMatch, needle: string): boolean {
   if (!needle) return false;

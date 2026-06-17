@@ -13,7 +13,6 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "@argent/cli": "file:../argent-cli",
     "@argent/native-devtools-ios": "file:../native-devtools-ios",
     "@argent/native-devtools-android": "file:../native-devtools-android",
     "@argent/preview-window": "file:../preview-window",
