@@ -177,7 +177,8 @@ captured=""
 for attempt in 1 2 3 4 5; do
   rm -f "$SHOT_BEFORE"
   resp="$(post_tool screenshot "$(printf '{"udid":"%s","scale":1}' "$SERIAL")")"
-  src="$(jget "$resp" path)"
+  # The HTTP screenshot result is an image artifact: {data:{image:{hostPath,…}}}.
+  src="$(jget "$resp" image.hostPath)"; [ -n "$src" ] || src="$(jget "$resp" path)"
   [ -n "$src" ] && [ -f "$src" ] && cp "$src" "$SHOT_BEFORE" 2>/dev/null
   if nonblack "$SHOT_BEFORE"; then captured=1; break; fi
   echo "attempt ${attempt}: screenshot missing/black; retrying..."
@@ -208,7 +209,7 @@ else
 fi
 # Capture the post-navigation screen (best-effort).
 resp="$(post_tool screenshot "$(printf '{"udid":"%s","scale":1}' "$SERIAL")")"
-src="$(jget "$resp" path)"
+src="$(jget "$resp" image.hostPath)"; [ -n "$src" ] || src="$(jget "$resp" path)"
 [ -n "$src" ] && [ -f "$src" ] && cp "$src" "${OUT_DIR}/kepler-after.png" 2>/dev/null && echo "saved ${OUT_DIR}/kepler-after.png"
 endg
 
