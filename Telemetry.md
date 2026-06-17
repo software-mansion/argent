@@ -2,7 +2,7 @@
 
 Effective date: 16 June 2026 · Version: 1.0
 
-This notice is a product-specific supplement to the Software Mansion Privacy Policy (the "Policy") and applies to telemetry collected by Argent, a Software Mansion Software Product. Capitalised terms used but not defined here (including Personal Data, Usage Data, Legitimate Interest, EEA and Software Mansion Software Product) have the meaning given to them in the Policy. Where this notice and the Policy differ in respect of Argent telemetry, this notice prevails.
+This notice is a product-specific supplement to the [Software Mansion Privacy Policy](https://swmansion.com/) (the "Policy") and applies to telemetry collected by Argent, a Software Mansion Software Product. Capitalised terms used but not defined here (including Personal Data, Usage Data, Legitimate Interest, EEA and Software Mansion Software Product) have the meaning given to them in the Policy. Where this notice and the Policy differ in respect of Argent telemetry, this notice prevails.
 
 Argent collects a small amount of usage and diagnostic data ("telemetry") to help us understand how the tool is used and to make it more reliable. We have designed it to be minimal by default: we do not collect the content of your work - no source code, no file paths, no tool inputs, no application data, no error messages, and no device identifiers.
 
