@@ -42,6 +42,7 @@ static inline id connectLocalHub(int *serverPidOut){
   NSError *err=nil; int spid=-1;
   id conn=((id(*)(id,SEL,AuthorizationRef,int*,NSError**))objc_msgSend)((id)objc_getClass("DTServiceHubClient"),
       sel_registerName("localConnectionWithAuthorization:returningServerPid:error:"),auth,&spid,&err);
+  if(auth) AuthorizationFree(auth, kAuthorizationFlagDefaults);
   if(serverPidOut)*serverPidOut=spid;
   return conn;
 }

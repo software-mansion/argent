@@ -17,16 +17,51 @@ function xmlEscape(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-function toBytes(s: string): number {
-  const m = /([\d.]+)\s*([KMG]?)/.exec(s.trim());
-  if (!m) return 0;
-  const mult: Record<string, number> = { K: 1024, M: 1048576, G: 1073741824 };
-  return Math.round(parseFloat(m[1]) * (mult[m[2]] ?? 1));
-}
-
 export interface LeakSummary {
   leaks: number;
   bytes: number;
+}
+
+/** One leaked-object group: per-object size (downstream multiplies size×count). */
+export interface LeakRow {
+  type: string;
+  /** PER-OBJECT size in bytes (the `[N]` bracket), not the retained-subgraph total. */
+  size: number;
+  count: number;
+}
+
+/**
+ * Parse the ROOT-LEAK lines of `leaks(1)` output into per-object leak rows.
+ * Pure (no I/O) so it can be unit-tested. Line shapes:
+ *   typed:   "  9 (1.25K) ROOT LEAK: <NSMutableDictionary 0x..> [32]  item count: 3"
+ *   untyped: "  1 (1.00K) ROOT LEAK: 0x106657000 [1024]  length: 34  \"reanimated::Foo\""
+ *   bare:    "  1 (16 bytes) ROOT LEAK: 0x1202b7d20 [16]"
+ * The bracket `[N]` is the PER-OBJECT size; the parenthesised `(…)` is the group
+ * total (root + retained subgraph) and must NOT be used as the per-object size.
+ */
+export function parseLeakLines(txt: string): LeakRow[] {
+  const out: LeakRow[] = [];
+  const ROOT = /^\s*(\d+)\s+\([^)]+\)\s+ROOT LEAK:\s+(.+)$/;
+  for (const line of txt.split("\n")) {
+    const m = ROOT.exec(line);
+    if (!m) continue;
+    const count = parseInt(m[1], 10);
+    const body = m[2];
+    const szm = /\[(\d+)\]/.exec(body);
+    const size = szm ? parseInt(szm[1], 10) : 0;
+    // type: the `<Type …>` token (allowing module-qualified `.`/`::`), else the
+    // trailing "string" hint for untyped blocks, else a Malloc-size label.
+    let type: string;
+    const tm = /^<([^\s>]+)/.exec(body);
+    if (tm) {
+      type = tm[1];
+    } else {
+      const hint = /"([^"]+)"/.exec(body);
+      type = hint ? hint[1].slice(0, 120) : `Malloc ${size} bytes`;
+    }
+    out.push({ type, size, count });
+  }
+  return out;
 }
 
 /**
@@ -51,21 +86,11 @@ export async function emitLeaks(udid: string, pid: number, out: string): Promise
     txt = (err.stdout ?? "") + (err.stderr ?? "");
   }
 
-  const rows: string[] = [];
-  // e.g. "  9 (1.25K) ROOT LEAK: <NSMutableDictionary 0x..> [32]  item count: 3"
-  const ROOT = /^\s*(\d+)\s+\(([^)]+)\)\s+ROOT LEAK:\s+<([A-Za-z_][\w]*)[^>]*>\s+\[(\d+)\]/;
-  for (const line of txt.split("\n")) {
-    const m = ROOT.exec(line);
-    if (!m) continue;
-    const count = parseInt(m[1], 10);
-    const total = toBytes(m[2]);
-    const typ = m[3];
-    const objsz = parseInt(m[4], 10);
-    rows.push(
-      `<row leaked-object="${xmlEscape(typ)}" size="${total || objsz}" count="${count}" ` +
-        `responsible-frame="${xmlEscape(typ)}" responsible-library=""/>`
-    );
-  }
+  const rows = parseLeakLines(txt).map(
+    (r) =>
+      `<row leaked-object="${xmlEscape(r.type)}" size="${r.size}" count="${r.count}" ` +
+      `responsible-frame="${xmlEscape(r.type)}" responsible-library=""/>`
+  );
   const xml =
     `<?xml version="1.0"?>\n<trace-toc><run number="1"><tracks>` +
     `<track name="Leaks"><details><detail name="Leaks">${rows.join("")}</detail></details></track>` +
@@ -100,7 +125,8 @@ export async function captureAllocations(udid: string, pid: number): Promise<All
   } catch (e: unknown) {
     txt = (e as { stdout?: string }).stdout ?? "";
   }
-  const summary = txt.slice(txt.indexOf("All zones:"));
+  const zonesIdx = txt.indexOf("All zones:");
+  const summary = zonesIdx >= 0 ? txt.slice(zonesIdx) : "";
   const nodes = /All zones:\s+(\d+)\s+nodes/.exec(txt);
   const objc = /(\d+)\s+ObjC classes/.exec(txt);
   const swift = /(\d+)\s+Swift classes/.exec(txt);

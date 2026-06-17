@@ -1,54 +1,51 @@
-// simprofiler capture: drive coreprofilesessiontap on the booted sim via the
+// ios-profiler capture: drive coreprofilesessiontap on the booted sim via the
 // host DTServiceHub (no xctrace), collect the raw kdebug stream to a file.
 // usage: capture <udid> <seconds> <out.bin>
+// stdout is intentionally silent (the kdebug stream goes to <out.bin>); failures
+// report on stderr and exit non-zero so the TS layer never trusts a partial file.
 #import "conn.h"
 
 int main(int argc, char **argv){
-  setbuf(stdout,NULL);
-  if(argc<4){ printf("usage: capture <udid> <seconds> <out.bin>\n"); return 1; }
+  if(argc<4){ fprintf(stderr,"usage: capture <udid> <seconds> <out.bin>\n"); return 1; }
   double secs = atof(argv[2]);
   @autoreleasepool{
     loadInstrumentsFrameworks();
     int spid=-1; id conn=connectLocalHub(&spid);
-    printf("conn=%p serverPid=%d\n", conn, spid);
-    if(!conn) return 2;
+    if(!conn){ fprintf(stderr,"capture: could not connect to DTServiceHub\n"); return 2; }
     ((void(*)(id,SEL))objc_msgSend)(conn, sel_registerName("resume"));
     ((void(*)(id,SEL,id))objc_msgSend)(conn, sel_registerName("_notifyOfPublishedCapabilities:"),
         (@{@"com.apple.private.DTXBlockCompression": @2, @"com.apple.private.DTXConnection": @1}));
 
     id ch = ((id(*)(id,SEL,id))objc_msgSend)(conn, sel_registerName("makeChannelWithIdentifier:"),
         @"com.apple.instruments.server.services.coreprofilesessiontap");
-    printf("coreprofile channel=%p\n", ch);
+    if(!ch){ fprintf(stderr,"capture: could not open coreprofilesessiontap channel\n"); return 2; }
 
-    printf("a1: channel ok\n");
     NSString *outPath=[NSString stringWithUTF8String:argv[3]];
     [[NSFileManager defaultManager] createFileAtPath:outPath contents:nil attributes:nil];
     NSFileHandle *fh=[NSFileHandle fileHandleForWritingAtPath:outPath];
-    printf("a2: file handle=%p\n", fh);
+    if(!fh){ fprintf(stderr,"capture: cannot open output file %s\n", argv[3]); return 2; }
 
-    __block long long totalBytes=0; __block int dataMsgs=0; __block int objMsgs=0;
-    __block NSString *firstObj=nil; __block int anyMsg=0;
+    __block long long totalBytes=0;
+    __block BOOL writeFailed=NO;
     void (^h)(id) = ^(id msg){
-      anyMsg++;
       id data=((id(*)(id,SEL))objc_msgSend)(msg, sel_registerName("data"));
-      id obj =((id(*)(id,SEL))objc_msgSend)(msg, sel_registerName("object"));
-      unsigned long mt=((unsigned long(*)(id,SEL))objc_msgSend)(msg, sel_registerName("messageType"));
-      if(anyMsg<=5) printf("[msg #%d] class=%s type=%lu dataLen=%lu obj=%s\n", anyMsg,
-          object_getClassName(msg), mt,
-          [data isKindOfClass:[NSData class]]?(unsigned long)[data length]:0,
-          obj?object_getClassName(obj):"nil");
       if([data isKindOfClass:[NSData class]] && [data length]>0){
-        dataMsgs++; totalBytes+=[data length];
+        totalBytes+=[data length];
         uint32_t len=(uint32_t)[data length];
-        @try{ [fh writeData:[NSData dataWithBytes:&len length:4]]; [fh writeData:data]; }@catch(id e){}
-      } else if(obj){ objMsgs++; if(!firstObj) firstObj=[obj description]; }
+        @try{
+          [fh writeData:[NSData dataWithBytes:&len length:4]];
+          [fh writeData:data];
+        }@catch(id e){
+          // disk full / IO error — the stream would silently truncate, so flag it
+          // and exit non-zero rather than leave a valid-looking partial file.
+          if(!writeFailed) fprintf(stderr,"capture: write failed: %s\n", [[e description]UTF8String]);
+          writeFailed=YES;
+        }
+      }
     };
     ((void(*)(id,SEL,id))objc_msgSend)(ch, sel_registerName("setMessageHandler:"), h);
-    printf("a3: channel handler set\n");
 
-    printf("A: handlers set, channel resumed\n");
     NSString *uuid=[[NSUUID UUID] UUIDString];
-    printf("B: uuid=%s\n", uuid.UTF8String);
     // Periodic "Profile Every Thread" (PET) time trigger:
     //   tk=1  -> DTKPTriggerTime (periodic timer), NOT the kdebug-event trigger (tk=3,
     //            which only samples on syscalls/context-switches and so massively
@@ -74,19 +71,12 @@ int main(int argc, char **argv){
       @"rp": @100,
       @"bm": @0,
     };
-    printf("C: config built: %s\n", [[config description] UTF8String]);
 
-    printf("sending setConfig: + start ...\n");
     ((void(*)(id,SEL,id,id))objc_msgSend)(ch, sel_registerName("sendMessage:replyHandler:"),
-        DTXMsg1(sel_registerName("setConfig:"), config), ^(id r){
-          id o=((id(*)(id,SEL))objc_msgSend)(r,sel_registerName("object"));
-          printf("setConfig reply: %s\n", o?[[o description]UTF8String]:[[r description]UTF8String]); });
+        DTXMsg1(sel_registerName("setConfig:"), config), (id)nil);
     ((void(*)(id,SEL,id,id))objc_msgSend)(ch, sel_registerName("sendMessage:replyHandler:"),
-        DTXMsg0(sel_registerName("start")), ^(id r){
-          id o=((id(*)(id,SEL))objc_msgSend)(r,sel_registerName("object"));
-          printf("start reply: %s\n", o?[[o description]UTF8String]:[[r description]UTF8String]); });
+        DTXMsg0(sel_registerName("start")), (id)nil);
 
-    printf("collecting for %.1fs ...\n", secs);
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:secs]];
 
     ((void(*)(id,SEL,id,id))objc_msgSend)(ch, sel_registerName("sendMessage:replyHandler:"),
@@ -94,9 +84,7 @@ int main(int argc, char **argv){
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
     [fh closeFile];
 
-    printf("\nRESULT: dataMsgs=%d objMsgs=%d totalBytes=%lld -> %s\n",
-        dataMsgs, objMsgs, totalBytes, outPath.UTF8String);
-    if(firstObj) printf("firstObj: %s\n", [firstObj.length>300?[firstObj substringToIndex:300]:firstObj UTF8String]);
+    if(writeFailed){ fprintf(stderr,"capture: output truncated by write error\n"); return 4; }
     return totalBytes>0 ? 0 : 3;
   }
 }

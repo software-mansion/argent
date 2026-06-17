@@ -122,11 +122,19 @@ export async function emitCpuAndHangs(
   for (const s of psamples) for (const f of s.frames) uniq.set("0x" + f.toString(16), f);
   const sym = await symbolicate(pid, [...uniq.values()]);
 
-  // weight = median inter-sample gap per tid
+  // kd_buf timestamps are mach-absolute TICKS; the downstream pipeline expects
+  // nanoseconds (sample-time/weight/hang-duration all interpreted as ns). Convert
+  // via the header tick_frequency, relative to the first sample so values stay
+  // small and exact. tickFrequency=0 (unknown) → assume the stream is already ns.
+  const nsPerTick = parsed.tickFrequency > 0 ? 1e9 / parsed.tickFrequency : 1;
+  const base = psamples.reduce((m, s) => Math.min(m, s.timestamp), Infinity);
+  const toNs = (ticks: number) => Math.round((ticks - base) * nsPerTick);
+
+  // weight = median inter-sample gap per tid (in ns)
   const tsByTid = new Map<number, number[]>();
   for (const s of psamples) {
     const arr = tsByTid.get(s.tid) ?? [];
-    arr.push(s.timestamp);
+    arr.push(toNs(s.timestamp));
     tsByTid.set(s.tid, arr);
   }
   const weightByTid = new Map<number, number>();
@@ -146,7 +154,7 @@ export async function emitCpuAndHangs(
       );
     }
     rows.push(
-      `<row><sample-time id="${nid()}" fmt="">${s.timestamp}</sample-time>` +
+      `<row><sample-time id="${nid()}" fmt="">${toNs(s.timestamp)}</sample-time>` +
         `<thread id="${nid()}" fmt="${xmlEscape(name)} ${s.tid}"/>` +
         `<weight id="${nid()}" fmt="">${weightByTid.get(s.tid) ?? 1000000}</weight>` +
         `<backtrace id="${nid()}">${bt.join("")}</backtrace></row>`

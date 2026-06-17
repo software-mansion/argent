@@ -11,6 +11,7 @@
     { "path": "packages/argent-installer" },
     { "path": "packages/argent-mcp" },
     { "path": "packages/argent-cli" },
-    { "path": "packages/argent" }
+    { "path": "packages/argent" },
+    { "path": "packages/argent-ios-profiling" }
   ]
 }

@@ -50,9 +50,11 @@ captureProfile (TS)
 ```
 
 The TS layer is the orchestrator; the ObjC binary is a leaf that only produces raw bytes. The
-`src/parser/kdebug.ts` parser is a faithful port of the pykdebugparser callstack path (validated
-byte-for-byte against the Python reference — identical 36,028-callstack output), so the package
-has zero runtime dependency on `pymobiledevice3` / `pykdebugparser`.
+`src/parser/kdebug.ts` parser is a port of the pykdebugparser callstack path — during development
+it was diffed against the Python reference on a real capture (identical 36,028-callstack output),
+and its framing/threadmap/record-alignment logic is covered by the unit tests
+(`src/parser/kdebug.test.ts`) — so the package has zero runtime dependency on `pymobiledevice3` /
+`pykdebugparser`.
 
 ## Build
 

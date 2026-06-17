@@ -16,24 +16,37 @@ int main(int argc,char**argv){
         @"com.apple.instruments.server.services.sysmontap");
     // procAttrs order MUST match how we read the row below
     NSArray *procAttrs=@[@"pid",@"physFootprint",@"memResidentSize",@"cpuUsage"];
-    __block int dumped=0;
     ((void(*)(id,SEL,id))objc_msgSend)(ch, sel_registerName("setMessageHandler:"), ^(id o){
-      // sysmontap update payload = OS_dispatch_data wrapping a binary plist.
+      // sysmontap update payload = OS_dispatch_data wrapping an NSKeyedArchiver
+      // graph of plain Foundation containers — decode it with the secure (non
+      // deprecated) unarchiver, allowlisting the container + leaf classes.
       id pl=((id(*)(id,SEL))objc_msgSend)(o,sel_registerName("object"));
       NSData *d = [pl isKindOfClass:[NSData class]] ? (NSData*)pl : nil;
       if(!d) return;
-      id top=nil; @try{ top=[NSKeyedUnarchiver unarchiveObjectWithData:d]; }@catch(id e){}
-      if(!top) return;      NSArray *arr = [top isKindOfClass:[NSArray class]] ? top : @[top];
+      NSSet *allowed=[NSSet setWithObjects:[NSArray class],[NSDictionary class],
+          [NSNumber class],[NSString class],[NSData class],[NSDate class],nil];
+      id top=nil; @try{
+        top=((id(*)(id,SEL,NSSet*,NSData*,NSError**))objc_msgSend)(
+            [NSKeyedUnarchiver class],
+            sel_registerName("unarchivedObjectOfClasses:fromData:error:"), allowed, d, NULL);
+      }@catch(id e){}
+      if(!top) return;
+      NSArray *arr = [top isKindOfClass:[NSArray class]] ? top : @[top];
       for(id e in arr){
         if(![e isKindOfClass:[NSDictionary class]]) continue;
         NSDictionary *procs=e[@"Processes"];
         if(![procs isKindOfClass:[NSDictionary class]]) continue;
         id row=procs[@(tpid)] ?: procs[[@(tpid) stringValue]];
         if([row isKindOfClass:[NSArray class]] && [row count]>=2){
-          // procAttrs=[pid,physFootprint,memResidentSize]; row may or may not include pid
-          NSUInteger base=([row count]>=3)?1:0;
-          double fp=[row[base] doubleValue]/1048576.0, rss=[row[base+1] doubleValue]/1048576.0;
-          printf("pid %d  physFootprint=%.1f MB  resident=%.1f MB\n", tpid, fp, rss);
+          // The row values line up with procAttrs, but sysmontap may or may not
+          // echo the leading `pid` column. Detect it deterministically: if the
+          // first value equals the target pid, footprint/resident start at index 1
+          // (footprints are millions of bytes, so they never collide with a pid).
+          NSUInteger base=([row[0] longLongValue]==(long long)tpid)?1:0;
+          if([row count]>=base+2){
+            double fp=[row[base] doubleValue]/1048576.0, rss=[row[base+1] doubleValue]/1048576.0;
+            printf("pid %d  physFootprint=%.1f MB  resident=%.1f MB\n", tpid, fp, rss);
+          }
         }
       }
     });
