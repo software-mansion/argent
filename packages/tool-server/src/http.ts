@@ -245,7 +245,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // (preview UI, integration tests, custom dashboards).
   app.use("/chromium-server/:deviceId", async (req: Request, res: Response, next) => {
     idleTimer.touch();
-    const deviceId = req.params.deviceId!;
+    const deviceId = req.params.deviceId as string;
     const device = resolveDevice(deviceId);
     if (device.platform !== "chromium") {
       res.status(400).json({
@@ -323,7 +323,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       next();
     },
     async (req: Request, res: Response) => {
-      const name = req.params.name!;
+      const name = req.params.name as string;
 
       const def = registry.getTool(name);
       if (!def) {
