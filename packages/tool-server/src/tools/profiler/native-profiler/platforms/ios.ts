@@ -15,6 +15,7 @@ import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
+import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
@@ -456,5 +457,9 @@ export async function analyzeNativeProfilerIos(
     payload,
     traceFile: api.traceFile,
     exportErrors,
+    // wallClockStartMs is the recording's start time, set at start on the
+    // session that persists for the whole tool-server run. A large gap to "now"
+    // means analyze is reusing a trace from an earlier capture, not a fresh one.
+    freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
   });
 }
