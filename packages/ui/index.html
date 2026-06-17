@@ -2553,18 +2553,33 @@
           );
         let best = null,
           bestScore = Infinity;
+        // The size gate is a PREFERENCE for the first match, never an eliminator.
+        // `fallback` keeps the nearest candidate even when the gate rejects it, so
+        // a clearly on-screen element is never reported off-screen just because the
+        // propose-time frame is a poor size hint: that frame is a thumbnail CROP
+        // region (often a whole component) while `match` can anchor on a small
+        // sub-element inside it — e.g. crop the header band, anchor on its tiny
+        // "Export" button — so the seed size legitimately dwarfs the real match.
+        let fallback = null,
+          fbScore = Infinity;
         for (const n of pool) {
           const f = n.frame;
           const score = anchor ? dist(f) : f.width * f.height;
+          if (score < fbScore) {
+            fbScore = score;
+            fallback = n;
+          }
           if (anchor && !hasDesc && !sizeMatches(f)) continue; // size gate only bootstraps identity
           if (score < bestScore) {
             bestScore = score;
             best = n;
           }
         }
-        // A locked identity must never be dropped over a size wobble: if the size
-        // gate isn't in play (hasDesc) `best` is simply the nearest identity match.
-        return best;
+        // A locked identity must never be dropped over a size wobble (hasDesc →
+        // `best` is the nearest identity match). When the size gate rejects every
+        // candidate (an unreliable propose-time frame), fall back to the nearest
+        // match rather than reporting a visible element off-screen.
+        return best || fallback;
       }
 
       // Topmost on-screen node whose frame contains a normalized point
