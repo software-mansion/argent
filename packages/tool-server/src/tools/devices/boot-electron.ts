@@ -176,7 +176,8 @@ export async function bootElectronApp(options: BootElectronOptions): Promise<Ele
     });
   } catch (err) {
     throw new Error(
-      `Electron boot: failed to spawn ${launcher.command}: ${err instanceof Error ? err.message : String(err)}`
+      `Electron boot: failed to spawn ${launcher.command}: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err }
     );
   }
 

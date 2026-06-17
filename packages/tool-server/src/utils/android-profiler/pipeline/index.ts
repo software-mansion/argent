@@ -119,9 +119,9 @@ export async function runAndroidProfilerPipeline(
     exportErrors.cpu =
       `No CPU samples were captured for cmdline \`${appPackage}\`. ` +
       `The most common cause is the target app being non-debuggable (release build) ` +
-      `without a \`<profileable shell=\"true\">\` entry in its AndroidManifest.xml. ` +
+      `without a \`<profileable shell="true">\` entry in its AndroidManifest.xml. ` +
       `Without that, Perfetto silently drops the linux.perf data source. ` +
-      `Add \`<profileable android:shell=\"true\"/>\` to the \`<application>\` element ` +
+      `Add \`<profileable android:shell="true"/>\` to the \`<application>\` element ` +
       `and rebuild, or run a debug variant of the app.`;
   }
 

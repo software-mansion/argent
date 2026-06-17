@@ -1,7 +1,7 @@
 export class TypedEventEmitter<
   T extends Record<string, (...args: any[]) => void> = Record<string, (...args: any[]) => void>,
 > {
-  private listeners = new Map<keyof T, Set<Function>>();
+  private listeners = new Map<keyof T, Set<(...args: unknown[]) => void>>();
 
   on<K extends keyof T>(event: K, listener: T[K]): this {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set());

@@ -8,7 +8,6 @@ import {
   addClaudePermission,
   removeClaudePermission,
 } from "../src/mcp-configs.js";
-import { readToml } from "../src/utils.js";
 import {
   cleanupSkillsLockFile,
   getBundledSkillNames,
@@ -17,11 +16,6 @@ import {
 } from "../src/uninstall.js";
 
 let tmpDir: string;
-
-function readConfigFile(filePath: string): Record<string, unknown> {
-  if (filePath.endsWith(".toml")) return readToml(filePath);
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
 
 function writeFile(filePath: string, contents = "test"): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

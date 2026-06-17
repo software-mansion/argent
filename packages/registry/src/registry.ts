@@ -291,7 +291,7 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
-        this._teardown(urn, error);
+        void this._teardown(urn, error);
       });
 
       return instance.api as T;

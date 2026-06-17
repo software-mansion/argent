@@ -342,7 +342,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // server-readable paths BEFORE schema validation, so the tool's zod
       // schema only ever sees the string params it declares. 422 on a file
       // that is reachable neither in place nor via uploaded content.
-      let bodyArgs = req.body;
+      // Type kept as `any` (matching req.body) so the downstream optional-chained
+      // access below — parsedData?.udid / parsedData?.device_id — type-checks as
+      // it did before. The `= req.body` initializer was dead: the try always
+      // assigns bodyArgs before it is read, and the catch never falls through.
+      let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       try {
         const resolved = await resolveFileInputs(def, req.body);
