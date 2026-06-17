@@ -90,15 +90,12 @@ Package: ${PACKAGE_NAME}
 // scripts/bundle-tools.cjs and shipped alongside this dispatcher in dist/.
 // Typed against the workspace packages so calls are still checked.
 async function loadInstaller(): Promise<typeof Installer> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await import("./installer.mjs" as any)) as typeof Installer;
 }
 async function loadMcp(): Promise<typeof Mcp> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await import("./mcp-server.mjs" as any)) as typeof Mcp;
 }
 async function loadCli(): Promise<typeof Cli> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await import("./cli-cmds.mjs" as any)) as typeof Cli;
 }
 

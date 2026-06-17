@@ -105,8 +105,8 @@ Returns { started_at, startedAtEpochMs, hermes_version, detected_architecture } 
 Fails if the Hermes runtime is not reachable or the Metro CDP connection cannot be established.`,
     zodSchema,
     // RN-only: bootstraps the React DevTools backend and uses Hermes'
-    // Profiler.start. A CDP-direct CPU profile for Electron is tracked as a
-    // follow-up; the React commit recording has no Electron analog.
+    // Profiler.start. A CDP-direct CPU profile for Chromium is tracked as a
+    // follow-up; the React commit recording has no Chromium analog.
     capability: RN_ONLY_TOOL_CAPABILITY,
     services: () => ({}),
     async execute(_services, params) {

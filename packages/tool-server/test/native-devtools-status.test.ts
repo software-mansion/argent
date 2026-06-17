@@ -12,9 +12,16 @@ function makeNativeApi(options: {
   connected?: boolean;
   appRunning?: boolean;
   initFailure?: NativeDevtoolsInitFailure | null;
-}): { api: NativeDevtoolsApi; ensureEnvReady: ReturnType<typeof vi.fn> } {
+}): {
+  api: NativeDevtoolsApi;
+  ensureEnvReady: ReturnType<typeof vi.fn>;
+  reverifyEnv: ReturnType<typeof vi.fn>;
+} {
   let envSetup = options.envSetup ?? false;
   const ensureEnvReady = vi.fn(async () => {
+    envSetup = true;
+  });
+  const reverifyEnv = vi.fn(async () => {
     envSetup = true;
   });
 
@@ -23,6 +30,7 @@ function makeNativeApi(options: {
       isEnvSetup: () => envSetup,
       socketPath: "/tmp/mock.sock",
       ensureEnvReady,
+      reverifyEnv,
       getInitFailure: () => options.initFailure ?? null,
       isConnected: () => options.connected ?? false,
       isAppRunning: async () => options.appRunning ?? false,
@@ -40,6 +48,7 @@ function makeNativeApi(options: {
       queryViewHierarchy: async () => ({}),
     },
     ensureEnvReady,
+    reverifyEnv,
   };
 }
 
@@ -61,6 +70,50 @@ describe("native-devtools-status tool", () => {
     });
 
     expect(ensureEnvReady).toHaveBeenCalledOnce();
+  });
+
+  it("re-applies the env when the app is not connected (repairs a stale latch after a sim reboot)", async () => {
+    // envSetup:false models the cleared launchd state after an out-of-band
+    // reboot; reverifyEnv must run and bring it back to true.
+    const { api, reverifyEnv } = makeNativeApi({
+      appRunning: true,
+      connected: false,
+      envSetup: false,
+    });
+
+    await expect(
+      nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.example.app" }
+      )
+    ).resolves.toEqual({
+      envSetup: true,
+      appRunning: true,
+      connected: false,
+      requiresRestart: true,
+      nextLaunchWillBeInjected: true,
+    });
+
+    expect(reverifyEnv).toHaveBeenCalledOnce();
+  });
+
+  it("does not re-apply the env when the app is already connected", async () => {
+    const { api, reverifyEnv } = makeNativeApi({ appRunning: true, connected: true });
+
+    await expect(
+      nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: "11111111-1111-1111-1111-111111111111", bundleId: "com.example.app" }
+      )
+    ).resolves.toEqual({
+      envSetup: true,
+      appRunning: true,
+      connected: true,
+      requiresRestart: false,
+      nextLaunchWillBeInjected: true,
+    });
+
+    expect(reverifyEnv).not.toHaveBeenCalled();
   });
 
   it("reports a stopped app as launch-ready without requiring restart", async () => {

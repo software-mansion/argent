@@ -104,7 +104,7 @@ export class CDPClient {
     this.wsUrl = wsUrl;
     // Default true matches Metro / Expo. Chromium's devtools-target rejects
     // upgrade requests that carry an Origin header (since the protocol is
-    // meant for IDE clients, not pages), so Electron CDP callers must pass
+    // meant for IDE clients, not pages), so Chromium CDP callers must pass
     // `sendOrigin: false`.
     this.sendOrigin = options?.sendOrigin !== false;
   }
@@ -114,7 +114,7 @@ export class CDPClient {
       // RN >= 0.85 Metro requires an Origin header. Expo's dev server does an
       // exact match against its serverBaseUrl (127.0.0.1), so we normalize
       // localhost → 127.0.0.1 in the Origin to satisfy both servers.
-      // For Chromium CDP (Electron), the same header triggers a 403, so we
+      // For Chromium CDP (Chromium), the same header triggers a 403, so we
       // honour the constructor's `sendOrigin: false`.
       let headers: Record<string, string> | undefined;
       if (this.sendOrigin) {
@@ -170,6 +170,40 @@ export class CDPClient {
       ws.close();
       setTimeout(resolve, 1000);
     });
+  }
+
+  /**
+   * Re-point this client at a different CDP WebSocket target (e.g. switching
+   * the active browser tab) WITHOUT emitting `disconnected`.
+   *
+   * Object identity is preserved, so existing references to this client
+   * (`server.cdp`, `api.cdp`, and every closure that captured it) automatically
+   * target the new tab after the swap — no rewiring needed. Callers that wire
+   * `disconnected` to teardown/termination therefore do not see a tab switch as
+   * a device loss.
+   *
+   * In-flight requests are rejected and per-connection state (enabled domains,
+   * parsed scripts) is reset — the new target starts fresh, so the caller must
+   * re-enable any domains it needs.
+   */
+  async reconnect(newWsUrl: string): Promise<void> {
+    const old = this.ws;
+    if (old) {
+      // Drop our handlers BEFORE closing so the impending close/error does not
+      // fire the `disconnected` event (which callers treat as a fatal teardown).
+      old.removeAllListeners();
+      this.ws = null;
+      try {
+        old.close();
+      } catch {
+        /* already closing */
+      }
+    }
+    // Reject in-flight requests and clear per-connection caches, but keep this
+    // client object alive to receive the new socket.
+    this.cleanup();
+    this.wsUrl = newWsUrl;
+    await this.connect();
   }
 
   isConnected(): boolean {
@@ -244,7 +278,7 @@ export class CDPClient {
       this.evaluate(expression, { timeout }).catch((err) => {
         this.pendingBindings.delete(id);
         clearTimeout(timer);
-        reject(err);
+        reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
   }
@@ -258,9 +292,14 @@ export class CDPClient {
   }
 
   private handleMessage(raw: WebSocket.RawData): void {
+    const text = Buffer.isBuffer(raw)
+      ? raw.toString()
+      : Array.isArray(raw)
+        ? Buffer.concat(raw).toString()
+        : Buffer.from(raw).toString();
     let msg: Record<string, unknown>;
     try {
-      msg = JSON.parse(raw.toString());
+      msg = JSON.parse(text);
     } catch {
       return;
     }

@@ -46,7 +46,8 @@ describe("screenshotDiffTool", () => {
           device: {
             id: "ABC",
             platform: "android",
-            kind: "emulator",
+            // A non-`emulator-*` serial resolves to a physical device.
+            kind: "device",
           },
         },
       },

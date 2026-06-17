@@ -69,8 +69,8 @@ function platformMatrix(
       return capability.apple;
     case "android":
       return capability.android;
-    case "electron":
-      return capability.electron;
+    case "chromium":
+      return capability.chromium;
   }
 }
 

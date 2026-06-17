@@ -224,7 +224,7 @@ export interface StopPerfettoResult {
 export async function stopPerfetto(opts: StopPerfettoOptions): Promise<StopPerfettoResult> {
   // First-poll check: if the daemon is already gone, skip the SIGTERM and pull
   // whatever's on disk.
-  let aliveBeforeSignal = false;
+  let aliveBeforeSignal: boolean;
   try {
     const out = await adbShell(opts.serial, `[ -d /proc/${opts.pid} ] && echo alive || echo gone`, {
       timeoutMs: STOP_PROBE_TIMEOUT_MS,

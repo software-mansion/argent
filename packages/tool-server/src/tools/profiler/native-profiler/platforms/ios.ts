@@ -61,7 +61,27 @@ interface AppInfo {
   ApplicationType: string;
 }
 
-function detectRunningApp(udid: string): string {
+interface DetectedApp {
+  /** CFBundleExecutable — used for human-readable messages and api.appProcess. */
+  executable: string;
+  /**
+   * Host PID of the running app, parsed from `launchctl list`. We attach by PID
+   * rather than by name because Xcode 26.5's `xctrace --attach` matches the app
+   * display name (not CFBundleExecutable, as Xcode <= 26.3 did), so passing the
+   * executable name fails with "Cannot find process matching name". A PID is
+   * unambiguous and works across Xcode versions. For simulator apps the launchd
+   * PID is also the host PID xctrace attaches to. Null when the target is not
+   * currently running (then we fall back to attaching by name).
+   */
+  pid: number | null;
+}
+
+/**
+ * Enumerate the user apps currently running on the simulator, each paired with
+ * its host PID. The PID is the leading column of `launchctl list`; apps that are
+ * registered but not running carry `-` there and are skipped.
+ */
+function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
     launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
@@ -72,19 +92,22 @@ function detectRunningApp(udid: string): string {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
-        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
     );
   }
 
-  const runningBundleIds = new Set<string>();
+  // Lines look like: `19967\t0\tUIKitApplication:com.apple.Preferences[183a][rb-legacy]`
+  // (PID, status, label). Only lines with a numeric PID are actually running.
+  const runningPids = new Map<string, number>();
   for (const line of launchctlOutput.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
+    const match = line.match(/^\s*(\d+)\s+\S+\s+UIKitApplication:([^[]+)/);
     if (match) {
-      runningBundleIds.add(match[1]);
+      runningPids.set(match[2], Number(match[1]));
     }
   }
 
-  if (runningBundleIds.size === 0) {
+  if (runningPids.size === 0) {
     throw new Error(
       "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
     );
@@ -100,16 +123,18 @@ function detectRunningApp(udid: string): string {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
-        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`
+        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
     );
   }
 
   const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
 
-  const runningUserApps: AppInfo[] = [];
-  for (const [, appInfo] of Object.entries(installedApps)) {
-    if (appInfo.ApplicationType === "User" && runningBundleIds.has(appInfo.CFBundleIdentifier)) {
-      runningUserApps.push(appInfo);
+  const runningUserApps: { info: AppInfo; pid: number }[] = [];
+  for (const [, info] of Object.entries(installedApps)) {
+    const pid = runningPids.get(info.CFBundleIdentifier);
+    if (info.ApplicationType === "User" && pid !== undefined) {
+      runningUserApps.push({ info, pid });
     }
   }
 
@@ -119,19 +144,49 @@ function detectRunningApp(udid: string): string {
     );
   }
 
+  return runningUserApps;
+}
+
+/** Auto-detect the single running user app to profile, with its host PID. */
+function detectRunningApp(udid: string): DetectedApp {
+  const runningUserApps = enumerateRunningUserApps(udid);
+
   if (runningUserApps.length > 1) {
     const appList = runningUserApps
       .map(
-        (a) =>
-          `  - ${a.CFBundleExecutable} (${a.CFBundleIdentifier}${a.CFBundleDisplayName ? `, "${a.CFBundleDisplayName}"` : ""})`
+        ({ info }) =>
+          `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
       )
       .join("\n");
     throw new Error(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable of the app you want to profile.`
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`
     );
   }
 
-  return runningUserApps[0].CFBundleExecutable;
+  const { info, pid } = runningUserApps[0];
+  return { executable: info.CFBundleExecutable, pid };
+}
+
+/**
+ * Resolve an explicitly-provided `app_process` to a host PID by matching it
+ * against the CFBundleExecutable or CFBundleDisplayName of a running user app.
+ * Falls back to attaching by the given name (pid: null) when nothing matches —
+ * e.g. the app isn't running yet — so the cold-start retry can still kick in.
+ */
+function resolveExplicitApp(udid: string, name: string): DetectedApp {
+  let runningUserApps: { info: AppInfo; pid: number }[];
+  try {
+    runningUserApps = enumerateRunningUserApps(udid);
+  } catch {
+    return { executable: name, pid: null };
+  }
+  const matched = runningUserApps.find(
+    ({ info }) => info.CFBundleExecutable === name || info.CFBundleDisplayName === name
+  );
+  if (matched) {
+    return { executable: matched.info.CFBundleExecutable, pid: matched.pid };
+  }
+  return { executable: name, pid: null };
 }
 
 async function registerStartupNotify(name: string): Promise<NotifyHandle | null> {
@@ -201,7 +256,13 @@ export async function startNativeProfilerIos(
   }
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
-  const appProcess = params.app_process ?? detectRunningApp(params.device_id);
+  const detected = params.app_process
+    ? resolveExplicitApp(params.device_id, params.app_process)
+    : detectRunningApp(params.device_id);
+  const appProcess = detected.executable;
+  // Attach by PID when we know it (immune to Xcode 26.5's display-name `--attach`
+  // matching); fall back to the name when the target isn't running yet.
+  const attachTarget = detected.pid != null ? String(detected.pid) : appProcess;
 
   const debugDir = await getDebugDir();
   const timestamp = new Date()
@@ -228,7 +289,7 @@ export async function startNativeProfilerIos(
       "--device",
       params.device_id,
       "--attach",
-      appProcess,
+      attachTarget,
       "--output",
       outputFile,
       "--no-prompt",
@@ -285,7 +346,7 @@ export async function startNativeProfilerIos(
       `xctrace could not find process "${appProcess}" after ${MAX_START_ATTEMPTS} attempts within ${totalMs} ms. ` +
         `The app appears to be cold-launching — its bundle is registered with launchd, but xctrace's process resolver hasn't seen it yet. ` +
         `Wait 1–2 seconds for the app to finish launching and retry. ` +
-        `If the wrong app is being detected, pass app_process explicitly with the CFBundleExecutable.`
+        `If the wrong app is being detected, pass app_process explicitly with the CFBundleExecutable or display name.`
     );
   };
 

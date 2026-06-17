@@ -190,7 +190,9 @@ function startListener(
     if (endpoint.transport === "unix") {
       try {
         fs.unlinkSync(endpoint.socketPath);
-      } catch {}
+      } catch {
+        /* no stale socket to remove; ignore */
+      }
     }
 
     const server = net.createServer(onConnection);
@@ -306,7 +308,7 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     const { device } = opts;
     if (device.platform !== "ios") {
       throw new Error(
-        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — describe uses uiautomator on Android and the CDP DOM walker on Electron, neither of which needs this service.`
+        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — describe uses uiautomator on Android and the CDP DOM walker on Chromium, neither of which needs this service.`
       );
     }
     // Reject before spawning. An undefined `device.id` slips through when an
@@ -413,7 +415,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       if (endpoint.transport === "unix") {
         try {
           fs.unlinkSync(endpoint.socketPath);
-        } catch {}
+        } catch {
+          /* best-effort socket cleanup; ignore errors */
+        }
       }
       throw err;
     }
@@ -478,7 +482,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         if (endpoint.transport === "unix") {
           try {
             fs.unlinkSync(endpoint.socketPath);
-          } catch {}
+          } catch {
+            /* best-effort socket cleanup; ignore errors */
+          }
         }
       },
       events,

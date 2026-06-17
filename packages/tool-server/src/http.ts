@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import { isFlagEnabled } from "@argent/configuration-core";
 import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer } from "./utils/idle-timer";
@@ -7,7 +8,7 @@ import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
-import { makeArtifactRoute } from "./artifacts";
+import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
@@ -17,20 +18,21 @@ import {
 import { resolveDevice } from "./utils/device-info";
 import type { Server as HttpServer } from "node:http";
 import {
-  ELECTRON_CDP_NAMESPACE,
-  electronCdpRef,
-  type ElectronCdpApi,
-} from "./blueprints/electron-cdp";
+  CHROMIUM_CDP_NAMESPACE,
+  chromiumCdpRef,
+  type ChromiumCdpApi,
+} from "./blueprints/chromium-cdp";
 import {
-  attachElectronServerWebsocket,
-  createElectronServerRouter,
-} from "./electron-server/http-api";
+  attachChromiumServerWebsocket,
+  createChromiumServerRouter,
+} from "./chromium-server/http-api";
 import { resolveDevice as resolveDeviceForWs } from "./utils/device-info";
 
 const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
+const ARTIFACTS_LIST_ENDPOINT_FLAG = "artifacts-list-endpoint";
 
 // Constant-time comparison so a leaked token can't be recovered byte-by-byte
 // via response-timing measurements. Both strings must be the same length to
@@ -84,12 +86,12 @@ export interface HttpAppHandle {
   dispose: () => void;
   /** Timestamp of the last tool invocation (ms since epoch). Exposed for testing. */
   getLastActivityAt: () => number;
-  /** Attach the per-Electron-device WebSocket upgrade handler to the live
+  /** Attach the per-Chromium-device WebSocket upgrade handler to the live
    * http.Server. Called once `app.listen()` has been invoked and the server
    * is bound. Splitting this out from `createHttpApp` keeps construction
    * synchronous — the WS upgrade is the only part that needs the Node server
    * instance rather than the Express app. */
-  attachElectronWebsockets: (server: HttpServer) => void;
+  attachChromiumWebsockets: (server: HttpServer) => void;
 }
 
 // Loopback hostnames the browser is allowed to address us by. The
@@ -218,41 +220,44 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Artifact retrieval: streams files produced by tools (screenshots, profiler
   // exports) over the remote-aware HTTP boundary so the MCP client can fetch
   // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  if (isFlagEnabled(ARTIFACTS_LIST_ENDPOINT_FLAG)) {
+    app.get("/artifacts", makeArtifactListRoute(registry));
+  }
   app.get("/artifacts/:id", makeArtifactRoute(registry));
 
-  // Per-Electron-device HTTP surface that mirrors sim-server's API: a
-  // `/electron-server/:id/api/*` namespace plus `/stream.mjpeg` and `/viewport`.
+  // Per-Chromium-device HTTP surface that mirrors sim-server's API: a
+  // `/chromium-server/:id/api/*` namespace plus `/stream.mjpeg` and `/viewport`.
   // The router is mounted lazily — the first request for a given id resolves
   // the registry service (kicking off the CDP connection) and then forwards
   // every subsequent request to that already-warm session. Like /preview, this
   // surface is NOT advertised to MCP agents; tools remain the canonical way to
-  // drive Electron from an LLM. The HTTP surface is for non-agent consumers
+  // drive Chromium from an LLM. The HTTP surface is for non-agent consumers
   // (preview UI, integration tests, custom dashboards).
-  app.use("/electron-server/:deviceId", async (req: Request, res: Response, next) => {
+  app.use("/chromium-server/:deviceId", async (req: Request, res: Response, next) => {
     idleTimer.touch();
     const deviceId = req.params.deviceId!;
     const device = resolveDevice(deviceId);
-    if (device.platform !== "electron") {
+    if (device.platform !== "chromium") {
       res.status(400).json({
-        error: `Device id "${deviceId}" is not an Electron device. Use list-devices to find one.`,
+        error: `Device id "${deviceId}" is not a Chromium device. Use list-devices to find one.`,
       });
       return;
     }
-    let server: ElectronCdpApi;
+    let server: ChromiumCdpApi;
     try {
-      const ref = electronCdpRef(device);
-      server = await registry.resolveService<ElectronCdpApi>(ref.urn, ref.options);
+      const ref = chromiumCdpRef(device);
+      server = await registry.resolveService<ChromiumCdpApi>(ref.urn, ref.options);
     } catch (err) {
       res.status(502).json({
-        error: `Could not resolve Electron CDP session for ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
+        error: `Could not resolve Chromium CDP session for ${deviceId}: ${err instanceof Error ? err.message : String(err)}`,
       });
       return;
     }
-    // Lazily build the router per-device. Each ElectronServer is stable for
+    // Lazily build the router per-device. Each ChromiumServer is stable for
     // the lifetime of the registry entry, so caching the router would only
     // save a few object allocations per request; building inline keeps the
     // code simple and the failure surface obvious.
-    const router = createElectronServerRouter(server.server);
+    const router = createChromiumServerRouter(server.server);
     router(req, res, next);
   });
 
@@ -317,7 +322,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // server-readable paths BEFORE schema validation, so the tool's zod
       // schema only ever sees the string params it declares. 422 on a file
       // that is reachable neither in place nor via uploaded content.
-      let bodyArgs = req.body;
+      // Type kept as `any` (matching req.body) so the downstream optional-chained
+      // access below — parsedData?.udid / parsedData?.device_id — type-checks as
+      // it did before. The `= req.body` initializer was dead: the try always
+      // assigns bodyArgs before it is read, and the catch never falls through.
+      let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       try {
         const resolved = await resolveFileInputs(def, req.body);
@@ -466,27 +475,27 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     app,
     dispose: () => idleTimer.dispose(),
     getLastActivityAt: () => idleTimer.getLastActivityAt(),
-    attachElectronWebsockets: (httpServer: HttpServer) => {
-      attachElectronServerWebsocket(httpServer, "/electron-server/", (req) => {
-        // URL shape: /electron-server/<deviceId>/ws
-        const match = (req.url ?? "").match(/^\/electron-server\/([^/]+)\/ws(?:[?#]|$)/);
+    attachChromiumWebsockets: (httpServer: HttpServer) => {
+      attachChromiumServerWebsocket(httpServer, "/chromium-server/", (req) => {
+        // URL shape: /chromium-server/<deviceId>/ws
+        const match = (req.url ?? "").match(/^\/chromium-server\/([^/]+)\/ws(?:[?#]|$)/);
         if (!match) return null;
         const deviceId = decodeURIComponent(match[1]!);
         const device = resolveDeviceForWs(deviceId);
-        if (device.platform !== "electron") return null;
+        if (device.platform !== "chromium") return null;
         // The CDP session must already be resolved (the per-device REST routes
         // resolve it lazily on first hit). For the WS endpoint we look at the
         // current registry snapshot — if no session is open, refuse the
         // upgrade instead of triggering a slow CDP connect inside the upgrade
         // handler (which would block the TCP socket).
-        const urn = `${ELECTRON_CDP_NAMESPACE}:${deviceId}`;
+        const urn = `${CHROMIUM_CDP_NAMESPACE}:${deviceId}`;
         const snapshot = registry.getSnapshot();
         if (!snapshot.services.has(urn)) return null;
         // Use the synchronous getter on the registry rather than the async
         // resolveService — by this point the service is guaranteed to exist.
         const node = (
           registry as unknown as {
-            services: Map<string, { instance: { api: ElectronCdpApi } | null }>;
+            services: Map<string, { instance: { api: ChromiumCdpApi } | null }>;
           }
         ).services.get(urn);
         const api = node?.instance?.api;

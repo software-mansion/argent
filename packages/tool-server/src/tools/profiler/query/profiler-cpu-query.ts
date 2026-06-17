@@ -349,7 +349,7 @@ Use when investigating JS CPU hotspots or correlating CPU cost with specific com
 Returns a markdown table of CPU hotspots, call tree, or per-component CPU breakdown.
 Fails if no CPU profile is stored — run react-profiler-stop first.`,
   zodSchema,
-  // RN-only: reads Hermes-format CPU profiles. Electron's V8 sample format is
+  // RN-only: reads Hermes-format CPU profiles. Chromium's V8 sample format is
   // different — see the PR description for the follow-up scope.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: () => ({}),

@@ -4,11 +4,11 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Electron)"),
+  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Chromium)"),
   device_id: z
     .string()
     .describe(
-      "Device id from debugger-connect (iOS simulator UDID, Android logicalDeviceId, or Electron device id)."
+      "Device id from debugger-connect (iOS simulator UDID, Android logicalDeviceId, or Chromium device id)."
     ),
   expression: z.string().describe("JavaScript expression to evaluate in the app runtime"),
 });
@@ -18,7 +18,7 @@ export const debuggerEvaluateTool: ToolDefinition<
   { result: unknown; deviceName: string; appName: string; logicalDeviceId: string | undefined }
 > = {
   id: "debugger-evaluate",
-  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP — Hermes on iOS / Android, V8 on Electron.
+  description: `Execute arbitrary JavaScript in the app's JS runtime via CDP — Hermes on iOS / Android, V8 on Chromium.
 Returns the evaluation result as a JSON-serializable value, along with deviceName, appName, and logicalDeviceId for context. Use when you need to read app state, call app functions, or test logic at runtime. Fails if the expression throws or the runtime is not connected.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,

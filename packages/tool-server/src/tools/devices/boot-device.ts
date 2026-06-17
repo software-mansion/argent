@@ -8,11 +8,7 @@ import {
   type NativeDevtoolsApi,
   type NativeDevtoolsInitFailedResult,
 } from "../../blueprints/native-devtools";
-import {
-  ensureAutomationEnabled,
-  isEntitlementBypassActive,
-  setAccessibilityPrefsPreBoot,
-} from "../../blueprints/ax-service";
+import { ensureAutomationEnabled, setAccessibilityPrefsPreBoot } from "../../blueprints/ax-service";
 import {
   adbShell,
   checkSnapshotLoadable,
@@ -77,7 +73,7 @@ const zodSchema = z.object({
     .max(65535)
     .optional()
     .describe(
-      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `electron-cdp-<port>`."
+      "Electron-only: CDP remote-debugging port to expose. Defaults to a free port; the resulting device id is `chromium-cdp-<port>`."
     ),
   electronArgs: z
     .array(z.string())
@@ -448,6 +444,13 @@ async function bootIos(
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  // We just (re)booted the sim, which wipes DYLD_INSERT_LIBRARIES from launchd.
+  // If this service was already initialized (e.g. by the simulator watcher),
+  // `resolveService` returns the cached instance whose one-shot env latch is
+  // set, so the env would never be re-applied and the next launch wouldn't be
+  // injected. Force a re-apply so describe / native tools work without an
+  // extra restart-app round-trip. Failures surface via getInitFailure below.
+  await ndApi.reverifyEnv().catch(() => {});
   const initFailure = ndApi.getInitFailure();
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);
@@ -534,13 +537,19 @@ async function attemptBoot(params: {
         `Verify Android SDK Emulator is installed and on PATH, then retry.`
     );
   });
+  // `earlyExitError` is assigned only inside the event-handler closures above, so
+  // a direct synchronous read flow-narrows to `null`. Read the live value through
+  // this getter so the declared `Error | null` type (and thus the thrown Error)
+  // is preserved.
+  const readEarlyExitError = (): Error | null => earlyExitError;
 
   // Stage 2: wait for adb to see the new emulator.
   let serial: string | null = null;
   const adbDeadline = Math.min(params.attemptDeadline, Date.now() + params.adbRegisterBudgetMs);
   try {
     while (Date.now() < adbDeadline) {
-      if (earlyExitError) throw earlyExitError;
+      const launchError = readEarlyExitError();
+      if (launchError) throw launchError;
       const newSerials = await listNewEmulatorSerials(params.serialsBefore);
       if (newSerials.length >= 1) {
         if (newSerials.length === 1) {
@@ -560,9 +569,10 @@ async function attemptBoot(params: {
     throw err;
   }
   if (!serial) {
-    if (earlyExitError) {
+    const launchError = readEarlyExitError();
+    if (launchError) {
       killDetachedEmulator(child);
-      throw earlyExitError;
+      throw launchError;
     }
     killDetachedEmulator(child);
     throw new Error(
@@ -766,7 +776,8 @@ async function bootAndroidImpl(params: {
     throw new Error(
       `\`adb\` is not available on PATH (${
         err instanceof Error ? err.message : String(err)
-      }). Install Android SDK Platform Tools before booting an emulator.`
+      }). Install Android SDK Platform Tools before booting an emulator.`,
+      { cause: err }
     );
   }
 
@@ -781,7 +792,7 @@ async function bootAndroidImpl(params: {
   // instead of spawning a second emulator that would collide on AVD locks,
   // burn the full 90 s hot-boot budget in the probe + spawn failure, and
   // surface a misleading "Running multiple emulators" error.
-  let hotBootFailureReason: string | null = null;
+  let hotBootFailureReason: string | null;
   const alreadyRunning = existingDevices.find(
     (d) => d.isEmulator && d.avdName === params.avdName && d.state === "device"
   );
@@ -809,10 +820,7 @@ async function bootAndroidImpl(params: {
           avdName: params.avdName,
           booted: true,
         };
-      } catch (err) {
-        hotBootFailureReason = `running AVD framebuffer was wedged (${
-          err instanceof Error ? err.message : String(err)
-        }), respawning`;
+      } catch (_err) {
         // assertScreencapAlive already killed the emulator; refresh the
         // existing-devices snapshot so the killed serial is included in
         // serialsBefore (matching the hot-boot catch refresh below) and the
@@ -952,7 +960,8 @@ async function bootAndroidImpl(params: {
       : "";
     throw new Error(
       `${base} Emulator has been terminated so the next boot starts clean.` +
-        ` If this keeps happening, wipe the AVD with \`emulator -avd ${params.avdName} -wipe-data\`.${suffix}`
+        ` If this keeps happening, wipe the AVD with \`emulator -avd ${params.avdName} -wipe-data\`.${suffix}`,
+      { cause: err }
     );
   }
 
@@ -1029,7 +1038,7 @@ function createEarlyExitRacer(getExit: () => Error | null): {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
 export function createBootDeviceTool(
@@ -1040,7 +1049,7 @@ export function createBootDeviceTool(
     description: `Start an iOS simulator, launch an Android emulator, or spawn an Electron app and wait until it is ready to accept interactions.
 Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'electron', id, port, pid, booted }.
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
 Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. If any boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
     alwaysLoad: true,
     searchHint: "boot start launch simulator emulator avd device session ios android cold hot",

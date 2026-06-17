@@ -1,6 +1,7 @@
 import type { Registry, ToolDependency } from "@argent/registry";
 import type { DescribeTreeData } from "../../contract";
 import { adbExecOutBinary } from "../../../../utils/adb";
+import { resolveDevice } from "../../../../utils/device-info";
 import { getAndroidScreenSize } from "../../../../utils/android-screen";
 import { parseUiAutomatorDump } from "./uiautomator-parser";
 import {
@@ -24,7 +25,10 @@ export async function describeAndroid(
 ): Promise<DescribeTreeData> {
   if (registry) {
     try {
-      const device = { id: serial, platform: "android" as const, kind: "emulator" as const };
+      // The android-devtools helper is driven entirely over adb, so it works the
+      // same on an emulator or a physical device; resolve the real kind anyway so
+      // the handle is accurate (and so a physical serial isn't mislabelled).
+      const device = resolveDevice(serial);
       const ref = androidDevtoolsRef(device);
       const devtools = await registry.resolveService<AndroidDevtoolsApi>(ref.urn, ref.options);
       const [{ xml }, size] = await Promise.all([
@@ -38,7 +42,7 @@ export async function describeAndroid(
       // recoverable because the legacy path has independent failure modes.
       // Surface at debug level so the failure is observable without leaking
       // into the per-call result.
-      // eslint-disable-next-line no-console
+
       console.debug(
         `[describe.android] devtools service failed, falling back to uiautomator dump: ${
           serviceErr instanceof Error ? serviceErr.message : String(serviceErr)

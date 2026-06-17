@@ -4,7 +4,6 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const readline = require("readline");
 
 const LOG_FILE = process.env.ARGENT_MCP_LOG ?? path.join(os.homedir(), ".argent", "mcp-calls.log");
 

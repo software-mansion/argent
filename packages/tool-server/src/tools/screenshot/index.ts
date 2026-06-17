@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { electronCdpRef, type ElectronCdpApi } from "../../blueprints/electron-cdp";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
@@ -9,12 +9,12 @@ import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 const zodSchema = z.object({
   udid: z
     .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Electron id)."),
+    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or Chromium id)."),
   rotation: z
     .enum(["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"])
     .optional()
     .describe(
-      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Electron)."
+      "Orientation override for the screenshot (rotates the captured image after Page.captureScreenshot on Chromium)."
     ),
   scale: z
     .number()
@@ -23,7 +23,7 @@ const zodSchema = z.object({
     .optional()
     .describe(
       "Scale factor (0.01-1.0). Defaults to ARGENT_SCREENSHOT_SCALE env var, or 0.3 if unset for iOS/Android. " +
-        "On Electron the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Electron requires the optional `sharp` dependency."
+        "On Chromium the default is 1.0 (no downscale); pass <1 to opt in. Downscaling on Chromium requires the optional `sharp` dependency."
     ),
   includeImageInContext: z
     .boolean()
@@ -36,7 +36,7 @@ const zodSchema = z.object({
     .enum(["lanczos3", "box", "bilinear", "nearest"])
     .optional()
     .describe(
-      "Downscaling algorithm when scale<1 on Electron. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum."
+      "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum."
     ),
 });
 
@@ -55,31 +55,31 @@ interface Result {
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
-  electron: { app: true },
+  chromium: { app: true },
 };
 
 export const screenshotTool: ToolDefinition<Params, Result> = {
   id: "screenshot",
-  description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, or Electron app). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
+  description: `Capture a screenshot of the device screen (iOS simulator, Android emulator, or Chromium app). Returns { url, path }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
-Fails if the simulator-server / emulator backend / Electron CDP is not reachable for the given device.`,
+Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
   alwaysLoad: true,
-  searchHint: "device simulator emulator electron screen image capture baseline",
+  searchHint: "device simulator emulator chromium screen image capture baseline",
   zodSchema,
   outputHint: "image",
   capability,
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    if (device.platform === "electron") {
-      return { electron: electronCdpRef(device) };
+    if (device.platform === "chromium") {
+      return { chromium: chromiumCdpRef(device) };
     }
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params, ctx) {
     const device = resolveDevice(params.udid);
-    if (device.platform === "electron") {
-      const electron = services.electron as ElectronCdpApi;
-      const { path } = await electron.captureScreenshot({
+    if (device.platform === "chromium") {
+      const chromium = services.chromium as ChromiumCdpApi;
+      const { path } = await chromium.captureScreenshot({
         rotation: params.rotation,
         scale: params.scale,
         downscaler: params.downscaler,

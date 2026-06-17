@@ -7,11 +7,11 @@ const zodSchema = z.object({
   port: z.coerce
     .number()
     .default(8081)
-    .describe("Metro server port (ignored for Electron — its CDP port is encoded in device_id)"),
+    .describe("Metro server port (ignored for Chromium — its CDP port is encoded in device_id)"),
   device_id: z
     .string()
     .describe(
-      "Device id: iOS simulator UDID, Android logicalDeviceId returned by Metro, or Electron device id (electron-cdp-<port>) from list-devices. The returned logicalDeviceId must be forwarded as device_id to all subsequent debugger-* calls to pin them to this device."
+      "Device id: iOS simulator UDID, Android logicalDeviceId returned by Metro, or Chromium device id (chromium-cdp-<port>) from list-devices. The returned logicalDeviceId must be forwarded as device_id to all subsequent debugger-* calls to pin them to this device."
     ),
 });
 
@@ -29,9 +29,9 @@ export const debuggerConnectTool: ToolDefinition<
 > = {
   id: "debugger-connect",
   description: `Connect to a JS runtime CDP debugger.
-iOS / Android: connects to Metro's CDP endpoint on the given port. Electron: re-uses the page CDP session opened by boot-device — port is ignored.
-Returns connection info including port, projectRoot (empty on Electron), deviceName, appName, logicalDeviceId, and isNewDebugger. If already connected, returns the existing connection.
-Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Electron CDP terminated).`,
+iOS / Android: connects to Metro's CDP endpoint on the given port. Chromium: re-uses the page CDP session opened by boot-device — port is ignored.
+Returns connection info including port, projectRoot (empty on Chromium), deviceName, appName, logicalDeviceId, and isNewDebugger. If already connected, returns the existing connection.
+Use when starting a debug session or before calling other debugger-* tools. Fails if the runtime is unreachable (Metro down, or Chromium CDP terminated).`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({

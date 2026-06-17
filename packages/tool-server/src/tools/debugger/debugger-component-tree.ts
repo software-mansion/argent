@@ -540,8 +540,8 @@ Use when you need tap coordinates for a React Native UI element. Returns a compa
   searchHint: "react native component tree discovery tap coordinates",
   zodSchema,
   // RN-only: depends on the React DevTools backend that ships with the JS
-  // bundle in dev builds. Electron has no equivalent — use `describe` instead
-  // for DOM-tree discovery on Electron.
+  // bundle in dev builds. Chromium has no equivalent — use `describe` instead
+  // for DOM-tree discovery on Chromium.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,

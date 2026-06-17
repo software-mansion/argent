@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { listAndroidDevices, listAvds } from "../../utils/adb";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
-import { discoverElectronDevices, type ElectronDevice } from "../../utils/electron-discovery";
+import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 
 type IosDevice = IosSimulator & { platform: "ios" };
 
@@ -11,13 +11,18 @@ type AndroidDevice = {
   serial: string;
   state: string;
   isEmulator: boolean;
+  // "emulator" for a local AVD, "device" for a physical phone (USB or wireless
+  // adb). The two are driven by different simulator-server controllers, so the
+  // kind is surfaced here for parity with iOS terminology and so consumers can
+  // tell a connected phone apart from an emulator at a glance.
+  kind: "emulator" | "device";
   model: string | null;
   avdName: string | null;
   sdkLevel: number | null;
 };
 
 type ListDevicesResult = {
-  devices: Array<IosDevice | AndroidDevice | ElectronDevice>;
+  devices: Array<IosDevice | AndroidDevice | ChromiumDevice>;
   avds: Array<{ name: string }>;
 };
 
@@ -41,32 +46,33 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 
 // Float booted/ready devices to the top of the merged list regardless of
 // platform — without this, all iOS entries are emitted before any Android.
-function readinessRank(d: IosDevice | AndroidDevice | ElectronDevice): number {
+function readinessRank(d: IosDevice | AndroidDevice | ChromiumDevice): number {
   if (d.platform === "ios") return d.state === "Booted" ? 0 : 1;
   if (d.platform === "android") return d.state === "device" ? 0 : 1;
-  return 0; // Electron entries are only listed when their CDP is responsive
+  return 0; // Chromium entries are only listed when their CDP is responsive
 }
 
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
-  description: `List iOS simulators, Android devices/emulators, and running Electron apps in one place.
-Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android, 'id' for Electron) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', or 'electron'), and 'avds' lists Android AVDs that can be booted via boot-device.
-Electron apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_ELECTRON_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with electronAppPath to launch one.
+  description: `List iOS simulators, Android emulators, connected physical Android devices, and running Chromium apps in one place.
+Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', or 'chromium'), and 'avds' lists Android AVDs that can be booted via boot-device.
+Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
+Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with chromiumAppPath to launch one.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select or Android platform-tools is not installed.`,
   alwaysLoad: true,
   searchHint:
-    "list devices simulators emulators avd serial udid ios android electron app session start",
+    "list devices simulators emulators avd serial udid ios android chromium app session start",
   zodSchema,
   services: () => ({}),
   async execute(_services, _params) {
-    const [ios, android, avds, electron] = await Promise.all([
+    const [ios, android, avds, chromium] = await Promise.all([
       listIosSimulators(),
       listAndroidDevices().catch(() => []),
       listAvds(),
-      discoverElectronDevices().catch(() => []),
+      discoverChromiumDevices().catch(() => []),
     ]);
     const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
     iosTagged.sort(sortIos);
@@ -75,16 +81,17 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       serial: d.serial,
       state: d.state,
       isEmulator: d.isEmulator,
+      kind: d.isEmulator ? "emulator" : "device",
       model: d.model,
       avdName: d.avdName,
       sdkLevel: d.sdkLevel,
     }));
     androidTagged.sort(sortAndroid);
 
-    const devices: Array<IosDevice | AndroidDevice | ElectronDevice> = [
+    const devices: Array<IosDevice | AndroidDevice | ChromiumDevice> = [
       ...iosTagged,
       ...androidTagged,
-      ...electron,
+      ...chromium,
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 

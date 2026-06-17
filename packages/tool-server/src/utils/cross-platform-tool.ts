@@ -47,9 +47,9 @@ export interface PlatformImpl<Services, Params, Result> {
  * see real names (e.g. `services.simulatorServer`) instead of the raw
  * `Record<string, unknown>` the registry hands in.
  *
- * The `electron` branch is optional. When omitted, an electron device triggers
+ * The `chromium` branch is optional. When omitted, a chromium device triggers
  * `NotImplementedOnPlatformError` — the capability gate normally fires first,
- * so this only matters for tools that declare electron support without wiring
+ * so this only matters for tools that declare chromium support without wiring
  * a handler.
  */
 export function dispatchByPlatform<
@@ -57,13 +57,13 @@ export function dispatchByPlatform<
   AndroidServices,
   Params extends { udid: string },
   Result,
-  ElectronServices = Record<string, unknown>,
+  ChromiumServices = Record<string, unknown>,
 >(opts: {
   toolId: string;
   capability: ToolCapability;
   ios: PlatformImpl<IosServices, Params, Result>;
   android: PlatformImpl<AndroidServices, Params, Result>;
-  electron?: PlatformImpl<ElectronServices, Params, Result>;
+  chromium?: PlatformImpl<ChromiumServices, Params, Result>;
 }): (
   services: Record<string, unknown>,
   params: Params,
@@ -89,18 +89,18 @@ export function dispatchByPlatform<
         invokeOptions
       );
     }
-    // electron
-    if (!opts.electron) {
+    // chromium
+    if (!opts.chromium) {
       throw new NotImplementedOnPlatformError({
         toolId: opts.toolId,
-        platform: "electron",
+        platform: "chromium",
       });
     }
-    if (opts.electron.requires?.length) {
-      await ensureDeps(opts.electron.requires);
+    if (opts.chromium.requires?.length) {
+      await ensureDeps(opts.chromium.requires);
     }
-    return opts.electron.handler(
-      services as unknown as ElectronServices,
+    return opts.chromium.handler(
+      services as unknown as ChromiumServices,
       params,
       device,
       invokeOptions

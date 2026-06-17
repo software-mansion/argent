@@ -4,11 +4,11 @@ import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger"
 import { DEBUGGER_TOOL_CAPABILITY, debuggerServiceRef } from "./debugger-service-ref";
 
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Electron)"),
+  port: z.coerce.number().default(8081).describe("Metro server port (ignored for Chromium)"),
   device_id: z
     .string()
     .describe(
-      "Device id from debugger-connect (iOS simulator UDID, Android logicalDeviceId, or Electron device id)."
+      "Device id from debugger-connect (iOS simulator UDID, Android logicalDeviceId, or Chromium device id)."
     ),
 });
 
@@ -29,7 +29,7 @@ export const debuggerStatusTool: ToolDefinition<
 > = {
   id: "debugger-status",
   description: `Get JS runtime debugger connection status and diagnostic info.
-Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot (empty on Electron), deviceName, appName, logicalDeviceId, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning; no-op on Electron). Fails if the runtime is unreachable.`,
+Use when you need to verify connectivity before using other debugger tools. Returns port, projectRoot (empty on Chromium), deviceName, appName, logicalDeviceId, connected flag, loadedScripts count, and sourceMapReady (always true — waits for pending source maps before returning; no-op on Chromium). Fails if the runtime is unreachable.`,
   zodSchema,
   capability: DEBUGGER_TOOL_CAPABILITY,
   services: (params) => ({

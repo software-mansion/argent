@@ -1,0 +1,35 @@
+name: Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    name: ESLint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          # ESLint 10 requires Node ^20.19 || ^22.13 || >=24.
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Type-aware rules need the referenced projects' declarations on disk so
+      # cross-package imports resolve to real types instead of `any`.
+      - name: Build workspace dependencies
+        run: npx tsc --build
+
+      - name: Lint
+        run: npm run lint

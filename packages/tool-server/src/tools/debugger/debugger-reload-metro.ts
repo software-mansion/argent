@@ -28,16 +28,16 @@ export const debuggerReloadMetroTool: ToolDefinition<
   description: `Restart the Metro JS bundle in the connected React Native app without restarting the native process.
 Use when you want to apply code changes or reset JS state. Returns { reloaded, port, method, deviceName, appName, logicalDeviceId } indicating which reload path was used and which device/app was targeted. Fails if Metro is not running on the given port.`,
   zodSchema,
-  // Metro-only: Electron loads from disk, not from a bundler. The closest
+  // Metro-only: Chromium loads from disk, not from a bundler. The closest
   // analog (Page.reload against the renderer) would behave differently enough
   // — preserving the URL but re-fetching index.html, blowing away in-memory
   // app state — that calling it under the same tool name would mislead. If we
-  // want that on Electron later, it deserves its own tool.
+  // want that on Chromium later, it deserves its own tool.
   capability: RN_ONLY_TOOL_CAPABILITY,
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
-  async execute(services, params) {
+  async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
 
@@ -56,7 +56,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
 
     try {
       await api.cdp.send("Page.reload");
-      disableLogBox();
+      void disableLogBox();
       return { reloaded: true, port, method: "cdp", ...context };
     } catch {
       // Fall through to HTTP fallback
@@ -72,7 +72,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
         `Failed to reload: CDP Page.reload unsupported and Metro HTTP /reload returned ${res.status} ${res.statusText}.`
       );
     }
-    disableLogBox();
+    void disableLogBox();
     return { reloaded: true, port, method: "http", ...context };
   },
 };

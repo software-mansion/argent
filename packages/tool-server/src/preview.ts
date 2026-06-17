@@ -45,7 +45,7 @@ export function createPreviewRouter(registry: Registry): Router {
               model?: string;
               sdkLevel?: number | null;
             }
-          | { platform: "electron"; id: string; title: string; port: number }
+          | { platform: "chromium"; id: string; title: string; port: number }
         >;
       }>(listDevicesTool.id);
       // The preview UI keys off `udid` and `state === "Booted"`, which are
@@ -53,10 +53,10 @@ export function createPreviewRouter(registry: Registry): Router {
       // dropdown can target both platforms — `simulator-server/:udid` already
       // accepts Android serials via `resolveDevice(udid)`.
       //
-      // Electron is intentionally excluded: the preview UI streams frames
+      // Chromium is intentionally excluded: the preview UI streams frames
       // through simulator-server's WebSocket, which only exists for iOS /
-      // Android. Surfacing electron entries would let the UI offer a target
-      // it can't actually drive. Electron consumers should use the MCP tools
+      // Android. Surfacing chromium entries would let the UI offer a target
+      // it can't actually drive. Chromium consumers should use the MCP tools
       // (screenshot, describe, gesture-*) directly.
       type PreviewEntry = {
         udid: string;
@@ -102,13 +102,13 @@ export function createPreviewRouter(registry: Registry): Router {
   router.get("/simulator-server/:udid", async (req: Request, res: Response) => {
     const udid = req.params.udid!;
     const device = resolveDevice(udid);
-    if (device.platform === "electron") {
+    if (device.platform === "chromium") {
       // The preview UI only knows how to render simulator-server's frame stream,
-      // and Electron drives the renderer over CDP instead. Fail loudly here so a
+      // and Chromium drives the renderer over CDP instead. Fail loudly here so a
       // forged URL doesn't quietly spawn a simulator-server process for an
-      // Electron device id.
+      // Chromium device id.
       res.status(400).json({
-        error: `Preview is not available for Electron devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
+        error: `Preview is not available for Chromium devices (id "${udid}"). Use the MCP tools (screenshot, describe, gesture-*) directly.`,
       });
       return;
     }

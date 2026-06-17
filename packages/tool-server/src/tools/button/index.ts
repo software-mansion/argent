@@ -33,9 +33,9 @@ interface Result {
 const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
   ios: new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
   android: new Set(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch"]),
-  // Electron apps have no hardware buttons; the capability gate already
+  // Chromium apps have no hardware buttons; the capability gate already
   // excludes them, the empty set keeps the lookup total if one slips through.
-  electron: new Set([]),
+  chromium: new Set([]),
 };
 
 const capability: ToolCapability = {

@@ -64,7 +64,7 @@ export async function update(args: string[]): Promise<void> {
 
   const pm = detectPackageManager();
   let latest: string | null = null;
-  let target: string | null = null;
+  let target: string | null;
   let minReleaseAgeMs = 0;
 
   if (requestedVersion !== null) {
