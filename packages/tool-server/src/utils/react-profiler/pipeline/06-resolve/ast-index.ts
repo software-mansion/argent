@@ -139,29 +139,6 @@ function nodeContainsCall(node: TreeSitterNode, callName: string): boolean {
   return false;
 }
 
-/**
- * Detect a React component wrapper call: memo(...) / forwardRef(...) /
- * React.memo(...) / React.forwardRef(...) (also nested, e.g. memo(forwardRef(...)),
- * since the outer callee is what we match). Components declared as
- * `const X = memo(...)` / `const X = forwardRef(...)` have a call_expression
- * value node, so without recognising these they would be missed entirely --
- * and profiler-flagged components are disproportionately memo-wrapped.
- */
-function reactWrapperCall(node: TreeSitterNode | undefined): {
-  isWrapper: boolean;
-  isMemo: boolean;
-} {
-  if (!node || node.type !== "call_expression") return { isWrapper: false, isMemo: false };
-  const callee = node.children[0];
-  let name: string | undefined;
-  if (callee?.type === "identifier") name = callee.text;
-  else if (callee?.type === "member_expression")
-    name = callee.children[callee.children.length - 1]?.text;
-  if (name === "memo") return { isWrapper: true, isMemo: true };
-  if (name === "forwardRef") return { isWrapper: true, isMemo: false };
-  return { isWrapper: false, isMemo: false };
-}
-
 function isWrappedInMemo(source: string, componentName: string): boolean {
   const memoPattern = /\b(React\.memo|memo)\s*\(\s*(\w+)/g;
   let match;
@@ -169,6 +146,64 @@ function isWrappedInMemo(source: string, componentName: string): boolean {
     if (match[2] === componentName) return true;
   }
   return false;
+}
+
+// React HOCs that wrap a component value but keep it a component definition.
+// `export const X = memo(...)` / `forwardRef(...)` (and the `React.`-qualified
+// forms) all produce a `call_expression` value node rather than a bare
+// arrow/function, so they need explicit unwrapping below.
+const COMPONENT_HOC_NAMES = new Set(["memo", "forwardRef"]);
+
+function calleeName(call: TreeSitterNode): string | null {
+  const callee = call.children[0];
+  if (!callee) return null;
+  if (callee.type === "identifier") return callee.text;
+  if (callee.type === "member_expression") {
+    // e.g. `React.memo` — the property identifier is the trailing child.
+    const prop = callee.children[callee.children.length - 1];
+    return prop?.text ?? null;
+  }
+  return null;
+}
+
+function firstCallArgument(call: TreeSitterNode): TreeSitterNode | null {
+  // Skip past `<T, U>` type_arguments (present on `forwardRef<View, Props>(…)`)
+  // by matching the arguments node by type rather than child index.
+  const args = call.children.find((c) => c.type === "arguments");
+  return args?.namedChildren[0] ?? null;
+}
+
+/**
+ * Classify a `variable_declarator` value node as a (possibly HOC-wrapped)
+ * React component. Recognizes a bare arrow/function expression as well as
+ * components wrapped in `memo` / `forwardRef` (including the `React.`-qualified
+ * forms and nesting like `memo(forwardRef(() => …))`). Before this, every
+ * `export const X = React.memo(...)` / `forwardRef(...)` component was silently
+ * absent from the index, so `react-profiler-component-source` returned
+ * `found: false` for them despite the source existing.
+ */
+function classifyComponentValue(node: TreeSitterNode | undefined): {
+  isComponent: boolean;
+  isMemoized: boolean;
+} {
+  let current: TreeSitterNode | null = node ?? null;
+  let isMemoized = false;
+  let unwrapped = false;
+
+  while (current && current.type === "call_expression") {
+    const name = calleeName(current);
+    if (name === null || !COMPONENT_HOC_NAMES.has(name)) break;
+    if (name === "memo") isMemoized = true;
+    unwrapped = true;
+    current = firstCallArgument(current);
+  }
+
+  const isFn =
+    current?.type === "arrow_function" || current?.type === "function_expression";
+
+  // A bare function, or anything we peeled an HOC off of (the inner argument
+  // may be an arrow, or an already-named component identifier as in `memo(Foo)`).
+  return { isComponent: isFn || unwrapped, isMemoized };
 }
 
 /**
@@ -225,15 +260,12 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
       } else if (node.type === "variable_declarator") {
         const nameNode = node.children[0];
         const valueNode = node.children[node.children.length - 1];
-        const wrapper = reactWrapperCall(valueNode);
+        const classified = classifyComponentValue(valueNode);
         if (
           nameNode &&
           nameNode.type === "identifier" &&
           isCapitalized(nameNode.text) &&
-          valueNode &&
-          (valueNode.type === "arrow_function" ||
-            valueNode.type === "function_expression" ||
-            wrapper.isWrapper)
+          classified.isComponent
         ) {
           const componentName = nameNode.text;
           if (!index.has(componentName)) {
@@ -241,7 +273,7 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
               file,
               line: nameNode.startPosition.row + 1,
               col: nameNode.startPosition.column,
-              isMemoized: isWrappedInMemo(source, componentName) || wrapper.isMemo,
+              isMemoized: classified.isMemoized || isWrappedInMemo(source, componentName),
               hasUseCallback: nodeContainsCall(node, "useCallback"),
               hasUseMemo: nodeContainsCall(node, "useMemo"),
             });
