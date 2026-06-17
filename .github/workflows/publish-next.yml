@@ -105,3 +105,11 @@ jobs:
       - run: npm publish -w @swmansion/argent --tag next
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Re-point `next` at the highest published version. `npm publish --tag next`
+      # already tags this prerelease, but this also self-heals `next` if it was
+      # left stale on an older version. Idempotent.
+      - name: Sync 'next' dist-tag to highest published version
+        run: node scripts/sync-next-dist-tag.mjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
