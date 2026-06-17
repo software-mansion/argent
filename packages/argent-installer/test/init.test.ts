@@ -1,4 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
   SKILLS_DIR,
@@ -7,6 +9,8 @@ import {
   ARGENT_SKILLS_REPO,
   buildArgentSkillsSource,
 } from "../src/utils.js";
+import { printFirstRunNotice } from "../src/first-run-notice.js";
+import { hasShownFirstRunNotice, _resetConsentCacheForTest } from "@argent/telemetry";
 
 // These tests verify the logic used by init.ts without running the full TUI.
 // The actual init flow is interactive and tested via the integration harness.
@@ -27,6 +31,62 @@ describe("init — skills path resolution", () => {
   it("AGENTS_DIR resolves relative to dist/", () => {
     expect(AGENTS_DIR).toContain("agents");
     expect(path.isAbsolute(AGENTS_DIR)).toBe(true);
+  });
+});
+
+describe("printFirstRunNotice", () => {
+  let tmp: string;
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  let savedArgentTelemetry: string | undefined;
+  let savedDoNotTrack: string | undefined;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "argent-installer-notice-"));
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    savedArgentTelemetry = process.env.ARGENT_TELEMETRY;
+    savedDoNotTrack = process.env.DO_NOT_TRACK;
+    process.env.HOME = tmp;
+    process.env.USERPROFILE = tmp;
+    delete process.env.ARGENT_TELEMETRY;
+    delete process.env.DO_NOT_TRACK;
+    _resetConsentCacheForTest();
+    // Keep clack output from polluting the test reporter.
+    vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    const restore = (
+      key: "HOME" | "USERPROFILE" | "ARGENT_TELEMETRY" | "DO_NOT_TRACK",
+      value: string | undefined
+    ) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    restore("HOME", savedHome);
+    restore("USERPROFILE", savedUserProfile);
+    restore("ARGENT_TELEMETRY", savedArgentTelemetry);
+    restore("DO_NOT_TRACK", savedDoNotTrack);
+    _resetConsentCacheForTest();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("marks the notice shown on first run and is a no-op afterwards", () => {
+    expect(hasShownFirstRunNotice()).toBe(false);
+    printFirstRunNotice();
+    expect(hasShownFirstRunNotice()).toBe(true);
+    // Second call must not throw and the marker stays set.
+    printFirstRunNotice();
+    expect(hasShownFirstRunNotice()).toBe(true);
+  });
+
+  it("does not mark the notice shown when telemetry is opted out", () => {
+    process.env.ARGENT_TELEMETRY = "0";
+    _resetConsentCacheForTest();
+    printFirstRunNotice();
+    expect(hasShownFirstRunNotice()).toBe(false);
   });
 });
 

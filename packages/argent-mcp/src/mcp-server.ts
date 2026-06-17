@@ -14,7 +14,13 @@ import {
   type ToolMeta,
   type ToolsServerPaths,
 } from "@argent/tools-client";
-import { canonicalizeAiClient, AI_CLIENT_NAME_PATTERN } from "@argent/telemetry";
+import {
+  canonicalizeAiClient,
+  AI_CLIENT_NAME_PATTERN,
+  FIRST_RUN_NOTICE,
+  markFirstRunNoticeShown,
+  shouldShowFirstRunNotice,
+} from "@argent/telemetry";
 import {
   toMcpContent,
   flowRunToMcpContent,
@@ -88,6 +94,16 @@ export interface StartMcpServerOptions {
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
+  // First-run telemetry notice, once per installation, for users who reach a
+  // telemetry-enabled build via an update: `argent update` runs the OLD binary
+  // (postinstall skipped), so the editor relaunching `argent mcp` is often the
+  // first time the new code runs. stdout is the JSON-RPC channel — the notice
+  // MUST go to stderr to avoid corrupting it.
+  if (shouldShowFirstRunNotice()) {
+    process.stderr.write(`[argent] ${FIRST_RUN_NOTICE}\n`);
+    markFirstRunNoticeShown();
+  }
+
   // isFlagEnabled hits disk, so resolve it once at startup rather than on every
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();

@@ -1,7 +1,6 @@
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { argentHomeDir, configFilePath } from "./paths.js";
+import { configFilePath } from "./paths.js";
+import { updateConfig } from "./config-file.js";
 
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
 // The config file is re-parsed only when its mtime or inode changes.
@@ -123,53 +122,13 @@ export function isEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 
 /** Persist the telemetry flag without discarding other config keys. */
 export function writeConsentFlag(enabled: boolean): void {
-  fs.mkdirSync(argentHomeDir(), { recursive: true });
-
-  let existing: Record<string, unknown> = {};
-  try {
-    const raw = fs.readFileSync(configFilePath(), "utf8");
-    const json = JSON.parse(raw) as unknown;
-    if (json && typeof json === "object") {
-      existing = json as Record<string, unknown>;
-    }
-  } catch {
-    /* missing or malformed — write a fresh document */
-  }
-
-  const telemetryBlock =
-    typeof existing.telemetry === "object" && existing.telemetry
-      ? (existing.telemetry as Record<string, unknown>)
-      : {};
-
-  const next: Record<string, unknown> = {
-    ...existing,
-    telemetry: {
-      ...telemetryBlock,
-      enabled,
-    },
-  };
-
-  // Atomic publish: write to a temp file then rename so an interrupted write
-  // can never truncate the shared config (which holds non-telemetry keys too).
-  const finalPath = configFilePath();
-  const tmpPath = path.join(argentHomeDir(), `.config.tmp.${process.pid}.${crypto.randomUUID()}`);
-  const fd = fs.openSync(tmpPath, "wx", 0o600);
-  try {
-    fs.writeSync(fd, JSON.stringify(next, null, 2) + "\n");
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
-    fs.renameSync(tmpPath, finalPath);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-      /* nothing to clean up */
-    }
-    throw err;
-  }
+  updateConfig((config) => {
+    const telemetryBlock =
+      typeof config.telemetry === "object" && config.telemetry
+        ? (config.telemetry as Record<string, unknown>)
+        : {};
+    config.telemetry = { ...telemetryBlock, enabled };
+  });
   cache.current = null;
 }
 

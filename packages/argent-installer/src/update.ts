@@ -31,6 +31,7 @@ import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServer } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
+import { printFirstRunNotice } from "./first-run-notice.js";
 
 function getRequestedVersion(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
@@ -158,6 +159,8 @@ export async function update(args: string[]): Promise<void> {
 
   try {
     p.intro(pc.bgCyan(pc.black(" argent update ")));
+
+    printFirstRunNotice();
 
     // When invoked via `npx @swmansion/argent update`, the running package is
     // the npx cache and will always be at the latest published version. Reading the

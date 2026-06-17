@@ -26,6 +26,16 @@ export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
 export { isDebugEnabled } from "./debug.js";
 export { getConsentState } from "./consent.js";
+export {
+  FIRST_RUN_NOTICE,
+  FIRST_RUN_NOTICE_BODY_LINES,
+  TELEMETRY_OPT_OUT_COMMAND,
+  TELEMETRY_DETAILS_URL,
+  hasShownFirstRunNotice,
+  markFirstRunNoticeShown,
+  resetFirstRunNotice,
+  shouldShowFirstRunNotice,
+} from "./notice.js";
 export { getSessionId } from "./base-props.js";
 export {
   AI_CLIENTS,

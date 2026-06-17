@@ -1,5 +1,6 @@
 import { deleteAnonId } from "./identity.js";
 import { writeConsentFlag } from "./consent.js";
+import { resetFirstRunNotice } from "./notice.js";
 import { emitDebugError } from "./debug.js";
 
 export interface ForgetOptions {
@@ -35,6 +36,14 @@ export async function forget(options: ForgetOptions = {}): Promise<ForgetResult>
     localIdRemoved = true;
   } catch (err) {
     emitDebugError("forget: deleting telemetry-id failed", err);
+  }
+
+  // Clear the first-run-notice marker so a later reinstall surfaces the notice
+  // again. Consent is handled above; this only resets the "already shown" state.
+  try {
+    resetFirstRunNotice();
+  } catch (err) {
+    emitDebugError("forget: resetting first-run notice failed", err);
   }
 
   return { localIdRemoved, consentDisabled };
