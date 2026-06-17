@@ -82,7 +82,7 @@ export function parseKdebugStream(raw: Buffer): ParsedKdebug {
   for (let i = 0; i < numThreads; i++) {
     const tid = Number(raw.readBigUInt64LE(off));
     const pid = raw.readInt32LE(off + 8);
-    let end = off + 12;
+    const end = off + 12;
     let z = end;
     while (z < off + 32 && raw[z] !== 0) z++;
     const name = raw.toString("utf8", end, z);

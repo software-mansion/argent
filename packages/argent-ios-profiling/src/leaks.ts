@@ -34,7 +34,7 @@ export interface LeakSummary {
  * Returns the reported leak/byte totals.
  */
 export async function emitLeaks(udid: string, pid: number, out: string): Promise<LeakSummary> {
-  let txt = "";
+  let txt: string;
   try {
     const { stdout, stderr } = await execFileAsync(
       "xcrun",
@@ -51,8 +51,6 @@ export async function emitLeaks(udid: string, pid: number, out: string): Promise
     txt = (err.stdout ?? "") + (err.stderr ?? "");
   }
 
-  let gid = 0;
-  const nid = () => ++gid;
   const rows: string[] = [];
   // e.g. "  9 (1.25K) ROOT LEAK: <NSMutableDictionary 0x..> [32]  item count: 3"
   const ROOT = /^\s*(\d+)\s+\(([^)]+)\)\s+ROOT LEAK:\s+<([A-Za-z_][\w]*)[^>]*>\s+\[(\d+)\]/;
@@ -88,7 +86,7 @@ export interface AllocationProfile {
 
 /** Run the in-sim heap engine for `pid` → live-object allocation profile. */
 export async function captureAllocations(udid: string, pid: number): Promise<AllocationProfile> {
-  let txt = "";
+  let txt: string;
   try {
     const { stdout } = await execFileAsync(
       "xcrun",

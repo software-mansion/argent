@@ -162,7 +162,12 @@ export async function emitCpuAndHangs(
   const GAP = 60_000_000;
   let mainTid = -1;
   let mainN = -1;
-  for (const [tid, ts] of tsByTid) if (ts.length > mainN) ((mainN = ts.length), (mainTid = tid));
+  for (const [tid, ts] of tsByTid) {
+    if (ts.length > mainN) {
+      mainN = ts.length;
+      mainTid = tid;
+    }
+  }
   const hangRows: string[] = [];
   if (mainTid >= 0) {
     const t = [...(tsByTid.get(mainTid) ?? [])].sort((a, b) => a - b);

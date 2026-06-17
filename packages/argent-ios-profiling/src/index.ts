@@ -15,7 +15,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { parseCapture } from "./parser/kdebug";
 import { emitCpuAndHangs } from "./parser/emit";
-import { emitLeaks, captureAllocations } from "./leaks";
+import { emitLeaks } from "./leaks";
 
 export type { AllocationProfile, LeakSummary } from "./leaks";
 export { captureAllocations } from "./leaks";
