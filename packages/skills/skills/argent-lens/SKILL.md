@@ -1,15 +1,15 @@
 ---
-name: argent-propose-variants
-description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent preview window. Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
+name: argent-lens
+description: Propose multiple visual design variants for on-screen elements and let the human pick in the Argent Lens window. Use when the user asks for design alternatives / options / A-B choices for a screen or component, or any time you have produced more than one candidate look for an element and want a human decision before committing.
 ---
 
-> **Prerequisite — feature flag.** This workflow is gated behind the `variant-selection` flag (off by default). Run `argent enable variant-selection` once before using it. If `propose_variant` / `await_user_selection` come back not-found, the flag is off — enable it and retry.
+> **Prerequisite — feature flag.** This workflow is gated behind the `argent-lens` flag (off by default). Run `argent enable argent-lens` once before using it. If `propose_variant` / `await_user_selection` come back not-found, the flag is off — enable it and retry.
 
 ## 1. Overview
 
-You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant`. Each proposed element shows up as a floating card next to the live simulator stream in the Argent preview window (a native window that opens automatically), connected by a thin line to the real element. The human picks per element, optionally pins free-form comments to elements, and presses **Complete selection**. `await_user_selection` is the single blocking call that returns their decision.
+You implement several candidate designs, capture each one running on the device, and stage them with `propose_variant`. Each proposed element shows up as a floating card next to the live simulator stream in the Argent Lens window (a native window that opens automatically), connected by a thin line to the real element. The human picks per element, optionally pins free-form comments to elements, and presses **Complete selection**. `await_user_selection` is the single blocking call that returns their decision.
 
-**The golden rule: one variant = one real, _distinct_ screenshot.** A proposal is only useful if its `previewImage` shows the variant actually rendered on the device, captured AFTER that specific variant was applied. Never propose a variant you have not built and seen on screen, and never point two variants at the same file path — if two captures end up byte-identical you have not actually changed anything and the choice UI degenerates to identical thumbnails. Plan → build → navigate → screenshot → propose, repeated for every variant of every element, then await once.
+**The golden rule: one variant = one real, _distinct_ screenshot.** A proposal is only useful if its `previewImage` shows the variant actually rendered on the device, captured AFTER that specific variant was applied. Never propose a variant you have not built and seen on screen, and never point two variants at the same file path — if two captures end up byte-identical you have not actually changed anything and the Argent Lens degenerates to identical thumbnails. Plan → build → navigate → screenshot → propose, repeated for every variant of every element, then await once.
 
 ## 2. Tools
 
@@ -69,7 +69,7 @@ Implement the chosen variant for every selected element, address every annotatio
 
 - **At least two variants per element.** A choice needs alternatives — every element you propose must have ≥2 distinct variants (call `propose_variant` at least twice for it). If you only have one look for an element, either produce a real alternative or don't propose that element at all; a lone variant isn't a choice.
 - **Build before you propose.** Every `previewImage` must be a screenshot of that variant actually running on the device. No mockups, no guesses, no proposing un-built ideas.
-- **Distinct screenshot per variant.** Reusing a `previewImage` path across two variants — or capturing two paths whose bytes turn out identical — defeats the whole point of the choice UI. If you can't produce visibly different captures (e.g. the app is read-only, accessibility is broken so you can't navigate, the bundle won't hot-reload), STOP and tell the user instead of staging duplicates.
+- **Distinct screenshot per variant.** Reusing a `previewImage` path across two variants — or capturing two paths whose bytes turn out identical — defeats the whole point of the Argent Lens. If you can't produce visibly different captures (e.g. the app is read-only, accessibility is broken so you can't navigate, the bundle won't hot-reload), STOP and tell the user instead of staging duplicates.
 - **One blocking call.** `propose_variant` never blocks — stage freely. `await_user_selection` is the only call that waits, and you call it once, last.
 - **Anchor accurately.** Pull matchers from `describe`; a wrong `match` makes the card point at the wrong element or float unanchored.
 - **One variant on screen at a time.** Apply → screenshot → revert before the next variant so screenshots never bleed together.

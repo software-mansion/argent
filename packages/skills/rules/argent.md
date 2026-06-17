@@ -131,8 +131,8 @@ When: A multi-step interaction sequence needs to be repeated — re-profiling af
 Prompt keywords: flow, repeat, test X times
 
 PROPOSING DESIGN VARIANTS FOR HUMAN SELECTION
-Use skill: `argent-propose-variants`
-When: The user asks for design alternatives / options / A-B choices for a screen or component, or you have produced more than one candidate look for an element and want a human to pick before committing. Covers the build → navigate → screenshot → propose_variant loop and the single blocking await_user_selection call. (Gated behind the `variant-selection` flag, off by default — run `argent enable variant-selection` first.)
+Use skill: `argent-lens`
+When: The user asks for design alternatives / options / A-B choices for a screen or component, or you have produced more than one candidate look for an element and want a human to pick before committing. Covers the build → navigate → screenshot → propose_variant loop and the single blocking await_user_selection call. (Gated behind the `argent-lens` flag, off by default — run `argent enable argent-lens` first.)
 Prompt keywords: variant, design option, alternative, A/B, "let me pick", "show me options"
 </skill_routing>
 

@@ -96,13 +96,13 @@ type Params = z.infer<typeof zodSchema>;
 export function createProposeVariantTool(registry: Registry): ToolDefinition<Params> {
   return {
     id: "propose_variant",
-    featureFlag: "variant-selection",
+    featureFlag: "argent-lens",
     description: `Stage ONE design variant for ONE on-screen element, then return immediately (non-blocking).
 
 Use when you have produced multiple alternative designs for an element and want the human to pick.
 Call this once per variant: e.g. propose_variant("Foo", v1), propose_variant("Foo", v2),
 propose_variant("Bar", v1)…  Variants accumulate per element and across elements. The agent is NOT
-blocked — keep proposing and keep working. Each element appears live in the Argent preview window (a
+blocked — keep proposing and keep working. Each element appears live in the Argent Lens window (a
 native window that opens automatically) as a floating card beside the streamed simulator, with a thin
 line connecting it to the matched on-screen element; you don't open or display anything yourself. Pass
 variant.previewImage (e.g. a screenshot path) to show how each variant looks.

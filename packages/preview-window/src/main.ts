@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import * as readline from "node:readline";
 
-// One-window-at-a-time host for the variant-selection preview UI. The
+// One-window-at-a-time host for the Argent Lens preview UI. The
 // tool-server spawns this process when `await_user_selection` parks, then
 // pipes single-line JSON commands ({cmd:"foreground"|"close",url?}) over
 // stdin to reuse or dismiss the window across rounds.

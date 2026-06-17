@@ -21,11 +21,11 @@ type Params = z.infer<typeof zodSchema>;
 
 export const awaitUserSelectionTool: ToolDefinition<Params> = {
   id: "await_user_selection",
-  featureFlag: "variant-selection",
+  featureFlag: "argent-lens",
   description: `Block until the human finishes picking among the variants you proposed (the ONE blocking call).
 
 Call this exactly once, AFTER you have staged every variant for every element via \`propose_variant\`.
-It parks until the user presses "Complete selection" in the Argent preview window (a native window
+It parks until the user presses "Complete selection" in the Argent Lens window (a native window
 that opens automatically on the user's screen), then returns their choices and any comments.
 
 Returns one of:

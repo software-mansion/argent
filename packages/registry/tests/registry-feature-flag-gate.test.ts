@@ -15,7 +15,7 @@ import { ToolNotFoundError } from "../src/errors";
 function registerGatedTool(registry: Registry, execute = vi.fn(async () => ({ ran: true }))) {
   registry.registerTool({
     id: "propose_variant",
-    featureFlag: "variant-selection",
+    featureFlag: "argent-lens",
     zodSchema: z.object({}),
     services: () => ({}),
     execute,
@@ -48,7 +48,7 @@ describe("Registry -- invokeTool feature-flag gate", () => {
     registerGatedTool(registry);
 
     await registry.invokeTool("propose_variant", {});
-    expect(isFlagEnabled).toHaveBeenCalledWith("variant-selection");
+    expect(isFlagEnabled).toHaveBeenCalledWith("argent-lens");
   });
 
   it("never gates a tool that declares no featureFlag, even with isFlagEnabled=false", async () => {

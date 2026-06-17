@@ -2,7 +2,7 @@
  * End-to-end regression for the feature-flag-gate bypass (PR #271 FIX 1).
  *
  * `flow-execute` dispatches arbitrary tool ids through `registry.invokeTool`.
- * Before the fix, the `variant-selection` gate lived ONLY at the HTTP edge
+ * Before the fix, the `argent-lens` gate lived ONLY at the HTTP edge
  * (http.ts), so a flow could invoke a flag-gated tool (e.g. `propose_variant`)
  * even while the flag was OFF — the registry dispatch had no gate. This test
  * drives a REAL `Registry` (not the mock used elsewhere) so the gate it
@@ -40,7 +40,7 @@ function buildRegistry(flagEnabled: boolean): { registry: Registry; sideEffect: 
   const registry = new Registry({ isFlagEnabled: () => flagEnabled });
   registry.registerTool({
     id: "propose_variant",
-    featureFlag: "variant-selection",
+    featureFlag: "argent-lens",
     zodSchema: z.object({}),
     services: () => ({}),
     async execute() {

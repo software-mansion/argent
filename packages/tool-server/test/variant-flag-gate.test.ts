@@ -1,10 +1,10 @@
 /**
- * Regression test for the variant-selection feature-flag gate.
+ * Regression test for the argent-lens feature-flag gate.
  *
  * The gate lives at the HTTP exposure layer (http.ts), keyed off each tool's
  * `featureFlag` field, and is re-evaluated on EVERY request. The earlier
  * implementation sampled the flag ONCE at registry construction (tool-server
- * startup), so `argent enable variant-selection` against an already-running
+ * startup), so `argent enable argent-lens` against an already-running
  * server had no effect until a restart — these tests pin the fixed behavior:
  * the SAME running app reflects the flag the instant it flips, with no restart.
  */
@@ -25,7 +25,7 @@ function buildApp() {
   const registry = new Registry();
   registry.registerTool({
     id: "gated_tool",
-    featureFlag: "variant-selection",
+    featureFlag: "argent-lens",
     zodSchema: z.object({}),
     services: () => ({}),
     async execute() {
@@ -48,14 +48,14 @@ async function toolNames(app: ReturnType<typeof buildApp>): Promise<string[]> {
   return res.body.tools.map((t: { name: string }) => t.name);
 }
 
-describe("variant-selection feature-flag gate (dynamic, HTTP layer)", () => {
+describe("argent-lens feature-flag gate (dynamic, HTTP layer)", () => {
   // Built ONCE: the gate must be dynamic per-request, not sampled at startup.
   const app = buildApp();
   beforeEach(() => mockFlag.mockReset());
 
-  it("the real variant tools declare the variant-selection flag", () => {
-    expect(createProposeVariantTool(new Registry()).featureFlag).toBe("variant-selection");
-    expect(awaitUserSelectionTool.featureFlag).toBe("variant-selection");
+  it("the real variant tools declare the argent-lens flag", () => {
+    expect(createProposeVariantTool(new Registry()).featureFlag).toBe("argent-lens");
+    expect(awaitUserSelectionTool.featureFlag).toBe("argent-lens");
   });
 
   it("hides a feature-flagged tool from /tools when the flag is off", async () => {
@@ -63,7 +63,7 @@ describe("variant-selection feature-flag gate (dynamic, HTTP layer)", () => {
     const names = await toolNames(app);
     expect(names).toContain("ungated_tool");
     expect(names).not.toContain("gated_tool");
-    expect(mockFlag).toHaveBeenCalledWith("variant-selection");
+    expect(mockFlag).toHaveBeenCalledWith("argent-lens");
   });
 
   it("shows it on the SAME running app once the flag flips on — no restart", async () => {

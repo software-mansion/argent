@@ -49,9 +49,9 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description: "Disable the automatic screenshot captured after interaction tools.",
   },
   {
-    name: "variant-selection",
+    name: "argent-lens",
     description:
-      "Variant proposal & selection UI — the propose_variant / await_user_selection tools and the Electron preview window. Off by default while the feature is in development.",
+      "Argent Lens — the propose_variant / await_user_selection tools and the Electron preview window for staging UI design variants and letting a human pick among them. Off by default while the feature is in development.",
   },
   {
     name: "artifacts-list-endpoint",

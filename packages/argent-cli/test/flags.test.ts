@@ -237,11 +237,11 @@ describe("enable / disable CLI", () => {
 });
 
 describe("flags (list) CLI", () => {
-  it("ships the variant-selection flag in the production registry", () => {
-    // Guards the gate: setup-registry.ts reads isFlagEnabled("variant-selection"),
+  it("ships the argent-lens flag in the production registry", () => {
+    // Guards the gate: setup-registry.ts reads isFlagEnabled("argent-lens"),
     // so that exact name must stay registered (and discoverable via `argent flags`).
     const out = captureConsole(() => flagsCmd([]));
-    expect(out.stdout).toContain("variant-selection");
+    expect(out.stdout).toContain("argent-lens");
     expect(out.stdout).not.toContain("No feature flags are defined.");
   });
 
