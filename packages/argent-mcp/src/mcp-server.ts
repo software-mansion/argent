@@ -278,7 +278,12 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         params.arguments != null &&
         typeof params.arguments === "object" &&
         (params.arguments as Record<string, unknown>).includeImageInContext === false;
-      if (autoScreenshotOn && !suppressAutoScreenshot && udid && shouldAutoScreenshot(params.name)) {
+      if (
+        autoScreenshotOn &&
+        !suppressAutoScreenshot &&
+        udid &&
+        shouldAutoScreenshot(params.name)
+      ) {
         const delayMs = getAutoScreenshotDelayMs(params.name);
         if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
 

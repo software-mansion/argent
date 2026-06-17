@@ -34,9 +34,7 @@ const vegaInventory = new Map<string, VegaInventoryEntry>();
  * device that has since stopped/disconnected stops resolving as Vega instead of
  * lingering forever.
  */
-export function registerVegaDevices(
-  entries: Array<{ id: string } & VegaInventoryEntry>
-): void {
+export function registerVegaDevices(entries: Array<{ id: string } & VegaInventoryEntry>): void {
   vegaInventory.clear();
   for (const e of entries) {
     vegaInventory.set(e.id, { kind: e.kind, name: e.name, state: e.state });

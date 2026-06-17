@@ -9,22 +9,25 @@ import type { ReinstallAppParams, ReinstallAppResult, ReinstallAppServices } fro
  * id), swallowing the not-installed case. `bundleId` is the interactive
  * component app id (e.g. com.example.app.main); `appPath` is the `.vpkg`.
  */
-export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, ReinstallAppResult> = {
-  requires: ["vega"],
-  handler: async (_services, params) => {
-    const { udid, bundleId, appPath } = params;
-    const absolute = resolvePath(appPath);
+export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, ReinstallAppResult> =
+  {
+    requires: ["vega"],
+    handler: async (_services, params) => {
+      const { udid, bundleId, appPath } = params;
+      const absolute = resolvePath(appPath);
 
-    await vegaDevice(udid, ["uninstall-app", "-a", bundleId], { timeoutMs: 60_000 }).catch(() => {});
+      await vegaDevice(udid, ["uninstall-app", "-a", bundleId], { timeoutMs: 60_000 }).catch(
+        () => {}
+      );
 
-    const { stdout, stderr } = await vegaDevice(udid, ["install-app", "-p", absolute], {
-      timeoutMs: 180_000,
-    });
-    // `install-app` prints "Installing/Updating '…' ...success" on success.
-    const output = `${stdout}\n${stderr}`;
-    if (!/success/i.test(output)) {
-      throw new Error(`vega install-app failed: ${output.trim()}`);
-    }
-    return { reinstalled: true, bundleId };
-  },
-};
+      const { stdout, stderr } = await vegaDevice(udid, ["install-app", "-p", absolute], {
+        timeoutMs: 180_000,
+      });
+      // `install-app` prints "Installing/Updating '…' ...success" on success.
+      const output = `${stdout}\n${stderr}`;
+      if (!/success/i.test(output)) {
+        throw new Error(`vega install-app failed: ${output.trim()}`);
+      }
+      return { reinstalled: true, bundleId };
+    },
+  };

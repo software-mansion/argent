@@ -19,11 +19,13 @@ export interface VegaLogCapture {
  * non-regex to avoid ReDoS on agent-supplied input). Only the last `maxLines`
  * lines are returned; `truncated` flags when earlier lines were dropped.
  */
-export async function captureVegaDeviceLogs(opts: {
-  durationMs?: number;
-  filter?: string;
-  maxLines?: number;
-} = {}): Promise<VegaLogCapture> {
+export async function captureVegaDeviceLogs(
+  opts: {
+    durationMs?: number;
+    filter?: string;
+    maxLines?: number;
+  } = {}
+): Promise<VegaLogCapture> {
   const bin = await resolveVegaBinary();
   if (!bin) {
     throw new Error(
