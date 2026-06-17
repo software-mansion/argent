@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "@argent/configuration-core",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Source of truth for argent feature flags: registry, JSON storage, and isFlagEnabled",
   "type": "module",
   "main": "dist/index.js",
