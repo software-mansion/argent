@@ -277,8 +277,8 @@
         font-weight: var(--fw-semibold);
         box-shadow: var(--shadow-card);
       }
-      /* Floating top-right controls (Add comment, Close): larger pill buttons
-         that sit over the stream, away from the slim drag-handle toolbar. */
+      /* Floating top-right controls (theme, comment, close): a row of square
+         icon buttons that sit over the stream, away from the slim drag toolbar. */
       .float-controls {
         position: absolute;
         top: var(--footbar-bottom);
@@ -288,25 +288,112 @@
         z-index: var(--z-overlay);
         -webkit-app-region: no-drag;
       }
+      /* Icon-only controls: a uniform square button so theme / comment / close
+         read as one consistent cluster (no mismatched text pills). The glyph is
+         inline SVG drawn in currentColor, so it themes for free and the hover /
+         active states just shift the text colour. */
       .float-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--icon-btn-size);
+        height: var(--icon-btn-size);
+        padding: 0;
         background: var(--color-surface);
         color: var(--color-fg);
         border: var(--border-hairline) solid var(--color-border);
-        border-radius: var(--radius-button);
-        padding: var(--pad-complete);
-        font-size: var(--fs-body);
-        font-weight: var(--fw-bold);
+        border-radius: var(--radius-control);
         cursor: pointer;
         box-shadow: var(--shadow-card);
-        white-space: nowrap;
+        transition:
+          border-color var(--dur-hover) var(--ease-out),
+          background var(--dur-hover) var(--ease-out),
+          color var(--dur-hover) var(--ease-out);
+      }
+      .float-btn svg {
+        width: var(--icon-size);
+        height: var(--icon-size);
+        display: block;
       }
       .float-btn:hover {
         border-color: var(--color-accent);
+        color: var(--color-accent);
       }
-      .float-btn.active {
+      .float-btn:focus-visible {
+        outline: var(--border-strong) solid var(--color-accent);
+        outline-offset: var(--border-strong);
+      }
+      .float-btn:active {
+        transform: translateY(var(--press-shift));
+      }
+      .float-btn.active,
+      .float-btn.active:hover {
         background: var(--color-accent);
         color: var(--color-on-accent);
         border-color: var(--color-accent);
+      }
+
+      /* Single-pass dithered theme transition (View Transitions + a Houdini
+         paint worklet). The OLD snapshot is held still underneath; the NEW one
+         is revealed over it by paint(dither-reveal), which draws a FIXED-size
+         Bayer dither whose reveal threshold grows radially from the theme
+         button. Animating --dr-progress repaints the worklet each frame, so the
+         dither pixels stay crisp (no texture scaling) while the wavefront
+         ripples out — a true single pass with no flat in-between. */
+      @property --dr-progress {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+      }
+      @property --dr-ox {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+      }
+      @property --dr-oy {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0;
+      }
+      @property --dr-maxr {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 1000;
+      }
+      @property --dr-cell {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 4;
+      }
+      @property --dr-band {
+        syntax: "<number>";
+        inherits: true;
+        initial-value: 0.3;
+      }
+      :root.theme-dithering::view-transition-old(root),
+      :root.theme-dithering::view-transition-new(root) {
+        mix-blend-mode: normal;
+      }
+      :root.theme-dithering::view-transition-old(root) {
+        animation: none;
+      }
+      :root.theme-dithering::view-transition-new(root) {
+        animation: dr-progress var(--dither-dur) linear forwards;
+        mask-image: paint(dither-reveal);
+        mask-mode: alpha;
+      }
+      @keyframes dr-progress {
+        from {
+          --dr-progress: 0;
+        }
+        to {
+          --dr-progress: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        :root.theme-dithering::view-transition-new(root) {
+          animation: none;
+        }
       }
 
       /* SVG layer for thin connector lines between cards and elements. */
@@ -797,6 +884,133 @@
         box-shadow: var(--shadow-card);
         z-index: var(--z-overlay);
         max-width: var(--footbar-max-width);
+        /* Grows from its pinned corner when every element is chosen (.ready). */
+        transform-origin: bottom right;
+        transition:
+          transform var(--dur-card-in) var(--ease-pop),
+          border-color var(--dur-fade) var(--ease-out),
+          box-shadow var(--dur-fade) var(--ease-out);
+      }
+      /* All elements chosen → lift the panel so "submit" is the obvious next step. */
+      .footbar.ready {
+        transform: scale(var(--footbar-ready-scale));
+        border-color: var(--color-accent);
+        box-shadow: var(--glow-accent);
+      }
+      .ready-label {
+        display: none;
+        align-items: center;
+        gap: var(--gap-inline);
+        color: var(--color-accent);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-bold);
+      }
+      .footbar.ready .ready-label {
+        display: flex;
+      }
+      .ready-label svg {
+        width: var(--icon-size);
+        height: var(--icon-size);
+        flex: none;
+      }
+
+      /* Off-screen reveal prompt — a CTA that rides just above the footbar
+         (its `bottom` is set by the layout pass) offering to surface proposals
+         whose element is on another screen. Collapsing folds it to a persistent
+         pill — never dismissed — so the hidden choices stay one tap from view. */
+      .offscreen-prompt {
+        position: absolute;
+        right: var(--footbar-right);
+        z-index: var(--z-overlay);
+        -webkit-app-region: no-drag;
+        /* `width` is set by the layout pass to match the footbar directly below
+           it; the column right-aligns the collapsed pill within that width. */
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+      }
+      .offscreen-prompt[hidden] {
+        display: none;
+      }
+      .op-card {
+        display: flex;
+        flex-direction: column;
+        gap: var(--gap-list);
+        width: 100%;
+        background: var(--color-surface);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-card);
+        padding: var(--pad-footbar);
+        box-shadow: var(--glow-accent);
+      }
+      .op-msg {
+        margin: 0;
+        color: var(--color-fg);
+        font-size: var(--fs-note);
+        line-height: var(--lh-snug);
+      }
+      .op-row {
+        display: flex;
+        align-items: center;
+        gap: var(--gap-list);
+      }
+      .op-show {
+        flex: 1;
+        background: var(--color-accent);
+        color: var(--color-on-accent);
+        border: 0;
+        border-radius: var(--radius-button);
+        padding: var(--pad-complete);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
+        cursor: pointer;
+      }
+      .op-collapse {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--icon-btn-size);
+        height: var(--icon-btn-size);
+        flex: none;
+        padding: 0;
+        background: transparent;
+        color: var(--color-muted);
+        border: var(--border-hairline) solid var(--color-border);
+        border-radius: var(--radius-control);
+        cursor: pointer;
+      }
+      .op-collapse:hover {
+        color: var(--color-fg);
+        border-color: var(--color-muted);
+      }
+      .op-collapse svg {
+        width: var(--icon-size);
+        height: var(--icon-size);
+      }
+      .op-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--gap-inline);
+        background: var(--color-surface);
+        color: var(--color-accent);
+        border: var(--border-hairline) solid var(--color-accent);
+        border-radius: var(--radius-pill);
+        padding: var(--pad-refresh);
+        font-size: var(--fs-note);
+        font-weight: var(--fw-semibold);
+        cursor: pointer;
+        box-shadow: var(--shadow-card);
+      }
+      .op-pill svg {
+        width: var(--fs-body);
+        height: var(--fs-body);
+        flex: none;
+      }
+      .offscreen-prompt.collapsed .op-card {
+        display: none;
+      }
+      .offscreen-prompt:not(.collapsed) .op-pill {
+        display: none;
       }
       .footbar textarea {
         background: var(--color-bg);
@@ -961,10 +1175,98 @@
           <span id="hidden-badge" class="hidden-badge" hidden></span>
         </div>
         <div class="float-controls" id="float-controls">
-          <button id="comment-btn" class="float-btn" hidden>＋ Add comment</button>
-          <button id="close-btn" class="float-btn" title="Close preview window">✕ Close</button>
+          <button
+            id="comment-btn"
+            class="float-btn"
+            type="button"
+            hidden
+            aria-label="Add comment"
+            title="Add comment">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true">
+              <path
+                d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+            </svg>
+          </button>
+          <button
+            id="theme-btn"
+            class="float-btn"
+            type="button"
+            aria-label="Theme"
+            title="Theme"></button>
+          <button
+            id="close-btn"
+            class="float-btn"
+            type="button"
+            aria-label="Close preview window"
+            title="Close preview window">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              aria-hidden="true">
+              <path d="M6 6 18 18M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+        <div class="offscreen-prompt" id="offscreen-prompt" hidden>
+          <div class="op-card">
+            <p class="op-msg">
+              <b id="op-count">0</b> <span id="op-noun">choices are</span> hidden on another screen.
+            </p>
+            <div class="op-row">
+              <button class="op-show" id="op-show" type="button">Show them</button>
+              <button class="op-collapse" id="op-collapse" type="button" aria-label="Collapse">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true">
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <button class="op-pill" id="op-pill" type="button" aria-label="Show hidden choices">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true">
+              <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+            <span><b id="op-pill-count">0</b> hidden — show</span>
+          </button>
         </div>
         <div class="footbar" id="footbar" hidden>
+          <div class="ready-label">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true">
+              <path d="M20 6 9 17l-5-5" />
+            </svg>
+            <span>All choices made — ready to submit</span>
+          </div>
           <textarea
             id="global-comment"
             rows="4"
@@ -1034,6 +1336,7 @@
         spotTrajReach: cssNum("--spot-traj-reach", 0.5),
         spotTrajHitboxMargin: cssNum("--spot-traj-hitbox-margin", 0.2),
         spotMaxFrameArea: cssNum("--spot-max-frame-area", 0.85),
+        spotRingRadius: cssNum("--radius-control", 6), // round the blur-mask hole to match .spot-ring
         collapsedThumbH: cssNum("--collapsed-thumb-h", 58),
         annpopGraceMs: cssNum("--annpop-hover-grace-ms", 280),
         successToastShowMs: cssNum("--success-toast-show-ms", 1200),
@@ -1650,6 +1953,148 @@
         fetch(`${TOOL_SERVER}/preview/close`, { method: "POST" }).catch(() => {});
       });
 
+      // ── Theme (light / dark) ────────────────────────────────────────────
+      // Colours are light-dark(LIGHT, DARK) tokens in theme.css; forcing
+      // `color-scheme` on the document resolves every token to the chosen side.
+      // Two explicit modes only — light and dark — seeded from the OS on first
+      // run, then remembered per tool-server origin.
+      const THEME_ICON = {
+        light:
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.2M12 19.8V22M4.2 4.2l1.6 1.6M18.2 18.2l1.6 1.6M2 12h2.2M19.8 12H22M4.2 19.8l1.6-1.6M18.2 5.8l1.6-1.6"/></svg>',
+        dark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+      };
+      const THEME_LABEL = { light: "Light", dark: "Dark" };
+      const themeBtn = document.getElementById("theme-btn");
+      let themeMode;
+      try {
+        const stored = localStorage.getItem("argent-preview-theme");
+        themeMode = stored === "light" || stored === "dark" ? stored : null;
+      } catch {
+        themeMode = null;
+      }
+      if (!themeMode) {
+        // First run: match the OS, then stay put until the user toggles.
+        themeMode = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+      }
+      function applyTheme() {
+        document.documentElement.style.colorScheme = themeMode; // "light" | "dark"
+        const next = themeMode === "light" ? "dark" : "light";
+        themeBtn.innerHTML = THEME_ICON[themeMode];
+        themeBtn.title = `Theme: ${THEME_LABEL[themeMode]} — tap for ${THEME_LABEL[next]}`;
+        themeBtn.setAttribute("aria-label", themeBtn.title);
+      }
+      // The toggle animates as a SINGLE-PASS dithered wave. The View Transitions
+      // API snapshots the old and new themes; the old one is held still
+      // underneath while the new one is revealed over it by a Houdini paint
+      // worklet (paint(dither-reveal)) that draws a FIXED-size Bayer dither whose
+      // reveal threshold grows radially from the theme button. Animating
+      // --dr-progress repaints the worklet each frame, so the dither pixels stay
+      // crisp while the wavefront ripples out — no flat in-between. Falls back to
+      // an instant flip when View Transitions / paint worklets are unavailable or
+      // reduced-motion is set.
+      const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      // Worklet source (runs in its own context): paints white where the radial
+      // wavefront has dithered through, transparent elsewhere — used as an alpha
+      // mask on the new view-transition layer.
+      const DITHER_PAINT_SRC = `
+        registerPaint("dither-reveal", class {
+          static get inputProperties() {
+            return ["--dr-progress", "--dr-ox", "--dr-oy", "--dr-maxr", "--dr-cell", "--dr-band"];
+          }
+          paint(ctx, size, props) {
+            const p = parseFloat(props.get("--dr-progress")) || 0;
+            const ox = parseFloat(props.get("--dr-ox")) || 0;
+            const oy = parseFloat(props.get("--dr-oy")) || 0;
+            const maxr = parseFloat(props.get("--dr-maxr")) || Math.hypot(size.width, size.height);
+            const cell = Math.max(2, parseFloat(props.get("--dr-cell")) || 4);
+            const band = parseFloat(props.get("--dr-band")) || 0.3;
+            const M = [
+              [0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],
+              [3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]
+            ];
+            const front = p * (1 + band);  // reveal front (0 .. 1+band), normalized
+            const innerN = front - band;   // radius fully revealed (normalized)
+            ctx.fillStyle = "white";
+            if (innerN > 0) { ctx.beginPath(); ctx.arc(ox, oy, innerN * maxr, 0, 6.2831853); ctx.fill(); }
+            if (front <= 0) return;
+            const outer = front * maxr;    // only the ring between innerN..front needs dithering
+            const x0 = Math.max(0, Math.floor((ox - outer) / cell) * cell);
+            const y0 = Math.max(0, Math.floor((oy - outer) / cell) * cell);
+            const x1 = Math.min(size.width, ox + outer);
+            const y1 = Math.min(size.height, oy + outer);
+            for (let y = y0; y < y1; y += cell) {
+              for (let x = x0; x < x1; x += cell) {
+                const dx = x + cell / 2 - ox, dy = y + cell / 2 - oy;
+                const dN = Math.sqrt(dx * dx + dy * dy) / maxr;
+                if (dN <= innerN || dN > front) continue;
+                let t = (front - dN) / band;
+                if (t > 1) t = 1; else if (t < 0) continue;
+                const bx = ((x / cell) | 0) & 7, by = ((y / cell) | 0) & 7;
+                if ((M[by][bx] + 0.5) / 64 < t) ctx.fillRect(x, y, cell, cell);
+              }
+            }
+          }
+        });`;
+      let ditherPaintReady = false;
+      function ensureDitherPaint() {
+        if (ditherPaintReady || !("paintWorklet" in CSS)) return;
+        ditherPaintReady = true;
+        CSS.paintWorklet
+          .addModule(URL.createObjectURL(new Blob([DITHER_PAINT_SRC], { type: "text/javascript" })))
+          .catch(() => {});
+      }
+      function changeTheme() {
+        const canAnimate =
+          !prefersReducedMotion.matches &&
+          typeof document.startViewTransition === "function" &&
+          "paintWorklet" in CSS;
+        if (!canAnimate) {
+          applyTheme();
+          return;
+        }
+        ensureDitherPaint();
+        // Origin = the theme button; radius reaches the farthest corner so the
+        // wavefront sweeps the whole screen.
+        const r = themeBtn.getBoundingClientRect();
+        const bx = r.left + r.width / 2;
+        const by = r.top + r.height / 2;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const maxR =
+          Math.max(
+            Math.hypot(bx, by),
+            Math.hypot(vw - bx, by),
+            Math.hypot(bx, vh - by),
+            Math.hypot(vw - bx, vh - by)
+          ) || 1;
+        const s = document.documentElement.style;
+        s.setProperty("--dr-ox", String(bx));
+        s.setProperty("--dr-oy", String(by));
+        s.setProperty("--dr-maxr", String(maxR));
+        s.setProperty("--dr-cell", "4");
+        s.setProperty("--dr-band", "0.3");
+        const root = document.documentElement;
+        root.classList.add("theme-dithering");
+        try {
+          const vt = document.startViewTransition(applyTheme);
+          vt.finished.finally(() => root.classList.remove("theme-dithering"));
+        } catch {
+          root.classList.remove("theme-dithering");
+          applyTheme();
+        }
+      }
+      themeBtn.addEventListener("click", () => {
+        themeMode = themeMode === "light" ? "dark" : "light";
+        try {
+          localStorage.setItem("argent-preview-theme", themeMode);
+        } catch {}
+        themeBtn.blur();
+        changeTheme();
+      });
+      applyTheme();
+      // Register the paint worklet up front so the first toggle has it ready.
+      ensureDitherPaint();
+
       // Global keyboard forwarding — active whenever a simulator is connected
       // and focus is not on a toolbar control. We forward raw keydown/keyup so
       // the simulator sees modifier keys (Shift, Ctrl, etc.) as real key events.
@@ -1793,6 +2238,33 @@
       const clearBtn = document.getElementById("clear-btn");
       const completeNote = document.getElementById("complete-note");
       const globalCommentEl = document.getElementById("global-comment");
+      // Off-screen reveal prompt (sits above the footbar).
+      const offscreenPrompt = document.getElementById("offscreen-prompt");
+      const opCount = document.getElementById("op-count");
+      const opNoun = document.getElementById("op-noun");
+      const opShow = document.getElementById("op-show");
+      const opCollapse = document.getElementById("op-collapse");
+      const opPill = document.getElementById("op-pill");
+      const opPillCount = document.getElementById("op-pill-count");
+      const revealOffscreenChoices = () => {
+        vp.revealOffscreen = true;
+        vpRender();
+      };
+      opShow.addEventListener("click", () => {
+        opShow.blur();
+        revealOffscreenChoices();
+      });
+      // Collapsing never dismisses the prompt — it folds to a pill so the hidden
+      // choices stay one tap from visible.
+      opPill.addEventListener("click", () => {
+        opPill.blur();
+        revealOffscreenChoices();
+      });
+      opCollapse.addEventListener("click", () => {
+        vp.offscreenPromptCollapsed = true;
+        opCollapse.blur();
+        vpRender();
+      });
       const confirmModal = document.getElementById("confirm-modal");
       const confirmMsg = document.getElementById("confirm-msg");
       const confirmCancel = document.getElementById("confirm-cancel");
@@ -2102,6 +2574,8 @@
                 vp.annotations = [];
                 vp.thumbFrames = {};
                 vp.anchors = {};
+                vp.revealOffscreen = false;
+                vp.offscreenPromptCollapsed = false;
                 if (globalCommentEl) globalCommentEl.value = "";
                 if (vp.justCompletedRound === snap.round) {
                   /* keep our own success note */
@@ -2690,10 +3164,14 @@
           const lost =
             !matched && (!rec.everMatched || (rec.lostAt && now - rec.lostAt > GONE_GRACE_MS));
           const wasGone = rec.gone;
-          // Keep it visible if the user is mid-typing in its comment box.
-          rec.gone = lost && !cardHasFocus(rec.el);
+          // Keep it visible if the user is mid-typing in its comment box, or once
+          // every on-screen choice is made (vp.revealOffscreen) — then the
+          // off-screen proposals surface so the user can finish the rest.
+          rec.gone = lost && !cardHasFocus(rec.el) && !vp.revealOffscreen;
           rec.el.classList.toggle("gone", rec.gone);
-          if (rec.gone) rec.target = null; // drop the connector when truly gone
+          // No connector for an element that isn't on screen — whether the card
+          // is hidden (gone) or surfaced by the off-screen reveal.
+          if (rec.gone || (lost && vp.revealOffscreen)) rec.target = null;
           if (wasGone && !rec.gone) {
             rec.spawned = false; // genuine re-entry → pop back in
             rec.pos = null;
@@ -3283,14 +3761,26 @@
           s.ring.style.height = eh + "px";
           s.lab.textContent = nodeDesc(n);
         }
-        const path = `path(evenodd, "M0 0H${q(W)}V${q(H)}H0Z M${q(hx)} ${q(hy)}H${q(hx2)}V${q(hy2)}H${q(hx)}Z")`;
+        // Round the hole's corners to match .spot-ring's border-radius (square
+        // hole + rounded ring left ugly corner artifacts). Keep the SAME segment
+        // structure in both the focused and no-focus branches so the clip-path
+        // transition still interpolates frame to frame.
+        const rad = Math.max(0.01, Math.min(THEME.spotRingRadius, (hx2 - hx) / 2, (hy2 - hy) / 2));
+        const roundRect = (x0, y0, x1, y1, rd) =>
+          `M${q(x0 + rd)} ${q(y0)}H${q(x1 - rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x1)} ${q(y0 + rd)}` +
+          `V${q(y1 - rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x1 - rd)} ${q(y1)}` +
+          `H${q(x0 + rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x0)} ${q(y1 - rd)}` +
+          `V${q(y0 + rd)}A${q(rd)} ${q(rd)} 0 0 1 ${q(x0 + rd)} ${q(y0)}Z`;
+        const path = `path(evenodd, "M0 0H${q(W)}V${q(H)}H0Z ${roundRect(hx, hy, hx2, hy2, rad)}")`;
         s.mask.style.clipPath = path;
         s.mask.style.webkitClipPath = path;
       }
       function setInspect(on) {
         vp.inspect = on;
         commentBtn.classList.toggle("active", on);
-        commentBtn.textContent = on ? "✕ Done commenting" : "＋ Add comment";
+        const commentLabel = on ? "Done commenting" : "Add comment";
+        commentBtn.title = commentLabel;
+        commentBtn.setAttribute("aria-label", commentLabel);
         document.getElementById("root").classList.toggle("inspecting", on);
         if (!on) {
           clearSpotIdle();
@@ -3707,6 +4197,38 @@
         footEl.hidden = !has;
         completeBtn.disabled = vp.submitting || !has;
         commentBtn.hidden = !img; // only when a stream is live
+
+        // Once every proposed element has a pick, lift the footbar and surface
+        // the "ready" label so submitting is the self-evident next step.
+        // Annotations are optional, so only element selections gate this.
+        const allChosen = vp.proposals.length > 0 && vp.proposals.every((p) => vp.staged[p.id]);
+        footEl.classList.toggle("ready", allChosen && !vp.submitting);
+
+        // Off-screen proposals stay folded away (the "N hidden" badge) until the
+        // user opts in. Once every ON-screen choice is staged, offer to reveal
+        // the rest via a prompt above the footbar. Dismissing it collapses to a
+        // persistent pill — the hidden choices are always one click from visible.
+        const offScreenCount = vp.proposals.filter((p) => !p._node).length;
+        const onScreenChosen =
+          vp.proposals.some((p) => p._node) &&
+          vp.proposals.every((p) => !p._node || vp.staged[p.id]);
+        const showPrompt =
+          onScreenChosen && offScreenCount > 0 && !vp.revealOffscreen && !vp.submitting;
+        offscreenPrompt.hidden = !showPrompt;
+        if (showPrompt) {
+          offscreenPrompt.classList.toggle("collapsed", !!vp.offscreenPromptCollapsed);
+          opCount.textContent = offScreenCount;
+          opNoun.textContent = offScreenCount === 1 ? "choice is" : "choices are";
+          opPillCount.textContent = offScreenCount;
+          // Sit just above the footbar, matched to its exact width and right
+          // edge (they read as one stacked pair). The footbar is never .ready
+          // here (off-screen picks are still pending), so its rect is unscaled
+          // and both the width and the gap stay exact.
+          const fr = footEl.getBoundingClientRect();
+          const mr = mainEl.getBoundingClientRect();
+          offscreenPrompt.style.width = fr.width + "px";
+          offscreenPrompt.style.bottom = mr.bottom - fr.top + 10 + "px"; // 10px above the footbar
+        }
       }
 
       // rAF loop, fixed-timestep so motion is identical at 60/120 Hz and after
@@ -3909,7 +4431,8 @@
         vp.inspect = false;
         vp.cardDragging = false;
         commentBtn.classList.remove("active");
-        commentBtn.textContent = "＋ Add comment";
+        commentBtn.title = "Add comment";
+        commentBtn.setAttribute("aria-label", "Add comment");
         document.getElementById("root").classList.remove("inspecting");
       }
 
@@ -3944,6 +4467,8 @@
         vp.staged = {};
         vp.comments = {};
         vp.annotations = [];
+        vp.revealOffscreen = false;
+        vp.offscreenPromptCollapsed = false;
         if (globalCommentEl) globalCommentEl.value = "";
         setNote("");
         closeAnnPop();

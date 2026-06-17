@@ -8,49 +8,72 @@
  * same design decision. The "Motion & feel" block at the bottom is also read
  * by the JS at boot (getComputedStyle), so animation feel is configured here
  * too — not buried in the script.
+ *
+ * Light and dark are colocated per token via light-dark(LIGHT, DARK). The
+ * active side follows `color-scheme` on :root — the OS theme by default, or a
+ * forced value the in-app theme toggle writes to documentElement.style. So
+ * every consumer themes for free, with no second palette to keep in sync.
  * ========================================================================== */
 
 :root {
   color-scheme: light dark;
 
   /* ── Palette ─────────────────────────────────────────────────────────── */
-  --color-bg: #0e0e10;
-  --color-fg: #eaeaea;
-  --color-muted: #8a8a90;
-  --color-accent: #9bc7f0; /* brand sky-blue (argent homepage wordmark) */
-  --color-on-accent: #06122b; /* ink on accent-filled surfaces */
-  --color-border: #2a2a2e;
-  --color-surface: #16161a; /* panels (toolbar, cards, pops) */
-  --color-surface-raised: #1c1c21; /* card header — lifted off surface */
-  --color-surface-hover: #1c1c22; /* hovered list item */
-  --color-row-hover: #20202a; /* hovered variant row */
-  --color-ok: #5cdc8b;
-  --color-error: #ff8080;
-  --color-thumb-bg: #000000; /* letterbox behind variant previews */
+  /* Light + dark live side by side via light-dark(LIGHT, DARK); the active
+     side follows the `color-scheme` above (so the OS theme by default, or a
+     forced value when the user flips the in-app theme toggle). Tokens that are
+     self-contained ink-on-fill pairs (pin, danger) or only ever sit over the
+     device stream (touch dots, spotlight scrim, ring) read on any backdrop and
+     so stay single-valued. */
+  --color-bg: light-dark(#f4f5f7, #0e0e10);
+  --color-fg: light-dark(#1b1d21, #eaeaea);
+  --color-muted: light-dark(#5f636b, #8a8a90);
+  --color-accent: light-dark(
+    #2f6fd0,
+    #9bc7f0
+  ); /* brand sky-blue on dark; a deeper blue carries the same role on light */
+  --color-on-accent: light-dark(#ffffff, #06122b); /* ink on accent-filled surfaces */
+  --color-border: light-dark(#d8dbe2, #2a2a2e);
+  --color-surface: light-dark(#ffffff, #16161a); /* panels (toolbar, cards, pops) */
+  --color-surface-raised: light-dark(#f6f7f9, #1c1c21); /* card header — lifted off surface */
+  --color-surface-hover: light-dark(#eef1f5, #1c1c22); /* hovered list item */
+  --color-row-hover: light-dark(#e8ecf3, #20202a); /* hovered variant row */
+  --color-ok: light-dark(#138a48, #5cdc8b);
+  --color-error: light-dark(#cf2f2f, #ff8080);
+  --color-thumb-bg: light-dark(#e3e5ea, #000000); /* letterbox behind variant previews */
   --color-pin-bg: #d8a657; /* saved-annotation pin */
   --color-pin-fg: #1a1205;
-  --color-danger-bg: #7a2230; /* destructive (delete) button */
+  --color-danger-bg: light-dark(#c2334a, #7a2230); /* destructive (delete) button */
   --color-danger-fg: #ffd9df;
 
   /* ── Translucent effect colours ──────────────────────────────────────── */
-  --color-row-staged: rgba(92, 220, 139, 0.13); /* ok tint on staged row */
+  --color-row-staged: light-dark(
+    rgba(19, 138, 72, 0.12),
+    rgba(92, 220, 139, 0.13)
+  ); /* ok tint on staged row */
   --touch-fill: rgba(155, 199, 240, 0.25); /* multi-touch dot body (accent) */
   --touch-fill-pressed: rgba(155, 199, 240, 0.55);
   --touch-stroke: rgba(155, 199, 240, 0.9); /* multi-touch dot ring */
   --touch-anchor-fill: rgba(255, 200, 80, 0.9); /* anchored-touch dot */
   --touch-anchor-stroke: rgba(255, 200, 80, 1);
   --spotlight-scrim: rgba(8, 8, 10, 0.55); /* dim/blur over the stream */
-  --footbar-bg: rgba(22, 22, 26, 0.94); /* surface, semi-opaque */
+  --footbar-bg: light-dark(
+    rgba(255, 255, 255, 0.94),
+    rgba(22, 22, 26, 0.94)
+  ); /* surface, semi-opaque */
 
-  /* ── Elevation (full box-shadow values, by purpose) ──────────────────── */
-  --shadow-stream: 0 10px 48px #0008;
-  --shadow-pill: 0 4px 14px #0008;
-  --shadow-card: 0 10px 30px #0009;
-  --shadow-pin: 0 3px 10px #0008;
-  --shadow-pop: 0 12px 36px #000b;
-  --ring-outline: 0 0 0 1px #000a; /* spotlight ring edge */
+  /* ── Elevation (box-shadow values, by purpose) ───────────────────────── */
+  /* Only the shadow COLOUR flips per theme: heavy black halos read as grime on
+     a light surface, so light mode uses a soft blue-grey ink at low alpha. */
+  --shadow-stream: 0 10px 48px light-dark(rgba(18, 26, 42, 0.14), #0008);
+  --shadow-pill: 0 4px 14px light-dark(rgba(18, 26, 42, 0.12), #0008);
+  --shadow-card: 0 10px 30px light-dark(rgba(18, 26, 42, 0.13), #0009);
+  --shadow-pin: 0 3px 10px light-dark(rgba(18, 26, 42, 0.16), #0008);
+  --shadow-pop: 0 12px 36px light-dark(rgba(18, 26, 42, 0.18), #000b);
+  --ring-outline: 0 0 0 1px #000a; /* spotlight ring edge (over the stream) */
   --touch-glow: 0 0 12px rgba(155, 199, 240, 0.5);
   --dot-glow: 0 0 8px var(--color-ok);
+  --glow-accent: 0 10px 34px light-dark(rgba(47, 111, 208, 0.32), rgba(155, 199, 240, 0.3)); /* accent halo — footbar "ready to submit" pop */
 
   /* ── Typography ──────────────────────────────────────────────────────── */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -134,6 +157,8 @@
   --pin-size: 20px;
   --dot-size: 8px; /* status dot, device-picker dot */
   --card-dot-size: 7px; /* card-header dot */
+  --icon-btn-size: 34px; /* floating top-right icon controls (theme, comment, close) */
+  --icon-size: 17px; /* glyph inside an icon button */
   --comment-pop-width: 248px;
   --annpop-width: 232px;
   --annpop-txt-max-h: 160px;
@@ -154,7 +179,7 @@
   --modal-max-width: 360px;
   --pad-modal: 18px;
   --stream-max-h: 80vh;
-  --backdrop-blur: 5px;
+  --backdrop-blur: 1.67px; /* light haze over the dimmed stream (3× softer than the former 5px) */
 
   /* ── Opacities ───────────────────────────────────────────────────────── */
   --opacity-disabled: 0.45;
@@ -180,7 +205,9 @@
   --dur-card-in: 0.22s;
   --dur-spot: 0.28s;
   --dur-card-move: 0.34s;
+  --dither-dur: 0.72s; /* light↔dark dithered wavefront sweep */
   --card-gone-scale: 0.8; /* shrink as a card pops away */
+  --footbar-ready-scale: 1.05; /* footbar grows a touch once every element is chosen */
 
   /* Spring feel — JS integrates these (ω rad/s, ζ damping ratio). The bubble
      spring is slow & barely-overshooting (cards drift into place); the tight
