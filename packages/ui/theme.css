@@ -178,7 +178,7 @@
   --complete-note-max-width: 200px;
   --modal-max-width: 360px;
   --pad-modal: 18px;
-  --stream-max-h: 80vh;
+  --stream-max-h: 80dvh; /* dvh, not vh: in a browser tab `vh` is the toolbar-retracted (large) viewport, so the centered stream overflowed the %-height container and got clipped at the bottom. `dvh` tracks the visible viewport. In the frameless Electron window (no toolbar) dvh == vh, so production is unchanged. */
   --backdrop-blur: 1.67px; /* light haze over the dimmed stream (3× softer than the former 5px) */
 
   /* ── Opacities ───────────────────────────────────────────────────────── */

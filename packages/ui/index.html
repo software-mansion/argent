@@ -5,6 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Argent Preview</title>
     <link rel="stylesheet" href="theme.css" />
+    <script>
+      // Seed `color-scheme` BEFORE first paint. theme.css tokens are
+      // light-dark(); until JS forces a side, they resolve to the OS theme. If
+      // the user previously toggled to the non-OS theme, that left a one-frame
+      // flash of the OS theme on load. This runs during head parse (pre-paint);
+      // the end-of-body theme script re-derives the same value idempotently and
+      // wires the toggle.
+      (function () {
+        try {
+          var s = localStorage.getItem("argent-preview-theme");
+          var mode =
+            s === "light" || s === "dark"
+              ? s
+              : window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light";
+          document.documentElement.style.colorScheme = mode;
+        } catch (e) {}
+      })();
+    </script>
     <style>
       * {
         box-sizing: border-box;
@@ -393,6 +413,19 @@
       @media (prefers-reduced-motion: reduce) {
         :root.theme-dithering::view-transition-new(root) {
           animation: none;
+        }
+        /* Honor the preference everywhere, not just the dither: collapse every
+           spring/pop transition and animation to instant so nothing visibly
+           moves. The static states (e.g. the footbar's "ready" emphasis) remain
+           — reduced-motion suppresses motion, not emphasis. Users with no
+           preference are unaffected (the rules live entirely inside this query). */
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
         }
       }
 
@@ -1465,6 +1498,10 @@
       let currentUdid = null;
       let img = null;
       let stage = null;
+      // Auto-reconnect bookkeeping (see scheduleReconnect): the simulator-server
+      // port is ephemeral, so a restart strands the pinned stream/WS.
+      let reconnectTimer = null;
+      let reconnectAttempts = 0;
       /** Elements for the three multi-touch indicators (primary / mirror / anchor). */
       let touchDots = { primary: null, mirror: null, anchor: null };
       let activePointerId = null;
@@ -1707,7 +1744,15 @@
       // ── Stream + WS wiring ─────────────────────────────────────────────
       function teardownStream() {
         releaseAllInput();
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
         if (ws) {
+          // Detach handlers before closing so this intentional teardown doesn't
+          // trip the auto-reconnect (otherwise the close we trigger here, or a
+          // reconnect that reuses the same udid, would schedule a spurious one).
+          ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
           try {
             ws.close();
           } catch {}
@@ -1722,6 +1767,7 @@
         // HTTP connection open after the element is detached, and re-selecting
         // a simulator leaks more connections. Same trick radon-ide uses.
         if (img) {
+          img.onerror = null;
           img.src = "";
           img.removeAttribute("src");
         }
@@ -1733,8 +1779,34 @@
         vpResetOverlay();
       }
 
-      async function connect(udid) {
+      // The simulator-server's port is ephemeral: scraped from the binary's
+      // stdout, not pinned by us. If it restarts (a crash, an explicit
+      // stop-simulator-server, a profiling run that bounces it), the <img> and
+      // WebSocket we pinned in connect() point at a dead port and the stream
+      // goes permanently blank — the recurring "the stream disappeared". The
+      // server route re-resolves the live port on each request, so a
+      // capped-backoff reconnect (re-running connect, which re-fetches that
+      // route) heals it instead of stranding the user on a refresh. The
+      // reconnectTimer guard collapses the simultaneous img.onerror + ws.onclose
+      // into a single attempt; backoff resets on a successful ws.onopen.
+      function scheduleReconnect(udid) {
+        if (currentUdid !== udid || reconnectTimer) return;
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 8000);
+        reconnectAttempts++;
+        setStatus("reconnecting…");
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          if (currentUdid === udid) {
+            connect(udid, true).catch((err) => setStatus(String(err.message || err), "error"));
+          }
+        }, delay);
+      }
+
+      async function connect(udid, isReconnect = false) {
         teardownStream();
+        // A fresh user-initiated connect resets the backoff; a reconnect keeps
+        // it growing across consecutive failures.
+        if (!isReconnect) reconnectAttempts = 0;
         currentUdid = udid;
         // Warm the describe pipeline in the background: the first /describe on
         // iOS AX or Android uiautomator cold-starts the platform service and
@@ -1777,7 +1849,10 @@
         img.draggable = false;
         // Append a cache-buster so re-connects don't reuse a stale MJPEG stream.
         img.src = `${info.streamUrl}?t=${Date.now()}`;
-        img.onerror = () => setStatus("stream error", "error");
+        img.onerror = () => {
+          setStatus("stream error", "error");
+          scheduleReconnect(udid);
+        };
         stage.appendChild(img);
         viewport.innerHTML = "";
         viewport.appendChild(stage);
@@ -1788,14 +1863,19 @@
         ws = new WebSocket(info.wsUrl);
         ws.onopen = () => {
           wsOpen = true;
+          reconnectAttempts = 0;
           setStatus("");
         };
         ws.onclose = () => {
           wsOpen = false;
-          if (currentUdid === udid) setStatus("disconnected", "error");
+          if (currentUdid === udid) {
+            setStatus("disconnected", "error");
+            scheduleReconnect(udid);
+          }
         };
         ws.onerror = () => {
           setStatus("ws error", "error");
+          scheduleReconnect(udid);
         };
       }
 
@@ -2944,7 +3024,7 @@
 
         const body = document.createElement("div");
         body.className = "vcard-body";
-        for (const v of p.variants) {
+        for (const v of p.variants || []) {
           const row = document.createElement("div");
           row.className = "vrow" + (vp.staged[p.id] === v.id ? " staged" : "");
           row.dataset.vid = v.id;
@@ -3015,7 +3095,7 @@
 
         // A choice needs at least two options — flag a lone-variant element so
         // the human (and the watching agent) sees it isn't actually a choice.
-        if (p.variants.length < 2) {
+        if ((p.variants || []).length < 2) {
           const hint = document.createElement("div");
           hint.className = "vcard-hint";
           hint.textContent = "Only one variant — a choice needs at least two.";
@@ -3284,8 +3364,13 @@
         // The footbar (Complete selection + comment) floats above #main's
         // bottom edge. Without this clamp the column extends behind it and
         // hides the bottom of any card whose comment box lands down low.
-        const footTop =
-          footEl && !footEl.hidden ? footEl.getBoundingClientRect().top - mr.top - COL_PAD : mh;
+        // offsetTop (layout), not getBoundingClientRect (visual): the footbar's
+        // `.ready` state applies a scale() whose bottom-right origin lifts its
+        // visual top ~10px and overshoots mid-spring. Reading the rect here fed
+        // that transient back into card layout, so cards visibly re-settled on
+        // the "ready" pop. offsetTop ignores the transform (offsetParent is the
+        // position:relative #main), keeping the column height stable.
+        const footTop = footEl && !footEl.hidden ? footEl.offsetTop - COL_PAD : mh;
         const colBottom = Math.min(mh - COL_PAD, footTop);
         const colH = colBottom - colTop;
         for (const col of ["L", "R"]) {
@@ -4209,11 +4294,19 @@
         // the rest via a prompt above the footbar. Dismissing it collapses to a
         // persistent pill — the hidden choices are always one click from visible.
         const offScreenCount = vp.proposals.filter((p) => !p._node).length;
-        const onScreenChosen =
-          vp.proposals.some((p) => p._node) &&
-          vp.proposals.every((p) => !p._node || vp.staged[p.id]);
+        // Every currently-on-screen choice is staged. `every` is vacuously true
+        // when NONE are on screen (e.g. all proposals target another screen), so
+        // the reveal prompt still appears in that case instead of stranding the
+        // user with inert "N hidden" cards and no way to surface them.
+        const onScreenStaged = vp.proposals.every((p) => !p._node || vp.staged[p.id]);
+        // Latch on `offscreenPromptCollapsed`: once dismissed to the pill, keep it
+        // shown even if an on-screen pick is later un-staged — the hidden choices
+        // must ALWAYS stay one click from visible (the pill never disappears).
         const showPrompt =
-          onScreenChosen && offScreenCount > 0 && !vp.revealOffscreen && !vp.submitting;
+          offScreenCount > 0 &&
+          !vp.revealOffscreen &&
+          !vp.submitting &&
+          (onScreenStaged || vp.offscreenPromptCollapsed);
         offscreenPrompt.hidden = !showPrompt;
         if (showPrompt) {
           offscreenPrompt.classList.toggle("collapsed", !!vp.offscreenPromptCollapsed);
