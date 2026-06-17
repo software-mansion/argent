@@ -12,12 +12,12 @@
     "typecheck:tests": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
-    "semver": "^7.7.4"
+    "semver": "^7.8.4"
   },
   "devDependencies": {
-    "@types/node": "^25.9.0",
+    "@types/node": "^25.9.3",
     "@types/semver": "^7.7.1",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.9"
   }
 }
