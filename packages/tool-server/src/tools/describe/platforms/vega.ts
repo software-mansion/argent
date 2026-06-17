@@ -1,6 +1,7 @@
 import type { ToolDependency } from "@argent/registry";
 import type { DescribeNode, DescribeTreeData } from "../contract";
 import { fetchVegaPageSource } from "../../../utils/vega-inspect";
+import { MultipleVegaDevicesError } from "../../../utils/vega-vvd";
 import { parseVegaPageSource } from "./vega/source-parser";
 
 export const vegaRequires: ToolDependency[] = ["vega"];
@@ -31,14 +32,19 @@ const PAGE_SOURCE_EMPTY_LENGTH = 50;
  *
  * `_serial` (the caller's Vega udid) is accepted for call-site symmetry with the
  * iOS/Android describe handlers but not used: the toolkit fetch targets the
- * single running VVD resolved under `fetchVegaPageSource` → `emulatorSerial`,
- * which errors if more than one VVD is present.
+ * single running VVD resolved under `fetchVegaPageSource` → `emulatorSerial`.
+ * A multi-VVD ambiguity (`MultipleVegaDevicesError`) is rethrown so the guard's
+ * "stop all but one VVD" message reaches the caller; every other fetch failure
+ * becomes the empty-tree relaunch hint below.
  */
 export async function describeVega(_serial: string): Promise<DescribeTreeData> {
   let xml: string;
   try {
     xml = (await fetchVegaPageSource()).trim();
-  } catch {
+  } catch (err) {
+    // A multi-VVD ambiguity is a hard error everywhere — don't bury the guard
+    // under the generic relaunch hint (the toolkit isn't the problem here).
+    if (err instanceof MultipleVegaDevicesError) throw err;
     return { tree: EMPTY_TREE, source: "vega-automation", hint: UNAVAILABLE_HINT };
   }
   if (xml.length < PAGE_SOURCE_EMPTY_LENGTH) {

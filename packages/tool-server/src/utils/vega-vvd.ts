@@ -15,6 +15,23 @@ import { join } from "node:path";
  */
 
 /**
+ * Thrown when more than one Vega Virtual Device is running. v1 cannot
+ * disambiguate which one a tool call targets (see `discoverQmpSocket`), so tools
+ * surface this rather than acting on an arbitrary device. Typed so callers that
+ * normally swallow discovery failures (e.g. `describe`) can still let it through.
+ */
+export class MultipleVegaDevicesError extends Error {
+  constructor(sockets: string[]) {
+    super(
+      `Multiple Vega Virtual Devices detected (${sockets.length} QMP sockets: ` +
+        `${sockets.join(", ")}). argent v1 targets a single running VVD and cannot ` +
+        "tell which one a tool call refers to — stop all but one VVD and retry."
+    );
+    this.name = "MultipleVegaDevicesError";
+  }
+}
+
+/**
  * Locate the running VVD's QMP socket file.
  *
  * v1 supports a single running VVD. If more than one socket is present we throw
@@ -50,11 +67,7 @@ export async function discoverQmpSocket(): Promise<string> {
     );
   }
   if (names.length > 1) {
-    throw new Error(
-      `Multiple Vega Virtual Devices detected (${names.length} QMP sockets: ` +
-        `${names.join(", ")}). argent v1 targets a single running VVD and cannot ` +
-        "tell which one a tool call refers to — stop all but one VVD and retry."
-    );
+    throw new MultipleVegaDevicesError(names);
   }
   return byName.get(names[0]!)!;
 }

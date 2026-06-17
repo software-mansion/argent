@@ -6,7 +6,11 @@ const readdir = vi.fn();
 vi.mock("node:fs/promises", () => ({ readdir: (...a: unknown[]) => readdir(...a) }));
 vi.mock("node:os", () => ({ tmpdir: () => "/var/folders/T" }));
 
-import { discoverQmpSocket, discoverVegaConsolePort } from "../src/utils/vega-vvd";
+import {
+  discoverQmpSocket,
+  discoverVegaConsolePort,
+  MultipleVegaDevicesError,
+} from "../src/utils/vega-vvd";
 
 function withSockets(byDir: Record<string, string[]>): void {
   readdir.mockImplementation(async (dir: string) => byDir[dir] ?? []);
@@ -32,8 +36,9 @@ describe("discoverQmpSocket", () => {
     await expect(discoverQmpSocket()).rejects.toThrow(/No Vega Virtual Device QMP socket/);
   });
 
-  it("throws on multiple VVDs rather than silently targeting one", async () => {
+  it("throws a typed MultipleVegaDevicesError rather than silently targeting one", async () => {
     withSockets({ "/tmp": ["qmp-socket-5554.sock", "qmp-socket-5556.sock"] });
+    await expect(discoverQmpSocket()).rejects.toBeInstanceOf(MultipleVegaDevicesError);
     await expect(discoverQmpSocket()).rejects.toThrow(/Multiple Vega Virtual Devices detected/);
   });
 

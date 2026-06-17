@@ -54,8 +54,8 @@ const capability: ToolCapability = {
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   // Virtual-Device-only in v1: physical Fire TV is unverified, and the Vega
-  // handlers target the running VVD via its emulator/QMP socket. Keep `vega`
-  // uniformly `virtual` across the tool suite until hardware is validated.
+  // handler targets the single running VVD. Keep `vega` uniformly `virtual`
+  // across the tool suite until hardware is validated.
   vega: { virtual: true },
 };
 
