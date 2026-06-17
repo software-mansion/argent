@@ -44,7 +44,7 @@
     "@modelcontextprotocol/sdk": "^1.20.0"
   },
   "optionalDependencies": {
-    "electron": "^31.7.7"
+    "electron": "^42.4.1"
   },
   "devDependencies": {
     "@argent/cli": "file:../argent-cli",
