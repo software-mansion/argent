@@ -13,8 +13,8 @@ import request from "supertest";
 import { Registry } from "@argent/registry";
 import { z } from "zod";
 
-vi.mock("@argent/cli", () => ({ isFlagEnabled: vi.fn() }));
-import { isFlagEnabled } from "@argent/cli";
+vi.mock("@argent/configuration-core", () => ({ isFlagEnabled: vi.fn() }));
+import { isFlagEnabled } from "@argent/configuration-core";
 import { createHttpApp } from "../src/http";
 import { createProposeVariantTool } from "../src/tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../src/tools/variants/await-user-selection";

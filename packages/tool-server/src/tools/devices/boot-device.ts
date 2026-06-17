@@ -448,6 +448,13 @@ async function bootIos(
 
   const ndRef = nativeDevtoolsRef({ id: udid, platform: "ios", kind: "simulator" });
   const ndApi = await registry.resolveService<NativeDevtoolsApi>(ndRef.urn, ndRef.options);
+  // We just (re)booted the sim, which wipes DYLD_INSERT_LIBRARIES from launchd.
+  // If this service was already initialized (e.g. by the simulator watcher),
+  // `resolveService` returns the cached instance whose one-shot env latch is
+  // set, so the env would never be re-applied and the next launch wouldn't be
+  // injected. Force a re-apply so describe / native tools work without an
+  // extra restart-app round-trip. Failures surface via getInitFailure below.
+  await ndApi.reverifyEnv().catch(() => {});
   const initFailure = ndApi.getInitFailure();
   if (initFailure?.givenUp) {
     return buildInitFailedResult(udid, initFailure);

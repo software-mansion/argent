@@ -172,6 +172,40 @@ export class CDPClient {
     });
   }
 
+  /**
+   * Re-point this client at a different CDP WebSocket target (e.g. switching
+   * the active browser tab) WITHOUT emitting `disconnected`.
+   *
+   * Object identity is preserved, so existing references to this client
+   * (`server.cdp`, `api.cdp`, and every closure that captured it) automatically
+   * target the new tab after the swap — no rewiring needed. Callers that wire
+   * `disconnected` to teardown/termination therefore do not see a tab switch as
+   * a device loss.
+   *
+   * In-flight requests are rejected and per-connection state (enabled domains,
+   * parsed scripts) is reset — the new target starts fresh, so the caller must
+   * re-enable any domains it needs.
+   */
+  async reconnect(newWsUrl: string): Promise<void> {
+    const old = this.ws;
+    if (old) {
+      // Drop our handlers BEFORE closing so the impending close/error does not
+      // fire the `disconnected` event (which callers treat as a fatal teardown).
+      old.removeAllListeners();
+      this.ws = null;
+      try {
+        old.close();
+      } catch {
+        /* already closing */
+      }
+    }
+    // Reject in-flight requests and clear per-connection caches, but keep this
+    // client object alive to receive the new socket.
+    this.cleanup();
+    this.wsUrl = newWsUrl;
+    await this.connect();
+  }
+
   isConnected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
   }

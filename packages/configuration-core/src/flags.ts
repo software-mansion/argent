@@ -53,6 +53,10 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     description:
       "Variant proposal & selection UI — the propose_variant / await_user_selection tools and the Electron preview window. Off by default while the feature is in development.",
   },
+  {
+    name: "artifacts-list-endpoint",
+    description: "Expose GET /artifacts for remote artifact inventory consumers.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

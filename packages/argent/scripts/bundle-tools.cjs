@@ -523,6 +523,20 @@ for (const platform of SUPPORTED_HOST_PLATFORMS) {
     fs.copyFileSync(src, dest);
     fs.chmodSync(dest, 0o755);
     console.log(`✓ Copied simulator-server (${platform}) → ${path.relative(process.cwd(), dest)}`);
+    // Ship the screen-sharing agent resources (jar + per-ABI .so) that the
+    // `android_device` controller pushes to a connected phone. They sit at
+    // <platform>/resources/android/ next to the binary (the simulator-server
+    // resolves them relative to its working directory, which the spawn sets to
+    // its own platform dir). download-simulator-server.sh extracts them there;
+    // optional because physical-device support degrades gracefully without them.
+    const resourcesSrc = path.join(BIN_SRC_ROOT, platform, "resources");
+    if (fs.existsSync(resourcesSrc)) {
+      const resourcesDest = path.join(destDir, "resources");
+      fs.cpSync(resourcesSrc, resourcesDest, { recursive: true });
+      console.log(
+        `✓ Copied screen-sharing agent resources (${platform}) → ${path.relative(process.cwd(), resourcesDest)}`
+      );
+    }
   } else if (platform === "darwin" && process.platform === "darwin") {
     throw new Error(
       `simulator-server binary not found at ${src}.\n` +

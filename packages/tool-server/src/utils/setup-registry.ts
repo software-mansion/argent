@@ -76,6 +76,9 @@ import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
 import { createProposeVariantTool } from "../tools/variants/propose-variant";
 import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
+import { chromiumTabsTool } from "../tools/chromium-tabs";
+import { chromiumCookiesTool } from "../tools/chromium-cookies";
+import { chromiumStorageTool } from "../tools/chromium-storage";
 
 export function createRegistry(): Registry {
   // Inject the real feature-flag check so the gate is enforced for EVERY
@@ -104,6 +107,9 @@ export function createRegistry(): Registry {
   registry.registerTool(screenshotTool);
   registry.registerTool(screenshotDiffTool);
   registry.registerTool(gestureTapTool);
+  registry.registerTool(chromiumTabsTool);
+  registry.registerTool(chromiumCookiesTool);
+  registry.registerTool(chromiumStorageTool);
   registry.registerTool(gestureSwipeTool);
   registry.registerTool(gestureScrollTool);
   registry.registerTool(gestureDragTool);

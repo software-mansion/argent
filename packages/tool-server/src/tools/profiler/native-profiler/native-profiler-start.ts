@@ -18,7 +18,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS: the exact CFBundleExecutable of the app to profile. Android: the app's package name. " +
+      "iOS: the CFBundleExecutable or display name of the app to profile. Android: the app's package name. " +
         "If omitted, auto-detects the currently running foreground app. Only provide this if " +
         "auto-detection picks the wrong app."
     ),

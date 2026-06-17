@@ -19,7 +19,12 @@ export type {
   ToolDependency,
 } from "./types";
 export { ArtifactStore, ARTIFACT_MARKER } from "./artifacts";
-export type { ArtifactHandle, ArtifactEntry, RegisterArtifactOptions } from "./artifacts";
+export type {
+  ArtifactHandle,
+  ArtifactEntry,
+  ArtifactListItem,
+  RegisterArtifactOptions,
+} from "./artifacts";
 export {
   FILE_INPUT_MARKER,
   CLIENT_FILE_MARKER,
