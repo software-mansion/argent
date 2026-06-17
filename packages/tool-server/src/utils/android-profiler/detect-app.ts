@@ -22,7 +22,8 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
-        `Check the device is booted and responsive, then retry.`
+        `Check the device is booted and responsive, then retry.`,
+      { cause: err }
     );
   }
   if (parseUserPackages(packagesOut).has(appProcess)) return;
@@ -40,7 +41,8 @@ export async function validateAndroidAppProcess(serial: string, appProcess: stri
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Could not verify app_process \`${appProcess}\` on ${serial} (adb error: ${msg}). ` +
-        `Check the device is booted and responsive, then retry.`
+        `Check the device is booted and responsive, then retry.`,
+      { cause: err }
     );
   }
   if (pidOut.trim().length > 0) return;
