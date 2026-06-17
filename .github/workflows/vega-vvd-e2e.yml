@@ -34,6 +34,12 @@ on:
       - "scripts/ci/vega-vvd-test.sh"
       - ".github/workflows/vega-vvd-e2e.yml"
 
+# A full VVD boot is several minutes; cancel a superseded in-progress run when a
+# PR gets a quick follow-up push instead of double-booting.
+concurrency:
+  group: vega-vvd-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   HOST_IMAGE: ${{ github.event.inputs.host-image || 'ghcr.io/finloop/vega-virtual-device-host:latest' }}
   KEPLER_FIXTURE_URL: "https://github.com/finloop/vega-virtual-device-action/releases/download/fixtures-keplervideoapp-0.22.1/keplervideoapp_aarch64.vpkg"
