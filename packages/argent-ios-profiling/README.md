@@ -59,11 +59,17 @@ and its framing/threadmap/record-alignment logic is covered by the unit tests
 ## Build
 
 ```
-npm run build:native -w @argent/ios-profiling   # clang → bin/darwin/ios-profiler-{capture,mem}
-npm run build        -w @argent/ios-profiling   # tsc → dist/
+npm run build:native   -w @argent/ios-profiling   # clang → bin/darwin/ios-profiler-{capture,mem}
+npm run build          -w @argent/ios-profiling   # tsc → dist/
+npm run format:native  -w @argent/ios-profiling   # clang-format → objc_src/*.{m,h}
 ```
 
 `PREBUILT_IOS_PROFILER_BIN_DIR` lets CI on non-macOS copy prebuilt binaries instead of building.
+
+TypeScript is formatted by the repo-wide Prettier; the `objc_src/*.{m,h}` sources are formatted by
+**clang-format** (the LLVM/Xcode-toolchain standard) per the package `.clang-format` (Google
+Objective-C style, tuned to Prettier's 2-space / 100-column settings). `format:native:check`
+verifies formatting without writing.
 
 ## Argent integration
 
