@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Entitlements applied when argent-private's build-native-binaries.yml signs
+    ios-profiler-capture / ios-profiler-mem with a Developer ID under hardened
+    runtime (`codesign --options runtime`).
+
+    disable-library-validation: the capture binary dlopen()s Xcode's private
+    frameworks (CoreSimulator, DTXConnectionServices, DVTInstruments*) to drive
+    the Instruments DTServiceHub. Those are Apple-signed under a *different* Team
+    ID than our Developer ID, so hardened runtime's library validation would
+    refuse the load and the DTX channel would never open. This entitlement lifts
+    that restriction for these two host-side tools.
+
+    NOTE: this is the suspected-sufficient set, mirroring ax-service's recipe.
+    It MUST be verified on a clean second Mac (download the CI-signed binary and
+    confirm `coreprofile channel=...` still connects) before relying on it for
+    distribution — the dev-machine validation in PR #350 used clang's ad-hoc
+    signature, which is a different trust context.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>
