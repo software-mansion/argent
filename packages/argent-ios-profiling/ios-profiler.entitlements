@@ -5,7 +5,7 @@
   <!--
     Entitlements applied when argent-private's build-native-binaries.yml signs
     ios-profiler-capture / ios-profiler-mem with a Developer ID under hardened
-    runtime (`codesign --options runtime`).
+    runtime (`codesign -o runtime`).
 
     disable-library-validation: the capture binary dlopen()s Xcode's private
     frameworks (CoreSimulator, DTXConnectionServices, DVTInstruments*) to drive
