@@ -3934,6 +3934,13 @@
           if (!ev.isComposing && (ev.metaKey || ev.ctrlKey) && ev.key === "Enter") {
             ev.preventDefault();
             save.click();
+          } else if (!ev.isComposing && ev.key === "Escape") {
+            // Esc dismisses the panel (same as Cancel — discards any draft).
+            // !isComposing so an IME-cancel Esc closes the composition, not the
+            // panel. shouldForwardKey already mutes the device while the
+            // textarea is focused, so this never leaks an Esc to the simulator.
+            ev.preventDefault();
+            cancel.click();
           }
         });
         const close = () => {

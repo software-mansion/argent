@@ -65,10 +65,10 @@ const zodSchema = z.object({
         .describe("Optional path to a file containing the variant implementation."),
       previewImage: z
         .string()
+        .min(1)
         .max(2_000)
-        .optional()
         .describe(
-          "Optional preview of how the variant looks, shown on the floating card. An http(s) " +
+          "Required preview of how the variant looks, shown on the floating card. An http(s) " +
             "URL, a data: URI, or a local image file path (e.g. a screenshot path returned by " +
             "the screenshot tool after you rendered the variant)."
         ),
