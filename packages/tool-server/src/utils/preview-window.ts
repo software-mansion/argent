@@ -70,7 +70,6 @@ export function createPreviewWindowManager(
     if (opts.electronBinaryPath) return opts.electronBinaryPath;
     // `require("electron")` from outside an Electron context returns the
     // path string to the Electron executable shipped in node_modules.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require("electron") as string;
   };
 

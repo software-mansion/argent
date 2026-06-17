@@ -187,7 +187,15 @@ async function closeWithAnimation(): Promise<void> {
   app.quit();
 }
 
-app.whenReady().then(createWindow);
+app
+  .whenReady()
+  .then(createWindow)
+  .catch((err: unknown) => {
+    process.stderr.write(
+      `[preview-window] initialization failed: ${err instanceof Error ? err.message : err}\n`
+    );
+    app.quit();
+  });
 app.on("window-all-closed", () => app.quit());
 
 // Tool-server drives the lifecycle over stdin — each line is one JSON command.
