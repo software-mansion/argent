@@ -472,7 +472,13 @@ buildBundle({
   out: OUT_FILE,
   format: "cjs",
   label: "tools server",
-  external: ["electron"],
+  // `electron` and the tree-sitter native addons MUST stay external: they load
+  // platform-specific `.node` binaries that esbuild can't inline, and they are
+  // runtime dependencies of @swmansion/argent so npm installs them into
+  // node_modules. The runtime `require("tree-sitter")` in ast-index.ts then
+  // resolves against the real install (component-source's AST lookup depends on
+  // this — without the deps it silently returns found:false for everything).
+  external: ["electron", "tree-sitter", "tree-sitter-typescript"],
 });
 
 // The remaining bundles are ESM so that:

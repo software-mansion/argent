@@ -139,6 +139,29 @@ function nodeContainsCall(node: TreeSitterNode, callName: string): boolean {
   return false;
 }
 
+/**
+ * Detect a React component wrapper call: memo(...) / forwardRef(...) /
+ * React.memo(...) / React.forwardRef(...) (also nested, e.g. memo(forwardRef(...)),
+ * since the outer callee is what we match). Components declared as
+ * `const X = memo(...)` / `const X = forwardRef(...)` have a call_expression
+ * value node, so without recognising these they would be missed entirely --
+ * and profiler-flagged components are disproportionately memo-wrapped.
+ */
+function reactWrapperCall(node: TreeSitterNode | undefined): {
+  isWrapper: boolean;
+  isMemo: boolean;
+} {
+  if (!node || node.type !== "call_expression") return { isWrapper: false, isMemo: false };
+  const callee = node.children[0];
+  let name: string | undefined;
+  if (callee?.type === "identifier") name = callee.text;
+  else if (callee?.type === "member_expression")
+    name = callee.children[callee.children.length - 1]?.text;
+  if (name === "memo") return { isWrapper: true, isMemo: true };
+  if (name === "forwardRef") return { isWrapper: true, isMemo: false };
+  return { isWrapper: false, isMemo: false };
+}
+
 function isWrappedInMemo(source: string, componentName: string): boolean {
   const memoPattern = /\b(React\.memo|memo)\s*\(\s*(\w+)/g;
   let match;
@@ -202,12 +225,15 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
       } else if (node.type === "variable_declarator") {
         const nameNode = node.children[0];
         const valueNode = node.children[node.children.length - 1];
+        const wrapper = reactWrapperCall(valueNode);
         if (
           nameNode &&
           nameNode.type === "identifier" &&
           isCapitalized(nameNode.text) &&
           valueNode &&
-          (valueNode.type === "arrow_function" || valueNode.type === "function_expression")
+          (valueNode.type === "arrow_function" ||
+            valueNode.type === "function_expression" ||
+            wrapper.isWrapper)
         ) {
           const componentName = nameNode.text;
           if (!index.has(componentName)) {
@@ -215,7 +241,7 @@ export async function buildAstIndexWithDiagnostics(projectRoot: string): Promise
               file,
               line: nameNode.startPosition.row + 1,
               col: nameNode.startPosition.column,
-              isMemoized: isWrappedInMemo(source, componentName),
+              isMemoized: isWrappedInMemo(source, componentName) || wrapper.isMemo,
               hasUseCallback: nodeContainsCall(node, "useCallback"),
               hasUseMemo: nodeContainsCall(node, "useMemo"),
             });
