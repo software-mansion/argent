@@ -50,18 +50,26 @@ captureProfile (TS)
 ```
 
 The TS layer is the orchestrator; the ObjC binary is a leaf that only produces raw bytes. The
-`src/parser/kdebug.ts` parser is a faithful port of the pykdebugparser callstack path (validated
-byte-for-byte against the Python reference — identical 36,028-callstack output), so the package
-has zero runtime dependency on `pymobiledevice3` / `pykdebugparser`.
+`src/parser/kdebug.ts` parser is a port of the pykdebugparser callstack path — during development
+it was diffed against the Python reference on a real capture (identical 36,028-callstack output),
+and its framing/threadmap/record-alignment logic is covered by the unit tests
+(`src/parser/kdebug.test.ts`) — so the package has zero runtime dependency on `pymobiledevice3` /
+`pykdebugparser`.
 
 ## Build
 
 ```
-npm run build:native -w @argent/ios-profiling   # clang → bin/darwin/ios-profiler-{capture,mem}
-npm run build        -w @argent/ios-profiling   # tsc → dist/
+npm run build:native   -w @argent/ios-profiling   # clang → bin/darwin/ios-profiler-{capture,mem}
+npm run build          -w @argent/ios-profiling   # tsc → dist/
+npm run format:native  -w @argent/ios-profiling   # clang-format → objc_src/*.{m,h}
 ```
 
 `PREBUILT_IOS_PROFILER_BIN_DIR` lets CI on non-macOS copy prebuilt binaries instead of building.
+
+TypeScript is formatted by the repo-wide Prettier; the `objc_src/*.{m,h}` sources are formatted by
+**clang-format** (the LLVM/Xcode-toolchain standard) per the package `.clang-format` (Google
+Objective-C style, tuned to Prettier's 2-space / 100-column settings). `format:native:check`
+verifies formatting without writing.
 
 ## Argent integration
 

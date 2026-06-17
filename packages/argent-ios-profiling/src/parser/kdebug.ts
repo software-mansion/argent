@@ -21,7 +21,7 @@ const PERF_STK_UDATA = 0x25020010; // args: up to 4 user-stack frame addresses
 const SAMPLER_USTACK = 0x08;
 
 export interface Callstack {
-  /** mach-absolute timestamp of the sample. */
+  /** sample timestamp in mach ticks, relative to the first sample (convert via tickFrequency). */
   timestamp: number;
   /** sampled thread id. */
   tid: number;
@@ -35,6 +35,12 @@ export interface ParsedKdebug {
   threadsPids: Map<number, number>;
   /** pid → process name (from the threadmap). */
   pidsNames: Map<number, string>;
+  /**
+   * kd_header_v2 tick_frequency (ticks/sec). Lets consumers convert the
+   * mach-tick timestamps to real time (ns = ticks * 1e9 / tickFrequency).
+   * 0 when unknown (empty/short stream).
+   */
+  tickFrequency: number;
 }
 
 /** Split the capture file into its length-prefixed frames (`<u32 len><bytes>`). */
@@ -67,19 +73,23 @@ export function parseKdebugStream(raw: Buffer): ParsedKdebug {
   const pidsNames = new Map<number, string>();
   const callstacks: Callstack[] = [];
 
-  if (raw.length < 4 || raw.readUInt32LE(0) !== RAW_VERSION2) {
-    return { callstacks, threadsPids, pidsNames };
+  if (raw.length < 32 || raw.readUInt32LE(0) !== RAW_VERSION2) {
+    return { callstacks, threadsPids, pidsNames, tickFrequency: 0 };
   }
 
-  // --- kd_header_v2 ---
-  // numThreads u32@4, pad(8+4), is_64bit u32@16, tick_frequency u64@20,
+  // --- kd_header_v2 (after the 4-byte magic) ---
+  // number_of_threads u32@4, pad(8), pad(4), is_64bit u32@20, tick_frequency u64@24,
   // pad(0x100), threadmap[numThreads] (each 32B: tid u64, pid u32, name char[20]),
   // then a run of zero padding until the first record.
   const numThreads = raw.readUInt32LE(4);
-  // version(4) + numThreads(4) + pad(8) + pad(4) + is_64bit(4) + tick_frequency(8) = 32
+  const tickFrequency = Number(raw.readBigUInt64LE(24));
+  // magic(4) + numThreads(4) + pad(8) + pad(4) + is_64bit(4) + tick_frequency(8) = 32
   let off = 32;
   off += 0x100; // pad(256) → threadmap at 288
   for (let i = 0; i < numThreads; i++) {
+    // numThreads is attacker/stream-controlled; never read past the buffer (a
+    // capture killed mid-write otherwise throws an opaque RangeError).
+    if (off + 32 > raw.length) break;
     const tid = Number(raw.readBigUInt64LE(off));
     const pid = raw.readInt32LE(off + 8);
     const end = off + 12;
@@ -90,10 +100,21 @@ export function parseKdebugStream(raw: Buffer): ParsedKdebug {
     if (!pidsNames.has(pid)) pidsNames.set(pid, name);
     off += 32;
   }
-  // skip zero padding to the first record (kd_header_v2 `_pad` = GreedyRange of 0)
-  while (off < raw.length && raw[off] === 0) off++;
+  // Locate the first kd_buf record. The header pads with a GreedyRange of zero
+  // bytes, but a byte-wise "skip while 0" misaligns the 64-byte grid whenever the
+  // first record's leading u64 timestamp has a zero low byte (~1/256), silently
+  // dropping the ENTIRE record stream. Instead align deterministically from the
+  // end: records are a whole number of 64-byte kd_bufs ending at the buffer end,
+  // so the leading pad length ≡ (remaining bytes) mod 64. Any extra all-zero
+  // 64-byte slots left in front parse as eventid 0 and are skipped harmlessly.
+  if (off < raw.length) off += (raw.length - off) % KEVENT_SIZE;
 
   // --- kd_buf records ---
+  // Timestamps are stored relative to the first sample so the u64→number narrowing
+  // stays exact: the absolute mach time can exceed 2^53 (e.g. an ns-reporting x86
+  // sim past ~104 days uptime), but a per-capture delta never does. The bigint
+  // subtraction happens BEFORE narrowing, so no low bits are lost.
+  let baseTs: bigint | null = null;
   const open = new Map<number, OpenGroup>();
   for (; off + KEVENT_SIZE <= raw.length; off += KEVENT_SIZE) {
     const debugid = raw.readUInt32LE(off + 48);
@@ -104,8 +125,10 @@ export function parseKdebugStream(raw: Buffer): ParsedKdebug {
     if (eventid === PERF_EVENT) {
       if (func === 1) {
         // START — open a sample group for this thread
+        const tsRaw = raw.readBigUInt64LE(off);
+        if (baseTs === null) baseTs = tsRaw;
         open.set(tid, {
-          ts: Number(raw.readBigUInt64LE(off)),
+          ts: Number(tsRaw - baseTs), // relative ticks (exact; see note above)
           sampleWhat: Number(raw.readBigUInt64LE(off + 8)), // arg0
           nframes: -1,
           frames: [],
@@ -149,13 +172,15 @@ export function parseKdebugStream(raw: Buffer): ParsedKdebug {
     }
   }
 
-  return { callstacks, threadsPids, pidsNames };
+  return { callstacks, threadsPids, pidsNames, tickFrequency };
 }
 
 /** Convenience: deframe a capture file and parse its kdebug stream. */
 export function parseCapture(buf: Buffer): ParsedKdebug {
   const frames = deframe(buf);
-  if (frames.length <= 1) return { callstacks: [], threadsPids: new Map(), pidsNames: new Map() };
+  if (frames.length <= 1) {
+    return { callstacks: [], threadsPids: new Map(), pidsNames: new Map(), tickFrequency: 0 };
+  }
   const raw = Buffer.concat(frames.slice(1)); // frame 0 = stackshot (unused)
   return parseKdebugStream(raw);
 }

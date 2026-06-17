@@ -74,12 +74,16 @@ export async function captureProfile(opts: CaptureOptions): Promise<ProfileExpor
     `.iosprof-${process.pid}-${Date.now()}.kdbg`
   );
   try {
-    // 1) native capture: drive coreprofilesessiontap → length-framed kdebug stream
+    // 1) native capture: drive coreprofilesessiontap → length-framed kdebug stream.
+    // Hard-kill if the binary stalls (DTX connect / stop / finalize) — never hang
+    // forever (the very failure mode this package routes xctrace around).
     await execFileAsync(
       bin("ios-profiler-capture"),
       [opts.udid, String(opts.durationSec), rawFile],
       {
         maxBuffer: 8 * 1024 * 1024,
+        timeout: (opts.durationSec + 60) * 1000,
+        killSignal: "SIGKILL",
       }
     );
     // 2) parse (TS) → callstacks + threadmap; symbolicate (atos) → cpu + hangs XML
@@ -122,6 +126,8 @@ export async function captureMemory(
     [udid, String(durationSec), String(pid)],
     {
       maxBuffer: 16 * 1024 * 1024,
+      timeout: (durationSec + 30) * 1000,
+      killSignal: "SIGKILL",
     }
   );
   const out: MemorySample[] = [];

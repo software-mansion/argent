@@ -1,0 +1,12 @@
+# Objective-C formatting for objc_src/*.{m,h} via clang-format (the industry
+# standard, ships with the Xcode/LLVM toolchain). Google base — a widely used
+# Objective-C style — tuned to match the repo's Prettier config (2-space indent,
+# 100-column width). Run `npm run format:native -w @argent/ios-profiling`.
+BasedOnStyle: Google
+ColumnLimit: 100
+IndentWidth: 2
+ContinuationIndentWidth: 4
+ObjCBlockIndentWidth: 2
+PointerAlignment: Right
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Empty

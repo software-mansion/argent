@@ -7,10 +7,15 @@
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsc",
     "build:native": "bash scripts/build.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "format:native": "$(xcrun --find clang-format 2>/dev/null || command -v clang-format) -i objc_src/*.m objc_src/*.h",
+    "format:native:check": "$(xcrun --find clang-format 2>/dev/null || command -v clang-format) --dry-run --Werror objc_src/*.m objc_src/*.h"
   },
   "devDependencies": {
     "@types/node": "^25.9.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
   }
 }
