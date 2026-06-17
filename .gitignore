@@ -32,6 +32,10 @@ packages/*/node_modules/
 packages/native-devtools-ios/bin/
 packages/native-devtools-ios/dylibs/
 
+# iOS-profiling native capture binaries (built locally via
+# packages/argent-ios-profiling/scripts/build.sh, like native-devtools-ios/bin).
+packages/argent-ios-profiling/bin/
+
 # Third-party Perfetto trace-processor WASM artifacts (fetched + verified via
 # scripts/download-trace-processor.sh). Ignore the generated files, not the dir,
 # so a future tracked README/.gitkeep isn't masked.
