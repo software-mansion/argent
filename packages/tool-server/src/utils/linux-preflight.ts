@@ -101,10 +101,10 @@ export function diagnoseAvdSizing(
 // match the same convention so the recommendation matches reality.
 function readMb(config: Record<string, unknown>, key: string): number | null {
   const raw = config[key];
-  if (raw === undefined || raw === null) return null;
-  const m = String(raw)
-    .trim()
-    .match(/^(\d+)\s*([MmGg][Bb]?)?$/);
+  // ini.parse yields string values for these keys; anything else can't carry
+  // a `NNNN[M|G]` size, so treat it as absent.
+  if (typeof raw !== "string") return null;
+  const m = raw.trim().match(/^(\d+)\s*([MmGg][Bb]?)?$/);
   if (!m) return null;
   const n = Number(m[1]);
   if (!Number.isFinite(n)) return null;
