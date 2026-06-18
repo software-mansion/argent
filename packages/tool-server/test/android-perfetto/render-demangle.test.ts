@@ -140,6 +140,7 @@ function memoryLeak(overrides: Partial<MemoryLeak> = {}): MemoryLeak {
     count: 128,
     responsibleFrame: MANGLED_LEAK,
     responsibleLibrary: "MyApp",
+    attributed: true,
     severity: "RED",
     ...overrides,
   };
