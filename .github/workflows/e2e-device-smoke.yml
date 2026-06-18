@@ -45,7 +45,7 @@ on:
 jobs:
   # ── iOS simulator on macOS ────────────────────────────────────────────────
   ios-sim-macos:
-    name: Boot + drive iOS simulator (macOS)
+    name: macOS + iOS E2E
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -113,7 +113,7 @@ jobs:
 
   # ── Chromium / Electron on Linux (Xvfb) ───────────────────────────────────
   chromium-linux:
-    name: Boot + drive Electron (Linux/Xvfb)
+    name: Linux + Chromium E2E
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -182,7 +182,7 @@ jobs:
 
   # ── Chromium / Electron on macOS ──────────────────────────────────────────
   chromium-macos:
-    name: Boot + drive Electron (macOS)
+    name: macOS + Chromium E2E
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
