@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { parse as parseIni } from "ini";
 import { resolveAndroidBinary } from "./android-binary";
 
 const execFileAsync = promisify(execFile);
@@ -510,13 +511,15 @@ export async function resolveAvdPath(avdName: string): Promise<string | null> {
   const { readFile } = await import("node:fs/promises");
   for (const root of avdRootCandidates()) {
     try {
-      const ini = await readFile(`${root}/${avdName}.ini`, "utf-8");
-      const match = ini.match(/^path\s*=\s*(.+?)\s*$/m);
-      if (!match || !match[1]) continue;
-      // `(.+?)` must match ≥1 char, so `path=   ` captures a single space —
-      // trim it, then reject anything non-absolute (the emulator always
-      // writes an absolute path; relative would resolve against cwd).
-      const trimmed = match[1].trim();
+      const content = await readFile(`${root}/${avdName}.ini`, "utf-8");
+      // The `.ini` is a flat key=value file; `ini.parse` handles comments,
+      // surrounding whitespace, CRLF and quoting that the previous anchored
+      // regex silently dropped.
+      const raw = parseIni(content).path;
+      if (typeof raw !== "string") continue;
+      // Reject anything non-absolute (the emulator always writes an absolute
+      // path; relative would resolve against cwd).
+      const trimmed = raw.trim();
       if (!trimmed.startsWith("/")) continue;
       return trimmed;
     } catch {

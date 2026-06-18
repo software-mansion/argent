@@ -1,4 +1,5 @@
 import * as path from "path";
+import { coerce } from "semver";
 import { execSyncWithTimeout } from "./run-with-timeout";
 
 /**
@@ -34,8 +35,9 @@ function getXctraceVersion(): number {
     const output = execSyncWithTimeout("xctrace version 2>&1 || true", {
       encoding: "utf-8",
     }) as string;
-    const match = output.match(/(\d+)\./);
-    return match ? parseInt(match[1]!, 10) : 0;
+    // e.g. "xctrace version 16.0 (16A242d)" → 16. coerce grabs the first
+    // semver-ish token, so a missing minor ("version 15") still yields 15.
+    return coerce(output)?.major ?? 0;
   } catch {
     return 0;
   }

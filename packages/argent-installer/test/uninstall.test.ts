@@ -110,6 +110,25 @@ describe("uninstall — skills cleanup helpers", () => {
     ]);
   });
 
+  it("resolves the frontmatter name past a trailing YAML comment", () => {
+    // The previous `^name:(.+)$` capture + outer-quote strip kept an inline
+    // `# …` comment as part of the name. Parsing the YAML block resolves the
+    // scalar correctly.
+    const skillsDir = path.join(tmpDir, "skills");
+    writeFile(
+      path.join(skillsDir, "argent-test-ui-flow", "SKILL.md"),
+      [
+        "---",
+        "name: argent-test-ui-flow # managed by argent",
+        "description: test",
+        "---",
+        "",
+        "body",
+      ].join("\n")
+    );
+    expect(getBundledSkillNames(skillsDir)).toEqual(["argent-test-ui-flow"]);
+  });
+
   it("removes installed skill entries by current skill names only", () => {
     const targetDir = path.join(tmpDir, ".claude", "skills");
     const storeDir = path.join(tmpDir, ".agents", "skills", "argent-create-flow");

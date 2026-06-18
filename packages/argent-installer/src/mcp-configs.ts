@@ -20,6 +20,7 @@ import {
   editJsoncFile,
 } from "./utils.js";
 import { isMap } from "yaml";
+import escapeStringRegexp from "escape-string-regexp";
 
 const TOOL_SERVER_BUNDLE = path.join(import.meta.dirname, "tool-server.cjs");
 
@@ -1090,7 +1091,7 @@ function injectArgentSection(existing: string | undefined, rules: string): strin
   if (!existing) return section;
   // Replace existing argent section if present
   const re = new RegExp(
-    `${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}`
+    `${escapeStringRegexp(ARGENT_RULES_START)}[\\s\\S]*?${escapeStringRegexp(ARGENT_RULES_END)}`
   );
   if (re.test(existing)) return existing.replace(re, section);
   // Append after user content
@@ -1099,13 +1100,9 @@ function injectArgentSection(existing: string | undefined, rules: string): strin
 
 function removeArgentSection(existing: string): string {
   const re = new RegExp(
-    `\\n*${escapeRegExp(ARGENT_RULES_START)}[\\s\\S]*?${escapeRegExp(ARGENT_RULES_END)}\\n*`
+    `\\n*${escapeStringRegexp(ARGENT_RULES_START)}[\\s\\S]*?${escapeStringRegexp(ARGENT_RULES_END)}\\n*`
   );
   return existing.replace(re, "").trim();
-}
-
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function injectCodexRules(configPath: string, rulesDir: string): string | null {

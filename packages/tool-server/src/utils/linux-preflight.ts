@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parse as parseIni } from "ini";
 
 // Linux-host preflight for boot-device. Two checks, both deterministic:
 //
@@ -72,8 +73,12 @@ export function diagnoseAvdSizing(
   configContent: string,
   configPath: string
 ): string | null {
-  const ramMb = readMb(configContent, "hw.ramSize");
-  const heapMb = readMb(configContent, "vm.heapSize");
+  // `config.ini` is a flat key=value file. `ini.parse` keeps dotted keys
+  // (`hw.ramSize`) literal — no `[section]` headers appear in AVD configs — so
+  // it replaces the per-key anchored regex while tolerating comments and CRLF.
+  const config = parseIni(configContent);
+  const ramMb = readMb(config, "hw.ramSize");
+  const heapMb = readMb(config, "vm.heapSize");
   const issues: string[] = [];
   if (ramMb !== null && ramMb < MIN_RAM_MB) {
     issues.push(`hw.ramSize=${ramMb} MB (recommended ≥ ${MIN_RAM_MB})`);
@@ -91,15 +96,15 @@ export function diagnoseAvdSizing(
   );
 }
 
-// Read a `key = NNNN[M|MB|G|GB]` line and normalize to MB. The emulator
+// Normalize a parsed `hw.ramSize` / `vm.heapSize` value to MB. The emulator
 // accepts both no-suffix integers (interpreted as MB) and `G` suffixes; we
 // match the same convention so the recommendation matches reality.
-function readMb(content: string, key: string): number | null {
-  const re = new RegExp(
-    `^\\s*${key.replace(/\./g, "\\.")}\\s*=\\s*(\\d+)\\s*([MmGg][Bb]?)?\\s*$`,
-    "m"
-  );
-  const m = content.match(re);
+function readMb(config: Record<string, unknown>, key: string): number | null {
+  const raw = config[key];
+  if (raw === undefined || raw === null) return null;
+  const m = String(raw)
+    .trim()
+    .match(/^(\d+)\s*([MmGg][Bb]?)?$/);
   if (!m) return null;
   const n = Number(m[1]);
   if (!Number.isFinite(n)) return null;
