@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createHttpApp, type HttpAppHandle } from "../src/http";
+import { createHttpApp } from "../src/http";
 import type { Registry } from "@argent/registry";
 
 function stubRegistry() {

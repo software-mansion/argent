@@ -69,7 +69,7 @@ export async function emulatorSupportsFlag(
   const cached = emulatorFlagSupportCache.get(cacheKey);
   if (cached !== undefined) return cached;
 
-  let output = "";
+  let output: string;
   try {
     const { stdout, stderr } = await execFileAsync(emulatorPath, ["-help"], {
       timeout: options.timeoutMs ?? 10_000,
@@ -382,7 +382,8 @@ export async function waitForBootCompleted(
       if (isTerminalAdbError(message)) {
         throw new Error(
           `Cannot wait for ${serial} to boot — adb reports the device is in a terminal state: ${message}.` +
-            ` Authorise the device, reconnect it, or pick a different target.`
+            ` Authorise the device, reconnect it, or pick a different target.`,
+          { cause: err }
         );
       }
       // Otherwise: device may be mid-boot; swallow and retry.

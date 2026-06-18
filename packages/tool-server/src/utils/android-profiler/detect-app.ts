@@ -23,7 +23,8 @@ export async function detectAndroidRunningApp(serial: string): Promise<string> {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Failed to enumerate running activities on ${serial} within ${DETECT_TIMEOUT_MS} ms. ` +
-        `Verify the device is booted and responsive, then retry. Underlying error: ${msg}`
+        `Verify the device is booted and responsive, then retry. Underlying error: ${msg}`,
+      { cause: err }
     );
   }
 
@@ -44,7 +45,8 @@ export async function detectAndroidRunningApp(serial: string): Promise<string> {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
       `Failed to list user-installed packages on ${serial} within ${DETECT_TIMEOUT_MS} ms. ` +
-        `Underlying error: ${msg}`
+        `Underlying error: ${msg}`,
+      { cause: err }
     );
   }
 

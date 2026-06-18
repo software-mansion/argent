@@ -241,7 +241,8 @@ export async function describeChromium(api: ChromiumCdpApi): Promise<DescribeTre
     parsed = JSON.parse(payload);
   } catch (err) {
     throw new Error(
-      `Chromium describe: could not parse renderer payload: ${err instanceof Error ? err.message : String(err)}`
+      `Chromium describe: could not parse renderer payload: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err }
     );
   }
   if (parsed.error) {

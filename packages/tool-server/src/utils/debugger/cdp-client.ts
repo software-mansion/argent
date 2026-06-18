@@ -278,7 +278,7 @@ export class CDPClient {
       this.evaluate(expression, { timeout }).catch((err) => {
         this.pendingBindings.delete(id);
         clearTimeout(timer);
-        reject(err);
+        reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
   }
@@ -292,9 +292,14 @@ export class CDPClient {
   }
 
   private handleMessage(raw: WebSocket.RawData): void {
+    const text = Buffer.isBuffer(raw)
+      ? raw.toString()
+      : Array.isArray(raw)
+        ? Buffer.concat(raw).toString()
+        : Buffer.from(raw).toString();
     let msg: Record<string, unknown>;
     try {
-      msg = JSON.parse(raw.toString());
+      msg = JSON.parse(text);
     } catch {
       return;
     }

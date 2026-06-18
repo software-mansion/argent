@@ -108,7 +108,11 @@ export function createSourceResolver(port: number, projectRoot: string): SourceR
       const frame = data.stack?.[0];
       if (!frame?.file) return null;
 
-      if (frame.file.includes("node_modules")) return null;
+      // A failed symbolication echoes the bundle URL back unchanged (an
+      // http(s) URL); reject those. A successful one yields a real file path,
+      // including legitimate node_modules sources (e.g. expo-router /
+      // react-navigation route components), which we keep.
+      if (/^https?:\/\//.test(frame.file)) return null;
 
       const relFile = frame.file.replace(projectRoot + "/", "").replace(/^\/+/, "");
 

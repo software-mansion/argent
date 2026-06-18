@@ -14,7 +14,6 @@ import {
   getManagedContentTargets,
   injectCodexRules,
   removeCodexRules,
-  type McpConfigAdapter,
 } from "../src/mcp-configs.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────

@@ -336,7 +336,7 @@ async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<s
 
   const bundleIds = new Set<string>();
   for (const line of stdout.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
+    const match = line.match(/UIKitApplication:([^[]+)/);
     if (match) {
       bundleIds.add(match[1].trim());
     }
@@ -480,7 +480,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     if (transport === "unix") {
       try {
         fs.unlinkSync(socketPath);
-      } catch {}
+      } catch {
+        /* no stale socket to remove; ignore */
+      }
     }
 
     // ── Socket server ─────────────────────────────────────────────────────────
@@ -689,7 +691,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (transport === "unix") {
           try {
             fs.unlinkSync(socketPath);
-          } catch {}
+          } catch {
+            /* best-effort socket cleanup; ignore errors */
+          }
         }
         for (const { reject } of pendingRpc.values()) {
           reject(new Error("NativeDevtools service disposed"));

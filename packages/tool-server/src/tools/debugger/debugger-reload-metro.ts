@@ -37,7 +37,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
-  async execute(services, params) {
+  async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
 
@@ -56,7 +56,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
 
     try {
       await api.cdp.send("Page.reload");
-      disableLogBox();
+      void disableLogBox();
       return { reloaded: true, port, method: "cdp", ...context };
     } catch {
       // Fall through to HTTP fallback
@@ -72,7 +72,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
         `Failed to reload: CDP Page.reload unsupported and Metro HTTP /reload returned ${res.status} ${res.statusText}.`
       );
     }
-    disableLogBox();
+    void disableLogBox();
     return { reloaded: true, port, method: "http", ...context };
   },
 };

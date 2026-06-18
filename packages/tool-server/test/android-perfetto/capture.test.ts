@@ -27,7 +27,7 @@ const captureState = vi.hoisted(() => ({
 vi.mock("child_process", () => ({
   spawn: (_path: string, args: string[]) => {
     // Use eval to lazy-construct so the FakeChild reference isn't hoisted.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const Mod = require("events");
     const child: FakeChild = new (class extends (Mod.EventEmitter as typeof EventEmitter) {
       pid = 9000;
