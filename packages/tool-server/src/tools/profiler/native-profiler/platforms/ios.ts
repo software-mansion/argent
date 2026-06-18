@@ -113,22 +113,7 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
     );
   }
 
-  let listAppsOutput: string;
-  try {
-    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
-      encoding: "utf-8",
-      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
-        `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
-      { cause: err }
-    );
-  }
-
-  const installedApps: Record<string, AppInfo> = JSON.parse(listAppsOutput);
+  const installedApps = getInstalledApps(udid);
 
   const runningUserApps: { info: AppInfo; pid: number }[] = [];
   for (const [, info] of Object.entries(installedApps)) {
