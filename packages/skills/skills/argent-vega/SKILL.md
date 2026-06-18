@@ -1,11 +1,10 @@
 ---
 name: argent-vega
-description: Use for any Vega / Amazon Fire TV task with argent — start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot, read device logs
+description: Drive Vega / Amazon Fire TV devices - start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot, read device logs
 ---
 
 ## Before you start
 
-Prereqs: 
 - Vega SDK on PATH (`source ~/vega/env`)
 - Virtual device is started by running list-devices. You can start the VVD with `vega virtual-device start`
 - You ran `list-devices` → Vega entries tagged `platform:"vega"` (`serial:"amazon-…"`, `kind:"vvd"`). Pass that `serial` as `udid` to every Vega tool.
@@ -13,7 +12,7 @@ Prereqs:
 
 ## VVD lifecycle (start / stop)
 
-argent has **no Vega lifecycle tool** — it only drives an already-running device. The VVD is started and stopped through the `vega` CLI (run `source ~/vega/env` first if it's not on PATH):
+The VVD is started and stopped through the `vega` CLI (run `source ~/vega/env` first if it's not on PATH):
 
 - Start: `vega virtual-device start` — then `list-devices` shows the `platform:"vega"` entry.
 - Stop: `vega virtual-device stop` — verify with `list-devices` (the Vega entry disappears).
