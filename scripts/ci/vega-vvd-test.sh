@@ -50,22 +50,25 @@ post_tool() {
 }
 
 # Dig a dotted field out of a tool response, tolerating the `{data:{…}}` wrapper.
+# The JSON is piped on stdin (not passed as argv) so large responses — e.g.
+# read-device-logs' full log blob — don't trip "Argument list too long". The
+# program goes via `-c` (stdin is the data), with the dotted path as argv[1].
 # jget '<json>' path.to.field
 jget() {
-  python3 - "$1" "$2" <<'PY'
+  printf '%s' "$1" | python3 -c '
 import sys, json
 try:
-    obj = json.loads(sys.argv[1])
+    obj = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
 node = obj.get("data", obj) if isinstance(obj, dict) else obj
-for key in sys.argv[2].split("."):
+for key in sys.argv[1].split("."):
     if isinstance(node, dict) and key in node:
         node = node[key]
     else:
         sys.exit(0)
 print(node if not isinstance(node, (dict, list)) else json.dumps(node))
-PY
+' "$2"
 }
 
 # PNG non-black check: a black capture decompresses to ~all-zero bytes (~0.000);
