@@ -1,13 +1,14 @@
 import express, { Request, Response } from "express";
+import { isFlagEnabled } from "@argent/configuration-core";
 import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
 import { ToolNotFoundError } from "@argent/registry";
-import { createIdleTimer } from "./utils/idle-timer";
+import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
-import { makeArtifactRoute } from "./artifacts";
+import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
@@ -31,6 +32,7 @@ const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
+const ARTIFACTS_LIST_ENDPOINT_FLAG = "artifacts-list-endpoint";
 
 // Constant-time comparison so a leaked token can't be recovered byte-by-byte
 // via response-timing measurements. Both strings must be the same length to
@@ -48,6 +50,16 @@ function constantTimeEqual(a: string, b: string): boolean {
 function extractBearerToken(authHeader: string | undefined): string | null {
   if (!authHeader || !authHeader.startsWith(BEARER_PREFIX)) return null;
   return authHeader.slice(BEARER_PREFIX.length).trim() || null;
+}
+
+// A tool that declares a `featureFlag` is exposed (listed + invocable) only
+// while that flag is enabled. Re-evaluated on every request — reading the tiny
+// `~/.argent/flags.json` (and project override) each time — so toggling
+// `argent enable/disable <flag>` takes effect on the next `tools/list` without
+// restarting the long-lived tool-server. Tools without a `featureFlag` are
+// always exposed (no flag read).
+function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
+  return !!def && (!def.featureFlag || isFlagEnabled(def.featureFlag));
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
@@ -218,6 +230,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Artifact retrieval: streams files produced by tools (screenshots, profiler
   // exports) over the remote-aware HTTP boundary so the MCP client can fetch
   // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  if (isFlagEnabled(ARTIFACTS_LIST_ENDPOINT_FLAG)) {
+    app.get("/artifacts", makeArtifactListRoute(registry));
+  }
   app.get("/artifacts/:id", makeArtifactRoute(registry));
 
   // Per-Chromium-device HTTP surface that mirrors sim-server's API: a
@@ -230,7 +245,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // (preview UI, integration tests, custom dashboards).
   app.use("/chromium-server/:deviceId", async (req: Request, res: Response, next) => {
     idleTimer.touch();
-    const deviceId = req.params.deviceId!;
+    const deviceId = req.params.deviceId as string;
     const device = resolveDevice(deviceId);
     if (device.platform !== "chromium") {
       res.status(400).json({
@@ -272,29 +287,32 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   app.get("/tools", (_req: Request, res: Response) => {
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
-    const tools = snapshot.tools.map((id) => {
-      const def = registry.getTool(id);
-      const entry: {
-        name: string;
-        description: string;
-        inputSchema: Record<string, unknown>;
-        outputHint?: string;
-        fileInputs?: FileInputSpec[];
-        alwaysLoad?: boolean;
-        searchHint?: string;
-        longRunning?: boolean;
-      } = {
-        name: id,
-        description: def?.description ?? "",
-        inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
-      };
-      if (def?.outputHint) entry.outputHint = def.outputHint;
-      if (def?.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
-      if (def?.alwaysLoad) entry.alwaysLoad = true;
-      if (def?.searchHint) entry.searchHint = def.searchHint;
-      if (def?.longRunning) entry.longRunning = true;
-      return entry;
-    });
+    const tools = snapshot.tools
+      .map((id) => registry.getTool(id))
+      // Hide feature-flagged tools whose flag is currently off.
+      .filter((def): def is NonNullable<typeof def> => isToolExposed(def))
+      .map((def) => {
+        const entry: {
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          outputHint?: string;
+          fileInputs?: FileInputSpec[];
+          alwaysLoad?: boolean;
+          searchHint?: string;
+          longRunning?: boolean;
+        } = {
+          name: def.id,
+          description: def.description ?? "",
+          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+        };
+        if (def.outputHint) entry.outputHint = def.outputHint;
+        if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
+        if (def.alwaysLoad) entry.alwaysLoad = true;
+        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.longRunning) entry.longRunning = true;
+        return entry;
+      });
     res.json({ tools });
   });
 
@@ -305,10 +323,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       next();
     },
     async (req: Request, res: Response) => {
-      const name = req.params.name!;
+      const name = req.params.name as string;
 
       const def = registry.getTool(name);
       if (!def) {
+        res.status(404).json({ error: `Tool "${name}" not found` });
+        return;
+      }
+      // A feature-flagged tool with its flag off is hidden from /tools and
+      // must not be invocable either — report it as not found (re-checked here
+      // per call, so the gate tracks `argent enable/disable` without a restart).
+      if (!isToolExposed(def)) {
         res.status(404).json({ error: `Tool "${name}" not found` });
         return;
       }
@@ -317,7 +342,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // server-readable paths BEFORE schema validation, so the tool's zod
       // schema only ever sees the string params it declares. 422 on a file
       // that is reachable neither in place nor via uploaded content.
-      let bodyArgs = req.body;
+      // Type kept as `any` (matching req.body) so the downstream optional-chained
+      // access below — parsedData?.udid / parsedData?.device_id — type-checks as
+      // it did before. The `= req.body` initializer was dead: the try always
+      // assigns bodyArgs before it is read, and the catch never falls through.
+      let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       try {
         const resolved = await resolveFileInputs(def, req.body);
@@ -398,6 +427,17 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
+      // A long-running tool (e.g. await_user_selection) can legitimately hold
+      // the request open for many minutes while it waits on external input.
+      // An in-flight invocation IS activity, so keep the idle timer warm for
+      // its whole duration — otherwise the auto-shutdown reaps the server out
+      // from under the still-open request. Cleared as soon as it settles.
+      const keepAlive =
+        def.longRunning && options?.idleTimeoutMs && options.idleTimeoutMs > 0
+          ? setInterval(() => idleTimer.touch(), Math.max(1_000, IDLE_CHECK_INTERVAL_MS / 2))
+          : null;
+      if (keepAlive) keepAlive.unref?.();
+
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
@@ -450,6 +490,8 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });
+      } finally {
+        if (keepAlive) clearInterval(keepAlive);
       }
     }
   );

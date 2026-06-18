@@ -30,7 +30,7 @@ async function probeInstalledVersion(
   serial: string,
   packageName: string
 ): Promise<InstalledVersionProbe> {
-  let out = "";
+  let out: string;
   try {
     out = await adbShell(serial, `cmd package list packages --show-versioncode ${packageName}`, {
       timeoutMs: 5_000,

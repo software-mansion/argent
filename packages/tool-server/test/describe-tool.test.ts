@@ -35,6 +35,7 @@ function makeNativeDevtoolsApi(options: {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
+    reverifyEnv: async () => {},
     getInitFailure: () => null,
     isConnected: (bundleId) => connected.has(bundleId),
     isAppRunning: async () => true,

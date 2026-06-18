@@ -23,7 +23,8 @@ export async function readViewport(cdp: CDPClient): Promise<ViewportSize> {
     parsed = JSON.parse(raw) as { w: number; h: number; dpr: number };
   } catch (err) {
     throw new Error(
-      `Chromium CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`
+      `Chromium CDP: viewport payload was not JSON: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err }
     );
   }
   if (!parsed.w || !parsed.h) {

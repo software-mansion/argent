@@ -15,10 +15,14 @@ try {
   if (state && state.pid) {
     try {
       process.kill(state.pid, "SIGTERM");
-    } catch {}
+    } catch {
+      /* process already gone — nothing to kill */
+    }
   }
   fs.unlinkSync(stateFile);
-} catch {}
+} catch {
+  /* no state file or unreadable — nothing to clean up */
+}
 
 if (process.env.ARGENT_SKIP_POSTINSTALL === "1") {
   process.exit(0);

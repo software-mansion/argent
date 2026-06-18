@@ -14,6 +14,16 @@ export interface InspectItem {
   skipReason?: string;
 }
 
+// A raw bundle URL (e.g. http://localhost:8081/index.bundle) is not an openable
+// source: readSourceFragment rejects it and `code` stays null. The symbolication
+// fallback assigns such a URL as `source` when Metro cannot map a frame, so for
+// skip-filter purposes it must count as "no source" — otherwise every framework
+// wrapper it touches would survive Pass 1 / Pass 3 and flood the result in
+// exactly the symbolication-failure mode the fallback exists to handle.
+function hasRealSource(item: InspectItem): boolean {
+  return item.source !== null && !/^https?:\/\//.test(item.source.file);
+}
+
 /**
  * Filters and deduplicates the raw inspect-element hierarchy.
  * Applied after source resolution, before maxItems truncation.
@@ -58,7 +68,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
       skipFiltered.push(item);
       continue;
     }
-    const hasSource = item.source !== null;
+    const hasSource = hasRealSource(item);
     if (i > 0 && !hasSource && (isHardSkip(item.name) || shouldSkip(item.name))) {
       if (includeSkipped) {
         skipFiltered.push(skip(item, "skip-rule:no-source"));
@@ -98,7 +108,7 @@ export function filterInspectItems(items: InspectItem[], includeSkipped = false)
       result.push(item);
       continue;
     }
-    if (keptCount > 0 && item.name === "View" && item.source === null) {
+    if (keptCount > 0 && item.name === "View" && !hasRealSource(item)) {
       if (includeSkipped) {
         result.push(skip(item, "anonymous-view"));
       }
@@ -230,6 +240,12 @@ Use when you need the source file and line for a component at a tap coordinate. 
             if (resolved) {
               source = resolved;
               code = await api.sourceResolver.readSourceFragment(resolved, params.contextLines);
+            } else {
+              source = {
+                file: item.frame.file,
+                line: item.frame.line,
+                column: item.frame.col,
+              };
             }
           } else {
             source = {

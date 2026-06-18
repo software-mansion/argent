@@ -27,12 +27,24 @@ export class Registry {
   private blueprints = new Map<string, ServiceBlueprint>();
   private tools = new Map<string, ToolRecord>();
   /**
+   * Predicate that decides whether a feature-flagged tool is currently enabled.
+   * Injected (rather than importing `@argent/cli` here) so the registry stays
+   * free of a CLI dependency. The default treats every flag as enabled, so
+   * existing `new Registry()` call sites (tests, non-flag deployments) keep
+   * their previous behavior. The tool-server wires the real `isFlagEnabled`.
+   */
+  private readonly isFlagEnabled: (flag: string) => boolean;
+  /**
    * Host files produced by tools, registered during `execute` and served by the
    * `/artifacts/:id` route. Owned here (one per registry/process) so the tool
    * path and the HTTP route resolve the same instance — no module singleton.
    */
   public readonly artifacts = new ArtifactStore();
   public readonly events = new TypedEventEmitter<RegistryEvents>();
+
+  constructor(options: { isFlagEnabled?: (flag: string) => boolean } = {}) {
+    this.isFlagEnabled = options.isFlagEnabled ?? (() => true);
+  }
 
   registerBlueprint<T, C>(blueprint: ServiceBlueprint<T, C>): void {
     const { namespace } = blueprint;
@@ -81,6 +93,15 @@ export class Registry {
     if (!record) throw new ToolNotFoundError(id);
 
     const { definition } = record;
+
+    // Feature-flag gate, enforced for EVERY dispatch path (HTTP, flow-execute,
+    // flow-add-step, run-sequence) — not just the HTTP edge. A flag-gated tool
+    // whose flag is off is treated as "not found", mirroring the HTTP 404, so a
+    // flow can't smuggle an invocation of a disabled tool through the registry.
+    if (definition.featureFlag && !this.isFlagEnabled(definition.featureFlag)) {
+      throw new ToolNotFoundError(id);
+    }
+
     const startTime = performance.now();
     this.events.emit("toolInvoked", id);
 
@@ -270,7 +291,7 @@ export class Registry {
       node.instance = instance as ServiceInstance;
 
       instance.events.on("terminated", (error?: Error) => {
-        this._teardown(urn, error);
+        void this._teardown(urn, error);
       });
 
       return instance.api as T;
