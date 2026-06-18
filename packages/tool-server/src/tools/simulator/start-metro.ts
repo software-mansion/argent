@@ -184,9 +184,27 @@ async function startMetro(
   child.once("error", spawnErrorListener);
 
   if (!child.pid) {
-    child.removeListener("error", spawnErrorListener);
-    spawnErrorReject = null;
-    throw new Error("start-metro: spawn returned without a pid.");
+    // spawn failed synchronously (e.g. ENOENT — command not on PATH, or npx
+    // missing). Node still emits the spawn 'error' event, but *asynchronously*
+    // on a later tick. We must NOT remove `spawnErrorListener` and return here:
+    // doing so leaves the deferred 'error' with no handler, so it surfaces as an
+    // uncaughtException. The tool-server's handler treats that as a crash and
+    // runs crashShutdown → process.exit(1), taking down every concurrent
+    // session — not just this start-metro call. Instead keep the listener
+    // attached (it's a `once`, so it self-removes after consuming the event) and
+    // await the error it surfaces, then reject this call with it. A defensive
+    // timeout guards the (Node-guaranteed-not-to-happen) case where no 'error'
+    // ever arrives, so we never hang the call indefinitely.
+    const spawnFailure = await Promise.race([
+      spawnError.catch((e: Error) => e),
+      new Promise<Error>((resolve) =>
+        setTimeout(
+          () => resolve(new Error("start-metro: spawn returned without a pid.")),
+          STATUS_PROBE_TIMEOUT_MS
+        )
+      ),
+    ]);
+    throw spawnFailure;
   }
   child.unref();
 
