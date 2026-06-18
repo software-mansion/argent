@@ -65,8 +65,11 @@ export function parseVegaXml(xml: string): VegaXmlNode | null {
   const body = xml.replace(/^\s*<\?xml[^?]*\?>\s*/, "");
   const stack: VegaXmlNode[] = [];
   let root: VegaXmlNode | null = null;
-  // Depth of `<traits>` nesting we are currently inside; >0 means "skip".
-  let traitsDepth = 0;
+  // Element-nesting depth inside the current `<traits>` metadata subtree; 0 means
+  // "not skipping". Counting *all* elements (not just `<traits>`) lets the skip be
+  // bounded to its owner, so one unclosed `<traits>` can't swallow the rest of the
+  // tree (see the owner-close backstop below).
+  let skipDepth = 0;
   let match: RegExpExecArray | null;
   TOKEN_RE.lastIndex = 0;
   while ((match = TOKEN_RE.exec(body)) !== null) {
@@ -74,7 +77,7 @@ export function parseVegaXml(xml: string): VegaXmlNode | null {
 
     // Text run between tags — attach to the current open element.
     if (textRun !== undefined) {
-      if (traitsDepth === 0) {
+      if (skipDepth === 0) {
         const parent = stack[stack.length - 1];
         const t = decodeXmlEntities(textRun).trim();
         if (parent && t) parent.text += parent.text ? " " + t : t;
@@ -82,21 +85,36 @@ export function parseVegaXml(xml: string): VegaXmlNode | null {
       continue;
     }
 
-    if (tag === "traits") {
-      // Enter / leave a metadata subtree. Self-closing `<traits/>` is a no-op.
-      if (closing) {
-        if (traitsDepth > 0) traitsDepth -= 1;
-      } else if (!selfClose) {
-        traitsDepth += 1;
+    if (closing) {
+      if (skipDepth > 0) {
+        const owner = stack[stack.length - 1];
+        // A `<traits>` whose own `</traits>` is missing would otherwise skip every
+        // following sibling. When we're back at the traits' own level and the
+        // closing tag is the element that *owns* it (the real stack top), the block
+        // was malformed — force-exit the skip and pop the owner so the rest of the
+        // tree still parses.
+        if (skipDepth === 1 && owner && owner.tag === tag) {
+          skipDepth = 0;
+          stack.pop();
+        } else {
+          skipDepth -= 1;
+        }
+        continue;
       }
+      if (stack.length > 0) stack.pop();
       continue;
     }
 
-    // Inside a traits subtree: ignore every tag until it closes.
-    if (traitsDepth > 0) continue;
-
-    if (closing) {
-      if (stack.length > 0) stack.pop();
+    // Opening (or self-closing) tag.
+    if (skipDepth > 0) {
+      // Inside a traits subtree: ignore the node, tracking nesting so the matching
+      // `</traits>` (or a balanced descendant close) ends the skip.
+      if (!selfClose) skipDepth += 1;
+      continue;
+    }
+    if (tag === "traits") {
+      // Enter the metadata subtree. Self-closing `<traits/>` is a no-op.
+      if (!selfClose) skipDepth = 1;
       continue;
     }
 
@@ -204,17 +222,28 @@ function convert(node: VegaXmlNode, screenW: number, screenH: number): DescribeN
   return [out];
 }
 
-/** Find the screen dimensions from the first element carrying width & height. */
+/**
+ * Screen dimensions used to normalize every frame. Prefer the sized `<window>`
+ * element (the actual screen rect); only if there is no sized `<window>` fall
+ * back to the first sized node, then to the VVD default. Returning the first
+ * sized node outright is order-fragile: any sized leaf (an icon/badge) that
+ * happens to precede `<window>` in breadth-first order would masquerade as the
+ * screen, clamping every normalized frame off-screen to ~{x:1,y:1,w:0,h:0}.
+ */
 function findScreenSize(root: VegaXmlNode): { w: number; h: number } {
+  let firstSized: { w: number; h: number } | null = null;
   const stack: VegaXmlNode[] = [root];
   while (stack.length > 0) {
     const n = stack.shift()!;
     const w = num(n.attrs, "width");
     const h = num(n.attrs, "height");
-    if (w && h) return { w, h };
+    if (w && h) {
+      if (n.tag === "window") return { w, h };
+      if (!firstSized) firstSized = { w, h };
+    }
     stack.push(...n.children);
   }
-  return { w: 1920, h: 1080 }; // VVD default
+  return firstSized ?? { w: 1920, h: 1080 }; // VVD default
 }
 
 /**

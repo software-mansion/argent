@@ -124,4 +124,37 @@ describe("parseVegaPageSource — robustness", () => {
   it("throws on unparseable input", () => {
     expect(() => parseVegaPageSource("not xml at all")).toThrow();
   });
+
+  it("an unclosed <traits> does not swallow the following siblings", () => {
+    // The first child's <traits> is never closed; the skip must be bounded to
+    // that child so the sibling after it still parses.
+    const xml =
+      '<?xml version="1.0"?>' +
+      '<root id="1"><window x="0" y="0" width="1920" height="1080">' +
+      '<child x="10" y="10" width="50" height="50" role="button" focusable="true" test_id="1">' +
+      "<text>First</text><traits><visibility/></child>" +
+      '<child x="70" y="10" width="50" height="50" role="button" focusable="true" test_id="2">' +
+      "<text>Second</text></child>" +
+      "</window></root>";
+    const tree = parseVegaPageSource(xml);
+    expect(byLabel(tree, "First")).toBeDefined();
+    expect(byLabel(tree, "Second")).toBeDefined();
+  });
+
+  it("normalizes frames against <window>, not a sized leaf that precedes it", () => {
+    const xml =
+      '<?xml version="1.0"?>' +
+      '<root id="1"><app appName="x">' +
+      '<icon x="0" y="0" width="48" height="48" role="image" test_id="9"/>' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="960" y="540" width="192" height="108" role="button" focusable="true" test_id="2">' +
+      "<text>Mid</text></child>" +
+      "</window></app></root>";
+    const tree = parseVegaPageSource(xml);
+    const mid = byLabel(tree, "Mid")!;
+    // Against the 1920×1080 window — not the 48×48 icon, which would clamp the
+    // mid-screen button off-screen to ~{x:1, w:0}.
+    expect(mid.frame.x).toBeCloseTo(960 / 1920, 3);
+    expect(mid.frame.width).toBeCloseTo(192 / 1920, 3);
+  });
 });

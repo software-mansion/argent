@@ -57,7 +57,16 @@ export async function captureVegaDeviceLogs(
   child.stderr.on("data", consume);
 
   const start = Date.now();
-  await new Promise<void>((resolve) => setTimeout(resolve, durationMs));
+  // A spawn failure (ENOENT/EACCES — e.g. the resolved `vega` binary was removed
+  // mid-session, or `~/vega/bin/vega` exists but isn't executable) emits an async
+  // 'error' event. With no listener that becomes an uncaughtException, which the
+  // server routes to crashShutdown — so guard it and reject the capture cleanly.
+  await new Promise<void>((resolve, reject) => {
+    child.on("error", (err) =>
+      reject(new Error(`failed to capture vega device logs: ${err.message}`, { cause: err }))
+    );
+    setTimeout(resolve, durationMs);
+  });
   child.kill("SIGKILL");
   const capturedMs = Date.now() - start;
   // Best-effort: tell the device to stop streaming so a left-over stream session

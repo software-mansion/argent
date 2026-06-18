@@ -91,6 +91,8 @@ describe("shouldAutoScreenshot", () => {
     expect(shouldAutoScreenshot("boot-device")).toBe(false);
     expect(shouldAutoScreenshot("simulator-server")).toBe(false);
     expect(shouldAutoScreenshot("activate-sso")).toBe(false);
+    // `describe` returns the element tree, so it stays text-only (no auto-shot).
+    expect(shouldAutoScreenshot("describe")).toBe(false);
   });
 });
 
@@ -167,7 +169,6 @@ describe("getAutoScreenshotDelayMs", () => {
 
   it("uses env override as a floor", () => {
     process.env.ARGENT_AUTO_SCREENSHOT_DELAY_MS = "2000";
-    expect(getAutoScreenshotDelayMs("describe")).toBe(2000); // 100 < 2000 → 2000
     expect(getAutoScreenshotDelayMs("keyboard")).toBe(2000); // 300 < 2000 → 2000
   });
 
@@ -201,7 +202,6 @@ describe("shouldAutoScreenshot — unified surface", () => {
       "launch-app",
       "restart-app",
       "open-url",
-      "describe",
       "run-sequence",
     ]) {
       expect(shouldAutoScreenshot(t)).toBe(true);

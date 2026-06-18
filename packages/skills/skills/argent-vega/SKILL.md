@@ -24,7 +24,7 @@ Prereqs: Vega SDK on PATH (`source ~/vega/env`). Start the VVD yourself — `veg
 
 `describe {udid}` → nested element tree from the on-device automation toolkit: each line is a `button`/`text`/`image` with its label, `id` (test_id), `[clickable]`, and **`[focused]`/`[selected]`** (`[focused]` is the live D-pad cursor; `[selected]` is just an active-tab/highlight state — track `[focused]`) + a normalized [0,1] frame. This is the discovery tool for Vega — call it before navigating so `remote` moves are deliberate, not blind. The toolkit auto-enables when argent launches the app; if the tree comes back empty, the app started before the toolkit attached → `restart-app` and retry. Needs `adb` on PATH. (No element-tap yet — act via `remote`.)
 
-**Always pass `{includeImageInContext:false}` to `describe` while navigating.** The text tree already carries focus + every label/position, so the auto-screenshot is pure waste: it adds a device round-trip and ~1–1.5k image tokens that re-accumulate every turn. Text-only `describe` is ~150ms; the screenshot-bearing one is ~2s. Only take a real `screenshot` when you genuinely need pixels (rendering/layout/colour check).
+**`describe` is text-only — it does not auto-screenshot**, so navigate on the tree alone (it already carries focus + every label/position). Only take a real `screenshot` when you genuinely need pixels (rendering/layout/colour check).
 
 ## Input
 
@@ -38,7 +38,7 @@ Prereqs: Vega SDK on PATH (`source ~/vega/env`). Start the VVD yourself — `veg
 
 Per screen, do exactly two tool calls:
 
-1. `describe {udid, includeImageInContext:false}` — read the tree, find `[focused]` and the target element.
+1. `describe {udid}` — read the tree, find `[focused]` and the target element.
 2. Compute the full D-pad path from focus → target (count rows/columns from the frames), then fire it as **one** `remote {button:[...]}` ending in `select`.
 
 Then `describe` again to confirm. This is text-only and ~2 round-trips/screen instead of one-press-per-round-trip with a screenshot each time. Off-by-one is normal on first traversal of an unfamiliar layout — re-`describe`, correct with a short follow-up `sequence`, and you'll have the layout's geometry for the rest of the run.

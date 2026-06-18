@@ -8,6 +8,11 @@
 
 import { isFlagEnabled, type FlagsPathOptions } from "@argent/configuration-core";
 
+// `describe` is intentionally absent: it already returns the full element tree,
+// so an auto-screenshot after it is redundant and costly (a device round-trip +
+// ~1–1.5k image tokens every call). Leaving it out keeps inspection text-only —
+// which is what the Vega D-pad nav loop relies on. Take an explicit `screenshot`
+// when pixels are actually needed.
 export const AUTO_SCREENSHOT_TOOLS = new Set([
   "gesture-tap",
   "gesture-swipe",
@@ -22,7 +27,6 @@ export const AUTO_SCREENSHOT_TOOLS = new Set([
   "launch-app",
   "restart-app",
   "open-url",
-  "describe",
   "run-sequence",
 ]);
 
@@ -45,7 +49,6 @@ export const AUTO_SCREENSHOT_DELAY_MS_BY_TOOL: Record<string, number> = {
   "button": 1500,
   "rotate": 1000,
   "keyboard": 300,
-  "describe": 100,
 };
 
 const DEFAULT_DELAY_MS = 1400;
