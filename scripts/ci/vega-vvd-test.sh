@@ -104,9 +104,14 @@ fi
 endg
 
 # ── Start the tool-server (built from this branch) ──────────────────────────
+# The container's Node (20.x) is older than 22.12, where `require(esm)` is on by
+# default. tool-server compiles to CommonJS but depends on the ESM-only
+# `@argent/configuration-core`, so the raw `tsc` dist needs
+# `--experimental-require-module` (backported to Node 20.17+) to load it. The
+# production esbuild bundle inlines the dep and doesn't need this.
 group "Start tool-server"
 : > /tmp/tool-server.log
-setsid env ARGENT_PORT="$PORT" node packages/tool-server/dist/index.js start \
+setsid env ARGENT_PORT="$PORT" node --experimental-require-module packages/tool-server/dist/index.js start \
   </dev/null >/tmp/tool-server.log 2>&1 &
 ready=""
 for _ in $(seq 1 30); do
