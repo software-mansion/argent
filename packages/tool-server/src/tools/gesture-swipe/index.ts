@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { ToolCapability, ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
-import { resolveDevice } from "../../utils/device-info";
+import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -44,12 +45,22 @@ Use when you need to scroll a list, dismiss a modal, drag an element, or navigat
   searchHint: "swipe scroll drag pan gesture device simulator emulator touch move",
   zodSchema,
   capability,
-  services: (params) => ({
-    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
-  }),
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.udid);
+    if (isPhysicalIos(device)) {
+      return { coreDevice: coreDeviceRef(device) };
+    }
+    return { simulatorServer: simulatorServerRef(device) };
+  },
   async execute(services, params) {
     const duration = params.durationMs ?? 300;
     const timestampMs = Date.now();
+    const device = resolveDevice(params.udid);
+    if (isPhysicalIos(device)) {
+      const coreDevice = services.coreDevice as CoreDeviceApi;
+      await coreDevice.swipe(params.fromX, params.fromY, params.toX, params.toY, duration);
+      return { swiped: true, timestampMs };
+    }
     const api = services.simulatorServer as SimulatorServerApi;
     const steps = Math.max(1, Math.round(duration / 16));
 

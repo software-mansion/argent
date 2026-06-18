@@ -63,6 +63,23 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
+# argent-device-auth is the macOS host helper that shows the branded admin
+# prompt to start the physical-iOS CoreDevice tunnel as root. Like ax-service it
+# is a darwin-only binary, resolved at bin/darwin/argent-device-auth.
+# Optional: until the argent-private build publishes it, the release won't carry
+# it — physical-iOS then falls back to the (unbranded) osascript admin prompt,
+# so a missing asset must not fail the whole download.
+echo "  Downloading argent-device-auth..."
+if gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "argent-device-auth" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber 2>/dev/null; then
+  chmod +x "${IOS_BIN_DIR}/argent-device-auth"
+else
+  echo "    (not in this release yet — physical iOS will use the osascript prompt fallback)"
+fi
+
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the
 # filename) so this script doesn't have to know the version ahead of time;
@@ -85,7 +102,8 @@ trap - EXIT
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
 if command -v codesign &>/dev/null; then
-  for f in "${DYLIBS_DIR}"/*.dylib "${IOS_BIN_DIR}/ax-service"; do
+  for f in "${DYLIBS_DIR}"/*.dylib "${IOS_BIN_DIR}/ax-service" "${IOS_BIN_DIR}/argent-device-auth"; do
+    [ -f "$f" ] || continue
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"
   done
 fi

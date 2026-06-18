@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { httpScreenshot } from "../../utils/simulator-client";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
@@ -73,6 +74,9 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (isPhysicalIos(device)) {
+      return { coreDevice: coreDeviceRef(device) };
+    }
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params, ctx) {
@@ -84,6 +88,14 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
         scale: params.scale,
         downscaler: params.downscaler,
       });
+      const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
+      return { image };
+    }
+    if (isPhysicalIos(device)) {
+      // CoreDevice returns a full-resolution PNG; rotation/scale/downscaler are
+      // simulator/Chromium-only knobs and don't apply to the device capture.
+      const coreDevice = services.coreDevice as CoreDeviceApi;
+      const { path } = await coreDevice.screenshot();
       const image = await requireArtifacts(ctx).register(path, { mimeType: "image/png" });
       return { image };
     }

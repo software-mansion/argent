@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import type { RestartAppAndroidServices, RestartAppIosServices, RestartAppResult } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
@@ -53,7 +53,11 @@ Returns { restarted, bundleId }. Fails if the app is not installed.`,
   // Only iOS needs the native-devtools service for relaunch injection.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    return device.platform === "ios" ? { nativeDevtools: nativeDevtoolsRef(device) } : {};
+    // Physical iOS has no native-devtools (it's rejected in the handler);
+    // resolving that service eagerly would throw its simulator-only guard first.
+    return device.platform === "ios" && !isPhysicalIos(device)
+      ? { nativeDevtools: nativeDevtoolsRef(device) }
+      : {};
   },
   execute: dispatchByPlatform<
     RestartAppIosServices,

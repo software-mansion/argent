@@ -186,6 +186,18 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       );
     }
 
+    if (device.platform === "ios" && device.kind === "device") {
+      // Physical iPhones are driven over CoreDevice (see core-device blueprint),
+      // not the simulator-server. Only screenshot/gesture-tap/gesture-swipe/button
+      // route physical iOS to that backend; any other tool lands here, so fail
+      // with a clear message instead of spawning a simulator-server that can't
+      // attach to a hardware UDID.
+      throw new Error(
+        `simulator-server cannot drive the physical iOS device ${device.id}. ` +
+          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, and button only.`
+      );
+    }
+
     if (device.platform === "ios") {
       await ensureAutomationEnabled(device.id).catch(() => {});
     } else if (device.platform === "android") {

@@ -73,6 +73,17 @@ const AX_TCP_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/tcp/ax-service");
 const BIN_DIR = path.resolve(__dirname, "../bin");
 const AX_BIN_DEST = path.resolve(BIN_DIR, "darwin/ax-service");
 const AX_TCP_BIN_DEST = path.resolve(BIN_DIR, "darwin/tcp/ax-service");
+// argent-device-auth: macOS host helper for the branded physical-iOS tunnel
+// auth prompt. Best-effort — only present once argent-private publishes the
+// signed binary; until then physical iOS falls back to the osascript prompt.
+const DEVICE_AUTH_BIN_SRC = path.resolve(BIN_SRC_ROOT, "darwin/argent-device-auth");
+const DEVICE_AUTH_BIN_DEST = path.resolve(BIN_DIR, "darwin/argent-device-auth");
+// Argent icon shown in that prompt (committed under native-devtools-ios/assets).
+const DEVICE_ICON_SRC = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/native-devtools-ios/assets/argent-icon.png"
+);
+const DEVICE_ICON_DEST = path.resolve(__dirname, "../assets/argent-icon.png");
 // Host platform keys (see hostPlatformKey() in @argent/native-devtools-ios):
 // darwin is a universal binary; Linux ships one single-arch ELF per key.
 const SUPPORTED_HOST_PLATFORMS = ["darwin", "linux", "linux-arm64"];
@@ -168,6 +179,27 @@ const ASSETS = [
     required: false,
     copiedLabel: "ax-service (tcp) binary",
     missLabel: "ax-service (tcp) binary",
+  },
+  // macOS host helper for the branded physical-iOS tunnel auth prompt.
+  // Best-effort: present once argent-private publishes the signed binary;
+  // until then physical iOS falls back to the (unbranded) osascript prompt.
+  {
+    kind: "file",
+    src: DEVICE_AUTH_BIN_SRC,
+    dest: DEVICE_AUTH_BIN_DEST,
+    mode: 0o755,
+    required: false,
+    copiedLabel: "argent-device-auth binary",
+    missLabel: "argent-device-auth binary",
+  },
+  // Argent icon shown in the device-auth prompt (committed; best-effort copy).
+  {
+    kind: "file",
+    src: DEVICE_ICON_SRC,
+    dest: DEVICE_ICON_DEST,
+    required: false,
+    copiedLabel: "device-auth icon",
+    missLabel: "device-auth icon",
   },
   // Android host-side Perfetto trace processor: the third-party WASM engine
   // (trace_processor.wasm + emscripten glue + the EngineBase decoder + LICENSE).

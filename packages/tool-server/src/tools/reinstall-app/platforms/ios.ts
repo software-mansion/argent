@@ -8,7 +8,12 @@ const execFileAsync = promisify(execFile);
 
 export const iosImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, ReinstallAppResult> = {
   requires: ["xcrun"],
-  handler: async (_services, params) => {
+  handler: async (_services, params, device) => {
+    if (device.kind === "device") {
+      // Installing on a physical iPhone needs a device-signed .app and a
+      // provisioning profile; that is out of scope for the CoreDevice path.
+      throw new Error("reinstall-app is not supported on physical iOS devices.");
+    }
     const { udid, bundleId, appPath } = params;
     const absolute = resolvePath(appPath);
     try {

@@ -3,7 +3,7 @@ import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registr
 import { nativeDevtoolsRef } from "../../blueprints/native-devtools";
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { resolveDevice } from "../../utils/device-info";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import type { LaunchAppAndroidServices, LaunchAppIosServices, LaunchAppResult } from "./types";
 import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
@@ -65,7 +65,11 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
   // Only iOS needs the native-devtools service for launch-time injection. Chromium needs its CDP session.
   services: (params): Record<string, ServiceRef> => {
     const device = resolveDevice(params.udid);
-    if (device.platform === "ios") return { nativeDevtools: nativeDevtoolsRef(device) };
+    // Physical iOS is driven over CoreDevice (devicectl launch in the handler) and
+    // has no native-devtools; resolving that service eagerly would throw its
+    // simulator-only guard before the handler ever runs.
+    if (device.platform === "ios" && !isPhysicalIos(device))
+      return { nativeDevtools: nativeDevtoolsRef(device) };
     if (device.platform === "chromium") return { chromium: chromiumCdpRef(device) };
     return {};
   },

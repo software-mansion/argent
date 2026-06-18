@@ -8,8 +8,11 @@ const execFileAsync = promisify(execFile);
 
 export const iosImpl: PlatformImpl<RestartAppIosServices, RestartAppParams, RestartAppResult> = {
   requires: ["xcrun"],
-  handler: async (services, params) => {
+  handler: async (services, params, device) => {
     const { udid, bundleId } = params;
+    if (device.kind === "device") {
+      throw new Error("restart-app is not supported on physical iOS devices.");
+    }
     const blocked = await precheckNativeDevtools(services.nativeDevtools, udid);
     if (blocked) return blocked;
     try {

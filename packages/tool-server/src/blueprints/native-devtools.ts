@@ -367,6 +367,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
       );
     }
+    if (device.kind === "device") {
+      // DYLD injection via `simctl spawn` is simulator-only; a signed app on a
+      // physical device cannot load the devtools dylib. Physical iPhones are
+      // driven over CoreDevice instead.
+      throw new Error(
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-simulator-only and cannot attach to the physical device '${device.id}'. Native-devtools tools are not supported on physical iOS.`
+      );
+    }
 
     const udid = device.id;
     const socketPath = getNativeDevtoolsSocketPath(udid);

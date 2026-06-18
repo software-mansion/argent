@@ -52,6 +52,11 @@ export const FLAG_REGISTRY: readonly FlagDefinition[] = [
     name: "artifacts-list-endpoint",
     description: "Expose GET /artifacts for remote artifact inventory consumers.",
   },
+  {
+    name: "physical-ios-devices",
+    description:
+      "Discover and control physical iOS devices (iOS 27+) over Apple's CoreDevice tunnel via pymobiledevice3. Requires a running `sudo pymobiledevice3 remote tunneld`. Supports screenshot, tap, swipe, and hardware buttons.",
+  },
 ];
 
 // Look up a flag's definition — exported for consumers that want the

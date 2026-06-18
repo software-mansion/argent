@@ -32,6 +32,47 @@ npx @swmansion/argent init
 
 ---
 
+## Physical iOS devices (experimental)
+
+Argent can drive a **physical iPhone** — no app installed on the device — over Apple's
+CoreDevice "remote control" services (the same path Xcode's device window uses), via
+[`pymobiledevice3`](https://github.com/doronz88/pymobiledevice3). Supported interactions:
+`screenshot`, `gesture-tap`, `gesture-swipe`, `button`, and `launch-app`. The device shows
+up in `list-devices` with `kind: "device"`.
+
+**Requirements**
+
+- **iOS 27 or later** — Apple gates host-driven input ("remote control") to iOS 27+; on
+  earlier versions the device reports `CoreDeviceError 9021` and only screenshots work.
+- macOS with Xcode, and `pymobiledevice3` installed (e.g. `pipx install pymobiledevice3`).
+- The iPhone connected, unlocked, trusted, with **Developer Mode** on.
+
+**Setup**
+
+1. Enable the feature flag:
+   ```sh
+   argent enable physical-ios-devices
+   ```
+2. Connect the iPhone (unlocked, trusted, Developer Mode on).
+
+`list-devices` then includes the iPhone, and the supported tools work against its UDID.
+The first interaction (or `boot-device`) starts the required CoreDevice tunnel
+automatically: Argent shows a standard macOS authorization prompt — branded as Argent,
+with Touch ID / password — to launch `pymobiledevice3 remote tunneld` as root (creating the
+tunnel interface needs root once; every other command runs unprivileged). No manual `sudo`.
+
+If the prompt is declined or there's no GUI session (headless), start the tunnel manually
+and leave it running: `sudo pymobiledevice3 remote tunneld`.
+
+**Limitations / notes**
+
+- Not supported on physical iOS yet: keyboard/typing, pinch & rotate (multi-touch),
+  `open-url`, and `reinstall-app` — these return a clear "not supported" error.
+- Overrides: `ARGENT_PYMOBILEDEVICE3` (path to the binary), `ARGENT_PMD3_TUNNELD_PORT`
+  (defaults to `49151`).
+
+---
+
 ## Installation
 
 #### Prerequisites

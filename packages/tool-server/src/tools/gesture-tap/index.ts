@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { ServiceRef, ToolCapability, ToolDefinition } from "@argent/registry";
 import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
 import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
-import { resolveDevice } from "../../utils/device-info";
+import { coreDeviceRef, type CoreDeviceApi } from "../../blueprints/core-device";
+import { resolveDevice, isPhysicalIos } from "../../utils/device-info";
 import { sendCommand } from "../../utils/simulator-client";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -54,6 +55,9 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     if (device.platform === "chromium") {
       return { chromium: chromiumCdpRef(device) };
     }
+    if (isPhysicalIos(device)) {
+      return { coreDevice: coreDeviceRef(device) };
+    }
     return { simulatorServer: simulatorServerRef(device) };
   },
   async execute(services, params) {
@@ -62,6 +66,11 @@ Before tapping, determine the correct coordinates by using discovery tools — p
     if (device.platform === "chromium") {
       const chromium = services.chromium as ChromiumCdpApi;
       await tapChromium(chromium, params.x, params.y);
+      return { tapped: true, timestampMs };
+    }
+    if (isPhysicalIos(device)) {
+      const coreDevice = services.coreDevice as CoreDeviceApi;
+      await coreDevice.tap(params.x, params.y);
       return { tapped: true, timestampMs };
     }
     const api = services.simulatorServer as SimulatorServerApi;

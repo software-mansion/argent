@@ -11,12 +11,29 @@ import type { DeviceInfo, DeviceKind, Platform } from "@argent/registry";
 const IOS_UDID_SHAPE =
   /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
 
+/**
+ * Physical iPhone/iPad UDID shape on Apple silicon devices (A12+/iOS 17+):
+ * an 8-hex ECID prefix, a single dash, then 16 hex — e.g.
+ * `00008120-000E6D0C0ABBA01E`. This is distinct from the simulator UUID
+ * (four dashes) so a real device can be told apart from a simulator by shape
+ * alone, the same way Android emulators vs phones are distinguished. Older
+ * 40-hex device UDIDs belong to pre-A12 hardware that tops out well below the
+ * iOS 27 floor for the CoreDevice control path, so they are intentionally not matched.
+ */
+const IOS_PHYSICAL_UDID_SHAPE = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$/;
+
 export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
+
+/** Whether a udid is a physical iOS device (vs a simulator UUID), by shape. */
+export function isPhysicalIosUdid(udid: string): boolean {
+  return IOS_PHYSICAL_UDID_SHAPE.test(udid);
+}
 
 /** Returns the platform a `udid` belongs to based on its shape. */
 export function classifyDevice(udid: string): Platform {
   if (udid.startsWith(CHROMIUM_ID_PREFIX)) return "chromium";
-  return IOS_UDID_SHAPE.test(udid) ? "ios" : "android";
+  if (IOS_UDID_SHAPE.test(udid) || IOS_PHYSICAL_UDID_SHAPE.test(udid)) return "ios";
+  return "android";
 }
 
 /**
@@ -47,13 +64,20 @@ export function resolveDevice(udid: string): DeviceInfo {
   const platform = classifyDevice(udid);
   const kind: DeviceKind =
     platform === "ios"
-      ? "simulator"
+      ? isPhysicalIosUdid(udid)
+        ? "device"
+        : "simulator"
       : platform === "android"
         ? isAndroidEmulatorSerial(udid)
           ? "emulator"
           : "device"
         : "app";
   return { id: udid, platform, kind };
+}
+
+/** A physical iOS device (driven via CoreDevice/pymobiledevice3, not the simulator-server). */
+export function isPhysicalIos(device: DeviceInfo): boolean {
+  return device.platform === "ios" && device.kind === "device";
 }
 
 /** Parses the CDP port out of a chromium device id. Returns null if the id is malformed. */
