@@ -20,22 +20,10 @@ const UNAVAILABLE_HINT =
 const PAGE_SOURCE_EMPTY_LENGTH = 50;
 
 /**
- * Describe the current Vega (Fire TV) screen by fetching the on-device
- * automation toolkit's `getPageSource` XML over `adb forward` (see
- * `fetchVegaPageSource`). Parsed into the shared DescribeNode tree.
- *
- * The toolkit enable flag is owned by the app-lifecycle tools (`launch-app` /
- * `restart-app` set it before launching) and is only read at app launch. If the
- * toolkit is unreachable (flag never set, or the app started before it attached)
- * the fetch fails / yields an empty result → we surface an empty tree with a
- * hint to relaunch rather than a hard error.
- *
- * `_serial` (the caller's Vega udid) is accepted for call-site symmetry with the
- * iOS/Android describe handlers but not used: the toolkit fetch targets the
- * single running VVD resolved under `fetchVegaPageSource` → `emulatorSerial`.
- * A multi-VVD ambiguity (`MultipleVegaDevicesError`) is rethrown so the guard's
- * "stop all but one VVD" message reaches the caller; every other fetch failure
- * becomes the empty-tree relaunch hint below.
+ * Describe the current Vega screen from the on-device automation toolkit's
+ * `getPageSource` XML (fetched over `adb forward`). An unreachable toolkit yields
+ * an empty tree + relaunch hint; a multi-VVD ambiguity is rethrown. `_serial` is
+ * unused — the fetch targets the single running VVD.
  */
 export async function describeVega(_serial: string): Promise<DescribeTreeData> {
   let xml: string;

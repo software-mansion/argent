@@ -68,7 +68,7 @@ Metro must be up before launch; confirm `http://localhost:8081/json/list` lists 
 - In Release mode Vega apps use Javascript and navive code stored on device (bundle split), patching node_modules only works in Debug apps
 - If the input does not work, try enabling the developer mode inside VDD `vsm developer-mode enable`
 
-## Konwledgebase
+## Knowledgebase
 
 - amazon-devices-buildertools-mcp search_documentation tool
 - Search the community.amazondeveloper.com

@@ -3,18 +3,9 @@ import type { DescribeFrame, DescribeNode } from "../../contract";
 
 /**
  * Parse the Vega automation toolkit's `getPageSource` XML into the shared
- * `DescribeNode` tree (normalized [0,1] frames), so the same describe formatter,
- * tap-point header, and agent guidance apply on Fire TV as on iOS / Android.
- *
- * Two structural facts drive the conversion:
- *   1. `<traits>` subtrees are pure metadata (visibility, action handles, an
- *      internal `<window>`, …) — not UI nodes, so they are dropped wholesale.
- *   2. A node's text label lives in a direct `<text>…</text>` child element, not
- *      in an attribute.
- *
- * Only `role`-bearing / interactive nodes are kept; bare structural `<child>`
- * wrappers are flattened by hoisting meaningful descendants up to the nearest
- * kept ancestor (see `convert`).
+ * `DescribeNode` tree (normalized [0,1] frames). `<traits>` subtrees are metadata
+ * and dropped; a node's label is its direct `<text>` child; only role-bearing /
+ * interactive nodes are kept (bare `<child>` wrappers are flattened — see `convert`).
  */
 
 interface VegaXmlNode {

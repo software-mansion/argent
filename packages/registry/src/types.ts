@@ -122,11 +122,7 @@ export interface ToolCapability {
   chromium?: {
     app?: boolean;
   };
-  /**
-   * Vega (Amazon Fire TV) support. `vvd` is the QEMU Virtual Device, the
-   * analogue of an iOS simulator / Android emulator; `device` is a physical
-   * Fire TV reached over the `vega`/`kepler` CLI.
-   */
+  // Vega (Fire TV): `vvd` = QEMU Virtual Device, `device` = physical Fire TV.
   vega?: {
     vvd?: boolean;
     device?: boolean;
