@@ -21,6 +21,7 @@
     "@argent/update-core": "file:../update-core",
     "@clack/prompts": "^1.1.0",
     "express": "^5.2.1",
+    "fast-xml-parser": "^5.2.5",
     "pngjs": "^7.0.0",
     "semver": "^7.7.4",
     "source-map-js": "^1.2.1",

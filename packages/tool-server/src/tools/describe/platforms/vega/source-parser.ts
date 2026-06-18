@@ -1,35 +1,20 @@
+import { XMLParser } from "fast-xml-parser";
 import type { DescribeFrame, DescribeNode } from "../../contract";
-import { decodeXmlEntities } from "../android/uiautomator-parser";
 
 /**
  * Parse the Vega automation toolkit's `getPageSource` XML into the shared
  * `DescribeNode` tree (normalized [0,1] frames), so the same describe formatter,
  * tap-point header, and agent guidance apply on Fire TV as on iOS / Android.
  *
- * The page source looks like:
- *
- *   <root id="1">
- *     <app appName="…"><traits>…</traits>
- *       <window x="0" y="0" width="1920" height="1080" …>
- *         <traits>…</traits>
- *         <child x="67" y="23" width="177" height="74" role="button"
- *                selectable="true" selected="false" focusable="true" focused="false" test_id="14">
- *           <child … role="text" test_id="10"><text>Search</text><traits>…</traits></child>
- *           <traits>…</traits>
- *         </child>
- *         …
- *
- * Two structural facts drive the parser:
+ * Two structural facts drive the conversion:
  *   1. `<traits>` subtrees are pure metadata (visibility, action handles, an
- *      internal `<window id="3"/>`, …) — they are NOT UI nodes and are skipped
- *      wholesale, or they would pollute the tree with phantom windows.
- *   2. A node's text label lives in a direct `<text>…</text>` child element
- *      (e.g. a `role="text"` node), not in an attribute.
+ *      internal `<window>`, …) — not UI nodes, so they are dropped wholesale.
+ *   2. A node's text label lives in a direct `<text>…</text>` child element, not
+ *      in an attribute.
  *
- * Only `role`-bearing / interactive nodes are kept; the structural `<child>`
- * scaffolding (full-screen containers with no role) is flattened by hoisting
- * each meaningful descendant up to the nearest kept ancestor. The result is a
- * compact tree of buttons / text / images that mirrors the on-screen layout.
+ * Only `role`-bearing / interactive nodes are kept; bare structural `<child>`
+ * wrappers are flattened by hoisting meaningful descendants up to the nearest
+ * kept ancestor (see `convert`).
  */
 
 interface VegaXmlNode {
@@ -40,97 +25,62 @@ interface VegaXmlNode {
   text: string;
 }
 
-// One regex, two alternatives: an element tag (open / close / self-closing) OR
-// a run of text between tags. Attribute values may contain `>` (XML §2.4 only
-// requires `<` and `&` escaped), so the attr block allows quoted `>` and stops
-// at the unquoted closing `>`.
-const TOKEN_RE = /<(\/?)([A-Za-z_][\w.-]*)((?:"[^"]*"|'[^']*'|[^"'>])*?)\s*(\/?)>|([^<]+)/gs;
-const ATTR_RE = /([A-Za-z_][\w.-]*)\s*=\s*"([^"]*)"/g;
+// fast-xml-parser in `preserveOrder` mode: each node is `{ <tag>: [children],
+// ":@": {attrs} }` and a text run is `{ "#text": "…" }`. `htmlEntities` decodes
+// numeric/hex char refs (`&#x2605;`) on top of the named XML entities.
+const ATTRS_KEY = ":@";
+const TEXT_KEY = "#text";
+const parser = new XMLParser({
+  ignoreAttributes: false,
+  attributeNamePrefix: "",
+  preserveOrder: true,
+  textNodeName: TEXT_KEY,
+  parseAttributeValue: false,
+  parseTagValue: false,
+  trimValues: true,
+  processEntities: true,
+  htmlEntities: true,
+});
 
-function parseAttributes(raw: string): Record<string, string> {
-  const attrs: Record<string, string> = {};
-  let m: RegExpExecArray | null;
-  while ((m = ATTR_RE.exec(raw)) !== null) {
-    attrs[m[1]!] = decodeXmlEntities(m[2]!);
+type FxpEntry = Record<string, unknown>;
+
+/** Tag name of a preserveOrder entry (the single key that isn't the attr key). */
+function tagOf(entry: FxpEntry): string | undefined {
+  return Object.keys(entry).find((k) => k !== ATTRS_KEY);
+}
+
+/** Adapt a preserveOrder element entry into a `VegaXmlNode`, dropping `<traits>`. */
+function adapt(entry: FxpEntry): VegaXmlNode | null {
+  const tag = tagOf(entry);
+  if (!tag || tag === TEXT_KEY || tag === "?xml" || tag === "traits") return null;
+  const node: VegaXmlNode = {
+    tag,
+    attrs: (entry[ATTRS_KEY] as Record<string, string>) ?? {},
+    children: [],
+    text: "",
+  };
+  for (const child of (entry[tag] as FxpEntry[]) ?? []) {
+    if (TEXT_KEY in child) {
+      const t = String(child[TEXT_KEY] ?? "").trim();
+      if (t) node.text += node.text ? " " + t : t;
+      continue;
+    }
+    const c = adapt(child);
+    if (c) node.children.push(c);
   }
-  ATTR_RE.lastIndex = 0;
-  return attrs;
+  return node;
 }
 
 /**
- * Tokenize the page source into a `VegaXmlNode` tree, dropping every `<traits>`
- * subtree. Returns the outermost element (`<root>`), or null if nothing parsed.
+ * Parse the page source into a `VegaXmlNode` tree, dropping `<traits>` metadata
+ * subtrees. Returns the outermost element (`<root>`), or null if nothing parsed.
  */
 export function parseVegaXml(xml: string): VegaXmlNode | null {
-  const body = xml.replace(/^\s*<\?xml[^?]*\?>\s*/, "");
-  const stack: VegaXmlNode[] = [];
-  let root: VegaXmlNode | null = null;
-  // Element-nesting depth inside the current `<traits>` metadata subtree; 0 means
-  // "not skipping". Counting *all* elements (not just `<traits>`) lets the skip be
-  // bounded to its owner, so one unclosed `<traits>` can't swallow the rest of the
-  // tree (see the owner-close backstop below).
-  let skipDepth = 0;
-  let match: RegExpExecArray | null;
-  TOKEN_RE.lastIndex = 0;
-  while ((match = TOKEN_RE.exec(body)) !== null) {
-    const [, closing, tag, rawAttrs, selfClose, textRun] = match;
-
-    // Text run between tags — attach to the current open element.
-    if (textRun !== undefined) {
-      if (skipDepth === 0) {
-        const parent = stack[stack.length - 1];
-        const t = decodeXmlEntities(textRun).trim();
-        if (parent && t) parent.text += parent.text ? " " + t : t;
-      }
-      continue;
-    }
-
-    if (closing) {
-      if (skipDepth > 0) {
-        const owner = stack[stack.length - 1];
-        // A `<traits>` whose own `</traits>` is missing would otherwise skip every
-        // following sibling. When we're back at the traits' own level and the
-        // closing tag is the element that *owns* it (the real stack top), the block
-        // was malformed — force-exit the skip and pop the owner so the rest of the
-        // tree still parses.
-        if (skipDepth === 1 && owner && owner.tag === tag) {
-          skipDepth = 0;
-          stack.pop();
-        } else {
-          skipDepth -= 1;
-        }
-        continue;
-      }
-      if (stack.length > 0) stack.pop();
-      continue;
-    }
-
-    // Opening (or self-closing) tag.
-    if (skipDepth > 0) {
-      // Inside a traits subtree: ignore the node, tracking nesting so the matching
-      // `</traits>` (or a balanced descendant close) ends the skip.
-      if (!selfClose) skipDepth += 1;
-      continue;
-    }
-    if (tag === "traits") {
-      // Enter the metadata subtree. Self-closing `<traits/>` is a no-op.
-      if (!selfClose) skipDepth = 1;
-      continue;
-    }
-
-    const node: VegaXmlNode = {
-      tag: tag!,
-      attrs: parseAttributes(rawAttrs ?? ""),
-      children: [],
-      text: "",
-    };
-    const parent = stack[stack.length - 1];
-    if (parent) parent.children.push(node);
-    else if (root === null) root = node;
-    else root.children.push(node);
-    if (!selfClose) stack.push(node);
+  for (const entry of parser.parse(xml) as FxpEntry[]) {
+    const node = adapt(entry);
+    if (node) return node;
   }
-  return root;
+  return null;
 }
 
 function isTrue(attrs: Record<string, string>, key: string): boolean {

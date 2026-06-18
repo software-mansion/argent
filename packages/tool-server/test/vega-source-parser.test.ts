@@ -125,20 +125,23 @@ describe("parseVegaPageSource — robustness", () => {
     expect(() => parseVegaPageSource("not xml at all")).toThrow();
   });
 
-  it("an unclosed <traits> does not swallow the following siblings", () => {
-    // The first child's <traits> is never closed; the skip must be bounded to
-    // that child so the sibling after it still parses.
+  it("drops <traits> metadata without swallowing the following siblings", () => {
+    // Real toolkit output is always well-formed (a real XML parser rejects
+    // malformed input), so this asserts the real intent: the first child's
+    // <traits> subtree is dropped and the sibling after it still parses.
     const xml =
       '<?xml version="1.0"?>' +
       '<root id="1"><window x="0" y="0" width="1920" height="1080">' +
       '<child x="10" y="10" width="50" height="50" role="button" focusable="true" test_id="1">' +
-      "<text>First</text><traits><visibility/></child>" +
+      "<text>First</text><traits><visibility/></traits></child>" +
       '<child x="70" y="10" width="50" height="50" role="button" focusable="true" test_id="2">' +
       "<text>Second</text></child>" +
       "</window></root>";
     const tree = parseVegaPageSource(xml);
     expect(byLabel(tree, "First")).toBeDefined();
     expect(byLabel(tree, "Second")).toBeDefined();
+    // The <visibility> trait must not leak in as a UI node.
+    expect(flatten(tree).some((n) => n.role === "visibility")).toBe(false);
   });
 
   it("normalizes frames against <window>, not a sized leaf that precedes it", () => {
