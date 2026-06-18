@@ -1,6 +1,6 @@
 ---
 name: argent-vega
-description: Use to drive Vega app with argent — list/launch/restart/reinstall apps/inspect the on-screen element tree (describe)/navigate with the TV remote/D-pad/type text/screenshot/read device logs
+description: Use for any Vega / Amazon Fire TV task with argent — start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot, read device logs
 ---
 
 ## Before you start
@@ -10,6 +10,15 @@ Prereqs:
 - Virtual device is started by running list-devices. You can start the VVD with `vega virtual-device start`
 - You ran `list-devices` → Vega entries tagged `platform:"vega"` (`serial:"amazon-…"`, `kind:"vvd"`). Pass that `serial` as `udid` to every Vega tool.
 - the https://developer.amazon.com/docs/vega/0.22/mcp-server.html is installed. You can check MCP configuration with `npx -y @amazon-devices/amazon-devices-buildertools-mcp@latest check-status`
+
+## VVD lifecycle (start / stop)
+
+argent has **no Vega lifecycle tool** — it only drives an already-running device. The VVD is started and stopped through the `vega` CLI (run `source ~/vega/env` first if it's not on PATH):
+
+- Start: `vega virtual-device start` — then `list-devices` shows the `platform:"vega"` entry.
+- Stop: `vega virtual-device stop` — verify with `list-devices` (the Vega entry disappears).
+
+Do **not** reach for `stop-simulator-server` / `stop-all-simulator-servers` for a VVD — those are iOS/Android/Chromium only and won't stop Vega.
 
 ## Platform specific notes
 

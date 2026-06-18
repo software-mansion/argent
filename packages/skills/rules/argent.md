@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator, Android emulator, and Chromium (CDP) app control. Argent MCP tools are the preferred form of interaction with the application. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`.
+Argent MCP tools are available in this project for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control. Argent MCP tools are the preferred form of interaction with the application. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by remote (D-pad) and tagged `platform: "vega"`.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -15,7 +15,7 @@ Use cases:
 - Any tapping, swiping, typing, screenshotting, or inspecting a running app
 - Any code change that affects visible mobile UI, layout, styling, copy, navigation, or screen composition
 - Any request to execute manual QA, UI QA, or visual behavior validation for a mobile app
-- Running, debugging, or testing a React Native app (iOS or Android)
+- Running, debugging, or testing a React Native app (iOS, Android or Vega)
 - Profiling performance or diagnosing re-renders in a React Native app (iOS or Android)
 - Running, debugging, or testing a Chromium (CDP) app — an Electron app (boot with `boot-device` + `electronAppPath`) or a Chromium browser exposing CDP (auto-discovered on port `9222` / `ARGENT_CHROMIUM_PORTS`); on Chromium scroll with `gesture-scroll` and drag with `gesture-drag` — `gesture-swipe` is touch-only
   </description>
@@ -83,7 +83,7 @@ Load the matching skill before starting work and executing tools from argent-mcp
 procedure and edge-case handling for each workflow.
 
 PLATFORM DETECTION
-If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS.
+If the user did not specify a platform, call `list-devices` first and pick the booted target — do not default to iOS. Vega (Amazon Fire TV) devices appear as `platform:"vega"`, when present load `argent-vega`
 
 iOS SIMULATOR SETUP
 Skill: `argent-ios-simulator-setup`
@@ -92,6 +92,11 @@ When: Beginning a task that involves the iOS simulator, no simulator booted yet,
 ANDROID EMULATOR SETUP
 Skill: `argent-android-emulator-setup`
 When: Beginning a task that involves the Android emulator, no emulator running yet, need an adb serial, or about to install an APK.
+
+VEGA / AMAZON FIRE TV APP CONTROL
+Skill: `argent-vega`
+When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `remote` tool (Vega is remote-driven, not touch), typing, screenshots, device logs, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
+Prompt keywords: vega, fire tv, vvd, virtual device, d-pad
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING
 Skill: `argent-device-interact`
