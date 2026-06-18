@@ -11,6 +11,11 @@ type AndroidDevice = {
   serial: string;
   state: string;
   isEmulator: boolean;
+  // "emulator" for a local AVD, "device" for a physical phone (USB or wireless
+  // adb). The two are driven by different simulator-server controllers, so the
+  // kind is surfaced here for parity with iOS terminology and so consumers can
+  // tell a connected phone apart from an emulator at a glance.
+  kind: "emulator" | "device";
   model: string | null;
   avdName: string | null;
   sdkLevel: number | null;
@@ -51,9 +56,10 @@ const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
   id: "list-devices",
-  description: `List iOS simulators, Android devices/emulators, and running Chromium apps in one place.
+  description: `List iOS simulators, Android emulators, connected physical Android devices, and running Chromium apps in one place.
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
 Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', or 'chromium'), and 'avds' lists Android AVDs that can be booted via boot-device.
+Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with chromiumAppPath to launch one.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select or Android platform-tools is not installed.`,
   alwaysLoad: true,
@@ -75,6 +81,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       serial: d.serial,
       state: d.state,
       isEmulator: d.isEmulator,
+      kind: d.isEmulator ? "emulator" : "device",
       model: d.model,
       avdName: d.avdName,
       sdkLevel: d.sdkLevel,

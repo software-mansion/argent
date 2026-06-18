@@ -1,7 +1,10 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import type { ServiceRef, ToolDefinition } from "@argent/registry";
 import type { NetworkInspectorApi } from "../../blueprints/network-inspector";
-import { RN_ONLY_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
+import { DEBUGGER_TOOL_CAPABILITY } from "../debugger/debugger-service-ref";
+import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-cdp";
+import { resolveDevice } from "../../utils/device-info";
+import type { NetworkRequestRecord } from "../../chromium-server";
 import {
   NETWORK_INTERCEPTOR_SCRIPT,
   makeNetworkLogReadScript,
@@ -56,8 +59,50 @@ function formatEntry(entry: LogEntry): string {
   return `{id: ${entry.requestId}} "${method} ${name}" ${status} ${type} ${size} ${duration}`.trim();
 }
 
+/** Map a Chromium CDP record into the shared LogEntry shape used by formatEntry. */
+function recordToLogEntry(r: NetworkRequestRecord, id: number): LogEntry {
+  return {
+    id,
+    requestId: r.requestId,
+    state: r.failed ? "failed" : r.status != null ? "complete" : "pending",
+    request: { url: r.url, method: r.method },
+    response:
+      r.status != null
+        ? { status: r.status, statusText: r.statusText ?? "", mimeType: r.mimeType ?? "" }
+        : undefined,
+    resourceType: r.resourceType,
+    encodedDataLength: r.encodedDataLength,
+    durationMs: r.durationMs != null ? Math.round(r.durationMs) : undefined,
+    errorText: r.errorText,
+  };
+}
+
+/** Render one page of Chromium records in the same format as the RN path. */
+function renderChromiumPage(
+  records: NetworkRequestRecord[],
+  pageIndexParam: number | "latest"
+): string {
+  const total = records.length;
+  if (total === 0) {
+    return "No network traffic captured. Recording is active on the active tab — navigate or reload the page to populate it (requests made before the device was attached are not captured).";
+  }
+  const pageCount = Math.ceil(total / ITEMS_PER_PAGE);
+  const pageIndex = pageIndexParam === "latest" ? pageCount - 1 : pageIndexParam;
+  if (pageIndex < 0 || pageIndex >= pageCount) {
+    return `Page index out of range. Valid range: 0-${pageCount - 1} (${pageCount} pages, ${total} total requests).`;
+  }
+  const start = pageIndex * ITEMS_PER_PAGE;
+  const lines = records
+    .slice(start, start + ITEMS_PER_PAGE)
+    .map((r, i) => formatEntry(recordToLogEntry(r, start + i)));
+  return `=== NETWORK LOGS (page ${pageIndex + 1}/${pageCount}, ${total} total) ===\n\n${lines.join("\n")}`;
+}
+
 const zodSchema = z.object({
-  port: z.coerce.number().default(8081).describe("Metro server port"),
+  port: z.coerce
+    .number()
+    .default(8081)
+    .describe("Metro server port (RN only; ignored on Chromium)"),
   device_id: z.string().describe("Device UDID (logicalDeviceId)."),
   pageIndex: z
     .union([z.coerce.number().int().nonnegative(), z.literal("latest")])
@@ -69,21 +114,30 @@ const zodSchema = z.object({
 
 export const networkLogsTool: ToolDefinition<z.infer<typeof zodSchema>, string> = {
   id: "view-network-logs",
-  description: `Retrieve captured network (HTTP) requests from the running React Native app.
+  description: `Retrieve captured network (HTTP) requests from the running app.
 Returns a paginated list of requests with method, URL, status, resource type, size, and duration.
 Each entry includes a requestId that can be passed to view-network-request-details for full details.
-Network interception is injected into the JS runtime — it captures fetch() calls.
+On React Native (iOS/Android) interception is injected into the JS runtime — it captures fetch() calls. On Chromium it reads the browser's native CDP Network domain (the active tab; all request types).
 Use when inspecting outbound HTTP traffic or debugging API calls in the running app.
-Fails if the app is not connected or no network interceptor could be injected.`,
+Fails if the app is not connected (RN) or the device is not reachable (Chromium).`,
   zodSchema,
-  // RN-only: the interceptor monkey-patches global.fetch in the Hermes runtime.
-  // Chromium pages should be inspected via Chromium's Network domain instead,
-  // which is a different mechanism — out of scope for this port.
-  capability: RN_ONLY_TOOL_CAPABILITY,
-  services: (params) => ({
-    inspector: `NetworkInspector:${params.port}:${params.device_id}`,
-  }),
+  // Works on RN (Metro-injected interceptor) and Chromium (native CDP Network
+  // domain), dispatched on the device id in `services` / `execute`.
+  capability: DEBUGGER_TOOL_CAPABILITY,
+  services: (params): Record<string, ServiceRef> => {
+    const device = resolveDevice(params.device_id);
+    if (device.platform === "chromium") {
+      return { chromium: chromiumCdpRef(device) };
+    }
+    return { inspector: `NetworkInspector:${params.port}:${params.device_id}` };
+  },
   async execute(services, params) {
+    // Chromium: read the server-side CDP Network recording (no in-app injection).
+    if (resolveDevice(params.device_id).platform === "chromium") {
+      const chromium = services.chromium as ChromiumCdpApi;
+      return renderChromiumPage(chromium.server.network.requests(), params.pageIndex);
+    }
+
     const api = services.inspector as NetworkInspectorApi;
 
     // Ensure the interceptor is installed (idempotent).

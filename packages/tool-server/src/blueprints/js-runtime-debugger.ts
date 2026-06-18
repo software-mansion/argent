@@ -32,10 +32,21 @@ export type ConsoleLogEvents = {
   log: (entry: ConsoleLogEntry) => void;
 };
 
+function stringifyConsoleValue(value: unknown): string {
+  if (typeof value === "object" && value !== null) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return Object.prototype.toString.call(value);
+    }
+  }
+  return String(value);
+}
+
 function formatConsoleArgs(params: ConsoleAPICalledParams): string {
   return params.args
     .map((arg) => {
-      if (arg.value !== undefined) return String(arg.value);
+      if (arg.value !== undefined) return stringifyConsoleValue(arg.value);
       if (arg.description) return arg.description;
       return `[${arg.type}]`;
     })

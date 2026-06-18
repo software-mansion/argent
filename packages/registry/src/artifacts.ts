@@ -65,6 +65,15 @@ export interface ArtifactEntry {
   isDirectory: boolean;
 }
 
+/** Public metadata returned by the artifact inventory endpoint. */
+export interface ArtifactListItem {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  isDirectory: boolean;
+}
+
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -136,5 +145,15 @@ export class ArtifactStore {
 
   get(id: string): ArtifactEntry | undefined {
     return this.entries.get(id);
+  }
+
+  list(): ArtifactListItem[] {
+    return [...this.entries.entries()].map(([id, entry]) => ({
+      id,
+      filename: entry.filename,
+      mimeType: entry.mimeType,
+      size: entry.size,
+      isDirectory: entry.isDirectory,
+    }));
   }
 }

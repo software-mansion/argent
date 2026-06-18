@@ -310,7 +310,6 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   const rowRe = /<row\s+([^>]*?)\/>/g;
   let rm;
   while ((rm = rowRe.exec(xml)) !== null) {
-    const rowAttrs = rm[1];
     const objectType = attr(rm[0], "leaked-object") ?? "Unknown";
     const sizeStr = attr(rm[0], "size");
     const sizeBytes = sizeStr ? parseInt(sizeStr, 10) : 0;
