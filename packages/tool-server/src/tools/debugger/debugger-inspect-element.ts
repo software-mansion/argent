@@ -14,13 +14,6 @@ export interface InspectItem {
   skipReason?: string;
 }
 
-/**
- * Filters and deduplicates the raw inspect-element hierarchy.
- * Applied after source resolution, before maxItems truncation.
- *
- * When includeSkipped is true, filtered items are kept in the result
- * with `skipped: true` and a `skipReason` string instead of being removed.
- */
 // A raw bundle URL (e.g. http://localhost:8081/index.bundle) is not an openable
 // source: readSourceFragment rejects it and `code` stays null. The symbolication
 // fallback assigns such a URL as `source` when Metro cannot map a frame, so for
@@ -31,6 +24,13 @@ function hasRealSource(item: InspectItem): boolean {
   return item.source !== null && !/^https?:\/\//.test(item.source.file);
 }
 
+/**
+ * Filters and deduplicates the raw inspect-element hierarchy.
+ * Applied after source resolution, before maxItems truncation.
+ *
+ * When includeSkipped is true, filtered items are kept in the result
+ * with `skipped: true` and a `skipReason` string instead of being removed.
+ */
 export function filterInspectItems(items: InspectItem[], includeSkipped = false): InspectItem[] {
   function skip(item: InspectItem, reason: string): InspectItem {
     return includeSkipped ? { ...item, skipped: true, skipReason: reason } : item;
