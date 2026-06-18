@@ -122,7 +122,6 @@ export interface ToolCapability {
   chromium?: {
     app?: boolean;
   };
-  // Vega (Fire TV): `vvd` = QEMU Virtual Device, `device` = physical Fire TV.
   vega?: {
     vvd?: boolean;
     device?: boolean;
