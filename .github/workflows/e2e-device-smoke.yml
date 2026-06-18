@@ -1,0 +1,238 @@
+name: Device E2E smoke
+
+# Boot-and-drive smoke tests for every (target × host) cell of the support
+# matrix that runs on GitHub-hosted runners. Each job boots ONE device through
+# the tool-server and asserts the headless interaction pipeline end-to-end via
+# scripts/e2e/drive-device.sh: booted:true → screenshot has real pixels →
+# gesture-tap round-trips.
+#
+#   ┌────────────────────┬───────────────┬──────────────────────────────────┐
+#   │ target             │ host          │ where                            │
+#   ├────────────────────┼───────────────┼──────────────────────────────────┤
+#   │ Android emulator   │ Linux (KVM)   │ wayland-e2e.yml (separate file:  │
+#   │                    │               │ also asserts gpu.mode=swiftshader)│
+#   │ iOS simulator      │ macOS         │ ios-sim-macos (this file)        │
+#   │ Chromium / Electron│ Linux (Xvfb)  │ chromium-linux (this file)       │
+#   │ Chromium / Electron│ macOS         │ chromium-macos (this file)       │
+#   └────────────────────┴───────────────┴──────────────────────────────────┘
+#
+# KNOWN GAPS — cells Argent supports on real machines but that GitHub-hosted
+# runners can't run, so they are intentionally not jobs here:
+#   - Android emulator on macOS: the arm64 emulator needs HVF (`-enable-hvf`),
+#     but hosted macOS runners are themselves VMs with no nested virtualization
+#     — qemu dies with "HVF error: HV_UNSUPPORTED" seconds into boot. The
+#     Android boot/screenshot/tap path is already regression-guarded on Linux
+#     via KVM (wayland-e2e.yml), so macOS adds no runnable coverage here.
+#   - Physical devices: real iOS (CoreDevice HID) and real Android (adb-USB)
+#     have no attached hardware on hosted runners.
+#   Both would need self-hosted runners (a Mac exposing HVF / wired-up devices).
+#
+# Manual + on-change trigger only — the macOS jobs are slow and billed.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/tool-server/src/tools/devices/**"
+      - "packages/tool-server/src/tools/gesture-tap/**"
+      - "packages/tool-server/src/tools/screenshot/**"
+      - "packages/tool-server/test/fixtures/electron-smoke-app/**"
+      - "scripts/e2e/drive-device.sh"
+      - ".github/workflows/e2e-device-smoke.yml"
+
+jobs:
+  # ── iOS simulator on macOS ────────────────────────────────────────────────
+  ios-sim-macos:
+    name: Boot + drive iOS simulator (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Install deps + build
+        run: |
+          npm ci
+          npm install @rollup/rollup-darwin-arm64 --no-save
+          npx tsc --build
+
+      - name: Download signed native binaries (darwin)
+        # iOS needs the simulator-server (screenshot/gesture-tap backend) AND the
+        # dylibs + ax-service: bootIos() only returns booted:true when native-
+        # devtools injection does NOT give up (boot-device.ts), so missing dylibs
+        # would surface here as a hard failure rather than a silent skip.
+        run: |
+          bash scripts/download-simulator-server.sh
+          bash scripts/download-native-binaries.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Start tool-server
+        run: |
+          mkdir -p ~/.argent
+          : > ~/.argent/tool-server.log
+          cd packages/tool-server
+          # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
+          # typecheck job already enforces types). Without it a cold start on a
+          # loaded macOS arm runner can take >60s to bind and flakily times out.
+          nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
+            > ~/.argent/tool-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3033/tools | grep -q 200 \
+              && { echo "tool-server up t+${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
+
+      - name: Pick an available simulator UDID
+        run: |
+          UDID=$(xcrun simctl list devices available --json | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(dev['udid'] for rt in d for dev in d[rt] if dev.get('isAvailable') and 'iPhone' in dev['name']))")
+          echo "Chosen simulator: $UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+
+      - name: Boot + drive
+        run: bash scripts/e2e/drive-device.sh
+        env:
+          BOOT_JSON: '{"udid":"${{ env.UDID }}"}'
+          DEVICE_ID: ${{ env.UDID }}
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-ios-sim-macos
+          path: |
+            ${{ runner.temp }}/smoke-shot.png
+            ${{ runner.temp }}/smoke-shot.json
+            ~/.argent/tool-server.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ── Chromium / Electron on Linux (Xvfb) ───────────────────────────────────
+  chromium-linux:
+    name: Boot + drive Electron (Linux/Xvfb)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Install deps + build
+        run: |
+          npm ci
+          npm install @rollup/rollup-linux-x64-gnu --no-save
+          npx tsc --build
+
+      - name: Vendor the fixture's electron
+        # The fixture brings its own electron (kept out of the root lockfile);
+        # boot-electron resolves ./node_modules/.bin/electron from the app dir.
+        # Standalone project (not a packages/* workspace member), so this ci is
+        # independent of the root install.
+        run: npm ci
+        working-directory: packages/tool-server/test/fixtures/electron-smoke-app
+
+      - name: Start Xvfb
+        # boot-electron spawns the Electron child inheriting the tool-server's
+        # env, so DISPLAY must be set BEFORE the tool-server starts.
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends xvfb
+          Xvfb :99 -screen 0 1280x1024x24 >/tmp/xvfb.log 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Start tool-server
+        run: |
+          mkdir -p ~/.argent
+          : > ~/.argent/tool-server.log
+          cd packages/tool-server
+          # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
+          # typecheck job already enforces types). Without it a cold start on a
+          # loaded macOS arm runner can take >60s to bind and flakily times out.
+          nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
+            > ~/.argent/tool-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3033/tools | grep -q 200 \
+              && { echo "tool-server up t+${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
+
+      - name: Boot + drive
+        run: bash scripts/e2e/drive-device.sh
+        env:
+          BOOT_JSON: '{"electronAppPath":"${{ github.workspace }}/packages/tool-server/test/fixtures/electron-smoke-app","electronPort":19222,"electronArgs":["--no-sandbox"]}'
+          DEVICE_ID: chromium-cdp-19222
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-chromium-linux
+          path: |
+            ${{ runner.temp }}/smoke-shot.png
+            ${{ runner.temp }}/smoke-shot.json
+            /tmp/xvfb.log
+            ~/.argent/tool-server.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  # ── Chromium / Electron on macOS ──────────────────────────────────────────
+  chromium-macos:
+    name: Boot + drive Electron (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Install deps + build
+        run: |
+          npm ci
+          npm install @rollup/rollup-darwin-arm64 --no-save
+          npx tsc --build
+
+      - name: Vendor the fixture's electron
+        run: npm ci
+        working-directory: packages/tool-server/test/fixtures/electron-smoke-app
+
+      - name: Start tool-server
+        run: |
+          mkdir -p ~/.argent
+          : > ~/.argent/tool-server.log
+          cd packages/tool-server
+          # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
+          # typecheck job already enforces types). Without it a cold start on a
+          # loaded macOS arm runner can take >60s to bind and flakily times out.
+          nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
+            > ~/.argent/tool-server.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3033/tools | grep -q 200 \
+              && { echo "tool-server up t+${i}s"; exit 0; }
+            sleep 1
+          done
+          echo "tool-server failed to start"; cat ~/.argent/tool-server.log; exit 1
+
+      - name: Boot + drive
+        # macOS runner has a window server and Electron's sandbox is fine there,
+        # so no Xvfb and no --no-sandbox.
+        run: bash scripts/e2e/drive-device.sh
+        env:
+          BOOT_JSON: '{"electronAppPath":"${{ github.workspace }}/packages/tool-server/test/fixtures/electron-smoke-app","electronPort":19222}'
+          DEVICE_ID: chromium-cdp-19222
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-chromium-macos
+          path: |
+            ${{ runner.temp }}/smoke-shot.png
+            ${{ runner.temp }}/smoke-shot.json
+            ~/.argent/tool-server.log
+          if-no-files-found: warn
+          retention-days: 7
