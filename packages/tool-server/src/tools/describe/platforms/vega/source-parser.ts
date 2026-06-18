@@ -61,7 +61,8 @@ function adapt(entry: FxpEntry): VegaXmlNode | null {
   };
   for (const child of (entry[tag] as FxpEntry[]) ?? []) {
     if (TEXT_KEY in child) {
-      const t = String(child[TEXT_KEY] ?? "").trim();
+      const raw = child[TEXT_KEY];
+      const t = (typeof raw === "string" ? raw : "").trim();
       if (t) node.text += node.text ? " " + t : t;
       continue;
     }

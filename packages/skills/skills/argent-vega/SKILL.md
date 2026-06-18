@@ -1,6 +1,6 @@
 ---
 name: argent-vega
-description: Drive Vega / Amazon Fire TV devices - start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot, read device logs
+description: Drive Vega / Amazon Fire TV devices via argent - start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot, read device logs. Use when a task involves a Vega / Fire TV device (a platform:"vega" / kind:"vvd" entry in list-devices) or mentions Vega, Fire TV, VVD, or the D-pad remote
 ---
 
 ## Before you start
@@ -54,7 +54,7 @@ Per screen, two calls: (1) `describe` — find `[focused]` and the target; (2) c
 
 ## Fast Refresh
 
-Needs a Debug build + Metro running. argent only connects to Metro — it does not start Metro or port-forward (any platform); do these in your shell. 
+Needs a Debug build + Metro running. argent only connects to Metro — it does not start Metro or port-forward (any platform); do these in your shell.
 
 1. Build a **Debug** `.vpkg` and install it: `vega device install-app -p <path/to/debug.vpkg>`
 2. `npm start` (Metro on :8081; use `npm start`, not `npx react-native start`)
@@ -65,11 +65,10 @@ Metro must be up before launch; confirm `http://localhost:8081/json/list` lists 
 
 ## Gotchas
 
-- In Release mode Vega apps use the Javascript and navive code stored on device (bundle split), patching node_modules only works in Debug apps
+- In Release mode Vega apps use Javascript and navive code stored on device (bundle split), patching node_modules only works in Debug apps
 - If the input does not work, try enabling the developer mode inside VDD `vsm developer-mode enable`
 
 ## Konwledgebase
 
-- Use the amazon-devices-buildertools-mcp search_documentation tool
+- amazon-devices-buildertools-mcp search_documentation tool
 - Search the community.amazondeveloper.com
-
