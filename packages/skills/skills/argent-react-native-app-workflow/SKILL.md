@@ -25,19 +25,17 @@ Do NOT default to `npx react-native start` or `npx react-native run-ios` without
 
 ### 1.2 Start Metro
 
-1. Check whether metro is already running on port found in configuration and if it is - do not start another server. Refer to point 2.1.
+**Use the `start-metro` tool** to start or reuse Metro. It checks the configured port, reuses an existing Metro instance by default, waits until Metro is ready, and returns `{ port, pid, status }`, where `status` is `"started"` or `"reused"`.
 
-1. **Use the project's custom start script if one exists** (e.g. `npm run start:local`, `yarn start:dev`). Fall back to default commands if no custom scripts are defined:
+- Set `port` when the project uses a non-default Metro port.
+- Pass `projectRoot` as an absolute path when the tool-server cwd is not the app root, such as in monorepos.
+- Use the project’s custom start script when one exists, especially for flavors or custom configs, by passing `command` and `args`.
+- When using a custom command, include any required flags yourself; `port` and `projectRoot` are not automatically added.
+- Set `reuseExisting: false` only when a fresh Metro instance is required; this errors if Metro is already running on the port.
 
-   ```bash
-   npx react-native start
-   ```
+For suspected cache issues, start Metro with a cache-reset command, for example: `command: "npx"`, `args: ["react-native", "start", "--port", "<configured-port>", "--reset-cache"]`.
 
-   Optional: `npx react-native start --reset-cache` if cache issues are suspected.
-
-1. **Verify Metro is ready**: use the `debugger-status` tool to verify Metro is running and reachable.
-
-1. **Projects with flavors or custom configs**: Use project-specific start script if present (e.g. `npm run start:local`), and start Metro **before** running the app.
+If `start-metro` reports that the port is held by a non-Metro process, free the port first using the `stop-metro`, then call `start-metro` again.
 
 ### 1.3 Run the App
 
@@ -67,7 +65,9 @@ npx react-native run-android --deviceId=<adb-serial> # Android
 
 ### 2.1 Check for Existing Metro
 
-Before starting Metro, avoid "port already in use" errors. Default port to check is :8081, infer the port from documentation:
+`start-metro` (see §1.2) handles the existing-Metro case for you: it reuses a Metro already on the port (`status: "reused"`) and errors with the offending PIDs if the port is held by a non-Metro process. You usually do **not** need a manual port check.
+
+If you do need to inspect the port directly (default :8081; infer the port from configuration):
 
 ```bash
 lsof -i :PORT
@@ -78,7 +78,7 @@ lsof -i :PORT
 
 Use the `debugger-status` tool to check whether the process on that port is actually a Metro server. If not Metro — ask the user whether you may kill the process.
 
-To kill a Metro process, use the `stop-metro` tool (requires user confirmation).
+To kill a Metro process, use the `stop-metro` tool (requires user confirmation). After freeing the port, call `start-metro` again.
 
 ### 2.2 Confirm Correct Server Connection
 
@@ -213,8 +213,7 @@ If the user's intent is ambiguous (run existing tests, write new tests, or find 
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | Check port 8081              | `lsof -i :8081`                                                                                                                          |
 | Kill Metro                   | `stop-metro` tool                                                                                                                        |
-| Start Metro                  | `npx react-native start`                                                                                                                 |
-| Start Metro (reset cache)    | `npx react-native start --reset-cache`                                                                                                   |
+| Start / Reuse Metro          | `start-metro` tool                                                                                                                       |
 | Run iOS app                  | `npx react-native run-ios`                                                                                                               |
 | Run Android app              | `npx react-native run-android`                                                                                                           |
 | List devices                 | `list-devices` tool (iOS + Android)                                                                                                      |

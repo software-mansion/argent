@@ -64,6 +64,7 @@ import { profilerLoadTool } from "../tools/profiler/query/profiler-load";
 import { createStopSimulatorServerTool } from "../tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../tools/simulator/stop-all-simulator-servers";
 import { stopMetroTool } from "../tools/simulator/stop-metro";
+import { startMetroTool } from "../tools/simulator/start-metro";
 import { flowStartRecordingTool } from "../tools/flows/flow-start-recording";
 import { createFlowAddStepTool } from "../tools/flows/flow-add-step";
 import { flowInsertEchoTool } from "../tools/flows/flow-insert-echo";
@@ -159,6 +160,7 @@ export function createRegistry(): Registry {
   registry.registerTool(createStopSimulatorServerTool(registry));
   registry.registerTool(createStopAllSimulatorServersTool(registry));
   registry.registerTool(stopMetroTool);
+  registry.registerTool(startMetroTool);
 
   // Flow tools
   registry.registerTool(flowStartRecordingTool);
