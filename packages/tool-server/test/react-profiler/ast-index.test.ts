@@ -67,4 +67,57 @@ describe("buildAstIndexWithDiagnostics", () => {
     expect(res.index.get("Dotted")).toMatchObject({ line: 5, isMemoized: true });
     expect(res.index.get("Nested")).toMatchObject({ line: 6, isMemoized: true });
   });
+
+  it("keeps every same-named component and prefers the base file over platform variants", async () => {
+    // Regression: when a name exists in several files (e.g. List.tsx and
+    // List.web.tsx) only the first one the walk reached survived and the rest
+    // were thrown away, so a lookup could hand back the wrong platform variant's
+    // source. Now the base file is the deterministic primary and the variants
+    // are surfaced under otherMatches.
+    const dir = mkdtempSync(join(tmpdir(), "ast-index-dup-"));
+    mkdirSync(join(dir, "components"), { recursive: true });
+    const base = join(dir, "components", "List.tsx");
+    const web = join(dir, "components", "List.web.tsx");
+    writeFileSync(base, `export function List() { return <View>native</View>; }\n`);
+    writeFileSync(
+      web,
+      [`// platform override`, `export function List() { return <div>web</div>; }`, ``].join("\n")
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+    const entry = res.index.get("List");
+
+    expect(entry?.file).toBe(base);
+    expect(entry?.line).toBe(1);
+    expect(entry?.otherMatches).toEqual([{ file: web, line: 2, col: 16 }]);
+  });
+
+  it("falls back to a deterministic primary when no base file exists", async () => {
+    // Only platform variants — there is no base file to prefer, so the tie
+    // breaks on path (walk-order independent) rather than whatever the directory
+    // happened to yield first.
+    const dir = mkdtempSync(join(tmpdir(), "ast-index-dup2-"));
+    mkdirSync(join(dir, "components"), { recursive: true });
+    const android = join(dir, "components", "List.android.tsx");
+    const ios = join(dir, "components", "List.ios.tsx");
+    writeFileSync(ios, `export function List() { return <View>ios</View>; }\n`);
+    writeFileSync(android, `export function List() { return <View>android</View>; }\n`);
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+    const entry = res.index.get("List");
+
+    // ".android." sorts before ".ios." lexicographically.
+    expect(entry?.file).toBe(android);
+    expect(entry?.otherMatches).toEqual([{ file: ios, line: 1, col: 16 }]);
+  });
+
+  it("omits otherMatches when a component name is unique", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ast-index-uniq-"));
+    writeFileSync(join(dir, "Solo.tsx"), `export function Solo() { return <View>x</View>; }\n`);
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.get("Solo")).toBeDefined();
+    expect(res.index.get("Solo")?.otherMatches).toBeUndefined();
+  });
 });
