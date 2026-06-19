@@ -48,6 +48,13 @@ export interface NativeProfilerSessionApi {
   profilingActive: boolean;
   wallClockStartMs: number | null;
   parsedData: NativeProfilerParsedData | null;
+  /**
+   * iOS-only: PID the exported CPU samples must be filtered to, or null to keep
+   * all samples. Set by the capture strategy at start — the all-processes
+   * fallback records host-wide and filters to the app PID; the device strategy
+   * scopes via --attach and leaves this null. See utils/ios-profiler/capture-strategy.
+   */
+  cpuFilterPid: number | null;
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
@@ -119,6 +126,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       profilingActive: false,
       wallClockStartMs: null,
       parsedData: null,
+      cpuFilterPid: null,
       recordingTimeout: null,
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,

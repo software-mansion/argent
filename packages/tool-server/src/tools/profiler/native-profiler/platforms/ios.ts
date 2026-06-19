@@ -14,6 +14,7 @@ import { exportIosTraceData } from "../../../../utils/ios-profiler/export";
 import type { ExportDiagnostics } from "../../../../utils/ios-profiler/export";
 import { shutdownChild } from "../../../../utils/profiler-shared/lifecycle";
 import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/index";
+import { selectIosCaptureStrategy } from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
@@ -253,6 +254,7 @@ function resetStartState(api: NativeProfilerSessionApi): void {
   api.captureProcess = null;
   api.traceFile = null;
   api.appProcess = null;
+  api.cpuFilterPid = null;
 }
 
 export function handleXctraceExit(
@@ -301,9 +303,27 @@ export async function startNativeProfilerIos(
     ? resolveExplicitApp(params.device_id, params.app_process)
     : detectRunningApp(params.device_id);
   const appProcess = detected.executable;
-  // Attach by PID when we know it (immune to Xcode 26.5's display-name `--attach`
-  // matching); fall back to the name when the target isn't running yet.
-  const attachTarget = detected.pid != null ? String(detected.pid) : appProcess;
+
+  // Pick the capture approach for this environment. On Xcode versions where
+  // `xctrace --device` works this is the original device/attach path; on the
+  // 26.4–27.0 regression (where --device deadlocks) it is the host-wide
+  // --all-processes fallback, filtered to the app PID. See capture-strategy.
+  const strategy = selectIosCaptureStrategy();
+  // The all-processes fallback records host-wide and isolates the app by PID, so
+  // it can only run when the target is actually running (PID known).
+  if (strategy.name === "all-processes" && detected.pid == null) {
+    throw new FailureError(
+      `The all-processes capture fallback needs the target app to be running so its ` +
+        `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
+        `Launch the app first using \`launch-app\`, then retry.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_NOT_RUNNING,
+        failure_stage: "native_profiler_start_app_detect",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
+  }
 
   const debugDir = await getDebugDir();
   const timestamp = new Date()
@@ -319,25 +339,20 @@ export async function startNativeProfilerIos(
   const attemptStart = async (): Promise<{ child: ChildProcess; pid: number }> => {
     api.appProcess = appProcess;
     api.traceFile = outputFile;
+    // Null for the device strategy (already scoped by --attach); the app PID for
+    // the host-wide all-processes fallback, used to filter the exported samples.
+    api.cpuFilterPid = strategy.cpuFilterPid(detected);
 
     const notifyName = `com.argent.ios-profiler.started.${process.pid}.${Date.now()}`;
     const notify = await registerStartupNotify(notifyName);
 
-    const xctraceArgs = [
-      "record",
-      "--template",
+    const xctraceArgs = strategy.buildRecordArgs({
       templatePath,
-      "--device",
-      params.device_id,
-      "--attach",
-      attachTarget,
-      "--output",
+      deviceId: params.device_id,
+      target: detected,
       outputFile,
-      "--no-prompt",
-    ];
-    if (notify) {
-      xctraceArgs.push("--notify-tracing-started", notifyName);
-    }
+      notifyName: notify ? notifyName : undefined,
+    });
 
     const xctraceProcess = spawn("xctrace", xctraceArgs, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -378,7 +393,9 @@ export async function startNativeProfilerIos(
         return await attemptStart();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        const isColdStart = msg.includes(COLD_START_SIGNATURE);
+        // Cold-start retry only applies when attaching by name (device strategy);
+        // the all-processes fallback doesn't attach, so it can't hit this.
+        const isColdStart = strategy.attachesByName && msg.includes(COLD_START_SIGNATURE);
         if (!isColdStart) throw err;
         if (attempt >= MAX_START_ATTEMPTS) break;
         process.stderr.write(
@@ -541,7 +558,7 @@ export async function analyzeNativeProfilerIos(
   ]);
 
   const { bottlenecks, cpuSamples, uiHangs, cpuHotspots, memoryLeaks } =
-    await runIosProfilerPipeline(api.exportedFiles);
+    await runIosProfilerPipeline(api.exportedFiles, { cpuFilterPid: api.cpuFilterPid });
 
   api.parsedData = { cpuSamples, uiHangs, cpuHotspots, memoryLeaks };
 
