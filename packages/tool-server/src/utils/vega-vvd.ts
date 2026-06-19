@@ -129,8 +129,15 @@ export async function isVvdRunning(): Promise<boolean> {
   }
 }
 
-export async function startVvd(params: { timeoutSeconds: number }): Promise<void> {
-  await runVega(["virtual-device", "start", "-t", String(params.timeoutSeconds)], {
+export async function startVvd(params: {
+  timeoutSeconds: number;
+  imagePath?: string;
+}): Promise<void> {
+  // `-p <package root>` selects which installed image to boot; without it the CLI
+  // boots the SDK default, so a `vvdImage` selector would be silently ignored.
+  const args = ["virtual-device", "start", "-t", String(params.timeoutSeconds)];
+  if (params.imagePath) args.push("-p", params.imagePath);
+  await runVega(args, {
     timeoutMs: params.timeoutSeconds * 1_000 + 15_000,
   });
 }

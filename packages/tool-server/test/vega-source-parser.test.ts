@@ -85,6 +85,28 @@ describe("parseVegaPageSource", () => {
     expect(selected.length).toBeGreaterThan(0);
   });
 
+  it("scopes to the foreground app and drops the Kepler launcher overlay", () => {
+    const labels = flatten(tree)
+      .map((n) => n.label)
+      .filter(Boolean) as string[];
+    // Foreground app content is present...
+    expect(labels).toContain("Home");
+    // ...but the launcher's own controls/text are excluded.
+    expect(labels.some((l) => l.includes("Kepler Virtual Device is ready"))).toBe(false);
+    expect(labels.some((l) => l.includes("Register this device"))).toBe(false);
+  });
+
+  it("reads boolean state flags case-insensitively (True / 1)", () => {
+    const xml =
+      '<?xml version="1.0"?><root id="1"><app appName="com.x">' +
+      '<window x="0" y="0" width="1920" height="1080">' +
+      '<child x="0" y="0" width="100" height="100" role="button" focusable="True" selected="1" test_id="9">' +
+      "<text>Cased</text></child></window></app></root>";
+    const node = byLabel(parseVegaPageSource(xml), "Cased")!;
+    expect(node.clickable).toBe(true);
+    expect(node.selected).toBe(true);
+  });
+
   it("normalizes the nav-bar Search button frame against 1920x1080", () => {
     // <child x=67 y=23 width=177 height=74 role=button>
     // its parent button has the 67/23 origin — find a button whose child is Search

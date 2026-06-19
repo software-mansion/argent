@@ -24,11 +24,15 @@ on:
     branches:
       - main
     paths:
-      - "packages/tool-server/src/tools/remote/**"
+      - "packages/tool-server/src/tools/tv-remote/**"
       - "packages/tool-server/src/tools/keyboard/index.ts"
       - "packages/tool-server/src/tools/screenshot/index.ts"
+      - "packages/tool-server/src/tools/describe/platforms/vega/**"
       - "packages/tool-server/src/tools/describe/platforms/vega.ts"
+      - "packages/tool-server/src/tools/devices/boot-device.ts"
+      - "packages/tool-server/src/tools/devices/list-devices.ts"
       - "packages/tool-server/src/utils/vega-*.ts"
+      - "packages/tool-server/src/utils/device-info.ts"
       - "scripts/ci/vega-vvd-test.sh"
       - ".github/workflows/vega-vvd-e2e.yml"
 

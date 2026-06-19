@@ -9,14 +9,14 @@ description: Control and inspect Amazon Fire TV (Vega) apps via argent — launc
 
 - Vega is a TV platform
 - **D-pad only.** Drive every interaction with `tv-remote`. Never use `gesture-*` / touch — they are unsupported on Vega.
-- **Always `describe` before navigating.** Find the live `[focused]` cursor from the tree — never guess focus position from a screenshot.
+- **Always `describe` before navigating.** Find the live cursor from the tree — the `[focused]` element, or `[selected]` when nothing reports `[focused]` (the toolkit often marks the highlighted item `[selected]` while `focused` stays false). Never guess focus position from a screenshot.
 - All tools take the Vega `serial` (from `list-devices`) as `udid`.
 
 ## The navigation loop
 
 Per screen, two calls:
 
-1. `describe` — find the `[focused]` element and your target.
+1. `describe` — find the cursor (`[focused]`, or `[selected]` if no `[focused]`) and your target.
 2. Compute the full D-pad path from focus → target (count rows/columns from the frames) and fire it as **one** `tv-remote {button:[...]}` ending in `select`.
 
 Then `describe` again to confirm. On a miss, run the loop again.
@@ -41,7 +41,7 @@ Then `describe` again to confirm. On a miss, run the loop again.
 
 ### `describe`
 
-Nested element tree from the on-device automation toolkit — each line is a `button`/`text`/`image` with its label, `id` (test_id), `[clickable]`, and **`[focused]`/`[selected]`** + a normalized [0,1] frame. `[focused]` is the live D-pad cursor (track this); `[selected]` is just an active-tab/highlight state. Navigate on the tree alone. If the tree comes back empty → `restart-app` and retry.
+Nested element tree from the on-device automation toolkit — each line is a `button`/`text`/`image` with its label, `id` (test_id), `[clickable]`, and **`[focused]`/`[selected]`** + a normalized [0,1] frame. `[focused]` is the live D-pad cursor when present; in practice the toolkit usually leaves `focused` false and marks the highlighted item `[selected]`, so treat `[selected]` as the cursor whenever no element reports `[focused]`. Navigate on the tree alone. If the tree comes back empty → `restart-app` and retry.
 
 ### `tv-remote`
 
@@ -68,7 +68,7 @@ Metro must be up before launch; confirm `http://localhost:8081/json/list` lists 
 
 - Metro connects only on port **8081** — fixed, cannot be changed.
 - Profiling / crashes → use the `amazon-devices-buildertools-mcp` server (`analyze_perfetto_traces`, `get_app_hot_functions`, `symbolicate_acr`).
-- Unsupported tools, with the Vega equivalent: `gesture-*` → use `tv-remote`; `open-url` → not wired; `debugger-*` → JS debugger not supported on Vega. These return "unsupported on vega".
+- Unsupported tools, with the Vega equivalent: `gesture-*` → use `tv-remote`; `open-url` → not wired; `debugger-*` → JS debugger not supported on Vega. These fail with `Tool '<id>' is not supported on vega vvd.` (or `... is not yet implemented on vega.`).
 
 ## Knowledgebase
 

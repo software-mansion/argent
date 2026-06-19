@@ -6,6 +6,11 @@ import { iosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { vegaImpl } from "./platforms/vega";
 
+// Mirror launch-app / restart-app: the leading-letter rule keeps a value like
+// `--user` from masquerading as a flag. Execution uses execFile with an argv
+// array (no shell), so this is a consistency guard, not an injection fix.
+const BUNDLE_ID_PATTERN = /^[A-Za-z_][A-Za-z0-9._-]*$/;
+
 const zodSchema = z.object({
   udid: z
     .string()
@@ -13,6 +18,7 @@ const zodSchema = z.object({
     .describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   bundleId: z
     .string()
+    .regex(BUNDLE_ID_PATTERN, "bundleId may only contain letters, digits, '.', '_' and '-'")
     .describe(
       "App identifier that matches the bundle at `appPath`. iOS: bundle id (used to uninstall first). Android: package name (used to uninstall first; the install itself identifies the app from the APK). Vega: interactive component app id (e.g. com.example.app.main), used to uninstall first."
     ),

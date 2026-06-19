@@ -16,10 +16,13 @@ const execFileAsync = promisify(execFile);
  *   2. `kepler` on PATH          — legacy alias (symlink to the same binary)
  *   3. `~/vega/bin/vega`         — SDK default install location
  *
- * Result is memoized for the process: the binary location does not move within
- * a session, and `command -v` per hot tool call would dominate latency.
+ * Result is memoized with a short TTL (mirroring `android-binary.ts`): a positive
+ * result effectively never expires within a session, but a *negative* one must
+ * not stick for the process lifetime — a user who sources `~/vega/env` or installs
+ * the SDK mid-session should recover without restarting the long-lived tool-server.
  */
-let cachedVegaBinary: string | null | undefined;
+const VEGA_BINARY_TTL_MS = 60_000;
+let cachedVegaBinary: { path: string | null; checkedAt: number } | undefined;
 
 async function commandOnPath(name: string): Promise<string | null> {
   try {
@@ -34,15 +37,15 @@ async function commandOnPath(name: string): Promise<string | null> {
 }
 
 export async function resolveVegaBinary(): Promise<string | null> {
-  if (cachedVegaBinary !== undefined) return cachedVegaBinary;
-  const onPath = (await commandOnPath("vega")) ?? (await commandOnPath("kepler"));
-  if (onPath) {
-    cachedVegaBinary = onPath;
-    return onPath;
+  const now = Date.now();
+  if (cachedVegaBinary && now - cachedVegaBinary.checkedAt < VEGA_BINARY_TTL_MS) {
+    return cachedVegaBinary.path;
   }
+  const onPath = (await commandOnPath("vega")) ?? (await commandOnPath("kepler"));
   const fallback = join(homedir(), "vega", "bin", "vega");
-  cachedVegaBinary = existsSync(fallback) ? fallback : null;
-  return cachedVegaBinary;
+  const path = onPath ?? (existsSync(fallback) ? fallback : null);
+  cachedVegaBinary = { path, checkedAt: now };
+  return path;
 }
 
 /** Test-only: clear the binary-resolution memo. */

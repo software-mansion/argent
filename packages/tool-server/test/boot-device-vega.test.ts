@@ -7,6 +7,7 @@ const startVvd = vi.fn();
 const stopVvd = vi.fn();
 const waitForVvdRunning = vi.fn();
 const resolveRunningVvdSerial = vi.fn();
+const listVegaDevices = vi.fn();
 const ensureDep = vi.fn();
 
 vi.mock("../src/utils/vega-sdk", () => ({
@@ -20,6 +21,7 @@ vi.mock("../src/utils/vega-vvd", () => ({
 }));
 vi.mock("../src/utils/vega-devices", () => ({
   resolveRunningVvdSerial: (...a: unknown[]) => resolveRunningVvdSerial(...a),
+  listVegaDevices: (...a: unknown[]) => listVegaDevices(...a),
 }));
 vi.mock("../src/utils/check-deps", async () => {
   const actual =
@@ -40,21 +42,24 @@ beforeEach(() => {
   stopVvd.mockResolvedValue(undefined);
   waitForVvdRunning.mockResolvedValue(undefined);
   resolveRunningVvdSerial.mockResolvedValue(SERIAL);
+  listVegaDevices.mockResolvedValue([
+    { platform: "vega", kind: "vvd", state: "running", serial: SERIAL, vvdImage: "tv" },
+  ]);
 });
 
 describe("boot-device — Vega VVD path", () => {
-  it("boots a stopped VVD: resolves the image, starts the SDK-default instance, waits, returns the serial", async () => {
+  it("boots a stopped VVD: resolves the image, starts that image via -p, waits, returns the serial", async () => {
     isVvdRunning.mockResolvedValue(false);
 
     const result = await createBootDeviceTool(registry).execute!({}, { vvdImage: "tv" });
 
     expect(ensureDep).toHaveBeenCalledWith("vega");
-    expect(startVvd).toHaveBeenCalledWith({ timeoutSeconds: 120 });
+    expect(startVvd).toHaveBeenCalledWith({ timeoutSeconds: 120, imagePath: "/sdk/vvd/images/tv" });
     expect(waitForVvdRunning).toHaveBeenCalled();
     expect(result).toEqual({ platform: "vega", serial: SERIAL, vvdImage: "tv", booted: true });
   });
 
-  it("returns the serial without restarting when the VVD is already running", async () => {
+  it("returns the serial without restarting when the requested image is already running", async () => {
     isVvdRunning.mockResolvedValue(true);
 
     const result = await createBootDeviceTool(registry).execute!({}, { vvdImage: "tv" });
@@ -62,6 +67,22 @@ describe("boot-device — Vega VVD path", () => {
     expect(startVvd).not.toHaveBeenCalled();
     expect(stopVvd).not.toHaveBeenCalled();
     expect((result as { serial: string }).serial).toBe(SERIAL);
+  });
+
+  it("rejects a non-force boot of a different image while another VVD is running", async () => {
+    isVvdRunning.mockResolvedValue(true);
+    listVvdImages.mockResolvedValue([
+      { name: "tv", path: "/sdk/vvd/images/tv" },
+      { name: "tablet", path: "/sdk/vvd/images/tablet" },
+    ]);
+    listVegaDevices.mockResolvedValue([
+      { platform: "vega", kind: "vvd", state: "running", serial: SERIAL, vvdImage: "tv" },
+    ]);
+
+    await expect(
+      createBootDeviceTool(registry).execute!({}, { vvdImage: "tablet" })
+    ).rejects.toThrow(/already running.*force:true/s);
+    expect(startVvd).not.toHaveBeenCalled();
   });
 
   it("force-restarts a running VVD (stop then start)", async () => {

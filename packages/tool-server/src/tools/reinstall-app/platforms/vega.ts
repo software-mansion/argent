@@ -24,8 +24,10 @@ export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Re
         timeoutMs: 180_000,
       });
       // `install-app` prints "Installing/Updating '…' ...success" on success.
+      // Anchor on the `...success` line so failure phrases like "unsuccessful"
+      // or "was not successful" can't read as success.
       const output = `${stdout}\n${stderr}`;
-      if (!/success/i.test(output)) {
+      if (!/\.\.\.\s*success\b/i.test(output)) {
         throw new Error(`vega install-app failed: ${output.trim()}`);
       }
       return { reinstalled: true, bundleId };

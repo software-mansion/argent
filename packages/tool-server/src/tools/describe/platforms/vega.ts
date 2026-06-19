@@ -42,5 +42,12 @@ export async function describeVega(_serial: string): Promise<DescribeTreeData> {
   if (xml.length < PAGE_SOURCE_EMPTY_LENGTH) {
     return { tree: EMPTY_TREE, source: "vega-automation", hint: UNAVAILABLE_HINT };
   }
-  return { tree: parseVegaPageSource(xml), source: "vega-automation" };
+  // A non-empty but malformed/truncated page source (e.g. a toolkit HTTP error
+  // body that slips past the length check) must degrade to the same empty-tree +
+  // relaunch hint rather than escaping as a raw parse error.
+  try {
+    return { tree: parseVegaPageSource(xml), source: "vega-automation" };
+  } catch {
+    return { tree: EMPTY_TREE, source: "vega-automation", hint: UNAVAILABLE_HINT };
+  }
 }

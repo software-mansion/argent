@@ -25,7 +25,7 @@ import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
 import { listVvdImages } from "../../utils/vega-sdk";
 import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
-import { resolveRunningVvdSerial } from "../../utils/vega-devices";
+import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
@@ -1071,11 +1071,24 @@ async function bootVegaImpl(params: {
 
   const running = await isVvdRunning();
   if (running && !params.force) {
-    // Already up — just resolve and return its serial (no restart).
+    // Already up. v1 supports a single running VVD and can't boot a second, so
+    // don't pretend we honored the request: resolve the image that is *actually*
+    // running and label the payload with it. If the caller asked for a different
+    // image, surface that rather than returning the running device mislabeled.
+    const current = await listVegaDevices();
+    const runningVvd = current.find((d) => d.kind === "vvd" && d.state === "running" && d.serial);
+    const runningImage = runningVvd?.vvdImage ?? null;
+    if (runningImage && runningImage !== params.vvdImage) {
+      throw new Error(
+        `A Vega VVD ("${runningImage}") is already running; argent v1 supports a single ` +
+          `running VVD. To switch to "${params.vvdImage}", re-run boot-device with force:true ` +
+          "(stops the current VVD first) or stop it via `vega virtual-device stop`."
+      );
+    }
     return {
       platform: "vega",
-      serial: await resolveRunningVvdSerial(),
-      vvdImage: params.vvdImage,
+      serial: runningVvd?.serial ?? (await resolveRunningVvdSerial()),
+      vvdImage: runningImage ?? params.vvdImage,
       booted: true,
     };
   }
@@ -1083,7 +1096,10 @@ async function bootVegaImpl(params: {
     await stopVvd();
   }
 
-  await startVvd({ timeoutSeconds: Math.ceil(params.bootTimeoutMs / 1_000) });
+  await startVvd({
+    timeoutSeconds: Math.ceil(params.bootTimeoutMs / 1_000),
+    imagePath: image.path,
+  });
   await waitForVvdRunning(params.bootTimeoutMs);
 
   return {

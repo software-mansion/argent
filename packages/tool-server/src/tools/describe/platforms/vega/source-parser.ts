@@ -75,8 +75,14 @@ export function parseVegaXml(xml: string): VegaXmlNode | null {
   return null;
 }
 
+// Toolkit booleans normally arrive lowercase, but `ro.serialno`-style vendor
+// variance means casing/`1` can't be assumed; accept `true`/`1` case-insensitively
+// rather than silently dropping a state flag on `"True"`.
 function isTrue(attrs: Record<string, string>, key: string): boolean {
-  return attrs[key] === "true";
+  const v = attrs[key];
+  if (v === undefined) return false;
+  const t = v.trim().toLowerCase();
+  return t === "true" || t === "1";
 }
 
 function num(attrs: Record<string, string>, key: string): number | null {
@@ -188,6 +194,25 @@ function findScreenSize(root: VegaXmlNode): { w: number; h: number } {
   return firstSized ?? { w: 1920, h: 1080 }; // VVD default
 }
 
+// The persistent Kepler launcher renders its own `<app>` ("Register this
+// device", "…is ready") into every page source alongside the foreground app.
+// Its controls aren't part of the app under test, so merging them produces
+// phantom off-screen elements and duplicate `test_id`s — scope describe to the
+// foreground app(s) and drop the launcher.
+const LAUNCHER_APP_NAME = "com.amazon.keplerlauncherapp";
+
+/**
+ * The XML subtree(s) to actually render. For the `<root><app>…</app></root>`
+ * shape, return the non-launcher apps (falling back to all apps if the launcher
+ * is somehow the only one). For any other shape, render the root as-is.
+ */
+function foregroundScopes(root: VegaXmlNode): VegaXmlNode[] {
+  const apps = root.children.filter((c) => c.tag === "app");
+  if (apps.length === 0) return [root];
+  const foreground = apps.filter((a) => a.attrs.appName !== LAUNCHER_APP_NAME);
+  return foreground.length > 0 ? foreground : apps;
+}
+
 /**
  * Parse Vega `getPageSource` XML into a DescribeNode tree. Throws if the XML is
  * unparseable; returns a root with no children for an empty/structural-only tree.
@@ -195,10 +220,13 @@ function findScreenSize(root: VegaXmlNode): { w: number; h: number } {
 export function parseVegaPageSource(xml: string): DescribeNode {
   const root = parseVegaXml(xml);
   if (!root) throw new Error("Failed to parse Vega page source");
-  const { w, h } = findScreenSize(root);
+  const scopes = foregroundScopes(root);
+  const { w, h } = findScreenSize(scopes[0]);
+  const children: DescribeNode[] = [];
+  for (const scope of scopes) children.push(...convert(scope, w, h));
   return {
     role: "Screen",
     frame: { x: 0, y: 0, width: 1, height: 1 },
-    children: convert(root, w, h),
+    children,
   };
 }
