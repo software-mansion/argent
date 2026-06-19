@@ -60,23 +60,38 @@ describe("sanitize", () => {
       }
     });
 
-    it("accepts coarse AI client metadata on tool events", () => {
+    it("accepts a coarse AI client slug on tool events", () => {
       expect(
         sanitize("tool:invoke", {
           tool: "gesture-tap",
           tool_invocation_id: "11111111-1111-4111-8111-111111111111",
           ai_client: "codex",
-          ai_client_name: "codex-mcp-client",
         })
       ).toEqual({
         tool: "gesture-tap",
         tool_invocation_id: "11111111-1111-4111-8111-111111111111",
         ai_client: "codex",
-        ai_client_name: "codex-mcp-client",
       });
     });
 
-    it("drops unregistered AI client slugs and path-leaking client names", () => {
+    it("never carries the free-form ai_client_name — it is not an allowed key", () => {
+      // The free-form name was dropped end-to-end; `other` is recorded as a bare
+      // bucket so a client that names itself after the host/user can't leak it.
+      expect(
+        sanitize("tool:invoke", {
+          tool: "gesture-tap",
+          tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+          ai_client: "other",
+          ai_client_name: "some-new-tool",
+        })
+      ).toEqual({
+        tool: "gesture-tap",
+        tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+        ai_client: "other",
+      });
+    });
+
+    it("drops unregistered AI client slugs", () => {
       expect(
         sanitize("tool:invoke", {
           tool: "gesture-tap",
@@ -90,21 +105,20 @@ describe("sanitize", () => {
       });
     });
 
-    it("carries AI client metadata on tool:fail alongside the failure signal", () => {
-      expect(
-        sanitize("tool:fail", {
-          tool: "screenshot",
-          tool_invocation_id: "11111111-1111-4111-8111-111111111111",
-          duration_ms: 12,
-          error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
-          ai_client: "other",
-          ai_client_name: "some-new-tool",
-        })
-      ).toMatchObject({
+    it("carries the coarse AI client on tool:fail alongside the failure signal", () => {
+      const result = sanitize("tool:fail", {
+        tool: "screenshot",
+        tool_invocation_id: "11111111-1111-4111-8111-111111111111",
+        duration_ms: 12,
+        error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
         ai_client: "other",
         ai_client_name: "some-new-tool",
+      });
+      expect(result).toMatchObject({
+        ai_client: "other",
         error_code: FAILURE_CODES.REGISTRY_TOOL_FAILURE_UNCLASSIFIED,
       });
+      expect(result).not.toHaveProperty("ai_client_name");
     });
   });
 
@@ -112,6 +126,13 @@ describe("sanitize", () => {
     it("accepts a tool id under 64 chars", () => {
       expect(sanitize("tool:invoke", { tool: "gesture-tap", platform: "ios" })).toEqual({
         tool: "gesture-tap",
+        platform: "ios",
+      });
+    });
+
+    it("accepts a snake_case tool id (e.g. argent-lens tools)", () => {
+      expect(sanitize("tool:invoke", { tool: "await_user_selection", platform: "ios" })).toEqual({
+        tool: "await_user_selection",
         platform: "ios",
       });
     });

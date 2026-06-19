@@ -58,7 +58,6 @@ export const NETWORK_FAILURES = [
   "connection_refused",
   "connection_reset",
   "invalid_response",
-  "unavailable",
   "other",
 ] as const;
 

@@ -9,7 +9,7 @@ import {
   type Registry,
   type ResolvedFileInput,
 } from "@argent/registry";
-import { AI_CLIENTS, AI_CLIENT_NAME_PATTERN, type AiTelemetryProps } from "@argent/telemetry";
+import { AI_CLIENTS, type AiTelemetryProps } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -115,21 +115,16 @@ function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-// The MCP server forwards the coarse AI-client identity as request headers (it
-// lives in a different process). We re-validate here against the same allowlist /
-// pattern the sanitizer enforces, so a misbehaving client can't inject arbitrary
-// values into telemetry. The free-form name is only retained when the client is
-// `other` — mirroring the producer and the documented `AiTelemetryProps` contract,
-// so a recognized (or absent) client can never carry a stray name.
+// The MCP server forwards the coarse AI-client identity as a request header (it
+// lives in a different process). We re-validate here against the same allowlist
+// the sanitizer enforces, so a misbehaving client can't inject an arbitrary value
+// into telemetry. Only the coarse client slug is carried — we never record the
+// raw client name.
 function extractAiTelemetryMeta(req: Request): AiTelemetryProps {
   const meta: AiTelemetryProps = {};
   const client = firstHeader(req.headers["x-argent-ai-client"]);
   if (client && (AI_CLIENTS as readonly string[]).includes(client)) {
     meta.ai_client = client as AiTelemetryProps["ai_client"];
-  }
-  const clientName = firstHeader(req.headers["x-argent-ai-client-name"]);
-  if (meta.ai_client === "other" && clientName && AI_CLIENT_NAME_PATTERN.test(clientName)) {
-    meta.ai_client_name = clientName;
   }
   return meta;
 }

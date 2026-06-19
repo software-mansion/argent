@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AI_CLIENT_NAME_PATTERN, canonicalizeAiClient } from "../src/ai-identity.js";
+import { canonicalizeAiClient } from "../src/ai-identity.js";
 
 describe("canonicalizeAiClient", () => {
   describe("runtime MCP clientInfo.name (verified from each tool's source)", () => {
@@ -47,18 +47,5 @@ describe("canonicalizeAiClient", () => {
 
   it("tolerates surrounding whitespace", () => {
     expect(canonicalizeAiClient("  codex-mcp-client  ")).toBe("codex");
-  });
-});
-
-describe("AI_CLIENT_NAME_PATTERN", () => {
-  it("accepts real clientInfo.name values", () => {
-    for (const name of ["codex-mcp-client", "Visual Studio Code - Insiders", "Zed", "opencode"]) {
-      expect(AI_CLIENT_NAME_PATTERN.test(name)).toBe(true);
-    }
-  });
-
-  it("rejects path-like or oversized values", () => {
-    expect(AI_CLIENT_NAME_PATTERN.test("/Users/alice/secret-client")).toBe(false);
-    expect(AI_CLIENT_NAME_PATTERN.test("x".repeat(81))).toBe(false);
   });
 });

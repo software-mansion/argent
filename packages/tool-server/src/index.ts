@@ -68,25 +68,18 @@ export function start(): void {
   let finalExitCode = 0;
   let shutdown: ((exitCode?: number) => Promise<void>) | null = null;
 
-  function crashShutdown(label: string, detail: string): void {
+  // The crash classification is passed in explicitly rather than re-derived from
+  // `label`: `label` is a human-readable stderr prefix, and coupling the emitted
+  // failure code to its exact wording would silently misclassify the crash if the
+  // message were ever reworded.
+  function crashShutdown(label: string, detail: string, signal: FailureSignal): void {
     process.stderr.write(`[tool-server] ${label}: ${detail}\n`);
     // A second fatal event must not re-run teardown or schedule a second timer.
     if (crashing) return;
     crashing = true;
     shutdownReason = "crash";
     finalExitCode = 1;
-    shutdownFailureSignal = {
-      error_code:
-        label === "Unhandled rejection"
-          ? FAILURE_CODES.TOOLSERVER_UNHANDLED_REJECTION
-          : FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
-      failure_stage:
-        label === "Unhandled rejection"
-          ? "toolserver_unhandled_rejection"
-          : "toolserver_uncaught_exception",
-      failure_area: "tool_server",
-      error_kind: "crash",
-    };
+    shutdownFailureSignal = signal;
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -96,12 +89,23 @@ export function start(): void {
   }
 
   process.on("uncaughtException", (err) => {
-    crashShutdown("Uncaught exception", String(err.stack ?? err));
+    crashShutdown("Uncaught exception", String(err.stack ?? err), {
+      error_code: FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
+      failure_stage: "toolserver_uncaught_exception",
+      failure_area: "tool_server",
+      error_kind: "crash",
+    });
   });
   process.on("unhandledRejection", (reason) => {
     crashShutdown(
       "Unhandled rejection",
-      reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+      reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
+      {
+        error_code: FAILURE_CODES.TOOLSERVER_UNHANDLED_REJECTION,
+        failure_stage: "toolserver_unhandled_rejection",
+        failure_area: "tool_server",
+        error_kind: "crash",
+      }
     );
   });
 

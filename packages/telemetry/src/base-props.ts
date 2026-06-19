@@ -1,15 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { isCi } from "./ci-detect.js";
 
-// Build-time version metadata injected by esbuild; source tests fall back to "0.0.0".
+// Build-time version metadata injected by esbuild's `define`. It substitutes the
+// bare `ARGENT_CLI_VERSION` identifier below with a string literal in the bundle;
+// unbundled source (tests) leaves it undefined and falls back to "0.0.0". A
+// `globalThis.ARGENT_CLI_VERSION` member read is intentionally NOT used here:
+// esbuild only rewrites the bare identifier, not property accesses, so such a
+// read would always be undefined.
 declare const ARGENT_CLI_VERSION: string | undefined;
 
 // Process-local session id. Never persisted or reused across Node processes.
 let SESSION_ID: string = randomUUID();
 
 function readCliVersion(): string {
-  const fromDefine = (globalThis as any).ARGENT_CLI_VERSION;
-  if (typeof fromDefine === "string" && fromDefine !== "") return fromDefine;
   if (typeof ARGENT_CLI_VERSION === "string" && ARGENT_CLI_VERSION !== "") {
     return ARGENT_CLI_VERSION;
   }

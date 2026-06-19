@@ -60,6 +60,37 @@ describe("consent", () => {
     }
   });
 
+  it("DO_NOT_TRACK disables for any present, non-off value (not just 1/true)", () => {
+    const restore = restoreEnv();
+    try {
+      // The DNT convention is "present and not 0/empty" ⇒ opt out, so an
+      // unrecognized token must still disable rather than fall through to on.
+      for (const value of ["2", "yes", "on", "enabled", "  1  "]) {
+        const state = getConsentState({ DO_NOT_TRACK: value });
+        expect(state.enabled).toBe(false);
+        expect(state.source.source).toBe("env_do_not_track");
+        expect(state.source.detail).toBe(`DO_NOT_TRACK=${value}`);
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it("DO_NOT_TRACK does not opt out when empty or explicitly off", () => {
+    const restore = restoreEnv();
+    try {
+      // Empty / unset and the explicit off tokens must NOT be treated as DNT;
+      // these fall through to the default-on (no config / session override here).
+      for (const value of ["", "   ", "0", "false", "no", "off"]) {
+        const state = getConsentState({ DO_NOT_TRACK: value });
+        expect(state.enabled).toBe(true);
+        expect(state.source.source).not.toBe("env_do_not_track");
+      }
+    } finally {
+      restore();
+    }
+  });
+
   it("ARGENT_TELEMETRY=0 disables", () => {
     const restore = restoreEnv();
     try {

@@ -3,8 +3,9 @@
 //
 // The single signal is the MCP `initialize` handshake `clientInfo.name` (ground
 // truth of what is actually connecting), read at runtime via
-// `Server.getClientVersion()`. Anything we can't map is reported as `other` with
-// a sanitized free-form name.
+// `Server.getClientVersion()`. Anything we can't map is reported as the coarse
+// `other` bucket — we never capture the raw client name, so a non-standard
+// client that names itself after the machine or user can't leak that string.
 
 export const AI_CLIENTS = [
   "codex",
@@ -21,13 +22,8 @@ export const AI_CLIENTS = [
 
 export type AiClient = (typeof AI_CLIENTS)[number];
 
-/** Bounded free-form client name, used for the long tail of unrecognized tools. */
-export const AI_CLIENT_NAME_PATTERN = /^[A-Za-z0-9 ._-]{1,80}$/;
-
 export type AiTelemetryProps = {
   ai_client?: AiClient;
-  /** Raw, sanitized clientInfo.name — only carried when `ai_client` is `other`. */
-  ai_client_name?: string;
 };
 
 // Runtime MCP `clientInfo.name` → canonical slug. Patterns are tested against the
@@ -54,14 +50,13 @@ const RUNTIME_CLIENT_PATTERNS: ReadonlyArray<readonly [RegExp, AiClient]> = [
 export function aiTelemetryFromMeta(meta: AiTelemetryProps): AiTelemetryProps {
   return {
     ...(meta.ai_client ? { ai_client: meta.ai_client } : {}),
-    ...(meta.ai_client_name ? { ai_client_name: meta.ai_client_name } : {}),
   };
 }
 
 /**
  * Normalize a runtime MCP `clientInfo.name` to an {@link AiClient}. Returns
- * `undefined` for anything unrecognized (callers may then fall back to `other` +
- * a sanitized free-form name).
+ * `undefined` for anything unrecognized (callers may then fall back to the
+ * coarse `other` bucket).
  */
 export function canonicalizeAiClient(value: string | undefined | null): AiClient | undefined {
   if (typeof value !== "string") return undefined;

@@ -16,7 +16,6 @@ import {
 } from "@argent/tools-client";
 import {
   canonicalizeAiClient,
-  AI_CLIENT_NAME_PATTERN,
   FIRST_RUN_NOTICE,
   markFirstRunNoticeShown,
   shouldShowFirstRunNotice,
@@ -133,20 +132,15 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
   }
 
   // Coarse identity of the AI tool driving this MCP server, forwarded to the
-  // tool-server (a separate process that owns tool telemetry) as request headers.
+  // tool-server (a separate process that owns tool telemetry) as a request header.
   // The signal is the MCP handshake clientInfo.name; unrecognized tools are
-  // reported as `other` with a bounded free-form name. Never carries prompts,
-  // model output, or tool args.
+  // reported as the coarse `other` bucket — we never forward the raw client name.
+  // Never carries prompts, model output, or tool args.
   function aiClientHeaders(): Record<string, string> {
     const rawName = server.getClientVersion()?.name?.trim() || undefined;
     const aiClient = canonicalizeAiClient(rawName);
     if (aiClient) return { "X-Argent-AI-Client": aiClient };
-    if (rawName) {
-      return {
-        "X-Argent-AI-Client": "other",
-        ...(AI_CLIENT_NAME_PATTERN.test(rawName) ? { "X-Argent-AI-Client-Name": rawName } : {}),
-      };
-    }
+    if (rawName) return { "X-Argent-AI-Client": "other" };
     return {};
   }
 

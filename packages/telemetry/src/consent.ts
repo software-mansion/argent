@@ -95,16 +95,18 @@ function parseFalsy(value: string | undefined): boolean {
   return v === "0" || v === "false" || v === "no" || v === "off";
 }
 
-function parseTruthy(value: string | undefined): boolean {
-  if (value === undefined) return false;
-  const v = value.trim().toLowerCase();
-  return v === "1" || v === "true" || v === "yes" || v === "on";
+function isDoNotTrackSet(value: string | undefined): boolean {
+  if (value === undefined || value.trim() === "") return false;
+  return !parseFalsy(value);
 }
 
 /** Computes the effective consent state without mutating anything on disk. */
 export function getConsentState(env: NodeJS.ProcessEnv = process.env): ConsentState {
-  if (parseTruthy(env.DO_NOT_TRACK)) {
-    return { enabled: false, source: { source: "env_do_not_track", detail: "DO_NOT_TRACK=1" } };
+  if (isDoNotTrackSet(env.DO_NOT_TRACK)) {
+    return {
+      enabled: false,
+      source: { source: "env_do_not_track", detail: `DO_NOT_TRACK=${env.DO_NOT_TRACK}` },
+    };
   }
 
   const argentEnv = env.ARGENT_TELEMETRY;

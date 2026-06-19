@@ -43,6 +43,7 @@ export function getClient(): PostHog | null {
     requestTimeout: 3000,
     flushAt: 20,
     flushInterval: 10_000,
+    fetchRetryCount: 0,
   };
 
   try {

@@ -187,7 +187,7 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(seenMeta).toEqual({ platform: "ios", ai_client: "codex" });
   });
 
-  it("captures an unknown tool by name when ai_client is `other`", async () => {
+  it("records the coarse `other` bucket for an unknown tool, never its name", async () => {
     let seenMeta: Record<string, unknown> | undefined;
     const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
       seenMeta = meta;
@@ -196,8 +196,8 @@ describe("GET /tools progressive-loading metadata", () => {
     handle.dispose();
     handle = createHttpApp(stubRegistry(), { recordInvocation });
 
-    // A non-device tool with no platform context still records because AI
-    // metadata is present on the request.
+    // A non-device tool with no platform context still records because the
+    // coarse `other` slug is present. The name header is ignored entirely.
     await request(handle.app)
       .post("/tools/plain-tool")
       .set("X-Argent-AI-Client", "other")
@@ -205,10 +205,10 @@ describe("GET /tools progressive-loading metadata", () => {
       .send({})
       .expect(200);
 
-    expect(seenMeta).toEqual({ ai_client: "other", ai_client_name: "some-new-tool" });
+    expect(seenMeta).toEqual({ ai_client: "other" });
   });
 
-  it("drops unregistered AI client slugs and path-leaking client names", async () => {
+  it("drops unregistered AI client slugs", async () => {
     const recordInvocation = vi.fn(() => vi.fn());
     handle.dispose();
     handle = createHttpApp(stubRegistry(), { recordInvocation });
@@ -225,7 +225,7 @@ describe("GET /tools progressive-loading metadata", () => {
     expect(recordInvocation).not.toHaveBeenCalled();
   });
 
-  it("drops the free-form client name unless ai_client is `other`", async () => {
+  it("never records a client-name header, even for a recognized client", async () => {
     let seenMeta: Record<string, unknown> | undefined;
     const recordInvocation = vi.fn((_id: string, meta: Record<string, unknown>) => {
       seenMeta = meta;
@@ -234,9 +234,8 @@ describe("GET /tools progressive-loading metadata", () => {
     handle.dispose();
     handle = createHttpApp(stubRegistry(), { recordInvocation });
 
-    // A recognized client must never carry a free-form name (the invariant is
-    // that the name is only meaningful for the `other` long tail). The name is
-    // a perfectly valid pattern here — it is dropped purely on the coupling.
+    // The raw client name is never recorded; only the coarse slug (and platform)
+    // survive, regardless of what name header the MCP server forwarded.
     await request(handle.app)
       .post("/tools/device-tool")
       .set("X-Argent-AI-Client", "codex")

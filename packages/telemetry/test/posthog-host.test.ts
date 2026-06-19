@@ -75,4 +75,13 @@ describe("posthog host invariance", () => {
     expect(client).not.toBeNull();
     expect(client!.opts).toEqual(expect.objectContaining({ flushAt: 20, flushInterval: 10_000 }));
   });
+
+  it("disables in-request retries so a failed flush can't hold the event loop open", () => {
+    // posthog-node's retry backoff uses a non-unref'd setTimeout; any retry would
+    // keep short-lived commands alive after their bounded shutdown() returns.
+    const client = getClient() as unknown as { opts: { fetchRetryCount: number } } | null;
+
+    expect(client).not.toBeNull();
+    expect(client!.opts.fetchRetryCount).toBe(0);
+  });
 });

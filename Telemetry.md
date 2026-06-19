@@ -52,7 +52,7 @@ We do not use telemetry for advertising, marketing, profiling, automated decisio
 
 - Argent version, Node.js version, operating system, processor architecture;
 - whether the process runs in an interactive terminal and whether it runs in a CI environment;
-- whether Argent is used in connection with Android or iOS.
+- whether Argent is used in connection with Android, iOS, or a Chromium-based target.
 
 ### Diagnostics
 

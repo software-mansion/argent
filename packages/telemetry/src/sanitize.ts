@@ -8,7 +8,7 @@ import {
   NETWORK_FAILURES,
 } from "@argent/registry";
 import { PLATFORMS, type EventName, type EventPropertyMap } from "./events.js";
-import { AI_CLIENTS, AI_CLIENT_NAME_PATTERN } from "./ai-identity.js";
+import { AI_CLIENTS } from "./ai-identity.js";
 
 // Per-event property allowlist and validators. Unknown keys and invalid values
 // are dropped before anything reaches PostHog.
@@ -48,7 +48,7 @@ const arrayOf =
 
 // Shared validators
 
-const TOOL_NAME = matches(/^[a-z][a-z0-9-]{0,63}$/, 64);
+const TOOL_NAME = matches(/^[a-z][a-z0-9_-]{0,63}$/, 64);
 const PLATFORM = oneOf(PLATFORMS);
 const UUID = matches(
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -84,11 +84,9 @@ const FAILURE_SPAWN_CODE = oneOf(FAILURE_SPAWN_CODES);
 const NETWORK_FAILURE = oneOf(NETWORK_FAILURES);
 
 const AI_CLIENT = oneOf(AI_CLIENTS);
-const AI_CLIENT_NAME = matches(AI_CLIENT_NAME_PATTERN, 80);
 
 const AI_TELEMETRY = {
   ai_client: AI_CLIENT,
-  ai_client_name: AI_CLIENT_NAME,
 };
 
 const FAILURE_SIGNAL = {

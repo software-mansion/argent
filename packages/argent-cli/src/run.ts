@@ -127,7 +127,7 @@ function renderResult(
   return JSON.stringify(result, null, 2);
 }
 
-const SAFE_TOOL_RE = /^[a-z][a-z0-9-]{0,63}$/;
+const SAFE_TOOL_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 
 function safeToolName(toolName: string | undefined): string {
   return toolName && SAFE_TOOL_RE.test(toolName) ? toolName : "unknown";

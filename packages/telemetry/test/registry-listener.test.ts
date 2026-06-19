@@ -59,24 +59,18 @@ describe("attachRegistryTelemetry", () => {
     registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1);
     registry.events.emit("toolCompleted", "gesture-tap", INVOCATION_ID_1, 10);
 
-    handle.recordInvocation(INVOCATION_ID_2, {
-      ai_client: "other",
-      ai_client_name: "some-new-tool",
-    });
+    handle.recordInvocation(INVOCATION_ID_2, { ai_client: "other" });
     registry.events.emit("toolInvoked", "screenshot", INVOCATION_ID_2);
     registry.events.emit("toolFailed", "screenshot", INVOCATION_ID_2, new Error("boom"), 5);
 
     expect(trackSpy.mock.calls[0]![1]).toMatchObject({ ai_client: "codex" });
     expect(trackSpy.mock.calls[1]![1]).toMatchObject({ ai_client: "codex" });
-    expect(trackSpy.mock.calls[3]![1]).toMatchObject({
-      ai_client: "other",
-      ai_client_name: "some-new-tool",
-    });
+    expect(trackSpy.mock.calls[3]![1]).toMatchObject({ ai_client: "other" });
 
     handle.detach();
   });
 
-  it("omits AI keys entirely when no client metadata was recorded", () => {
+  it("omits the AI client key entirely when no client metadata was recorded", () => {
     const trackSpy = vi.spyOn(telemetry, "track");
     const registry = new Registry();
     const handle = attachRegistryTelemetry(registry);
@@ -85,7 +79,6 @@ describe("attachRegistryTelemetry", () => {
     registry.events.emit("toolInvoked", "gesture-tap", INVOCATION_ID_1);
 
     expect(trackSpy.mock.calls[0]![1]).not.toHaveProperty("ai_client");
-    expect(trackSpy.mock.calls[0]![1]).not.toHaveProperty("ai_client_name");
 
     handle.detach();
   });

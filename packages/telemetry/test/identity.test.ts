@@ -29,6 +29,38 @@ describe("identity", () => {
     expect(id).toMatch(/^[0-9a-f-]{36}$/);
   });
 
+  it("cleans up the temp file when writing the id fails", async () => {
+    vi.resetModules();
+    vi.doMock("node:fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs")>();
+      return {
+        ...actual,
+        // Fail the durability sync after the temp file is opened + written, so
+        // the create path throws between openSync and the link/publish step.
+        fsyncSync: vi.fn(() => {
+          const err = new Error("simulated I/O failure") as NodeJS.ErrnoException;
+          err.code = "EIO";
+          throw err;
+        }),
+      };
+    });
+
+    try {
+      const { readOrCreateAnonId } = await import("../src/identity.js");
+      expect(() => readOrCreateAnonId()).toThrow();
+
+      // No id was published, and no `.telemetry-id.tmp.*` orphan was left behind.
+      expect(fs.existsSync(identityFilePath())).toBe(false);
+      const leftovers = fs
+        .readdirSync(tmp() + "/.argent")
+        .filter((name) => name.startsWith(".telemetry-id.tmp."));
+      expect(leftovers).toEqual([]);
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+    }
+  });
+
   it("fails closed when a symlink is planted at the final path", () => {
     // First create a real file elsewhere.
     fs.mkdirSync(tmp() + "/.argent", { recursive: true });

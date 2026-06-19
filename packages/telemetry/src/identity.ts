@@ -38,19 +38,24 @@ export function readOrCreateAnonId(): string {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw err;
     }
+    // One try/finally around write + publish so the temp file is cleaned up on
+    // any failure after openSync — a throwing writeSync/fsyncSync (e.g. ENOSPC,
+    // EIO) must not leave a `.telemetry-id.tmp.*` orphan behind.
     try {
-      fs.writeSync(fd, uuid);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
+      try {
+        fs.writeSync(fd, uuid);
+        fs.fsyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
 
-    try {
       // POSIX rename() would replace; link() gives us no-overwrite publish.
       fs.linkSync(tmpPath, finalPath);
       cached = { path: finalPath, id: uuid };
       return uuid;
     } catch (err) {
+      // openSync's EEXIST is handled above; the only EEXIST reaching here is
+      // from linkSync, i.e. another process published first.
       if ((err as NodeJS.ErrnoException).code === "EEXIST") {
         const beatUs = tryReadId(finalPath);
         if (beatUs) {

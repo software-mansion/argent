@@ -55,13 +55,6 @@ const INSTALL_FROM_TAR_PACKAGE_FAILED: InstallerFailureSignal = {
   error_kind: "subprocess",
 };
 
-const INSTALL_REGISTRY_CHECK_FAILED: InstallerFailureSignal = {
-  error_code: FAILURE_CODES.INSTALL_REGISTRY_CHECK_FAILED,
-  failure_stage: "installer_registry_update_check",
-  failure_area: "installer",
-  error_kind: "network",
-};
-
 const INSTALL_INIT_TRIGGERED_UPDATE_FAILED: InstallerFailureSignal = {
   error_code: FAILURE_CODES.INSTALL_INIT_TRIGGERED_UPDATE_FAILED,
   failure_stage: "installer_init_triggered_update",
@@ -266,13 +259,7 @@ export async function init(args: string[]): Promise<void> {
       try {
         latest = getLatestVersion();
       } catch {
-        await trackPackageAction(
-          "update_skipped",
-          packageActionStartedAt,
-          false,
-          INSTALL_REGISTRY_CHECK_FAILED
-        );
-        // Registry unreachable - silently skip
+        // Registry unreachable — silently skip.
       }
       spinner.stop(pc.dim("Version check complete."));
 

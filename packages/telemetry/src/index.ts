@@ -47,7 +47,6 @@ export {
 export { getSessionId } from "./base-props.js";
 export {
   AI_CLIENTS,
-  AI_CLIENT_NAME_PATTERN,
   canonicalizeAiClient,
   aiTelemetryFromMeta,
   type AiClient,
