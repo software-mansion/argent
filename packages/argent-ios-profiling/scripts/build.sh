@@ -28,7 +28,12 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 1
 fi
 
-CFLAGS=(-fno-objc-arc -fobjc-exceptions -O2 -I"$DIR/objc_src" -framework Foundation -framework Security)
+# Universal host binary (arm64 + x86_64). These run on the host Mac (not the
+# simulator), so the default macOS SDK is correct — but both host arches must be
+# built or x86_64 / Rosetta hosts get an ENOEXEC at spawn. Mirrors the dylib CI
+# build matrix (-arch arm64 -arch x86_64). The signed release artifacts produced
+# by argent-private's build-native-binaries.yml use the same flags.
+CFLAGS=(-fno-objc-arc -fobjc-exceptions -O2 -arch arm64 -arch x86_64 -I"$DIR/objc_src" -framework Foundation -framework Security)
 
 echo "building ios-profiler-capture ..."
 clang "${CFLAGS[@]}" -o "$OUT/ios-profiler-capture" "$DIR/objc_src/capture.m"
