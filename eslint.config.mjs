@@ -12,6 +12,11 @@ export default tseslint.config(
       "**/dist/",
       "**/node_modules/",
       "**/*.tsbuildinfo",
+      // Standalone research tool: runs on Node-native TS type-stripping (.ts
+      // import specifiers, its own module semantics) and is not part of the
+      // typechecked package graph, so it isn't in any tsconfig `project` the
+      // type-aware parser knows about. Linted by its own conventions, not here.
+      "datagen/",
       "packages/argent-private/",
       "packages/argent/bin/",
       "packages/argent/dylibs/",
