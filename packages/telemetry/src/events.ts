@@ -73,7 +73,7 @@ export interface InstallationPackageActionProps {
   duration_ms: number;
 }
 
-export interface InstallationCliUpdateStartProps {}
+export type InstallationCliUpdateStartProps = Record<string, never>;
 
 export interface InstallationCliUpdateCompleteProps {
   duration_ms: number;
@@ -83,7 +83,7 @@ export interface InstallationCliUpdateFailProps {
   duration_ms: number;
 }
 
-export interface InstallationCliUninstallStartProps {}
+export type InstallationCliUninstallStartProps = Record<string, never>;
 
 export interface InstallationCliUninstallCompleteProps {
   has_pruned_content: boolean;
@@ -114,7 +114,7 @@ export interface ToolFailProps {
 
 // Lifecycle events
 
-export interface ToolserverStartProps {}
+export type ToolserverStartProps = Record<string, never>;
 
 export interface ToolserverStopProps {
   reason: "idle" | "signal" | "crash";
@@ -124,7 +124,7 @@ export interface ToolserverStopProps {
 
 // Consent transition events
 
-export interface TelemetryOptOutProps {}
+export type TelemetryOptOutProps = Record<string, never>;
 
 // Discriminated union for typed-track()
 

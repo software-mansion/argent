@@ -217,7 +217,7 @@ export function start(): void {
     idleTimeoutMs,
     onIdle: () => {
       shutdownReason = "idle";
-      shutdown?.();
+      void shutdown?.();
     },
     onShutdown: shutdown,
     bindHost: HOST,

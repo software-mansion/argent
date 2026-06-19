@@ -13,7 +13,6 @@ interface ResolvedConfig {
 }
 
 function readProjectToken(): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const g = globalThis as any;
   const override = g.__ARGENT_POSTHOG_KEY_TEST;
   if (typeof override === "string") return override;

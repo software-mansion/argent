@@ -23,7 +23,7 @@ interface CachedConfig {
 const cache: { current: CachedConfig | null } = { current: null };
 
 function readConfigOverride(): boolean | null {
-  let stats: fs.Stats | null = null;
+  let stats: fs.Stats;
   try {
     stats = fs.lstatSync(configFilePath());
   } catch (err) {

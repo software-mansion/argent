@@ -707,9 +707,9 @@ function printTelemetryNotice(): void {
       pc.dim("a small set of typed, validator-enforced properties."),
       pc.dim(""),
       pc.dim("A lifetime-stable anonymous UUID is generated on first run. To opt out,"),
-      pc.dim("run \`argent telemetry disable\` or set \`DO_NOT_TRACK=1\` /"),
-      pc.dim("\`ARGENT_TELEMETRY=0\`. To audit what is sent,"),
-      pc.dim("set \`ARGENT_TELEMETRY_DEBUG=1\` and inspect \`~/.argent/telemetry-debug.log\`."),
+      pc.dim("run `argent telemetry disable` or set `DO_NOT_TRACK=1` /"),
+      pc.dim("`ARGENT_TELEMETRY=0`. To audit what is sent,"),
+      pc.dim("set `ARGENT_TELEMETRY_DEBUG=1` and inspect `~/.argent/telemetry-debug.log`."),
     ].join("\n")
   );
 }

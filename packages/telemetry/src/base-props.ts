@@ -8,7 +8,6 @@ declare const ARGENT_CLI_VERSION: string | undefined;
 let SESSION_ID: string = randomUUID();
 
 function readCliVersion(): string {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fromDefine = (globalThis as any).ARGENT_CLI_VERSION;
   if (typeof fromDefine === "string" && fromDefine !== "") return fromDefine;
   if (typeof ARGENT_CLI_VERSION === "string" && ARGENT_CLI_VERSION !== "") {
