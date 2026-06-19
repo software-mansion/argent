@@ -179,7 +179,12 @@ export async function markDisabled(): Promise<void> {
   try {
     const wasEnabled = consentIsEnabled();
     let client = getConstructedClient();
-    if (wasEnabled) {
+    // Only announce the opt-out when a persistent id already exists on disk.
+    // buildPayload() goes through readOrCreateAnonId(), so emitting the event on
+    // a machine that has never sent anything would mint a durable identifier
+    // purely to transmit the opt-out — provisioning identity at the exact moment
+    // the user is opting out. peekAnonId() reads without creating.
+    if (wasEnabled && peekAnonId() !== null) {
       const built = buildPayload("telemetry:opt_out", {});
       if (built && isDebugEnabled()) {
         emitDebugPayload({

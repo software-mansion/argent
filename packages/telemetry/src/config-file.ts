@@ -69,7 +69,11 @@ function acquireConfigLock(): ConfigLock | null {
           continue;
         }
       } catch {
-        continue; // vanished between open and stat — retry immediately
+        // Lock vanished between open and stat, or the stat/unlink itself
+        // failed. Fall through to the deadline + backoff guard rather than
+        // `continue`-ing: a persistent stat failure paired with a persistent
+        // EEXIST on open would otherwise spin this into a tight, unbounded loop
+        // (no deadline check, no sleep). The next iteration retries the open.
       }
       if (Date.now() >= deadline) return null;
       sleepSync(LOCK_RETRY_MS);

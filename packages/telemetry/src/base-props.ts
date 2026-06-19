@@ -39,18 +39,42 @@ export interface BaseProps {
   $process_person_profile: false;
 }
 
+// Everything here is constant for the process lifetime. Computing it once
+// matters for the long-lived tool-server, which calls getBaseProps() on every
+// tracked event: readCliVersion(), the process.version regex, and especially
+// isCi() (which scans ~9 env vars and walks every ci-info vendor definition)
+// would otherwise re-run per event. Only `runtime` and `$session_id` are kept
+// dynamic below — the session id reads SESSION_ID live so the test seam can
+// rotate it.
+type InvariantProps = Omit<BaseProps, "runtime" | "$session_id">;
+let invariantProps: InvariantProps | null = null;
+
+function getInvariantProps(): InvariantProps {
+  if (!invariantProps) {
+    invariantProps = {
+      cli_version: readCliVersion(),
+      node_version_major: readNodeVersionMajor(),
+      os: process.platform,
+      arch: process.arch,
+      is_tty: Boolean(process.stdout.isTTY),
+      is_ci: isCi(),
+      $process_person_profile: false,
+    };
+  }
+  return invariantProps;
+}
+
 export function getBaseProps(runtime: Runtime): BaseProps {
   return {
-    cli_version: readCliVersion(),
-    node_version_major: readNodeVersionMajor(),
-    os: process.platform,
-    arch: process.arch,
-    is_tty: Boolean(process.stdout.isTTY),
-    is_ci: isCi(),
+    ...getInvariantProps(),
     runtime,
     $session_id: SESSION_ID,
-    $process_person_profile: false,
   };
+}
+
+/** Test seam: drop the memoized invariant block so env changes take effect. */
+export function _resetBasePropsCacheForTest(): void {
+  invariantProps = null;
 }
 
 export function getSessionId(): string {

@@ -76,6 +76,25 @@ afterEach(() => {
 });
 
 describe("uninstall — telemetry consent preservation", () => {
+  // The prune step resolves global skill/rule/agent targets from homedir(), so
+  // point HOME at the empty tmpDir: the prune then finds nothing to remove and
+  // has_pruned_content is deterministically false regardless of what the real
+  // home contains (these are telemetry-behavior tests, not real-home cleanup).
+  let savedHome: string | undefined;
+  let savedUserProfile: string | undefined;
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpDir;
+    process.env.USERPROFILE = tmpDir;
+  });
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = savedUserProfile;
+  });
+
   it("does not reset uninstall telemetry identity when no global package was uninstalled", async () => {
     childProcessMock.execSync.mockImplementationOnce(() => {
       throw new Error("not found");
@@ -89,7 +108,7 @@ describe("uninstall — telemetry consent preservation", () => {
       expect.arrayContaining(["uninstall", "-g"])
     );
     expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
-      has_pruned_content: true,
+      has_pruned_content: false,
       has_uninstalled_package: false,
     });
     expect(telemetryMock.forget).not.toHaveBeenCalled();
@@ -114,7 +133,7 @@ describe("uninstall — telemetry consent preservation", () => {
     await uninstall(["--yes"]);
 
     expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
-      has_pruned_content: true,
+      has_pruned_content: false,
       has_uninstalled_package: true,
     });
 
@@ -136,7 +155,7 @@ describe("uninstall — telemetry consent preservation", () => {
       "installation:cli_uninstall_complete",
       expect.objectContaining({
         error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
-        has_pruned_content: true,
+        has_pruned_content: false,
         has_uninstalled_package: false,
       })
     );
@@ -153,7 +172,7 @@ describe("uninstall — telemetry consent preservation", () => {
       "installation:cli_uninstall_complete",
       expect.objectContaining({
         error_code: "UNINSTALL_TOOLSERVER_STOP_FAILED",
-        has_pruned_content: true,
+        has_pruned_content: false,
         has_uninstalled_package: false,
       })
     );

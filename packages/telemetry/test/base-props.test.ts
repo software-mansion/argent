@@ -1,9 +1,18 @@
-import { describe, expect, it } from "vitest";
-import { getBaseProps, getSessionId, _resetSessionIdForTest } from "../src/base-props.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  getBaseProps,
+  getSessionId,
+  _resetBasePropsCacheForTest,
+  _resetSessionIdForTest,
+} from "../src/base-props.js";
 import { snapshotEnv } from "./helpers.js";
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 describe("base-props", () => {
+  // The invariant block (incl. is_ci) is memoized per process; reset it so each
+  // case re-reads the env it just set up.
+  beforeEach(() => _resetBasePropsCacheForTest());
+
   it("returns the full base set with coarse CI telemetry", () => {
     const restore = snapshotEnv(["CI", "GITHUB_ACTIONS"]);
     try {

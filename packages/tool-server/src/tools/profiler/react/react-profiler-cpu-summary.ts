@@ -139,7 +139,7 @@ Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
           error_code: FAILURE_CODES.REACT_PROFILER_NO_CPU_PROFILE,
           failure_stage: "react_profiler_cpu_summary_load_data",
           failure_area: "tool_server",
-          error_kind: "validation",
+          error_kind: "unknown",
         }
       );
     }

@@ -13,6 +13,7 @@ import {
   track,
 } from "../src/index.js";
 import { resetClient } from "../src/posthog.js";
+import { _resetBasePropsCacheForTest } from "../src/base-props.js";
 import { scopeHome, snapshotEnv } from "./helpers.js";
 import { configFilePath } from "../src/paths.js";
 
@@ -48,6 +49,9 @@ describe("telemetry public surface", () => {
     posthogMock.instances.length = 0;
     posthogMock.flushImpl = () => Promise.resolve();
     resetClient();
+    // is_ci and friends are memoized per process; reset so a test that sets CI
+    // env vars sees them recomputed rather than a value cached by a prior test.
+    _resetBasePropsCacheForTest();
     (globalThis as Record<string, unknown>).__ARGENT_POSTHOG_KEY_TEST = "phc_real";
     init("tool_server");
     markEnabled();

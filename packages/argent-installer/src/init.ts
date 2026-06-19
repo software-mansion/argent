@@ -267,6 +267,14 @@ export async function init(args: string[]): Promise<void> {
         const fromMajor = Number.parseInt(version.split(".")[0] ?? "0", 10) || 0;
         const toMajor = Number.parseInt(latest.split(".")[0] ?? "0", 10) || 0;
         if (nonInteractive) {
+          // A --yes/CI install with an available update implicitly skips it.
+          // Emit the same update_decision the interactive and no-update branches
+          // do, so the upgrade funnel isn't blind for non-interactive installs.
+          track("installation:update_decision", {
+            from_major: fromMajor,
+            to_major: toMajor,
+            decision: "skip",
+          });
           await trackPackageAction("update_skipped", packageActionStartedAt, true);
         } else {
           const updateChoice = await p.select({

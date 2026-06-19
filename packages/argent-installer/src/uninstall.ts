@@ -336,6 +336,7 @@ export async function uninstall(args: string[]): Promise<void> {
 
   // Declared before the try so the catch can report what actually completed.
   let shouldPrune = nonInteractive;
+  let hasPrunedContent = false;
   let hasUninstalledPackage = false;
 
   try {
@@ -491,6 +492,7 @@ export async function uninstall(args: string[]): Promise<void> {
       } else {
         p.log.info(pc.dim("No Argent-owned skills, rules, or agents found to remove."));
       }
+      hasPrunedContent = pruneResults.length > 0;
     } else {
       p.log.info(pc.dim("Kept Argent-owned skills, rules, and agents."));
     }
@@ -499,6 +501,20 @@ export async function uninstall(args: string[]): Promise<void> {
 
     const globallyInstalled = isGloballyInstalled();
     let shouldUninstallPackage = nonInteractive && globallyInstalled;
+
+    // In --yes mode we only remove a global install we can actually see on PATH,
+    // mirroring the interactive flow (which prompts only when detected) and
+    // avoiding a spurious `uninstall -g` error for a package that isn't there.
+    // The probe is PATH-based, so surface the skip in case a global install
+    // lives under a toolchain not on this shell's PATH (nvm/pnpm/etc.).
+    if (nonInteractive && !globallyInstalled) {
+      p.log.info(
+        pc.dim(
+          `Skipped global package removal: ${PACKAGE_NAME} was not detected on PATH. ` +
+            `If it is installed under a different toolchain, remove it manually.`
+        )
+      );
+    }
 
     if (!nonInteractive && globallyInstalled) {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
@@ -522,7 +538,7 @@ export async function uninstall(args: string[]): Promise<void> {
         await killToolServer();
       } catch (err) {
         p.log.error(`Could not stop the running tool server: ${err}`);
-        await finalizeUninstallTelemetry(shouldPrune, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
+        await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
         throw err;
       }
 
@@ -532,12 +548,12 @@ export async function uninstall(args: string[]): Promise<void> {
         hasUninstalledPackage = true;
       } catch (err) {
         p.log.error(`Uninstall failed: ${err}`);
-        await finalizeUninstallTelemetry(shouldPrune, false, UNINSTALL_PACKAGE_ACTION_FAILED);
+        await finalizeUninstallTelemetry(hasPrunedContent, false, UNINSTALL_PACKAGE_ACTION_FAILED);
         return;
       }
     }
 
-    await finalizeUninstallTelemetry(shouldPrune, hasUninstalledPackage);
+    await finalizeUninstallTelemetry(hasPrunedContent, hasUninstalledPackage);
     if (hasUninstalledPackage) {
       try {
         await telemetryForget({ disableConsent: false });
@@ -551,7 +567,7 @@ export async function uninstall(args: string[]): Promise<void> {
     // Any unclassified throw in the prune/cleanup section or a prompt still
     // drains the buffered cli_uninstall_start with a terminal cli_uninstall_complete.
     await finalizeUninstallTelemetry(
-      shouldPrune,
+      hasPrunedContent,
       hasUninstalledPackage,
       UNINSTALL_UNCLASSIFIED_FAILED
     );
