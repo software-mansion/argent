@@ -143,7 +143,7 @@ labeling. That's the natural next step once the text benchmark validates the dat
 ## Gemma 4 E4B (`silver:e4b`)
 
 The same pipeline scaled to **Gemma 4 E4B** (effective-4B, ~7.46B params) on the
-*identical* 2,500-trajectory dataset — a bigger-model run to confirm the gym
+_identical_ 2,500-trajectory dataset — a bigger-model run to confirm the gym
 teaches at scale. Recipe held constant vs the 2B (8 LoRA layers, batch 1, LR 5e-5,
 500 iters); only `MAXSEQ` changed (the gemma4 chat template is ~30% more verbose
 than gemma2's, so 46% of the same trajectories overflow 2600 tokens → raised to
@@ -168,10 +168,10 @@ MODEL=$PWD/training/base/gemma-4-e4b-clean ITERS=500 MAXSEQ=3500 \
 
 ### Ollama: convert with llama.cpp, not Ollama's converter
 
-**Ollama 0.30's gemma4 *converter* is broken** for a text-only checkpoint (its
+**Ollama 0.30's gemma4 _converter_ is broken** for a text-only checkpoint (its
 `Gemma4ForConditionalGeneration` path drops `token_embd`; its `Gemma4ForCausalLM`
-path crashes mid-tensor-write) — but its gemma4 *runtime* is fine (the official
-`gemma4:e4b` runs). So convert with **llama.cpp's** mature converter, then *import*
+path crashes mid-tensor-write) — but its gemma4 _runtime_ is fine (the official
+`gemma4:e4b` runs). So convert with **llama.cpp's** mature converter, then _import_
 the GGUF (no Ollama-side conversion):
 
 ```bash
@@ -193,7 +193,7 @@ A harness (OpenCode, etc.) sends a long system prompt + many tool schemas that
 overflow 4096 → Ollama truncates the input → the model emits degenerate `TheThe…`
 output until max tokens (looks like a model bug; it's input truncation, and it hits
 the official `gemma4:e4b` too). The Modelfile bakes `PARAMETER num_ctx 32768`; to fix
-*any* Ollama model globally, run the server with `OLLAMA_CONTEXT_LENGTH=32768`.
+_any_ Ollama model globally, run the server with `OLLAMA_CONTEXT_LENGTH=32768`.
 Note: `silver:e4b` emits the Argent `<tool_call>` **text** protocol (tools in SYSTEM),
 not Ollama's native gemma4 tool-calling — so a generic harness won't parse its calls
 as structured `tool_calls`. It's an Argent model, driven via the Argent toolchain.
