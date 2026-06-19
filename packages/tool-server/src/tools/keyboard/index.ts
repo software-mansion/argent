@@ -19,9 +19,7 @@ const zodSchema = z.object({
   text: z
     .string()
     .optional()
-    .describe(
-      "Text to type character by character. Handles uppercase and common punctuation. Use when paste is unreliable."
-    ),
+    .describe("Text to type character by character. Handles uppercase and common punctuation."),
   key: z
     .string()
     .optional()
@@ -183,7 +181,7 @@ Use when you need to enter text or trigger a named key such as enter, escape, or
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the backend is not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)
-Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
+Provide text, key, or both.`,
   zodSchema,
   capability,
   services: (params): Record<string, ServiceRef> => {
