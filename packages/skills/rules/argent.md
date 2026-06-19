@@ -95,7 +95,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 VEGA / AMAZON FIRE TV APP CONTROL
 Skill: `argent-vega`
-When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `remote` tool (Vega is remote-driven, not touch), typing, screenshots, device logs, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
+When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `remote` tool (Vega is remote-driven, not touch), typing, screenshots, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
 Prompt keywords: vega, fire tv, vvd, virtual device, d-pad
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING

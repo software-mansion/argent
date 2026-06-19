@@ -1,6 +1,6 @@
 ---
 name: argent-vega
-description: Drive Vega / Amazon Fire TV devices via argent - start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot, read device logs. Use when a task involves a Vega / Fire TV device (a platform:"vega" / kind:"vvd" entry in list-devices) or mentions Vega, Fire TV, VVD, or the D-pad remote
+description: Drive Vega / Amazon Fire TV devices via argent - start/stop the virtual device (VVD) via the vega CLI, list/launch/restart/reinstall apps, inspect the on-screen element tree (describe), navigate with the TV remote/D-pad, type text, screenshot. Use when a task involves a Vega / Fire TV device (a platform:"vega" / kind:"vvd" entry in list-devices) or mentions Vega, Fire TV, VVD, or the D-pad remote
 ---
 
 ## Before you start
@@ -38,7 +38,6 @@ Every tool takes the Vega `serial` (from `list-devices`) as `udid`.
 - `remote {udid, button}` — D-pad; single key, path array, or `repeat`
 - `keyboard {udid, text}` or `{udid, key:"enter"}` — focus the field with the D-pad first
 - `screenshot {udid, scale?}` — captured host-side via `adb`. Do **not** run `adb connect` on the VVD
-- `read-device-logs {udid, durationMs?, filter?, maxLines?}` — log stream (default 5s); `filter` = case-insensitive substring
 
 ### `describe`
 

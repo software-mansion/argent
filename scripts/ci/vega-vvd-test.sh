@@ -11,7 +11,7 @@
 #   - remote             → `adb shell inputd-cli` button injection
 #   - describe           → `adb forward` + on-device automation toolkit
 #   - keyboard           → `adb shell inputd-cli send_text`
-#   - list-installed-apps / read-device-logs / restart-app / reinstall-app
+#   - list-installed-apps / restart-app / reinstall-app
 #                        → the `vega`/`kepler` CLI
 #
 # There is intentionally no vega-fast-cli probe anymore: the host binary is gone,
@@ -50,9 +50,9 @@ post_tool() {
 }
 
 # Dig a dotted field out of a tool response, tolerating the `{data:{…}}` wrapper.
-# The JSON is piped on stdin (not passed as argv) so large responses — e.g.
-# read-device-logs' full log blob — don't trip "Argument list too long". The
-# program goes via `-c` (stdin is the data), with the dotted path as argv[1].
+# The JSON is piped on stdin (not passed as argv) so large responses don't trip
+# "Argument list too long". The program goes via `-c` (stdin is the data), with
+# the dotted path as argv[1].
 # jget '<json>' path.to.field
 jget() {
   printf '%s' "$1" | python3 -c '
@@ -277,23 +277,7 @@ else
 fi
 endg
 
-# ── TEST 6: read-device-logs (vega start-log-stream) ────────────────────────
-# Capture a short window; success = a well-formed capture (numeric
-# capturedMs/lines) returned without taking the server down (the spawn-error
-# guard path in vega-logs.ts).
-group "TEST read-device-logs"
-resp="$(post_tool read-device-logs "$(printf '{"udid":"%s","durationMs":3000}' "$SERIAL")")" || resp=""
-cap="$(jget "$resp" capturedMs)"
-nlines="$(jget "$resp" lines)"
-echo "response: ${resp:0:200}"
-if [ -n "$cap" ] && [ "$cap" -ge 0 ] 2>/dev/null && [ -n "$nlines" ]; then
-  echo "OK: read-device-logs captured ${nlines} lines in ${cap}ms"
-else
-  fail "read-device-logs did not return a well-formed capture (capturedMs='${cap}', lines='${nlines}')"
-fi
-endg
-
-# ── TEST 7: restart-app (terminate + relaunch) ──────────────────────────────
+# ── TEST 6: restart-app (terminate + relaunch) ──────────────────────────────
 group "TEST restart-app"
 restarted=""
 for attempt in 1 2 3; do
@@ -311,7 +295,7 @@ fi
 sleep 5
 endg
 
-# ── TEST 8: reinstall-app (uninstall + install the .vpkg) ────────────────────
+# ── TEST 7: reinstall-app (uninstall + install the .vpkg) ────────────────────
 # Runs last: it leaves the app freshly installed (and not running). Uses a longer
 # timeout for the install and retries the vega CLI's occasionally-racy handshake.
 group "TEST reinstall-app"
@@ -337,7 +321,7 @@ echo "::group::Summary"
 if [ "${#FAILURES[@]}" -eq 0 ]; then
   echo "PASS: all Vega tool checks passed against the kepler app on the VVD —"
   echo "      list-devices, screenshot, remote, describe, keyboard,"
-  echo "      list-installed-apps, read-device-logs, restart-app, reinstall-app."
+  echo "      list-installed-apps, restart-app, reinstall-app."
   endg
   exit 0
 fi
