@@ -71,7 +71,7 @@ system dialogs, permission prompts, and any foreground app content. On Android, 
 On Chromium, walks the renderer's DOM via Chrome DevTools Protocol — every visible element with its ARIA
 role, accessible name, and bounding rect (normalized to 0–1).
 On Vega (Fire TV), reads the on-device automation toolkit (\`getPageSource\`); each element carries
-\`[focused]\`/\`[selected]\` so you can see where the D-pad cursor is, then move it with the \`remote\` tool
+\`[focused]\`/\`[selected]\` so you can see where the D-pad cursor is, then move it with the \`tv-remote\` tool
 (Vega is remote-driven, not touch). If describe returns an empty tree on Vega, relaunch the foreground
 app (the toolkit attaches at launch) and try again.
 

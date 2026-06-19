@@ -108,7 +108,7 @@ async function runChromium(api: ChromiumCdpApi, params: Params): Promise<Result>
 export const keyboardTool: ToolDefinition<Params, Result> = {
   id: "keyboard",
   description: `Type text or press special keys on the device (iOS simulator, Android emulator, Chromium app, or Vega Virtual Device) using keyboard events.
-Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega, prefer the \`remote\` tool for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
+Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega, prefer the \`tv-remote\` tool for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the backend is not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12)

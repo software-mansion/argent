@@ -43,7 +43,7 @@ export const REMOTE_KEYCODES = {
 
 export type RemoteButton = keyof typeof REMOTE_KEYCODES;
 
-// The `remote` tool's button vocabulary (schema enum). Key order is the
+// The `tv-remote` tool's button vocabulary (schema enum). Key order is the
 // insertion order above (D-pad first), which reads naturally in tool help.
 export const REMOTE_BUTTONS = Object.keys(REMOTE_KEYCODES) as RemoteButton[];
 

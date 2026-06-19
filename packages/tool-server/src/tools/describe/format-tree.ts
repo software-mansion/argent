@@ -194,7 +194,7 @@ export function formatDescribeTree(root: DescribeNode, opts: FormatDescribeOptio
   if (isVega) {
     header.push(
       "Vega is remote-driven, not touch — there is no tap. Use the frames as spatial hints to plan " +
-        "D-pad moves with the `remote` tool: compare the target's frame to the `[focused]` element's " +
+        "D-pad moves with the `tv-remote` tool: compare the target's frame to the `[focused]` element's " +
         'and count rows/columns to build the path (e.g. one row down and two columns right → ["down","right","right","select"]).'
     );
   } else {

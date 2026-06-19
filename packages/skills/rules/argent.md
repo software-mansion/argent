@@ -4,7 +4,7 @@ alwaysApply: true
 ---
 
 <description>
-Argent MCP tools are available in this project for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control. Argent MCP tools are the preferred form of interaction with the application. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by remote (D-pad) and tagged `platform: "vega"`.
+Argent MCP tools are available in this project for iOS simulator, Android emulator, Chromium (CDP) app, and Vega (Amazon Fire TV) device control. Argent MCP tools are the preferred form of interaction with the application. A "Chromium (CDP) app" is any Chromium runtime exposing a Chrome DevTools Protocol endpoint — an Electron app, or any Chromium-family browser (Chrome/Brave/Edge) launched with `--remote-debugging-port`; all are driven through the same tool surface and tagged `platform: "chromium"`. A "Vega device" is a virtual device (VVD) or physical unit — driven by tv-remote (D-pad) and tagged `platform: "vega"`.
 Running MCP server and managing the Argent toolkit utilises `argent` command - if asked use `argent --help` for reference.
 To check current version of MCP server run `argent --version` command.
 
@@ -95,7 +95,7 @@ When: Beginning a task that involves the Android emulator, no emulator running y
 
 VEGA / AMAZON FIRE TV APP CONTROL
 Skill: `argent-vega`
-When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `remote` tool (Vega is remote-driven, not touch), typing, screenshots, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
+When: Any task involving a Vega / Amazon Fire TV device (a `platform:"vega"` / `kind:"vvd"` entry in `list-devices`, or the user mentions Vega / Fire TV / VVD). Covers list/launch/restart/reinstall apps, on-screen element discovery via `describe`, D-pad navigation with the `tv-remote` tool (Vega is remote-driven, not touch), typing, screenshots, Fast Refresh setup, and VVD lifecycle (start/stop via the `vega` CLI — argent has no Vega stop tool).
 Prompt keywords: vega, fire tv, vvd, virtual device, d-pad
 
 TAPPING, SWIPING, TYPING, GESTURES, SCREENSHOTS, SCROLLING

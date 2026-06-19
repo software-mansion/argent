@@ -33,7 +33,7 @@ import { gestureRotateTool } from "../tools/gesture-rotate";
 import { buttonTool } from "../tools/button";
 import { keyboardTool } from "../tools/keyboard";
 import { rotateTool } from "../tools/rotate";
-import { remoteTool } from "../tools/remote";
+import { tvRemoteTool } from "../tools/tv-remote";
 import { listInstalledAppsTool } from "../tools/list-installed-apps";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
@@ -121,7 +121,7 @@ export function createRegistry(): Registry {
   registry.registerTool(buttonTool);
   registry.registerTool(keyboardTool);
   registry.registerTool(rotateTool);
-  registry.registerTool(remoteTool);
+  registry.registerTool(tvRemoteTool);
   registry.registerTool(listInstalledAppsTool);
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
