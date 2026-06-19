@@ -42,9 +42,7 @@ function consolePortFromSocketName(name: string): number | null {
 async function filterLiveSockets(names: string[]): Promise<string[]> {
   const connected = await listAndroidDevices().catch(() => null);
   if (!connected) return names;
-  const liveSerials = new Set(
-    connected.filter((d) => d.state === "device").map((d) => d.serial)
-  );
+  const liveSerials = new Set(connected.filter((d) => d.state === "device").map((d) => d.serial));
   return names.filter((name) => {
     const port = consolePortFromSocketName(name);
     return port !== null && liveSerials.has(`emulator-${port}`);
