@@ -121,11 +121,6 @@ export async function init(args: string[]): Promise<void> {
 
   telemetryInit("installer");
 
-  track("installation:cli_init_start", {
-    package_manager: detectPackageManager(),
-    is_non_interactive: nonInteractive,
-  });
-
   let editorsConfiguredCount = 0;
   let initSucceeded = false;
   let telemetryFinalized = false;
@@ -172,6 +167,11 @@ export async function init(args: string[]): Promise<void> {
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
     printFirstRunNotice();
+
+    track("installation:cli_init_start", {
+      package_manager: detectPackageManager(),
+      is_non_interactive: nonInteractive,
+    });
 
     // ── Step 0: Install / Update Check ──────────────────────────────────────────
 

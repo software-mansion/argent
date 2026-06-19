@@ -118,7 +118,6 @@ export async function update(args: string[]): Promise<void> {
   const trigger = getUpdateTriggerFromEnv();
   telemetryInit("installer");
   const updateStartTime = performance.now();
-  track("installation:cli_update_start", {});
   let telemetryFinalized = false;
 
   const trackPackageAction = async (
@@ -161,6 +160,8 @@ export async function update(args: string[]): Promise<void> {
     p.intro(pc.bgCyan(pc.black(" argent update ")));
 
     printFirstRunNotice();
+
+    track("installation:cli_update_start", {});
 
     // When invoked via `npx @swmansion/argent update`, the running package is
     // the npx cache and will always be at the latest published version. Reading the
