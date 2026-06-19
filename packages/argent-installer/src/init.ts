@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { init as telemetryInit, track, isEnabled as telemetryIsEnabled } from "@argent/telemetry";
+import { init as telemetryInit, track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   detectAdapters,
@@ -37,6 +37,7 @@ import {
 } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
+import { resolveTelemetryConsent } from "./first-run-notice.js";
 
 type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
 
@@ -115,16 +116,11 @@ function extractFlag(args: string[], flag: string): string | null {
 
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const noTelemetry = args.includes("--no-telemetry");
   const fromTar = extractFlag(args, "--from");
   const initStartTime = performance.now();
 
   telemetryInit("installer");
-  printTelemetryNotice();
-
-  track("installation:cli_init_start", {
-    package_manager: detectPackageManager(),
-    is_non_interactive: nonInteractive,
-  });
 
   let editorsConfiguredCount = 0;
   let initSucceeded = false;
@@ -170,6 +166,20 @@ export async function init(args: string[]): Promise<void> {
 
     let version = getInstalledVersion() ?? "unknown";
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
+
+    // Resolve telemetry consent before the first track() so the user's choice
+    // governs whether this session's installation events are collected at all.
+    const consent = await resolveTelemetryConsent({ nonInteractive, disableFlag: noTelemetry });
+    if (consent.kind === "cancelled") {
+      // No tracking on a consent-prompt cancel — the user agreed to nothing.
+      p.cancel("Initialization cancelled.");
+      process.exit(0);
+    }
+
+    track("installation:cli_init_start", {
+      package_manager: detectPackageManager(),
+      is_non_interactive: nonInteractive,
+    });
 
     // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
@@ -764,6 +774,11 @@ export async function init(args: string[]): Promise<void> {
     p.outro("Done.");
 
     initSucceeded = true;
+    // Persist an interactive first-run telemetry choice only now that init has
+    // completed. Until this point the pick governs the session via an in-process
+    // override but isn't written to disk, so aborting setup leaves nothing behind
+    // and the next run re-prompts instead of inheriting the abandoned choice.
+    if ("commit" in consent) consent.commit();
     await finalizeInitTelemetry();
   } catch (err) {
     // Any unclassified throw (file I/O, copyRulesAndAgents, the online check, a
@@ -772,25 +787,6 @@ export async function init(args: string[]): Promise<void> {
     await finalizeInitTelemetry(INSTALL_UNCLASSIFIED_FAILED);
     throw err;
   }
-}
-
-// Print the notice only when this run may send telemetry.
-function printTelemetryNotice(): void {
-  if (!telemetryIsEnabled()) return;
-  p.log.info(
-    [
-      pc.bold("Telemetry"),
-      pc.dim("Argent collects anonymous, opt-out usage telemetry (PostHog EU) so we can"),
-      pc.dim("prioritise the features and bugs that matter most. No raw arguments, paths,"),
-      pc.dim("error messages, or environment values are ever sent — only event names and"),
-      pc.dim("a small set of typed, validator-enforced properties."),
-      pc.dim(""),
-      pc.dim("A lifetime-stable anonymous UUID is generated on first run. To opt out,"),
-      pc.dim("run `argent telemetry disable` or set `DO_NOT_TRACK=1` /"),
-      pc.dim("`ARGENT_TELEMETRY=0`. To audit what is sent,"),
-      pc.dim("set `ARGENT_TELEMETRY_DEBUG=1` and inspect `~/.argent/telemetry-debug.log`."),
-    ].join("\n")
-  );
 }
 
 function sanitizeEditorName(raw: string): string {

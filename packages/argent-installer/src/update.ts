@@ -31,6 +31,7 @@ import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
 import { killToolServer } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
+import { resolveTelemetryConsent } from "./first-run-notice.js";
 
 function getRequestedVersion(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
@@ -113,11 +114,11 @@ export function resolveUpdatePackageAction(
 
 export async function update(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const noTelemetry = args.includes("--no-telemetry");
   const requestedVersion = getRequestedVersion(args);
   const trigger = getUpdateTriggerFromEnv();
   telemetryInit("installer");
   const updateStartTime = performance.now();
-  track("installation:cli_update_start", {});
   let telemetryFinalized = false;
 
   const trackPackageAction = async (
@@ -158,6 +159,13 @@ export async function update(args: string[]): Promise<void> {
 
   try {
     p.intro(pc.bgCyan(pc.black(" argent update ")));
+
+    // `--no-telemetry` force-disables before the first track(); otherwise just
+    // surface the notice. update never prompts — it often runs from the old
+    // binary or non-TTY contexts where the init consent step can't apply.
+    await resolveTelemetryConsent({ nonInteractive: true, disableFlag: noTelemetry });
+
+    track("installation:cli_update_start", {});
 
     // When invoked via `npx @swmansion/argent update`, the running package is
     // the npx cache and will always be at the latest published version. Reading the

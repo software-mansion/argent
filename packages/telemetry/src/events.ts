@@ -2,6 +2,7 @@
 // same surface at runtime.
 
 import type { FailureSignal } from "@argent/registry";
+import type { AiTelemetryProps } from "./ai-identity.js";
 
 // Single source of truth for the device platform enum: the TS union below and
 // sanitize.ts's runtime allowlist both derive from this tuple, so adding a
@@ -104,20 +105,20 @@ export interface InstallationCliUninstallCompleteProps extends FailureTelemetryP
 
 // Tool usage events
 
-export interface ToolInvokeProps {
+export interface ToolInvokeProps extends AiTelemetryProps {
   tool: string;
   tool_invocation_id: string;
   platform?: Platform;
 }
 
-export interface ToolCompleteProps {
+export interface ToolCompleteProps extends AiTelemetryProps {
   tool: string;
   tool_invocation_id: string;
   platform?: Platform;
   duration_ms: number;
 }
 
-export interface ToolFailProps extends FailureTelemetryProps {
+export interface ToolFailProps extends FailureTelemetryProps, AiTelemetryProps {
   tool: string;
   tool_invocation_id?: string;
   platform?: Platform;

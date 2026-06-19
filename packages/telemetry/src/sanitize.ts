@@ -8,6 +8,7 @@ import {
   NETWORK_FAILURES,
 } from "@argent/registry";
 import { PLATFORMS, type EventName, type EventPropertyMap } from "./events.js";
+import { AI_CLIENTS, AI_CLIENT_NAME_PATTERN } from "./ai-identity.js";
 
 // Per-event property allowlist and validators. Unknown keys and invalid values
 // are dropped before anything reaches PostHog.
@@ -81,6 +82,14 @@ const FAILURE_EXIT_CODE = finiteNonNeg(255);
 const FAILURE_SIGNAL_NAME = oneOf(FAILURE_SIGNAL_NAMES);
 const FAILURE_SPAWN_CODE = oneOf(FAILURE_SPAWN_CODES);
 const NETWORK_FAILURE = oneOf(NETWORK_FAILURES);
+
+const AI_CLIENT = oneOf(AI_CLIENTS);
+const AI_CLIENT_NAME = matches(AI_CLIENT_NAME_PATTERN, 80);
+
+const AI_TELEMETRY = {
+  ai_client: AI_CLIENT,
+  ai_client_name: AI_CLIENT_NAME,
+};
 
 const FAILURE_SIGNAL = {
   error_code: ERROR_CODE,
@@ -175,12 +184,14 @@ export const ALLOWED: ValidatorMap = {
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
+    ...AI_TELEMETRY,
   },
   "tool:complete": {
     tool: TOOL_NAME,
     tool_invocation_id: UUID,
     platform: PLATFORM,
     duration_ms: DURATION_MS,
+    ...AI_TELEMETRY,
   },
   "tool:fail": {
     tool: TOOL_NAME,
@@ -188,6 +199,7 @@ export const ALLOWED: ValidatorMap = {
     platform: PLATFORM,
     duration_ms: DURATION_MS,
     ...FAILURE_SIGNAL,
+    ...AI_TELEMETRY,
   },
   "cli:run_fail": {
     tool: TOOL_NAME,

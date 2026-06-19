@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@argent/configuration-core": "file:../configuration-core",
+    "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },

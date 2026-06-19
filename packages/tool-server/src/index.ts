@@ -4,6 +4,7 @@ import {
   attachRegistryTelemetry,
   track as telemetryTrack,
   shutdown as telemetryShutdown,
+  aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
@@ -204,7 +205,22 @@ export function start(): void {
     stopWatcher();
     httpHandle.dispose();
 
-    // Emit toolserver:stop before tearing the registry down.
+    // Tear the registry down BEFORE recording toolserver:stop. A crash that
+    // escalates mid-shutdown (crashShutdown sets shutdownReason="crash" plus a
+    // failure signal, then re-enters here and the guard short-circuits it) would
+    // otherwise be lost behind an already-sent reason:"signal" stop event — the
+    // exit code escalates via finalExitCode but the telemetry didn't. Recording
+    // the stop event last means it reflects everything up to this point.
+    // Guarded so a dispose failure can't skip the stop event itself.
+    try {
+      await registry.dispose();
+    } catch (err) {
+      process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
+    }
+
+    // Capture toolserver:stop, then drain — the final telemetry action, so the
+    // reason/signal are as fresh as possible. (A crash during the drain below is
+    // inherently unobservable: the queue is already closing.)
     try {
       telemetryTrack("toolserver:stop", {
         reason: shutdownReason,
@@ -218,7 +234,6 @@ export function start(): void {
       // Telemetry must never block process exit.
     }
 
-    await registry.dispose();
     if (server) {
       const forceExit = setTimeout(() => process.exit(finalExitCode), PROCESS_TIMEOUT_MS);
       await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -242,6 +257,7 @@ export function start(): void {
         ...(meta.platform ? { platform: meta.platform } : {}),
         duration_ms: durationMs,
         ...signal,
+        ...aiTelemetryFromMeta(meta),
       });
     },
   });
