@@ -18,7 +18,7 @@ import { generateTask, type TaskSpec } from "../src/tasks.ts";
 import { solve } from "../src/expert.ts";
 import { pickPersona, userTaskPhrase } from "../src/narrate.ts";
 import { buildOfferedTools, buildGemmaFirstUser, compactObservation } from "../src/emit.ts";
-import { ARGENT_SYSTEM_PROMPT } from "../src/system-prompt.ts";
+import { ARGENT_POLICY_COMPACT } from "../src/system-prompt.ts";
 import { Validator, parseDescribeBoxes, parseComponentTaps } from "../src/validate.ts";
 import { buildWorld } from "../src/world.ts";
 import { currentScreenDef, elementAt, execute, type ToolResult } from "../src/gym.ts";
@@ -155,7 +155,7 @@ async function runEpisode(seed: number, gen: Gen): Promise<EpisodeResult | null>
   });
 
   const messages: { role: string; content: string }[] = [
-    { role: "user", content: buildGemmaFirstUser(ARGENT_SYSTEM_PROMPT, offered, taskPrompt) },
+    { role: "user", content: buildGemmaFirstUser(ARGENT_POLICY_COMPACT, offered, taskPrompt) },
   ];
 
   const r: EpisodeResult = {

@@ -22,13 +22,13 @@ exec "$PY" -m mlx_lm.lora \
   --data data \
   --adapter-path "$ADAPTER" \
   --fine-tune-type lora \
-  --num-layers 12 \
-  --batch-size 2 \
+  --num-layers 8 \
+  --batch-size 1 \
   --iters "$ITERS" \
-  --max-seq-length 3400 \
-  --learning-rate 1e-4 \
+  --max-seq-length 2600 \
+  --learning-rate 1.5e-4 \
   --steps-per-report 20 \
-  --steps-per-eval 200 \
-  --val-batches 20 \
-  --save-every 350 \
+  --steps-per-eval 300 \
+  --val-batches 8 \
+  --save-every 300 \
   --grad-checkpoint

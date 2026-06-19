@@ -1,6 +1,6 @@
 // Assemble a validated Trajectory and convert it to common fine-tuning formats.
 
-import { ARGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
+import { ARGENT_SYSTEM_PROMPT, ARGENT_POLICY_COMPACT } from "./system-prompt.ts";
 import type { RNG } from "./rng.ts";
 import type { Message, Persona, ToolSpec, Trajectory, TrajectoryMeta } from "./types.ts";
 import type { SolveResult } from "./expert.ts";
@@ -157,8 +157,8 @@ export function buildGemmaFirstUser(systemPrompt: string, tools: ToolSpec[], tas
 }
 
 export function gemmaSystemPreamble(traj: Trajectory, task: string): string {
-  const sys = traj.messages.find((m) => m.role === "system")?.content ?? "";
-  return buildGemmaFirstUser(sys, traj.tools, task);
+  // Gemma export uses the compact policy (repeated per example; token-sensitive).
+  return buildGemmaFirstUser(ARGENT_POLICY_COMPACT, traj.tools, task);
 }
 
 // The describe header repeats a long, constant coordinate explanation on every
