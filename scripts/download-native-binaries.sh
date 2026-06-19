@@ -63,6 +63,41 @@ gh release download "${TAG}" \
   --clobber
 chmod +x "${IOS_BIN_DIR}/ax-service"
 
+# tvOS binaries (Apple TV support). The three tvOS injection dylibs share their
+# filenames with the iOS dylibs, so the release ships them as a tarball
+# (native-devtools-ios-tvos-dylibs.tar.gz) that we extract into dylibs/tvos/ —
+# the directory bootstrapDylibPathTvos() reads from. The two daemons
+# (tvos-ax-service spawned in-sim, tvos-hid-daemon on the host) have unique
+# names and download flat into bin/darwin/.
+TVOS_DYLIBS_DIR="${DYLIBS_DIR}/tvos"
+mkdir -p "${TVOS_DYLIBS_DIR}"
+
+echo "  Downloading tvOS dylibs..."
+TMP_TVOS_DYLIBS="$(mktemp -t native-devtools-ios-tvos-dylibs.XXXXXX.tar.gz)"
+gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "native-devtools-ios-tvos-dylibs.tar.gz" \
+  --output "${TMP_TVOS_DYLIBS}" \
+  --clobber
+tar -xzf "${TMP_TVOS_DYLIBS}" -C "${TVOS_DYLIBS_DIR}"
+rm -f "${TMP_TVOS_DYLIBS}"
+
+echo "  Downloading tvos-ax-service..."
+gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tvos-ax-service" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber
+chmod +x "${IOS_BIN_DIR}/tvos-ax-service"
+
+echo "  Downloading tvos-hid-daemon..."
+gh release download "${TAG}" \
+  --repo "${REPO}" \
+  --pattern "tvos-hid-daemon" \
+  --dir "${IOS_BIN_DIR}" \
+  --clobber
+chmod +x "${IOS_BIN_DIR}/tvos-hid-daemon"
+
 echo "  Downloading argent-android-devtools.apk..."
 # The release publishes the APK under a stable name (no versioning in the
 # filename) so this script doesn't have to know the version ahead of time;
@@ -85,7 +120,12 @@ trap - EXIT
 echo "Downloaded native binaries to ${DYLIBS_DIR}/, ${IOS_BIN_DIR}/, and ${ANDROID_BIN_DIR}/"
 
 if command -v codesign &>/dev/null; then
-  for f in "${DYLIBS_DIR}"/*.dylib "${IOS_BIN_DIR}/ax-service"; do
+  for f in \
+    "${DYLIBS_DIR}"/*.dylib \
+    "${TVOS_DYLIBS_DIR}"/*.dylib \
+    "${IOS_BIN_DIR}/ax-service" \
+    "${IOS_BIN_DIR}/tvos-ax-service" \
+    "${IOS_BIN_DIR}/tvos-hid-daemon"; do
     codesign -dvv "$f" 2>&1 || echo "Warning: signature verification failed for $f"
   done
 fi

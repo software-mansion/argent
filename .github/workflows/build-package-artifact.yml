@@ -66,6 +66,13 @@ jobs:
       - run: test -f packages/argent/dylibs/libNativeDevtoolsIos.dylib
       - run: test -f packages/argent/dylibs/libKeyboardPatch.dylib
       - run: test -f packages/argent/dylibs/libArgentInjectionBootstrap.dylib
+      # tvOS (Apple TV) binaries — fail the build if any is missing rather
+      # than silently shipping a package where tv-* tools crash at runtime.
+      - run: test -x packages/argent/bin/darwin/tvos-ax-service
+      - run: test -x packages/argent/bin/darwin/tvos-hid-daemon
+      - run: test -f packages/argent/dylibs/tvos/libNativeDevtoolsIos.dylib
+      - run: test -f packages/argent/dylibs/tvos/libKeyboardPatch.dylib
+      - run: test -f packages/argent/dylibs/tvos/libArgentInjectionBootstrap.dylib
       - run: test -f packages/argent/assets/argent.tracecfg.pbtxt
       - run: test -d packages/argent/assets/queries
       - run: test -f packages/argent/assets/manifest.json
