@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from "child_process";
+import { spawn, execFileSync, type ChildProcess } from "child_process";
 import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
@@ -81,10 +81,11 @@ interface DetectedApp {
  * its host PID. The PID is the leading column of `launchctl list`; apps that are
  * registered but not running carry `-` there and are skipped.
  */
-function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
+// Exported for the shell-injection regression test (native-profiler-ios-shell-injection.test.ts).
+export function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[] {
   let launchctlOutput: string;
   try {
-    launchctlOutput = execSync(`xcrun simctl spawn ${udid} launchctl list`, {
+    launchctlOutput = execFileSync("xcrun", ["simctl", "spawn", udid, "launchctl", "list"], {
       encoding: "utf-8",
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
     });
@@ -115,8 +116,16 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
 
   let listAppsOutput: string;
   try {
-    listAppsOutput = execSync(`xcrun simctl listapps ${udid} | plutil -convert json -o - -`, {
+    // Two stages, piped in code rather than by /bin/sh, so the udid is never
+    // interpreted by a shell. Stage 1: ask simctl for the OpenStep plist of
+    // installed apps. Stage 2: feed it to plutil over stdin to get JSON.
+    const rawPlist = execFileSync("xcrun", ["simctl", "listapps", udid], {
       encoding: "utf-8",
+      timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
+    });
+    listAppsOutput = execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+      encoding: "utf-8",
+      input: rawPlist,
       timeout: DETECT_RUNNING_APP_TIMEOUT_MS,
     });
   } catch (err) {
