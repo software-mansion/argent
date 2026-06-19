@@ -11,12 +11,7 @@ import {
 import { tvosAxServiceBinaryPath, tvosHidDaemonBinaryPath } from "@argent/native-devtools-ios";
 import { ensureAutomationEnabled } from "./ax-service";
 import { listIosSimulators } from "../utils/ios-devices";
-import type {
-  TvControlApi,
-  TvDescribeResponse,
-  TvDirection,
-  TvElement,
-} from "./tv-control-types";
+import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
 // Re-export the shared TV contract so existing importers of `tv-control` keep
 // working. The Android TV backend implements the same `TvControlApi`.
@@ -109,7 +104,16 @@ async function sendJson(socketPath: string, command: string, timeoutMs?: number)
 function spawnAxDaemon(udid: string, socketPath: string): ChildProcess {
   const proc = execFile(
     "xcrun",
-    ["simctl", "spawn", udid, tvosAxServiceBinaryPath(), "--socket", socketPath, "--timeout", "3600"],
+    [
+      "simctl",
+      "spawn",
+      udid,
+      tvosAxServiceBinaryPath(),
+      "--socket",
+      socketPath,
+      "--timeout",
+      "3600",
+    ],
     { encoding: "utf8" }
   ) as ChildProcess;
   const tag = udid.slice(0, 8);
@@ -133,7 +137,11 @@ function spawnHidDaemon(udid: string, socketPath: string): ChildProcess {
 // Poll until the daemon has bound its socket (it prints a "ready" line on
 // stdout, but waiting on the socket file existing + accepting is simpler and
 // works identically for both the in-sim and host daemons).
-async function waitForSocket(socketPath: string, proc: ChildProcess, timeoutMs: number): Promise<void> {
+async function waitForSocket(
+  socketPath: string,
+  proc: ChildProcess,
+  timeoutMs: number
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let exited: number | null | undefined;
   proc.once("exit", (code) => (exited = code));
@@ -258,7 +266,11 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
       }
       axExited = false;
       // Best-effort: the socket file may not exist yet on first spawn.
-      try { fs.unlinkSync(axSock); } catch { /* no stale socket to remove */ }
+      try {
+        fs.unlinkSync(axSock);
+      } catch {
+        /* no stale socket to remove */
+      }
       axProc = spawnAxDaemon(udid, axSock);
       axProc.on("exit", onAxExit);
       await waitForSocket(axSock, axProc, 15_000);
@@ -268,7 +280,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // outlives the app). Stale-cache recovery goes through `recycleAx` instead.
     async function ensureAxAlive(): Promise<void> {
       if (!axExited || disposed) return;
-      if (!axRespawn) axRespawn = spawnFreshAx().finally(() => { axRespawn = null; });
+      if (!axRespawn)
+        axRespawn = spawnFreshAx().finally(() => {
+          axRespawn = null;
+        });
       await axRespawn;
     }
 
@@ -276,7 +291,10 @@ export const tvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInfo> = {
     // cache. Coalesces concurrent callers onto a single respawn.
     async function recycleAx(): Promise<void> {
       if (disposed) return;
-      if (!axRespawn) axRespawn = spawnFreshAx().finally(() => { axRespawn = null; });
+      if (!axRespawn)
+        axRespawn = spawnFreshAx().finally(() => {
+          axRespawn = null;
+        });
       await axRespawn;
     }
 

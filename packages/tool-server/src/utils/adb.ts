@@ -115,8 +115,7 @@ function describeAdbFailure(args: string[], err: unknown): Error {
     message?: string;
   };
   const argv = args.join(" ");
-  const asText = (v: string | Buffer | undefined): string =>
-    v == null ? "" : v.toString();
+  const asText = (v: string | Buffer | undefined): string => (v == null ? "" : v.toString());
   const ioDetail = asText(e.stderr).trim() || asText(e.stdout).trim();
   if (ioDetail) return new Error(`adb ${argv} failed: ${ioDetail}`);
   const meta: string[] = [];
@@ -356,9 +355,7 @@ const androidRuntimeKindCache = new Map<string, "mobile" | "tv">();
  * (the tv-* tools) call this for the real form factor. Parallels
  * `getSimulatorRuntimeKind` on the iOS side.
  */
-export async function getAndroidRuntimeKind(
-  serial: string
-): Promise<"mobile" | "tv" | undefined> {
+export async function getAndroidRuntimeKind(serial: string): Promise<"mobile" | "tv" | undefined> {
   const cached = androidRuntimeKindCache.get(serial);
   if (cached) return cached;
   const devices = await listAndroidDevices();

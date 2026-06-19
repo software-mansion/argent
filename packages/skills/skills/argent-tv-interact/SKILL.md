@@ -26,16 +26,16 @@ Call `list-devices` and pick a device with `runtimeKind: "tv"` — an Apple TV s
 
 ## 2. Choosing the Right Tool
 
-| Action | Tool | Notes |
-|--------|------|-------|
-| Read focus state | `tv-describe` | Use before and after every navigation step |
-| Move focus | `tv-navigate` | D-pad: `up/down/left/right`; use when validating real nav paths |
-| Activate element | `tv-navigate` with `select` | Equivalent to a tap on iOS |
-| Go back | `tv-navigate` with `menu` | Back one level |
-| Exit to home | `tv-navigate` with `home` | Exits the current app |
-| Toggle playback | `tv-navigate` with `playpause` | Media apps |
-| Move focus by label | `tv-set-focus` | Apple TV jumps directly; Android TV walks the D-pad toward the target (best-effort). Requires knowing the label from `tv-describe` |
-| Type text | `tv-type` | Focus a text field first, then call this |
+| Action              | Tool                           | Notes                                                                                                                              |
+| ------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Read focus state    | `tv-describe`                  | Use before and after every navigation step                                                                                         |
+| Move focus          | `tv-navigate`                  | D-pad: `up/down/left/right`; use when validating real nav paths                                                                    |
+| Activate element    | `tv-navigate` with `select`    | Equivalent to a tap on iOS                                                                                                         |
+| Go back             | `tv-navigate` with `menu`      | Back one level                                                                                                                     |
+| Exit to home        | `tv-navigate` with `home`      | Exits the current app                                                                                                              |
+| Toggle playback     | `tv-navigate` with `playpause` | Media apps                                                                                                                         |
+| Move focus by label | `tv-set-focus`                 | Apple TV jumps directly; Android TV walks the D-pad toward the target (best-effort). Requires knowing the label from `tv-describe` |
+| Type text           | `tv-type`                      | Focus a text field first, then call this                                                                                           |
 
 ---
 
@@ -51,7 +51,7 @@ Returns the currently focused element and all focusable elements on screen. Alwa
 
 Output includes `focusedLabel`, `focusableCount`, and a `description` text rendering of the full focus state.
 
-> **Android TV: some screens legitimately report `focusableCount: 0`.** Android TV reads focus from the OS accessibility tree (`uiautomator`). Many `react-native-tvos` screens manage focus with React Native's *own* focus engine, which Android's accessibility tree does not expose — so `tv-describe` can correctly return zero focusables on a screen that visibly has selectable tiles (e.g. a full-screen RN promo/upsell). This is faithful reporting, not a tool failure. When it happens: (1) take a `screenshot` to see what's actually there, (2) use the full `describe` tool instead — it surfaces the `content-desc`/`text` tree the RN screen does expose, and (3) `tv-navigate` still moves focus on these screens even though the labels aren't enumerable, so you can drive blind + screenshot to confirm. Screens that use native focusable views (the NFL sidebar, system dialogs) report focusables normally.
+> **Android TV: some screens legitimately report `focusableCount: 0`.** Android TV reads focus from the OS accessibility tree (`uiautomator`). Many `react-native-tvos` screens manage focus with React Native's _own_ focus engine, which Android's accessibility tree does not expose — so `tv-describe` can correctly return zero focusables on a screen that visibly has selectable tiles (e.g. a full-screen RN promo/upsell). This is faithful reporting, not a tool failure. When it happens: (1) take a `screenshot` to see what's actually there, (2) use the full `describe` tool instead — it surfaces the `content-desc`/`text` tree the RN screen does expose, and (3) `tv-navigate` still moves focus on these screens even though the labels aren't enumerable, so you can drive blind + screenshot to confirm. Screens that use native focusable views (the NFL sidebar, system dialogs) report focusables normally.
 
 ### tv-navigate — Send a Siri-remote input
 
@@ -143,23 +143,23 @@ between steps.
 
 ## 6. Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Tool fails with "not a tvOS simulator" / "Android-TV-only" | Passed a non-TV target — use `list-devices` and pick a `runtimeKind: "tv"` entry |
-| `tv-set-focus` returns `ok: false` | Label not on screen (call `tv-describe` and use the exact label shown), or on Android TV focus couldn't reach it by D-pad — fall back to step-by-step `tv-navigate` |
-| Apple TV daemons take a few seconds on first call | Normal — `tvos-ax-service` and `tvos-hid-daemon` start on first use and stay running |
-| Focus doesn't move as expected | Some TV screens throttle focus changes; always call `tv-describe` after each step |
-| **Android TV:** `tv-describe` shows `focusableCount: 0` on a screen that clearly has tiles | Expected on `react-native-tvos` screens that use RN's own focus engine (invisible to the OS accessibility tree). Use `screenshot` + the full `describe` tool; `tv-navigate` still moves focus, so drive + screenshot to confirm. Not a bug. |
-| **Android TV:** right after `launch-app`/`restart-app`, `tv-describe` is empty | The RN bundle is still loading (splash window). Wait ~2–3s and retry — `tv-describe` retries internally, but a cold dev-client start can take longer. |
-| `debugger-*` / profiler tools target the wrong app when two devices share one Metro | The CDP page is chosen by **recency of the last registered WebSocket**, not by `device_id` — `device_id` only resolves the session-cache key. If a tvOS and an Android (or phone) app are both connected to one Metro, the most-recently-foregrounded one wins. Bring the target app to the foreground (or background the other, e.g. a HOME intent) so it re-registers as the most-recent page, then connect. |
+| Problem                                                                                    | Solution                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool fails with "not a tvOS simulator" / "Android-TV-only"                                 | Passed a non-TV target — use `list-devices` and pick a `runtimeKind: "tv"` entry                                                                                                                                                                                                                                                                                                                               |
+| `tv-set-focus` returns `ok: false`                                                         | Label not on screen (call `tv-describe` and use the exact label shown), or on Android TV focus couldn't reach it by D-pad — fall back to step-by-step `tv-navigate`                                                                                                                                                                                                                                            |
+| Apple TV daemons take a few seconds on first call                                          | Normal — `tvos-ax-service` and `tvos-hid-daemon` start on first use and stay running                                                                                                                                                                                                                                                                                                                           |
+| Focus doesn't move as expected                                                             | Some TV screens throttle focus changes; always call `tv-describe` after each step                                                                                                                                                                                                                                                                                                                              |
+| **Android TV:** `tv-describe` shows `focusableCount: 0` on a screen that clearly has tiles | Expected on `react-native-tvos` screens that use RN's own focus engine (invisible to the OS accessibility tree). Use `screenshot` + the full `describe` tool; `tv-navigate` still moves focus, so drive + screenshot to confirm. Not a bug.                                                                                                                                                                    |
+| **Android TV:** right after `launch-app`/`restart-app`, `tv-describe` is empty             | The RN bundle is still loading (splash window). Wait ~2–3s and retry — `tv-describe` retries internally, but a cold dev-client start can take longer.                                                                                                                                                                                                                                                          |
+| `debugger-*` / profiler tools target the wrong app when two devices share one Metro        | The CDP page is chosen by **recency of the last registered WebSocket**, not by `device_id` — `device_id` only resolves the session-cache key. If a tvOS and an Android (or phone) app are both connected to one Metro, the most-recently-foregrounded one wins. Bring the target app to the foreground (or background the other, e.g. a HOME intent) so it re-registers as the most-recent page, then connect. |
 
 ---
 
 ## Related Skills
 
-| Skill | When to use |
-|-------|-------------|
-| `argent-tv-setup` | Boot and connect to a TV target (Apple TV simulator or Android TV emulator) before interacting |
-| `argent-android-emulator-setup` | Boot and connect to an Android emulator / Android TV AVD before interacting |
-| `argent-device-interact` | Tapping, swiping, gestures — phone/tablet iOS and Android (not TV) |
-| `argent-ios-simulator-setup` | iOS simulator boot and connection setup |
+| Skill                           | When to use                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `argent-tv-setup`               | Boot and connect to a TV target (Apple TV simulator or Android TV emulator) before interacting |
+| `argent-android-emulator-setup` | Boot and connect to an Android emulator / Android TV AVD before interacting                    |
+| `argent-device-interact`        | Tapping, swiping, gestures — phone/tablet iOS and Android (not TV)                             |
+| `argent-ios-simulator-setup`    | iOS simulator boot and connection setup                                                        |

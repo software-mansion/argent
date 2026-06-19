@@ -11,12 +11,7 @@ import {
   parseUiAutomatorXml,
   parseUiAutomatorBounds,
 } from "../tools/describe/platforms/android/uiautomator-parser";
-import type {
-  TvControlApi,
-  TvDescribeResponse,
-  TvDirection,
-  TvElement,
-} from "./tv-control-types";
+import type { TvControlApi, TvDescribeResponse, TvDirection, TvElement } from "./tv-control-types";
 
 export const ANDROID_TV_CONTROL_NAMESPACE = "AndroidTvControl";
 
@@ -158,9 +153,7 @@ function traitsOf(n: TvNode): string[] {
 function toTvElement(n: TvNode): TvElement {
   return {
     label: n.label || undefined,
-    frame: n.rect
-      ? { x: n.rect.x, y: n.rect.y, width: n.rect.w, height: n.rect.h }
-      : undefined,
+    frame: n.rect ? { x: n.rect.x, y: n.rect.y, width: n.rect.w, height: n.rect.h } : undefined,
     traits: traitsOf(n),
     value: n.value || undefined,
     isFocused: n.focused,

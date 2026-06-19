@@ -45,8 +45,8 @@ beforeAll(async () => {
   root = await fs.mkdtemp(join(tmpdir(), "argent-ast-index-hoc-"));
   await Promise.all(
     Object.entries(FIXTURES).map(([name, content]) =>
-      fs.writeFile(join(root, name), content, "utf8"),
-    ),
+      fs.writeFile(join(root, name), content, "utf8")
+    )
   );
 });
 

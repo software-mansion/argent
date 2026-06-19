@@ -198,8 +198,7 @@ function classifyComponentValue(node: TreeSitterNode | undefined): {
     current = firstCallArgument(current);
   }
 
-  const isFn =
-    current?.type === "arrow_function" || current?.type === "function_expression";
+  const isFn = current?.type === "arrow_function" || current?.type === "function_expression";
 
   // A bare function, or anything we peeled an HOC off of (the inner argument
   // may be an arrow, or an already-named component identifier as in `memo(Foo)`).

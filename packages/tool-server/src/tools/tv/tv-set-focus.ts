@@ -33,7 +33,8 @@ const tvSetFocusTool: ToolDefinition<Params, Result> = {
 On Apple TV this jumps focus directly (native setNativeFocus); on Android TV there is no jump primitive, so it walks the D-pad toward the target's on-screen position (best-effort, bounded) — prefer \`tv-navigate\` when validating an exact navigation path.
 Returns { ok, message, label }. ok=false (with a message) when the label isn't on screen, focus can't reach it, or (Apple TV) the simulator lacks AutomationEnabled.
 Requires a booted TV target (runtimeKind 'tv'); fails for phones/tablets.`,
-  searchHint: "tvos apple tv android tv set focus jump element label accessibility teleport leanback dpad",
+  searchHint:
+    "tvos apple tv android tv set focus jump element label accessibility teleport leanback dpad",
   zodSchema,
   services: (params) => ({
     tv: tvServiceRef(params.udid),

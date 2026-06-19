@@ -79,10 +79,7 @@ function findDependencyMissing(err: unknown): DependencyMissingError | null {
  * UnsupportedOperationError only ever reaches this catch nested inside a wrapper
  * — a top-level `instanceof` would miss it and mis-map a clean 4xx to a 500.
  */
-function findInChain<T extends Error>(
-  err: unknown,
-  ctor: new (...args: never[]) => T
-): T | null {
+function findInChain<T extends Error>(err: unknown, ctor: new (...args: never[]) => T): T | null {
   let current: unknown = err;
   for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
     if (current instanceof ctor) return current;

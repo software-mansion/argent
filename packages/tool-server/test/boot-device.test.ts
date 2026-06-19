@@ -458,12 +458,14 @@ describe("boot-device — iOS path", () => {
 
     await tool.execute!({}, { udid: TV_UDID });
 
-    const ndDisposeOrder = disposeService.mock.invocationCallOrder[
-      disposeService.mock.calls.findIndex(([urn]) => urn === `NativeDevtools:${TV_UDID}`)
-    ];
-    const ndResolveOrder = resolveService.mock.invocationCallOrder[
-      resolveService.mock.calls.findIndex(([urn]) => urn === `NativeDevtools:${TV_UDID}`)
-    ];
+    const ndDisposeOrder =
+      disposeService.mock.invocationCallOrder[
+        disposeService.mock.calls.findIndex(([urn]) => urn === `NativeDevtools:${TV_UDID}`)
+      ];
+    const ndResolveOrder =
+      resolveService.mock.invocationCallOrder[
+        resolveService.mock.calls.findIndex(([urn]) => urn === `NativeDevtools:${TV_UDID}`)
+      ];
     expect(ndDisposeOrder).toBeLessThan(ndResolveOrder);
   });
 

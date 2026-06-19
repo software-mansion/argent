@@ -213,9 +213,7 @@ function startListener(
 
 function spawnDaemon(udid: string, endpoint: AXEndpoint): ChildProcess {
   const binaryPath =
-    endpoint.transport === "tcp"
-      ? axServiceBinaryPathTcp()
-      : axServiceBinaryPath();
+    endpoint.transport === "tcp" ? axServiceBinaryPathTcp() : axServiceBinaryPath();
 
   const endpointArgs =
     endpoint.transport === "tcp"
@@ -446,7 +444,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       degraded: !entitlementBypassActive,
 
       async describe(): Promise<AXDescribeResponse> {
-        const result = (await query("describe", 10_000)) as AXDescribeResponse & { focusable?: AXDescribeElement[] };
+        const result = (await query("describe", 10_000)) as AXDescribeResponse & {
+          focusable?: AXDescribeElement[];
+        };
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,

@@ -1,7 +1,11 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
 import { tvServiceRef } from "./tv-service";
-import { TV_DIRECTIONS, type TvControlApi, type TvDirection } from "../../blueprints/tv-control-types";
+import {
+  TV_DIRECTIONS,
+  type TvControlApi,
+  type TvDirection,
+} from "../../blueprints/tv-control-types";
 
 const DIRECTIONS = TV_DIRECTIONS as readonly [TvDirection, ...TvDirection[]];
 

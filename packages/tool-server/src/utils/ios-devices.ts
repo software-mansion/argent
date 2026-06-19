@@ -46,7 +46,7 @@ export async function listIosSimulators(): Promise<IosSimulator[]> {
           name: d.name,
           state: d.state,
           runtime: runtimeId,
-          runtimeKind
+          runtimeKind,
         });
       }
     }
@@ -70,9 +70,7 @@ const runtimeKindCache = new Map<string, "mobile" | "tv">();
  * both are 8-4-4-4-12 UUIDs tagged `platform: "ios"`. Code paths that must
  * branch on tvOS (describe, screenshot) call this to get the real runtime.
  */
-export async function getSimulatorRuntimeKind(
-  udid: string
-): Promise<"mobile" | "tv" | undefined> {
+export async function getSimulatorRuntimeKind(udid: string): Promise<"mobile" | "tv" | undefined> {
   const cached = runtimeKindCache.get(udid);
   if (cached) return cached;
   const kind = (await listIosSimulators()).find((s) => s.udid === udid)?.runtimeKind;

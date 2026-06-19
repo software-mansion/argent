@@ -10,7 +10,11 @@ import {
   type ServiceBlueprint,
   type ServiceEvents,
 } from "@argent/registry";
-import { bootstrapDylibPath, bootstrapDylibPathTcp, bootstrapDylibPathTvos } from "@argent/native-devtools-ios";
+import {
+  bootstrapDylibPath,
+  bootstrapDylibPathTcp,
+  bootstrapDylibPathTvos,
+} from "@argent/native-devtools-ios";
 import { isTvOsSimulator } from "../utils/ios-devices";
 import { SIMCTL_SPAWN_TIMEOUT_MS } from "../utils/simctl-config";
 

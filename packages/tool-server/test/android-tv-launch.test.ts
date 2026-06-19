@@ -75,10 +75,7 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
   it("does NOT query leanback for a non-TV target", async () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const shell = shellCmd(args);
-      if (
-        shell.startsWith("cmd package resolve-activity --brief ") &&
-        !shell.includes("-c ")
-      ) {
+      if (shell.startsWith("cmd package resolve-activity --brief ") && !shell.includes("-c ")) {
         return { stdout: "com.example.app/com.example.app.MainActivity\n", stderr: "" };
       }
       return { stdout: "", stderr: "" };
@@ -92,8 +89,8 @@ describe("resolveLauncherActivity — leanback (Android TV)", () => {
 
   it("throws a leanback-aware error when nothing resolves on a TV target", async () => {
     execFileMock.mockImplementation(() => ({ stdout: "", stderr: "" }));
-    await expect(
-      resolveLauncherActivity("emulator-5556", "com.example.tv", true)
-    ).rejects.toThrow(/LEANBACK_LAUNCHER or LAUNCHER/);
+    await expect(resolveLauncherActivity("emulator-5556", "com.example.tv", true)).rejects.toThrow(
+      /LEANBACK_LAUNCHER or LAUNCHER/
+    );
   });
 });

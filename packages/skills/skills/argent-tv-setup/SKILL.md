@@ -15,6 +15,7 @@ If you delegate device tasks to sub-agents, make sure they have MCP permissions.
 2. **Verify connection** — the `tv-*` tools auto-start the tvOS daemons (`tvos-ax-service`, `tvos-hid-daemon`) on first use; no manual server start needed. The first call may take a few seconds while they spawn.
 
 Notes:
+
 - tvOS UDIDs look like `A1B2C3D4-E5F6-7890-ABCD-EF1234567890` (same shape as iOS — only `runtimeKind` distinguishes them).
 - Passing an iPhone (`runtimeKind: "mobile"`) UDID to a `tv-*` tool fails with a clear "tvOS-only" error.
 
@@ -25,6 +26,7 @@ Notes:
 3. **No connection step** — the Android TV backend is adb-backed and starts no daemons, so there's nothing to wait on after boot.
 
 Notes:
+
 - `launch-app` automatically resolves the app's `LEANBACK_LAUNCHER` activity on a TV target, so launching an Android TV app needs no special `activity` argument.
 - If a booted leanback AVD shows up as `runtimeKind: "mobile"`, that's a detection bug — flag it.
 

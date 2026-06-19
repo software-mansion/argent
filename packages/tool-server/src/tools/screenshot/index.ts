@@ -137,7 +137,12 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
 
       const ref = simulatorServerRef(device);
       const api = (await registry.resolveService(ref.urn, ref.options)) as SimulatorServerApi;
-      const { path: capturedPath } = await httpScreenshot(api, params.rotation, signal, params.scale);
+      const { path: capturedPath } = await httpScreenshot(
+        api,
+        params.rotation,
+        signal,
+        params.scale
+      );
       const image = await requireArtifacts(ctx).register(capturedPath, { mimeType: "image/png" });
       return { image };
     },

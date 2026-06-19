@@ -97,11 +97,7 @@ describe("android-tv-control — type", () => {
   it("encodes spaces as %s and quotes the token", async () => {
     const api = await makeApi();
     await api.type("hello world");
-    expect(mockShell).toHaveBeenCalledWith(
-      SERIAL,
-      "input text 'hello%sworld'",
-      expect.anything()
-    );
+    expect(mockShell).toHaveBeenCalledWith(SERIAL, "input text 'hello%sworld'", expect.anything());
   });
 
   it("is a no-op for empty text", async () => {
@@ -109,7 +105,11 @@ describe("android-tv-control — type", () => {
     await api.type("");
     // Only the factory's runtime-kind probe ran via getAndroidRuntimeKind; no
     // `input text` shell-out.
-    expect(mockShell).not.toHaveBeenCalledWith(SERIAL, expect.stringContaining("input text"), expect.anything());
+    expect(mockShell).not.toHaveBeenCalledWith(
+      SERIAL,
+      expect.stringContaining("input text"),
+      expect.anything()
+    );
   });
 });
 
@@ -141,7 +141,11 @@ describe("android-tv-control — setFocus D-pad walk", () => {
     const r = await api.setFocus("Home");
     expect(r.ok).toBe(true);
     expect(r.message).toMatch(/already focused/i);
-    expect(mockShell).not.toHaveBeenCalledWith(SERIAL, expect.stringContaining("keyevent"), expect.anything());
+    expect(mockShell).not.toHaveBeenCalledWith(
+      SERIAL,
+      expect.stringContaining("keyevent"),
+      expect.anything()
+    );
   });
 
   it("fails clearly when the label is not on screen", async () => {
