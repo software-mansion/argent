@@ -14,13 +14,28 @@
     refuse the load and the DTX channel would never open. This entitlement lifts
     that restriction for these two host-side tools.
 
-    NOTE: this is the suspected-sufficient set, mirroring ax-service's recipe.
-    It MUST be verified on a clean second Mac (download the CI-signed binary and
-    confirm `coreprofile channel=...` still connects) before relying on it for
-    distribution — the dev-machine validation in PR #350 used clang's ad-hoc
-    signature, which is a different trust context.
+    get-task-allow: on a SIP-enabled Mac, com.apple.dt.instruments.dtarbiter
+    validates the connecting client's code signature against the requirement
+      ( entitlement["com.apple.private.DTServiceHubClient"]
+        and (anchor apple or (anchor apple generic and certificate leaf[...6.1.9])) )
+      OR entitlement["com.apple.security.get-task-allow"]
+    and rejects clients that satisfy neither with -67050 (errSecCSReqFailed).
+    A third-party Developer-ID binary can never satisfy the first branch (it
+    needs an Apple-private entitlement + Apple signing), but get-task-allow is a
+    standard entitlement any developer can self-apply — and it is the OR escape
+    branch the arbiter accepts. Without it the released binary cannot open the
+    DTServiceHub channel on SIP-enabled hosts (only on SIP-disabled, where AMFI
+    bypasses the requirement entirely). Un-notarized distribution only — Apple
+    notarization rejects get-task-allow; these binaries ship via the private
+    releases repo and are not notarized.
+
+    NOTE: still verify on a SIP-enabled Mac — the arbiter binary carries two
+    requirement variants (with and without the get-task-allow branch) and which
+    is enforced under SIP is confirmed only by a live SIP-on test.
   -->
   <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.get-task-allow</key>
   <true/>
 </dict>
 </plist>
