@@ -16,7 +16,9 @@ import { Validator } from "./validate.ts";
 import type { Message, ToolSpec, Trajectory } from "./types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const catalog: ToolSpec[] = JSON.parse(readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8"));
+const catalog: ToolSpec[] = JSON.parse(
+  readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8")
+);
 const validator = new Validator(catalog);
 
 function clone(t: Trajectory): Trajectory {
@@ -29,7 +31,12 @@ function goodTrajectory(): Trajectory {
     const rng = new RNG(seed);
     const task = generateTask(rng);
     if (!task || (task.kind !== "navigate-tap" && task.kind !== "toggle")) continue;
-    const prompt = userTaskPhrase(rng, task.kind, { app: task.app.name, platform: task.platform, target: task.pathLabels.at(-1), path: task.pathLabels });
+    const prompt = userTaskPhrase(rng, task.kind, {
+      app: task.app.name,
+      platform: task.platform,
+      target: task.pathLabels.at(-1),
+      path: task.pathLabels,
+    });
     const sr = solve(task, rng, prompt);
     const traj = assemble(sr, task, seed, buildOfferedTools(catalog, sr.toolsUsed, rng));
     if (validator.validate(traj).ok && sr.toolsUsed.includes("gesture-tap")) return traj;
@@ -38,7 +45,9 @@ function goodTrajectory(): Trajectory {
 }
 
 function firstTapMsgIndex(msgs: Message[]): number {
-  return msgs.findIndex((m) => m.role === "assistant" && m.tool_calls?.some((c) => c.name === "gesture-tap"));
+  return msgs.findIndex(
+    (m) => m.role === "assistant" && m.tool_calls?.some((c) => c.name === "gesture-tap")
+  );
 }
 
 const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: boolean }[] = [
@@ -47,7 +56,9 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
     name: "ungrounded tap (move coords off every element)",
     mutate: (t) => {
       const i = firstTapMsgIndex(t.messages);
-      const call = (t.messages[i] as { tool_calls: { name: string; arguments: Record<string, number> }[] }).tool_calls.find((c) => c.name === "gesture-tap")!;
+      const call = (
+        t.messages[i] as { tool_calls: { name: string; arguments: Record<string, number> }[] }
+      ).tool_calls.find((c) => c.name === "gesture-tap")!;
       call.arguments.x = 0.999;
       call.arguments.y = 0.999;
     },
@@ -60,7 +71,10 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
       // remove the nearest preceding describe/component-tree assistant+tool pair
       for (let j = i - 1; j >= 0; j--) {
         const m = t.messages[j]!;
-        if (m.role === "assistant" && m.tool_calls?.some((c) => c.name === "describe" || c.name === "debugger-component-tree")) {
+        if (
+          m.role === "assistant" &&
+          m.tool_calls?.some((c) => c.name === "describe" || c.name === "debugger-component-tree")
+        ) {
           // delete assistant + following tool result(s)
           let k = j + 1;
           while (k < t.messages.length && t.messages[k]!.role === "tool") k++;
@@ -75,7 +89,9 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
     name: "schema violation (drop required y from a gesture-tap)",
     mutate: (t) => {
       const i = firstTapMsgIndex(t.messages);
-      const call = (t.messages[i] as { tool_calls: { name: string; arguments: Record<string, unknown> }[] }).tool_calls.find((c) => c.name === "gesture-tap")!;
+      const call = (
+        t.messages[i] as { tool_calls: { name: string; arguments: Record<string, unknown> }[] }
+      ).tool_calls.find((c) => c.name === "gesture-tap")!;
       delete call.arguments.y;
     },
     expectReject: true,
@@ -84,7 +100,9 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
     name: "unknown argument on a tool call",
     mutate: (t) => {
       const i = firstTapMsgIndex(t.messages);
-      const call = (t.messages[i] as { tool_calls: { name: string; arguments: Record<string, unknown> }[] }).tool_calls.find((c) => c.name === "gesture-tap")!;
+      const call = (
+        t.messages[i] as { tool_calls: { name: string; arguments: Record<string, unknown> }[] }
+      ).tool_calls.find((c) => c.name === "gesture-tap")!;
       call.arguments.bogus = 42;
     },
     expectReject: true,
@@ -93,7 +111,9 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
     name: "coordinate out of [0,1] range",
     mutate: (t) => {
       const i = firstTapMsgIndex(t.messages);
-      const call = (t.messages[i] as { tool_calls: { name: string; arguments: Record<string, number> }[] }).tool_calls.find((c) => c.name === "gesture-tap")!;
+      const call = (
+        t.messages[i] as { tool_calls: { name: string; arguments: Record<string, number> }[] }
+      ).tool_calls.find((c) => c.name === "gesture-tap")!;
       call.arguments.x = 1.5;
     },
     expectReject: true,
@@ -101,7 +121,9 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
   {
     name: "interaction before list-devices (delete list-devices turn)",
     mutate: (t) => {
-      const j = t.messages.findIndex((m) => m.role === "assistant" && m.tool_calls?.some((c) => c.name === "list-devices"));
+      const j = t.messages.findIndex(
+        (m) => m.role === "assistant" && m.tool_calls?.some((c) => c.name === "list-devices")
+      );
       if (j >= 0) {
         let k = j + 1;
         while (k < t.messages.length && t.messages[k]!.role === "tool") k++;
@@ -114,7 +136,9 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
     name: "unknown tool name",
     mutate: (t) => {
       const i = firstTapMsgIndex(t.messages);
-      (t.messages[i] as { tool_calls: { name: string }[] }).tool_calls.find((c) => c.name === "gesture-tap")!.name = "gesture-teleport";
+      (t.messages[i] as { tool_calls: { name: string }[] }).tool_calls.find(
+        (c) => c.name === "gesture-tap"
+      )!.name = "gesture-teleport";
     },
     expectReject: true,
   },
@@ -139,7 +163,9 @@ for (const c of cases) {
   const ok = rejected === c.expectReject;
   if (ok) pass++;
   else fail++;
-  console.log(`${ok ? "PASS" : "FAIL"}  ${c.name.padEnd(56)} -> ${rejected ? "rejected" : "accepted"}${rejected ? `  (${res.errors[0]})` : ""}`);
+  console.log(
+    `${ok ? "PASS" : "FAIL"}  ${c.name.padEnd(56)} -> ${rejected ? "rejected" : "accepted"}${rejected ? `  (${res.errors[0]})` : ""}`
+  );
 }
 console.log(`\n${pass}/${pass + fail} self-check cases behaved correctly`);
 if (fail > 0) process.exit(1);

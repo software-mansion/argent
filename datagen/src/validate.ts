@@ -22,7 +22,19 @@ const DISCOVERY_TOOLS = new Set([
   "native-find-views",
 ]);
 
-const GESTURE_COORD_FIELDS = ["x", "y", "fromX", "fromY", "toX", "toY", "centerX", "centerY", "radius", "startDistance", "endDistance"];
+const GESTURE_COORD_FIELDS = [
+  "x",
+  "y",
+  "fromX",
+  "fromY",
+  "toX",
+  "toY",
+  "centerX",
+  "centerY",
+  "radius",
+  "startDistance",
+  "endDistance",
+];
 
 const RUN_SEQUENCE_ALLOWED = new Set([
   "gesture-tap",
@@ -86,12 +98,19 @@ export class Validator {
           if (t.role !== "tool") break;
           seen.push(t.tool_call_id);
         }
-        for (const id of ids) if (!seen.includes(id)) errors.push(`tool_call ${id} has no matching tool result`);
-        for (const c of m.tool_calls) if (!this.catalogNames.has(c.name)) errors.push(`unknown tool '${c.name}' not in catalog`);
+        for (const id of ids)
+          if (!seen.includes(id)) errors.push(`tool_call ${id} has no matching tool result`);
+        for (const c of m.tool_calls)
+          if (!this.catalogNames.has(c.name))
+            errors.push(`unknown tool '${c.name}' not in catalog`);
       }
       if (m.role === "tool") {
         // must correspond to a tool_call id seen earlier
-        const ok = msgs.slice(0, i).some((p) => p.role === "assistant" && p.tool_calls?.some((c) => c.id === m.tool_call_id));
+        const ok = msgs
+          .slice(0, i)
+          .some(
+            (p) => p.role === "assistant" && p.tool_calls?.some((c) => c.id === m.tool_call_id)
+          );
         if (!ok) errors.push(`tool result ${m.tool_call_id} has no originating tool_call`);
       }
     }
@@ -131,15 +150,21 @@ export class Validator {
     const steps = args.steps as Array<{ tool: string; args: Record<string, unknown> }> | undefined;
     if (!Array.isArray(steps)) return;
     for (const [i, step] of steps.entries()) {
-      if (!RUN_SEQUENCE_ALLOWED.has(step.tool)) errors.push(`run-sequence step ${i}: tool '${step.tool}' not allowed in a sequence`);
-      if (step.args && "udid" in step.args) errors.push(`run-sequence step ${i}: must not include 'udid' (it is injected)`);
+      if (!RUN_SEQUENCE_ALLOWED.has(step.tool))
+        errors.push(`run-sequence step ${i}: tool '${step.tool}' not allowed in a sequence`);
+      if (step.args && "udid" in step.args)
+        errors.push(`run-sequence step ${i}: must not include 'udid' (it is injected)`);
       // validate inner step against its tool schema (udid is supplied by the runner)
       const schema = this.schemas.get(step.tool);
       if (schema) {
         const required = ((schema.required as string[]) ?? []).filter((r) => r !== "udid");
-        for (const r of required) if (!(r in (step.args ?? {}))) errors.push(`run-sequence step ${i}: missing required '${r}' for ${step.tool}`);
+        for (const r of required)
+          if (!(r in (step.args ?? {})))
+            errors.push(`run-sequence step ${i}: missing required '${r}' for ${step.tool}`);
         const props = Object.keys((schema.properties as Record<string, unknown>) ?? {});
-        for (const k of Object.keys(step.args ?? {})) if (!props.includes(k)) errors.push(`run-sequence step ${i}: unknown arg '${k}' for ${step.tool}`);
+        for (const k of Object.keys(step.args ?? {}))
+          if (!props.includes(k))
+            errors.push(`run-sequence step ${i}: unknown arg '${k}' for ${step.tool}`);
       }
     }
   }
@@ -153,7 +178,11 @@ export class Validator {
       if (m.role === "assistant" && m.tool_calls) {
         for (const c of m.tool_calls) {
           if (c.name === "list-devices" && listedAt < 0) listedAt = idx;
-          if ((c.name === "boot-device" || c.name === "launch-app" || c.name === "open-url") && firstTouchAt < 0) firstTouchAt = idx;
+          if (
+            (c.name === "boot-device" || c.name === "launch-app" || c.name === "open-url") &&
+            firstTouchAt < 0
+          )
+            firstTouchAt = idx;
         }
       }
       idx++;
@@ -180,20 +209,27 @@ export class Validator {
           const x = Number(c.arguments.x);
           const y = Number(c.arguments.y);
           if (!lastDiscovery) {
-            errors.push(`gesture-tap at (${x},${y}) with no preceding discovery (guessed coordinates)`);
+            errors.push(
+              `gesture-tap at (${x},${y}) with no preceding discovery (guessed coordinates)`
+            );
           } else if (!this.isGrounded(lastDiscovery, x, y)) {
-            errors.push(`gesture-tap at (${x},${y}) not grounded in latest ${lastDiscovery.name} result (stale screen / ungrounded)`);
+            errors.push(
+              `gesture-tap at (${x},${y}) not grounded in latest ${lastDiscovery.name} result (stale screen / ungrounded)`
+            );
           }
         }
         if (c.name === "run-sequence") {
           // Ground the first tap step against the latest discovery.
-          const steps = (c.arguments.steps as Array<{ tool: string; args: Record<string, unknown> }>) ?? [];
+          const steps =
+            (c.arguments.steps as Array<{ tool: string; args: Record<string, unknown> }>) ?? [];
           const firstTap = steps.find((s) => s.tool === "gesture-tap");
           if (firstTap) {
             const x = Number(firstTap.args.x);
             const y = Number(firstTap.args.y);
-            if (!lastDiscovery) errors.push(`run-sequence tap (${x},${y}) with no preceding discovery`);
-            else if (!this.isGrounded(lastDiscovery, x, y)) errors.push(`run-sequence tap (${x},${y}) not grounded in latest discovery`);
+            if (!lastDiscovery)
+              errors.push(`run-sequence tap (${x},${y}) with no preceding discovery`);
+            else if (!this.isGrounded(lastDiscovery, x, y))
+              errors.push(`run-sequence tap (${x},${y}) not grounded in latest discovery`);
           }
         }
       }
@@ -208,14 +244,18 @@ export class Validator {
     // describe-family: box containment
     const boxes = parseDescribeBoxes(disc.content);
     const eps = 0.005;
-    return boxes.some((b) => x >= b.x - eps && x <= b.x + b.w + eps && y >= b.y - eps && y <= b.y + b.h + eps);
+    return boxes.some(
+      (b) => x >= b.x - eps && x <= b.x + b.w + eps && y >= b.y - eps && y <= b.y + b.h + eps
+    );
   }
 
   private checkToolsOffered(traj: Trajectory, errors: string[]) {
     const offered = new Set(traj.tools.map((t) => t.name));
     for (const m of traj.messages) {
       if (m.role === "assistant" && m.tool_calls) {
-        for (const c of m.tool_calls) if (!offered.has(c.name)) errors.push(`tool '${c.name}' called but not offered in tools[]`);
+        for (const c of m.tool_calls)
+          if (!offered.has(c.name))
+            errors.push(`tool '${c.name}' called but not offered in tools[]`);
       }
     }
   }

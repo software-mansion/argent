@@ -56,10 +56,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -78,10 +75,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -100,11 +94,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "bundleId",
-        "appPath"
-      ]
+      "required": ["udid", "bundleId", "appPath"]
     }
   },
   {
@@ -120,10 +110,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "url"
-      ]
+      "required": ["udid", "url"]
     }
   },
   {
@@ -137,12 +124,7 @@
         },
         "rotation": {
           "type": "string",
-          "enum": [
-            "Portrait",
-            "LandscapeLeft",
-            "LandscapeRight",
-            "PortraitUpsideDown"
-          ]
+          "enum": ["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"]
         },
         "scale": {
           "type": "number"
@@ -153,17 +135,10 @@
         },
         "downscaler": {
           "type": "string",
-          "enum": [
-            "lanczos3",
-            "box",
-            "bilinear",
-            "nearest"
-          ]
+          "enum": ["lanczos3", "box", "bilinear", "nearest"]
         }
       },
-      "required": [
-        "udid"
-      ]
+      "required": ["udid"]
     }
   },
   {
@@ -189,20 +164,13 @@
         },
         "rotation": {
           "type": "string",
-          "enum": [
-            "Portrait",
-            "LandscapeLeft",
-            "LandscapeRight",
-            "PortraitUpsideDown"
-          ]
+          "enum": ["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"]
         },
         "outputDir": {
           "type": "string"
         }
       },
-      "required": [
-        "udid"
-      ]
+      "required": ["udid"]
     }
   },
   {
@@ -221,11 +189,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "x",
-        "y"
-      ]
+      "required": ["udid", "x", "y"]
     }
   },
   {
@@ -239,12 +203,7 @@
         },
         "action": {
           "type": "string",
-          "enum": [
-            "list",
-            "select",
-            "new",
-            "close"
-          ]
+          "enum": ["list", "select", "new", "close"]
         },
         "tab": {
           "type": "string"
@@ -256,10 +215,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "action"
-      ]
+      "required": ["udid", "action"]
     }
   },
   {
@@ -273,12 +229,7 @@
         },
         "action": {
           "type": "string",
-          "enum": [
-            "get",
-            "set",
-            "delete",
-            "clear"
-          ]
+          "enum": ["get", "set", "delete", "clear"]
         },
         "name": {
           "type": "string"
@@ -303,20 +254,13 @@
         },
         "sameSite": {
           "type": "string",
-          "enum": [
-            "Strict",
-            "Lax",
-            "None"
-          ]
+          "enum": ["Strict", "Lax", "None"]
         },
         "expires": {
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "action"
-      ]
+      "required": ["udid", "action"]
     }
   },
   {
@@ -330,19 +274,11 @@
         },
         "store": {
           "type": "string",
-          "enum": [
-            "local",
-            "session"
-          ]
+          "enum": ["local", "session"]
         },
         "action": {
           "type": "string",
-          "enum": [
-            "get",
-            "set",
-            "remove",
-            "clear"
-          ]
+          "enum": ["get", "set", "remove", "clear"]
         },
         "key": {
           "type": "string"
@@ -351,11 +287,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "store",
-        "action"
-      ]
+      "required": ["udid", "store", "action"]
     }
   },
   {
@@ -383,13 +315,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "fromX",
-        "fromY",
-        "toX",
-        "toY"
-      ]
+      "required": ["udid", "fromX", "fromY", "toX", "toY"]
     }
   },
   {
@@ -417,11 +343,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "x",
-        "y"
-      ]
+      "required": ["udid", "x", "y"]
     }
   },
   {
@@ -449,13 +371,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "fromX",
-        "fromY",
-        "toX",
-        "toY"
-      ]
+      "required": ["udid", "fromX", "fromY", "toX", "toY"]
     }
   },
   {
@@ -474,11 +390,7 @@
             "properties": {
               "type": {
                 "type": "string",
-                "enum": [
-                  "Down",
-                  "Move",
-                  "Up"
-                ]
+                "enum": ["Down", "Move", "Up"]
               },
               "x": {
                 "type": "number"
@@ -496,21 +408,14 @@
                 "type": "number"
               }
             },
-            "required": [
-              "type",
-              "x",
-              "y"
-            ]
+            "required": ["type", "x", "y"]
           }
         },
         "interpolate": {
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "events"
-      ]
+      "required": ["udid", "events"]
     }
   },
   {
@@ -541,13 +446,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "centerX",
-        "centerY",
-        "startDistance",
-        "endDistance"
-      ]
+      "required": ["udid", "centerX", "centerY", "startDistance", "endDistance"]
     }
   },
   {
@@ -578,14 +477,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "centerX",
-        "centerY",
-        "radius",
-        "startAngle",
-        "endAngle"
-      ]
+      "required": ["udid", "centerX", "centerY", "radius", "startAngle", "endAngle"]
     }
   },
   {
@@ -599,21 +491,10 @@
         },
         "button": {
           "type": "string",
-          "enum": [
-            "home",
-            "back",
-            "power",
-            "volumeUp",
-            "volumeDown",
-            "appSwitch",
-            "actionButton"
-          ]
+          "enum": ["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]
         }
       },
-      "required": [
-        "udid",
-        "button"
-      ]
+      "required": ["udid", "button"]
     }
   },
   {
@@ -635,9 +516,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid"
-      ]
+      "required": ["udid"]
     }
   },
   {
@@ -651,18 +530,10 @@
         },
         "orientation": {
           "type": "string",
-          "enum": [
-            "Portrait",
-            "LandscapeLeft",
-            "LandscapeRight",
-            "PortraitUpsideDown"
-          ]
+          "enum": ["Portrait", "LandscapeLeft", "LandscapeRight", "PortraitUpsideDown"]
         }
       },
-      "required": [
-        "udid",
-        "orientation"
-      ]
+      "required": ["udid", "orientation"]
     }
   },
   {
@@ -689,17 +560,11 @@
                 "type": "number"
               }
             },
-            "required": [
-              "tool",
-              "args"
-            ]
+            "required": ["tool", "args"]
           }
         }
       },
-      "required": [
-        "udid",
-        "steps"
-      ]
+      "required": ["udid", "steps"]
     }
   },
   {
@@ -716,9 +581,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -735,9 +598,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -757,10 +618,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id",
-        "expression"
-      ]
+      "required": ["device_id", "expression"]
     }
   },
   {
@@ -777,9 +635,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -807,9 +663,7 @@
           "default": false
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -848,11 +702,7 @@
           "default": false
         }
       },
-      "required": [
-        "device_id",
-        "x",
-        "y"
-      ]
+      "required": ["device_id", "x", "y"]
     }
   },
   {
@@ -869,9 +719,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -891,9 +739,7 @@
           "default": "latest"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -917,10 +763,7 @@
           "default": true
         }
       },
-      "required": [
-        "device_id",
-        "requestId"
-      ]
+      "required": ["device_id", "requestId"]
     }
   },
   {
@@ -936,9 +779,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid"
-      ]
+      "required": ["udid"]
     }
   },
   {
@@ -963,9 +804,7 @@
           "default": false
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -982,9 +821,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1001,9 +838,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1024,10 +859,7 @@
         },
         "platform": {
           "type": "string",
-          "enum": [
-            "ios",
-            "android"
-          ],
+          "enum": ["ios", "android"],
           "default": "ios"
         },
         "rn_version": {
@@ -1046,17 +878,11 @@
                 "type": "string"
               }
             },
-            "required": [
-              "offsetMs",
-              "label"
-            ]
+            "required": ["offsetMs", "label"]
           }
         }
       },
-      "required": [
-        "device_id",
-        "project_root"
-      ]
+      "required": ["device_id", "project_root"]
     }
   },
   {
@@ -1072,10 +898,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "component_name",
-        "project_root"
-      ]
+      "required": ["component_name", "project_root"]
     }
   },
   {
@@ -1100,9 +923,7 @@
           "default": false
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1123,9 +944,7 @@
           "default": 20
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1149,9 +968,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1170,9 +987,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1185,9 +1000,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1200,9 +1013,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1220,12 +1031,7 @@
         },
         "mode": {
           "type": "string",
-          "enum": [
-            "top_functions",
-            "time_window",
-            "call_tree",
-            "component_cpu"
-          ]
+          "enum": ["top_functions", "time_window", "call_tree", "component_cpu"]
         },
         "time_window_ms": {
           "type": "object",
@@ -1237,10 +1043,7 @@
               "type": "number"
             }
           },
-          "required": [
-            "start",
-            "end"
-          ]
+          "required": ["start", "end"]
         },
         "component_name": {
           "type": "string"
@@ -1257,10 +1060,7 @@
           "default": false
         }
       },
-      "required": [
-        "device_id",
-        "mode"
-      ]
+      "required": ["device_id", "mode"]
     }
   },
   {
@@ -1278,12 +1078,7 @@
         },
         "mode": {
           "type": "string",
-          "enum": [
-            "by_component",
-            "by_time_range",
-            "by_index",
-            "cascade_tree"
-          ]
+          "enum": ["by_component", "by_time_range", "by_index", "cascade_tree"]
         },
         "component_name": {
           "type": "string"
@@ -1298,10 +1093,7 @@
               "type": "number"
             }
           },
-          "required": [
-            "start",
-            "end"
-          ]
+          "required": ["start", "end"]
         },
         "commit_index": {
           "type": "number"
@@ -1311,10 +1103,7 @@
           "default": 20
         }
       },
-      "required": [
-        "device_id",
-        "mode"
-      ]
+      "required": ["device_id", "mode"]
     }
   },
   {
@@ -1328,12 +1117,7 @@
         },
         "mode": {
           "type": "string",
-          "enum": [
-            "hang_stacks",
-            "function_callers",
-            "thread_breakdown",
-            "leak_stacks"
-          ]
+          "enum": ["hang_stacks", "function_callers", "thread_breakdown", "leak_stacks"]
         },
         "hang_index": {
           "type": "number"
@@ -1352,10 +1136,7 @@
           "default": 15
         }
       },
-      "required": [
-        "device_id",
-        "mode"
-      ]
+      "required": ["device_id", "mode"]
     }
   },
   {
@@ -1372,9 +1153,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "device_id"
-      ]
+      "required": ["device_id"]
     }
   },
   {
@@ -1385,11 +1164,7 @@
       "properties": {
         "mode": {
           "type": "string",
-          "enum": [
-            "list",
-            "load_react",
-            "load_native"
-          ]
+          "enum": ["list", "load_react", "load_native"]
         },
         "session_id": {
           "type": "string"
@@ -1405,10 +1180,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "mode",
-        "device_id"
-      ]
+      "required": ["mode", "device_id"]
     }
   },
   {
@@ -1421,9 +1193,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "workspacePath"
-      ]
+      "required": ["workspacePath"]
     }
   },
   {
@@ -1439,10 +1209,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -1466,10 +1233,7 @@
           "default": false
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -1512,10 +1276,7 @@
           }
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -1552,10 +1313,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -1583,10 +1341,7 @@
           }
         }
       },
-      "required": [
-        "udid",
-        "bundleId"
-      ]
+      "required": ["udid", "bundleId"]
     }
   },
   {
@@ -1635,12 +1390,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "bundleId",
-        "x",
-        "y"
-      ]
+      "required": ["udid", "bundleId", "x", "y"]
     }
   },
   {
@@ -1689,12 +1439,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "udid",
-        "bundleId",
-        "x",
-        "y"
-      ]
+      "required": ["udid", "bundleId", "x", "y"]
     }
   },
   {
@@ -1707,9 +1452,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "udid"
-      ]
+      "required": ["udid"]
     }
   },
   {
@@ -1749,11 +1492,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "name",
-        "project_root",
-        "executionPrerequisite"
-      ]
+      "required": ["name", "project_root", "executionPrerequisite"]
     }
   },
   {
@@ -1772,9 +1511,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "command"
-      ]
+      "required": ["command"]
     }
   },
   {
@@ -1787,9 +1524,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "message"
-      ]
+      "required": ["message"]
     }
   },
   {
@@ -1816,10 +1551,7 @@
           "type": "string"
         }
       },
-      "required": [
-        "name",
-        "project_root"
-      ]
+      "required": ["name", "project_root"]
     }
   },
   {
@@ -1841,10 +1573,7 @@
           "type": "boolean"
         }
       },
-      "required": [
-        "name",
-        "project_root"
-      ]
+      "required": ["name", "project_root"]
     }
   },
   {
@@ -1865,9 +1594,7 @@
           "type": "number"
         }
       },
-      "required": [
-        "hours"
-      ]
+      "required": ["hours"]
     }
   }
 ]

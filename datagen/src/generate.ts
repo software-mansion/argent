@@ -29,16 +29,23 @@ interface Args {
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { n: 200, seed: 1, out: join(HERE, "..", "out"), evalN: 40, emit: ["openai", "sharegpt"], samples: 4 };
+  const a: Args = {
+    n: 200,
+    seed: 1,
+    out: join(HERE, "..", "out"),
+    evalN: 40,
+    emit: ["openai", "sharegpt"],
+    samples: 4,
+  };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
-    if (k === "--n") (a.n = +v!), i++;
-    else if (k === "--seed") (a.seed = +v!), i++;
-    else if (k === "--out") (a.out = v!), i++;
-    else if (k === "--evalN") (a.evalN = +v!), i++;
-    else if (k === "--samples") (a.samples = +v!), i++;
-    else if (k === "--emit") (a.emit = v!.split(",")), i++;
+    if (k === "--n") ((a.n = +v!), i++);
+    else if (k === "--seed") ((a.seed = +v!), i++);
+    else if (k === "--out") ((a.out = v!), i++);
+    else if (k === "--evalN") ((a.evalN = +v!), i++);
+    else if (k === "--samples") ((a.samples = +v!), i++);
+    else if (k === "--emit") ((a.emit = v!.split(",")), i++);
   }
   return a;
 }
@@ -72,7 +79,13 @@ function generateOne(seed: number, catalog: ToolSpec[], validator: Validator): G
   return { traj, task };
 }
 
-function collect(label: string, baseSeed: number, count: number, catalog: ToolSpec[], validator: Validator) {
+function collect(
+  label: string,
+  baseSeed: number,
+  count: number,
+  catalog: ToolSpec[],
+  validator: Validator
+) {
   const accepted: Trajectory[] = [];
   const failures: { seed: number; kind?: string; errors: string[] }[] = [];
   let k = 0;
@@ -103,7 +116,8 @@ function computeStats(records: Trajectory[], catalog: ToolSpec[]) {
     totalCalls += r.meta.n_tool_calls;
     lengths.push(r.meta.n_tool_calls);
     for (const m of r.messages) {
-      if (m.role === "assistant" && m.tool_calls) for (const c of m.tool_calls) toolUse.set(c.name, (toolUse.get(c.name) ?? 0) + 1);
+      if (m.role === "assistant" && m.tool_calls)
+        for (const c of m.tool_calls) toolUse.set(c.name, (toolUse.get(c.name) ?? 0) + 1);
     }
   }
   lengths.sort((a, b) => a - b);
@@ -128,14 +142,22 @@ function computeStats(records: Trajectory[], catalog: ToolSpec[]) {
 }
 
 function renderSampleMarkdown(traj: Trajectory): string {
-  const lines: string[] = [`### ${traj.meta.id}  \`${traj.meta.task_type}/${traj.meta.platform}/${traj.meta.difficulty}\``, ""];
-  lines.push(`_tools offered: ${traj.tools.length} · tool calls: ${traj.meta.n_tool_calls} · recovery: ${traj.meta.has_recovery}_`, "");
+  const lines: string[] = [
+    `### ${traj.meta.id}  \`${traj.meta.task_type}/${traj.meta.platform}/${traj.meta.difficulty}\``,
+    "",
+  ];
+  lines.push(
+    `_tools offered: ${traj.tools.length} · tool calls: ${traj.meta.n_tool_calls} · recovery: ${traj.meta.has_recovery}_`,
+    ""
+  );
   for (const m of traj.messages) {
     if (m.role === "system") continue;
     if (m.role === "user") lines.push(`**user:** ${m.content}`, "");
     else if (m.role === "assistant") {
       if (m.content) lines.push(`**assistant:** ${m.content}`);
-      if (m.tool_calls) for (const c of m.tool_calls) lines.push("```tool_call\n" + c.name + " " + JSON.stringify(c.arguments) + "\n```");
+      if (m.tool_calls)
+        for (const c of m.tool_calls)
+          lines.push("```tool_call\n" + c.name + " " + JSON.stringify(c.arguments) + "\n```");
       lines.push("");
     } else if (m.role === "tool") {
       const short = m.content.length > 600 ? m.content.slice(0, 600) + " …" : m.content;
@@ -157,15 +179,18 @@ function main() {
 
   const train = collect("train", args.seed, args.n, catalog, validator);
   // Eval split: disjoint seed range so no overlap with train.
-  const evalSet = args.evalN > 0 ? collect("eval", args.seed + 1_000_000, args.evalN, catalog, validator) : null;
+  const evalSet =
+    args.evalN > 0 ? collect("eval", args.seed + 1_000_000, args.evalN, catalog, validator) : null;
 
   // normalized JSONL
   writeJsonl(join(args.out, "train.jsonl"), train.accepted);
   if (evalSet) writeJsonl(join(args.out, "eval.jsonl"), evalSet.accepted);
 
   // format conversions
-  if (args.emit.includes("openai")) writeJsonl(join(args.out, "train.openai.jsonl"), train.accepted.map(toOpenAI));
-  if (args.emit.includes("sharegpt")) writeJsonl(join(args.out, "train.sharegpt.jsonl"), train.accepted.map(toShareGPT));
+  if (args.emit.includes("openai"))
+    writeJsonl(join(args.out, "train.openai.jsonl"), train.accepted.map(toOpenAI));
+  if (args.emit.includes("sharegpt"))
+    writeJsonl(join(args.out, "train.sharegpt.jsonl"), train.accepted.map(toShareGPT));
 
   // failures (auditable)
   const allFailures = [...train.failures, ...(evalSet?.failures ?? [])];
@@ -178,7 +203,12 @@ function main() {
     generation: {
       train_accepted: train.accepted.length,
       train_attempts: train.attempts,
-      train_pass_rate_pct: Math.round((train.accepted.length / Math.max(1, train.attempts - train.failures.length + train.accepted.length)) * 1000) / 10,
+      train_pass_rate_pct:
+        Math.round(
+          (train.accepted.length /
+            Math.max(1, train.attempts - train.failures.length + train.accepted.length)) *
+            1000
+        ) / 10,
       train_rejected: train.failures.length,
       eval_accepted: evalSet?.accepted.length ?? 0,
       eval_rejected: evalSet?.failures.length ?? 0,
@@ -196,19 +226,29 @@ function main() {
   // console summary
   const rejected = train.failures.length + (evalSet?.failures.length ?? 0);
   console.log(`\n=== Argent datagen ===`);
-  console.log(`train: ${train.accepted.length} accepted / ${train.attempts} attempts (${train.failures.length} rejected)`);
-  if (evalSet) console.log(`eval:  ${evalSet.accepted.length} accepted (${evalSet.failures.length} rejected)`);
+  console.log(
+    `train: ${train.accepted.length} accepted / ${train.attempts} attempts (${train.failures.length} rejected)`
+  );
+  if (evalSet)
+    console.log(`eval:  ${evalSet.accepted.length} accepted (${evalSet.failures.length} rejected)`);
   console.log(`rejected total: ${rejected}`);
-  console.log(`tool coverage: ${stats.train.distinct_tools_used}/${catalog.length} (${stats.train.tool_coverage_pct}%)`);
-  console.log(`avg tool calls/traj: ${stats.train.avg_tool_calls}  (median ${stats.train.median_tool_calls}, max ${stats.train.max_tool_calls})`);
+  console.log(
+    `tool coverage: ${stats.train.distinct_tools_used}/${catalog.length} (${stats.train.tool_coverage_pct}%)`
+  );
+  console.log(
+    `avg tool calls/traj: ${stats.train.avg_tool_calls}  (median ${stats.train.median_tool_calls}, max ${stats.train.max_tool_calls})`
+  );
   console.log(`recovery trajectories: ${stats.train.recovery_pct}%`);
   console.log(`task types:`, stats.train.by_task_type);
   console.log(`platforms:`, stats.train.by_platform);
   if (rejected > 0) {
     console.log(`\nFirst few rejections:`);
-    for (const f of allFailures.slice(0, 5)) console.log(`  seed=${f.seed} kind=${f.kind}: ${f.errors[0]}`);
+    for (const f of allFailures.slice(0, 5))
+      console.log(`  seed=${f.seed} kind=${f.kind}: ${f.errors[0]}`);
   }
-  console.log(`\nwrote -> ${args.out}/{train.jsonl, eval.jsonl, train.openai.jsonl, train.sharegpt.jsonl, stats.json, samples.md, failures.jsonl}`);
+  console.log(
+    `\nwrote -> ${args.out}/{train.jsonl, eval.jsonl, train.openai.jsonl, train.sharegpt.jsonl, stats.json, samples.md, failures.jsonl}`
+  );
 }
 
 main();

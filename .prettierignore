@@ -11,3 +11,4 @@ pnpm-lock.yaml
 
 # Generated.
 **/tsconfig.tsbuildinfo
+datagen/out/

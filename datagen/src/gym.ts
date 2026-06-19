@@ -52,7 +52,8 @@ export function currentVisible(world: World): ElementDef[] {
 /** Resolve the element whose frame contains a normalized point. */
 export function elementAt(world: World, x: number, y: number): ElementDef | undefined {
   return currentVisible(world).find(
-    (e) => x >= e.frame.x && x <= e.frame.x + e.frame.w && y >= e.frame.y && y <= e.frame.y + e.frame.h
+    (e) =>
+      x >= e.frame.x && x <= e.frame.x + e.frame.w && y >= e.frame.y && y <= e.frame.y + e.frame.h
   );
 }
 
@@ -95,7 +96,10 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
       world.currentScreen = world.app.entryScreen;
       world.navStack = [];
       tick(world, 3000);
-      return { content: json({ restarted: true, bundleId: world.app.bundleId }), autoScreenshot: true };
+      return {
+        content: json({ restarted: true, bundleId: world.app.bundleId }),
+        autoScreenshot: true,
+      };
     }
 
     case "reinstall-app": {
@@ -210,12 +214,23 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
 
     case "gesture-pinch": {
       const ts = tick(world, 1500);
-      return { content: json({ pinched: true, timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+      return {
+        content: json({ pinched: true, timestampMs: ts }) + screenshotNote(world),
+        autoScreenshot: true,
+      };
     }
 
     case "rotate": {
       const ts = tick(world, 1000);
-      return { content: json({ rotated: true, orientation: String(args.orientation ?? "Portrait"), timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+      return {
+        content:
+          json({
+            rotated: true,
+            orientation: String(args.orientation ?? "Portrait"),
+            timestampMs: ts,
+          }) + screenshotNote(world),
+        autoScreenshot: true,
+      };
     }
 
     case "debugger-log-registry":
@@ -280,7 +295,12 @@ function listDevices(world: World) {
   return {
     devices: world.devices.map((d) => {
       if (d.platform === "ios") {
-        return { platform: "ios", udid: d.id, name: d.name, state: d.booted ? "Booted" : "Shutdown" };
+        return {
+          platform: "ios",
+          udid: d.id,
+          name: d.name,
+          state: d.booted ? "Booted" : "Shutdown",
+        };
       }
       if (d.platform === "android") {
         return {
@@ -315,9 +335,12 @@ function bootDevice(world: World, args: ToolArgs): ToolResult {
   }
   dev.booted = true;
   tick(world, dev.platform === "android" ? 45000 : 6000);
-  if (dev.platform === "ios") return { content: json({ platform: "ios", udid: dev.id, booted: true }) };
+  if (dev.platform === "ios")
+    return { content: json({ platform: "ios", udid: dev.id, booted: true }) };
   if (dev.platform === "android")
-    return { content: json({ platform: "android", serial: dev.id, avdName: dev.avdName, booted: true }) };
+    return {
+      content: json({ platform: "android", serial: dev.id, avdName: dev.avdName, booted: true }),
+    };
   return { content: json({ platform: "chromium", id: dev.id, port: dev.port, booted: true }) };
 }
 
@@ -359,7 +382,9 @@ function describe(world: World): ToolResult {
   }
   tick(world, 100);
   return {
-    content: formatDescribe(world.platform, currentScreenDef(world), isScrolled(world)) + screenshotNote(world),
+    content:
+      formatDescribe(world.platform, currentScreenDef(world), isScrolled(world)) +
+      screenshotNote(world),
     autoScreenshot: true,
   };
 }
@@ -398,7 +423,9 @@ function debuggerConnect(world: World): ToolResult {
 function componentTree(world: World): ToolResult {
   if (!world.debuggerConnected) {
     return {
-      content: json({ error: "No CDP target connected. Run debugger-status / debugger-connect first." }),
+      content: json({
+        error: "No CDP target connected. Run debugger-status / debugger-connect first.",
+      }),
       isError: true,
     };
   }
@@ -427,7 +454,10 @@ function gestureTap(world: World, args: ToolArgs): ToolResult {
   if (world.inject.tapMissOnce && el?.navigatesTo) {
     world.inject.tapMissOnce = false;
     tick(world, 1500);
-    return { content: json({ tapped: true, timestampMs: tick(world, 0) }) + screenshotNote(world), autoScreenshot: true };
+    return {
+      content: json({ tapped: true, timestampMs: tick(world, 0) }) + screenshotNote(world),
+      autoScreenshot: true,
+    };
   }
   if (el) {
     if (el.textField) setFocus(world, el.textField);
@@ -439,7 +469,10 @@ function gestureTap(world: World, args: ToolArgs): ToolResult {
     }
   }
   const ts = tick(world, 1500);
-  return { content: json({ tapped: true, timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+  return {
+    content: json({ tapped: true, timestampMs: ts }) + screenshotNote(world),
+    autoScreenshot: true,
+  };
 }
 
 function gestureSwipe(world: World, args: ToolArgs): ToolResult {
@@ -447,14 +480,20 @@ function gestureSwipe(world: World, args: ToolArgs): ToolResult {
   const toY = Number(args.toY);
   if (fromY > toY) world.scrolledScreens.add(world.currentScreen); // swipe up reveals more
   const ts = tick(world, 1500);
-  return { content: json({ swiped: true, timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+  return {
+    content: json({ swiped: true, timestampMs: ts }) + screenshotNote(world),
+    autoScreenshot: true,
+  };
 }
 
 function gestureScroll(world: World, args: ToolArgs): ToolResult {
   const deltaY = Number(args.deltaY ?? 0.5);
   if (deltaY > 0) world.scrolledScreens.add(world.currentScreen);
   const ts = tick(world, 1500);
-  return { content: json({ scrolled: true, timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+  return {
+    content: json({ scrolled: true, timestampMs: ts }) + screenshotNote(world),
+    autoScreenshot: true,
+  };
 }
 
 function keyboard(world: World, args: ToolArgs): ToolResult {
@@ -462,7 +501,10 @@ function keyboard(world: World, args: ToolArgs): ToolResult {
   const focus = getFocus(world);
   if (text && focus) world.fieldValues[focus] = text;
   const ts = tick(world, 300);
-  return { content: json({ ok: true, timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+  return {
+    content: json({ ok: true, timestampMs: ts }) + screenshotNote(world),
+    autoScreenshot: true,
+  };
 }
 
 function pressButton(world: World, args: ToolArgs): ToolResult {
@@ -471,7 +513,10 @@ function pressButton(world: World, args: ToolArgs): ToolResult {
     world.currentScreen = world.navStack.pop()!;
   }
   const ts = tick(world, 1500);
-  return { content: json({ pressed: true, button, timestampMs: ts }) + screenshotNote(world), autoScreenshot: true };
+  return {
+    content: json({ pressed: true, button, timestampMs: ts }) + screenshotNote(world),
+    autoScreenshot: true,
+  };
 }
 
 function runSequence(world: World, args: ToolArgs): ToolResult {
@@ -485,7 +530,9 @@ function runSequence(world: World, args: ToolArgs): ToolResult {
   }
   tick(world, 500);
   return {
-    content: json({ completed: results.length, total: steps.length, steps: results }) + screenshotNote(world),
+    content:
+      json({ completed: results.length, total: steps.length, steps: results }) +
+      screenshotNote(world),
     autoScreenshot: true,
   };
 }
@@ -532,7 +579,12 @@ function networkDetails(world: World, args: ToolArgs): ToolResult {
       resourceType: r.resourceType,
       durationMs: r.durationMs,
       encodedDataLength: r.bytes,
-      request: { url: r.url, method: r.method, headers: { "content-type": "application/json" }, postData: r.reqBody },
+      request: {
+        url: r.url,
+        method: r.method,
+        headers: { "content-type": "application/json" },
+        postData: r.reqBody,
+      },
       response: {
         status: r.status,
         statusText: r.statusText,
@@ -577,7 +629,8 @@ function flowAddEcho(world: World, args: ToolArgs): ToolResult {
 function flowAddStep(world: World, args: ToolArgs): ToolResult {
   if (!world.flowRecording) throw new GymError("no active recording");
   const command = String(args.command ?? "");
-  const parsed = typeof args.args === "string" ? safeParse(args.args) : (args.args as ToolArgs) ?? {};
+  const parsed =
+    typeof args.args === "string" ? safeParse(args.args) : ((args.args as ToolArgs) ?? {});
   // The step runs immediately during recording.
   const r = execute(world, command, parsed);
   world.flowRecording.steps.push({ kind: "tool", name: command, args: parsed });
@@ -617,7 +670,11 @@ function flowExecute(world: World, args: ToolArgs): ToolResult {
       steps.push({ kind: "echo", message: s.message });
     } else {
       const r = execute(world, s.name!, s.args ?? {});
-      steps.push({ kind: "tool", tool: s.name, result: JSON.parse(stripScreenshotNote(r.content)) });
+      steps.push({
+        kind: "tool",
+        tool: s.name,
+        result: JSON.parse(stripScreenshotNote(r.content)),
+      });
     }
   }
   tick(world, 1000);
@@ -733,12 +790,21 @@ function nativeDescribe(world: World) {
     status: "ok",
     screenFrame: { x: 0, y: 0, width: px.w, height: px.h },
     elements: currentVisible(world).map((e) => ({
-      normalizedFrame: { x: round3(e.frame.x), y: round3(e.frame.y), width: round3(e.frame.w), height: round3(e.frame.h) },
-      normalizedTapPoint: { x: round3(e.frame.x + e.frame.w / 2), y: round3(e.frame.y + e.frame.h / 2) },
+      normalizedFrame: {
+        x: round3(e.frame.x),
+        y: round3(e.frame.y),
+        width: round3(e.frame.w),
+        height: round3(e.frame.h),
+      },
+      normalizedTapPoint: {
+        x: round3(e.frame.x + e.frame.w / 2),
+        y: round3(e.frame.y + e.frame.h / 2),
+      },
       traits: traitsFor(e.role),
       label: e.label,
       identifier: e.identifier,
-      viewClassName: e.role === "button" ? "UIButton" : e.role === "field" ? "UITextField" : "UIView",
+      viewClassName:
+        e.role === "button" ? "UIButton" : e.role === "field" ? "UITextField" : "UIView",
     })),
   };
 }
@@ -774,12 +840,22 @@ function chromiumTabs(world: World, args: ToolArgs): ToolResult {
       world.navStack.push(world.currentScreen);
       world.currentScreen = target;
     }
-    return { content: json({ opened: true, tabId: "t" + (world.clock % 97), url, active: true }) + screenshotNote(world), autoScreenshot: true };
+    return {
+      content:
+        json({ opened: true, tabId: "t" + (world.clock % 97), url, active: true }) +
+        screenshotNote(world),
+      autoScreenshot: true,
+    };
   }
   return {
     content: json({
       tabs: [
-        { tabId: "t1", title: world.app.name, url: Object.keys(world.app.urls ?? { x: "" })[0], active: true },
+        {
+          tabId: "t1",
+          title: world.app.name,
+          url: Object.keys(world.app.urls ?? { x: "" })[0],
+          active: true,
+        },
         { tabId: "t2", title: "Docs", url: "https://docs.example.com", active: false },
       ],
     }),

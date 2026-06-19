@@ -52,7 +52,12 @@ export function makeScreen(opts: {
 }): ScreenDef {
   const elements: ElementDef[] = [];
   if (opts.heading) {
-    elements.push({ key: `${opts.key}-h`, role: "heading", label: opts.heading, frame: headingFrame() });
+    elements.push({
+      key: `${opts.key}-h`,
+      role: "heading",
+      label: opts.heading,
+      frame: headingFrame(),
+    });
   }
   opts.rows.forEach((r, i) => {
     elements.push({
@@ -96,7 +101,12 @@ export function makeFormScreen(opts: {
 }): ScreenDef {
   const elements: ElementDef[] = [];
   if (opts.heading) {
-    elements.push({ key: `${opts.key}-h`, role: "heading", label: opts.heading, frame: headingFrame() });
+    elements.push({
+      key: `${opts.key}-h`,
+      role: "heading",
+      label: opts.heading,
+      frame: headingFrame(),
+    });
   }
   opts.fields.forEach((f, i) => {
     elements.push({

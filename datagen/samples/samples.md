@@ -1,12 +1,13 @@
 # Sample trajectories
 
-### argent-flow-record-1  `flow-record/ios/easy`
+### argent-flow-record-1 `flow-record/ios/easy`
 
 _tools offered: 28 · tool calls: 13 · recovery: false_
 
 **user:** Save the steps to reach "Tracking" in Settings as a flow so we can re-run it later.
 
 **assistant:** I'll check which simulators/emulators are running before doing anything.
+
 ```tool_call
 list-devices {}
 ```
@@ -16,6 +17,7 @@ list-devices {}
 ```
 
 **assistant:** Let me launch the app (Settings).
+
 ```tool_call
 launch-app {"udid":"49B6F772-6327-16C4-3069-C43A8C3B7CF3","bundleId":"com.apple.Preferences"}
 ```
@@ -27,6 +29,7 @@ launch-app {"udid":"49B6F772-6327-16C4-3069-C43A8C3B7CF3","bundleId":"com.apple.
 ```
 
 **assistant:** Recording a reusable flow for this path.
+
 ```tool_call
 flow-start-recording {"name":"ios-settings-to-tracking","project_root":"/Users/dev/ios-settings","executionPrerequisite":"App launched on the Settings screen"}
 ```
@@ -36,6 +39,7 @@ flow-start-recording {"name":"ios-settings-to-tracking","project_root":"/Users/d
 ```
 
 **assistant:** Let me describe the screen to get exact, grounded coordinates.
+
 ```tool_call
 describe {"udid":"49B6F772-6327-16C4-3069-C43A8C3B7CF3"}
 ```
@@ -54,9 +58,11 @@ ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)
 ```
 
 **assistant:** Labeling and recording the tap on "Privacy & Security".
+
 ```tool_call
 flow-add-echo {"message":"Tap Privacy & Security"}
 ```
+
 ```tool_call
 flow-add-step {"command":"gesture-tap","args":"{\"udid\":\"49B6F772-6327-16C4-3069-C43A8C3B7CF3\",\"x\":0.5,\"y\":0.43}"}
 ```
@@ -70,6 +76,7 @@ flow-add-step {"command":"gesture-tap","args":"{\"udid\":\"49B6F772-6327-16C4-30
 ```
 
 **assistant:** Reading the accessibility tree so I don't guess coordinates.
+
 ```tool_call
 describe {"udid":"49B6F772-6327-16C4-3069-C43A8C3B7CF3"}
 ```
@@ -89,9 +96,11 @@ ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)
 ```
 
 **assistant:** Labeling and recording the tap on "Tracking".
+
 ```tool_call
 flow-add-echo {"message":"Tap Tracking"}
 ```
+
 ```tool_call
 flow-add-step {"command":"gesture-tap","args":"{\"udid\":\"49B6F772-6327-16C4-3069-C43A8C3B7CF3\",\"x\":0.5,\"y\":0.26}"}
 ```
@@ -105,6 +114,7 @@ flow-add-step {"command":"gesture-tap","args":"{\"udid\":\"49B6F772-6327-16C4-30
 ```
 
 **assistant:** Finishing the recording.
+
 ```tool_call
 flow-finish-recording {}
 ```
@@ -114,6 +124,7 @@ flow-finish-recording {}
 ```
 
 **assistant:** Returning to the start state so the replay matches the prerequisite.
+
 ```tool_call
 restart-app {"udid":"49B6F772-6327-16C4-3069-C43A8C3B7CF3","bundleId":"com.apple.Preferences"}
 ```
@@ -123,6 +134,7 @@ restart-app {"udid":"49B6F772-6327-16C4-3069-C43A8C3B7CF3","bundleId":"com.apple
 ```
 
 **assistant:** Replaying the flow to confirm it reproduces.
+
 ```tool_call
 flow-execute {"name":"ios-settings-to-tracking","project_root":"/Users/dev/ios-settings"}
 ```
@@ -132,6 +144,7 @@ flow-execute {"name":"ios-settings-to-tracking","project_root":"/Users/dev/ios-s
 ```
 
 **assistant:** The prerequisite is satisfied, so I'll acknowledge it and run the flow.
+
 ```tool_call
 flow-execute {"name":"ios-settings-to-tracking","project_root":"/Users/dev/ios-settings","prerequisiteAcknowledged":true}
 ```
@@ -146,13 +159,14 @@ flow-execute {"name":"ios-settings-to-tracking","project_root":"/Users/dev/ios-s
 
 ---
 
-### argent-android-setup-2  `android-setup/android/hard`
+### argent-android-setup-2 `android-setup/android/hard`
 
 _tools offered: 28 · tool calls: 8 · recovery: false_
 
 **user:** Nothing's running — get ShopMart up on Android and open "Mechanical Keyboard".
 
 **assistant:** Starting by listing available devices.
+
 ```tool_call
 list-devices {}
 ```
@@ -162,6 +176,7 @@ list-devices {}
 ```
 
 **assistant:** No device is booted, so I'll boot Pixel 7.
+
 ```tool_call
 boot-device {"avdName":"Pixel_7_API_33"}
 ```
@@ -171,6 +186,7 @@ boot-device {"avdName":"Pixel_7_API_33"}
 ```
 
 **assistant:** Opening ShopMart on the device.
+
 ```tool_call
 launch-app {"udid":"emulator-5556","bundleId":"com.shopmart.app"}
 ```
@@ -182,6 +198,7 @@ launch-app {"udid":"emulator-5556","bundleId":"com.shopmart.app"}
 ```
 
 **assistant:** This is a React Native app on Android, so Metro needs `adb -s emulator-5556 reverse tcp:8081 tcp:8081` to be reachable. With that in place I'll check the debugger status.
+
 ```tool_call
 debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -191,6 +208,7 @@ debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -211,6 +229,7 @@ HomeScreen
 ```
 
 **assistant:** Now I'll tap "Search" at its centre.
+
 ```tool_call
 gesture-tap {"udid":"emulator-5556","x":0.375,"y":0.965}
 ```
@@ -222,6 +241,7 @@ gesture-tap {"udid":"emulator-5556","x":0.375,"y":0.965}
 ```
 
 **assistant:** Let me read the component tree to find the element and its tap coordinates.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -240,6 +260,7 @@ SearchScreen
 ```
 
 **assistant:** "Mechanical Keyboard" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"emulator-5556","x":0.5,"y":0.26}
 ```
@@ -254,13 +275,14 @@ gesture-tap {"udid":"emulator-5556","x":0.5,"y":0.26}
 
 ---
 
-### argent-android-setup-3  `android-setup/android/hard`
+### argent-android-setup-3 `android-setup/android/hard`
 
 _tools offered: 28 · tool calls: 8 · recovery: false_
 
 **user:** Boot the Android emulator, launch ShopMart, and tap "Checkout".
 
 **assistant:** First, let me see what devices are available.
+
 ```tool_call
 list-devices {}
 ```
@@ -270,6 +292,7 @@ list-devices {}
 ```
 
 **assistant:** No device is booted, so I'll boot sdk_gphone64_arm64.
+
 ```tool_call
 boot-device {"avdName":"Pixel_8_API_34"}
 ```
@@ -279,6 +302,7 @@ boot-device {"avdName":"Pixel_8_API_34"}
 ```
 
 **assistant:** Let me launch the app (ShopMart).
+
 ```tool_call
 launch-app {"udid":"emulator-5556","bundleId":"com.shopmart.app"}
 ```
@@ -290,6 +314,7 @@ launch-app {"udid":"emulator-5556","bundleId":"com.shopmart.app"}
 ```
 
 **assistant:** This is a React Native app on Android, so Metro needs `adb -s emulator-5556 reverse tcp:8081 tcp:8081` to be reachable. With that in place I'll check the debugger status.
+
 ```tool_call
 debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -299,6 +324,7 @@ debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
 
 **assistant:** I'll pull the React component tree to locate the target.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -319,6 +345,7 @@ HomeScreen
 ```
 
 **assistant:** "Cart" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"emulator-5556","x":0.625,"y":0.965}
 ```
@@ -330,6 +357,7 @@ gesture-tap {"udid":"emulator-5556","x":0.625,"y":0.965}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -348,6 +376,7 @@ CartScreen
 ```
 
 **assistant:** Tapping "Checkout".
+
 ```tool_call
 gesture-tap {"udid":"emulator-5556","x":0.5,"y":0.26}
 ```
@@ -362,13 +391,14 @@ gesture-tap {"udid":"emulator-5556","x":0.5,"y":0.26}
 
 ---
 
-### argent-pinch-zoom-4  `pinch-zoom/ios/medium`
+### argent-pinch-zoom-4 `pinch-zoom/ios/medium`
 
 _tools offered: 28 · tool calls: 7 · recovery: false_
 
 **user:** Pinch-zoom the "Summer Sale -40%" in ShopMart and check it scales across rotations.
 
 **assistant:** Let me list the devices so I target the right one.
+
 ```tool_call
 list-devices {}
 ```
@@ -378,6 +408,7 @@ list-devices {}
 ```
 
 **assistant:** Opening ShopMart on the device.
+
 ```tool_call
 launch-app {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","bundleId":"com.shopmart.app"}
 ```
@@ -389,6 +420,7 @@ launch-app {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","bundleId":"com.shopma
 ```
 
 **assistant:** Connecting to the JS debugger so I can read the React component tree.
+
 ```tool_call
 debugger-status {"port":8081,"device_id":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6"}
 ```
@@ -398,6 +430,7 @@ debugger-status {"port":8081,"device_id":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6"}
 ```
 
 **assistant:** I'll pull the React component tree to locate the target.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6"}
 ```
@@ -418,6 +451,7 @@ HomeScreen
 ```
 
 **assistant:** Pinching out to zoom into "Summer Sale -40%".
+
 ```tool_call
 gesture-pinch {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","centerX":0.5,"centerY":0.175,"startDistance":0.15,"endDistance":0.6}
 ```
@@ -429,6 +463,7 @@ gesture-pinch {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","centerX":0.5,"cent
 ```
 
 **assistant:** Rotating to landscape to check the image scales correctly.
+
 ```tool_call
 rotate {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","orientation":"LandscapeLeft"}
 ```
@@ -440,6 +475,7 @@ rotate {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","orientation":"LandscapeLe
 ```
 
 **assistant:** Rotating back to portrait.
+
 ```tool_call
 rotate {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","orientation":"Portrait"}
 ```
@@ -454,13 +490,14 @@ rotate {"udid":"381F9BC5-BE8B-67BE-F75C-4C857078C1C6","orientation":"Portrait"}
 
 ---
 
-### argent-network-inspect-5  `network-inspect/ios/medium`
+### argent-network-inspect-5 `network-inspect/ios/medium`
 
 _tools offered: 28 · tool calls: 9 · recovery: false_
 
 **user:** Inspect the API call ShopMart makes when you open "Add to Cart".
 
 **assistant:** First, let me see what devices are available.
+
 ```tool_call
 list-devices {}
 ```
@@ -470,6 +507,7 @@ list-devices {}
 ```
 
 **assistant:** Let me launch the app (ShopMart).
+
 ```tool_call
 launch-app {"udid":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","bundleId":"com.shopmart.app"}
 ```
@@ -481,6 +519,7 @@ launch-app {"udid":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","bundleId":"com.shopma
 ```
 
 **assistant:** Connecting to the JS debugger so I can read the React component tree.
+
 ```tool_call
 debugger-status {"port":8081,"device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46"}
 ```
@@ -490,6 +529,7 @@ debugger-status {"port":8081,"device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46"}
 ```
 
 **assistant:** Let me read the component tree to find the element and its tap coordinates.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46"}
 ```
@@ -510,6 +550,7 @@ HomeScreen
 ```
 
 **assistant:** Now I'll tap "Wireless Headphones" at its centre.
+
 ```tool_call
 gesture-tap {"udid":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","x":0.5,"y":0.26}
 ```
@@ -521,6 +562,7 @@ gesture-tap {"udid":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","x":0.5,"y":0.26}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46"}
 ```
@@ -540,6 +582,7 @@ ProductScreen
 ```
 
 **assistant:** "Add to Cart" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","x":0.5,"y":0.345}
 ```
@@ -551,6 +594,7 @@ gesture-tap {"udid":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","x":0.5,"y":0.345}
 ```
 
 **assistant:** Checking the captured network log.
+
 ```tool_call
 view-network-logs {"device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","port":8081}
 ```
@@ -563,6 +607,7 @@ view-network-logs {"device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","port":808
 ```
 
 **assistant:** Pulling the full request/response for that call.
+
 ```tool_call
 view-network-request-details {"requestId":"req_2","device_id":"19B7E3CB-A074-E4CB-40C3-417F31D56F46","port":8081}
 ```
@@ -575,13 +620,14 @@ view-network-request-details {"requestId":"req_2","device_id":"19B7E3CB-A074-E4C
 
 ---
 
-### argent-profile-6  `profile/android/hard`
+### argent-profile-6 `profile/android/hard`
 
 _tools offered: 28 · tool calls: 15 · recovery: false_
 
 **user:** ShopMart feels janky when scrolling the Home. Profile it and tell me the bottleneck.
 
 **assistant:** Starting by listing available devices.
+
 ```tool_call
 list-devices {}
 ```
@@ -591,6 +637,7 @@ list-devices {}
 ```
 
 **assistant:** Now I'll launch ShopMart.
+
 ```tool_call
 launch-app {"udid":"emulator-5556","bundleId":"com.shopmart.app"}
 ```
@@ -602,6 +649,7 @@ launch-app {"udid":"emulator-5556","bundleId":"com.shopmart.app"}
 ```
 
 **assistant:** This is a React Native app on Android, so Metro needs `adb -s emulator-5556 reverse tcp:8081 tcp:8081` to be reachable. With that in place I'll check the debugger status.
+
 ```tool_call
 debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
@@ -611,9 +659,11 @@ debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
 
 **assistant:** Starting the React and native profilers together so their captures are wall-clock aligned. I'll record interaction timestamps for annotations.
+
 ```tool_call
 react-profiler-start {"device_id":"emulator-5556","port":8081}
 ```
+
 ```tool_call
 native-profiler-start {"device_id":"emulator-5556"}
 ```
@@ -627,6 +677,7 @@ native-profiler-start {"device_id":"emulator-5556"}
 ```
 
 **assistant:** Scrolling the list to exercise the render path.
+
 ```tool_call
 gesture-swipe {"udid":"emulator-5556","fromX":0.5,"fromY":0.78,"toX":0.5,"toY":0.22}
 ```
@@ -638,6 +689,7 @@ gesture-swipe {"udid":"emulator-5556","fromX":0.5,"fromY":0.78,"toX":0.5,"toY":0
 ```
 
 **assistant:** Scrolling once more to get a few commits.
+
 ```tool_call
 gesture-swipe {"udid":"emulator-5556","fromX":0.5,"fromY":0.78,"toX":0.5,"toY":0.22}
 ```
@@ -649,9 +701,11 @@ gesture-swipe {"udid":"emulator-5556","fromX":0.5,"fromY":0.78,"toX":0.5,"toY":0
 ```
 
 **assistant:** Stopping both profilers.
+
 ```tool_call
 react-profiler-stop {"device_id":"emulator-5556","port":8081}
 ```
+
 ```tool_call
 native-profiler-stop {"device_id":"emulator-5556"}
 ```
@@ -665,6 +719,7 @@ native-profiler-stop {"device_id":"emulator-5556"}
 ```
 
 **assistant:** Analyzing the React commits with the interaction annotations.
+
 ```tool_call
 react-profiler-analyze {"device_id":"emulator-5556","port":8081,"platform":"android","project_root":"/Users/dev/rn-shop","rn_version":"0.81.0","annotations":[{"label":"scroll 1","offsetMs":1700},{"label":"scroll 2","offsetMs":3200}]}
 ```
@@ -687,6 +742,7 @@ Wrap `HomeRow` in React.memo and hoist the row press handler. Re-profile to conf
 ```
 
 **assistant:** Analyzing the native trace.
+
 ```tool_call
 native-profiler-analyze {"device_id":"emulator-5556"}
 ```
@@ -706,6 +762,7 @@ native-profiler-analyze {"device_id":"emulator-5556"}
 ```
 
 **assistant:** Correlating both with the combined report.
+
 ```tool_call
 profiler-combined-report {"device_id":"emulator-5556","port":8081}
 ```
@@ -720,6 +777,7 @@ native image decode is the dominant cost; the JS re-render is secondary.
 ```
 
 **assistant:** Drilling into the per-component renders to confirm the hot component.
+
 ```tool_call
 react-profiler-renders {"device_id":"emulator-5556","port":8081,"top_n":5}
 ```
@@ -734,6 +792,7 @@ react-profiler-renders {"device_id":"emulator-5556","port":8081,"top_n":5}
 ```
 
 **assistant:** Querying the CPU hotspots for that window.
+
 ```tool_call
 profiler-cpu-query {"device_id":"emulator-5556","port":8081,"mode":"top_functions","top_n":5}
 ```
@@ -746,6 +805,7 @@ profiler-cpu-query {"device_id":"emulator-5556","port":8081,"mode":"top_function
 ```
 
 **assistant:** Opening the source of `HomeRow` to see what's re-rendering.
+
 ```tool_call
 react-profiler-component-source {"component_name":"HomeRow","project_root":"/Users/dev/rn-shop"}
 ```
@@ -758,13 +818,14 @@ react-profiler-component-source {"component_name":"HomeRow","project_root":"/Use
 
 ---
 
-### argent-navigate-tap-7  `navigate-tap/ios/easy`
+### argent-navigate-tap-7 `navigate-tap/ios/easy`
 
 _tools offered: 28 · tool calls: 10 · recovery: true_
 
 **user:** Open Settings and get to "Battery Health & Charging" (it's under Battery).
 
 **assistant:** Starting by listing available devices.
+
 ```tool_call
 list-devices {}
 ```
@@ -774,6 +835,7 @@ list-devices {}
 ```
 
 **assistant:** Let me launch the app (Settings).
+
 ```tool_call
 launch-app {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","bundleId":"com.apple.Preferences"}
 ```
@@ -785,6 +847,7 @@ launch-app {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","bundleId":"com.apple.
 ```
 
 **assistant:** I'll run describe to find the element before tapping.
+
 ```tool_call
 describe {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02"}
 ```
@@ -803,6 +866,7 @@ ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)
 ```
 
 **assistant:** I need to scroll; the element is below the fold.
+
 ```tool_call
 gesture-swipe {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","fromX":0.5,"fromY":0.75,"toX":0.5,"toY":0.25}
 ```
@@ -814,6 +878,7 @@ gesture-swipe {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","fromX":0.5,"fromY"
 ```
 
 **assistant:** Let me describe the screen to get exact, grounded coordinates.
+
 ```tool_call
 describe {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02"}
 ```
@@ -832,6 +897,7 @@ ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)
 ```
 
 **assistant:** Now I'll tap "Battery" at its centre.
+
 ```tool_call
 gesture-tap {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","x":0.5,"y":0.515}
 ```
@@ -843,6 +909,7 @@ gesture-tap {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","x":0.5,"y":0.515}
 ```
 
 **assistant:** Let me describe the screen to get exact, grounded coordinates.
+
 ```tool_call
 describe {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02"}
 ```
@@ -862,6 +929,7 @@ ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)
 ```
 
 **assistant:** "Battery Health & Charging" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","x":0.5,"y":0.26}
 ```
@@ -873,6 +941,7 @@ gesture-tap {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","x":0.5,"y":0.26}
 ```
 
 **assistant:** The screen looks unchanged after the tap — re-running discovery to get fresh coordinates instead of tapping the same spot again.
+
 ```tool_call
 describe {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02"}
 ```
@@ -892,6 +961,7 @@ ROOT  AXGroup (0.000, 0.000, 1.000, 1.000)
 ```
 
 **assistant:** "Battery Health & Charging" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","x":0.5,"y":0.26}
 ```
@@ -906,13 +976,14 @@ gesture-tap {"udid":"38B42C83-5484-F3E3-2248-C1E89AF9ED02","x":0.5,"y":0.26}
 
 ---
 
-### argent-navigate-tap-8  `navigate-tap/ios/medium`
+### argent-navigate-tap-8 `navigate-tap/ios/medium`
 
 _tools offered: 28 · tool calls: 9 · recovery: false_
 
 **user:** Go into Habitly, drill into Sign In / Add habit, and tap Save.
 
 **assistant:** Starting by listing available devices.
+
 ```tool_call
 list-devices {}
 ```
@@ -922,6 +993,7 @@ list-devices {}
 ```
 
 **assistant:** Opening Habitly on the device.
+
 ```tool_call
 launch-app {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","bundleId":"com.habitly.app"}
 ```
@@ -933,6 +1005,7 @@ launch-app {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","bundleId":"com.habitl
 ```
 
 **assistant:** This is a React Native app, so I'll connect to the Metro debugger to use the component tree.
+
 ```tool_call
 debugger-status {"port":8081,"device_id":"38081932-FB12-087C-C075-8581D5BE8ACA"}
 ```
@@ -942,6 +1015,7 @@ debugger-status {"port":8081,"device_id":"38081932-FB12-087C-C075-8581D5BE8ACA"}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"38081932-FB12-087C-C075-8581D5BE8ACA"}
 ```
@@ -957,6 +1031,7 @@ SignInScreen
 ```
 
 **assistant:** "Sign In" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","x":0.5,"y":0.483}
 ```
@@ -968,6 +1043,7 @@ gesture-tap {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","x":0.5,"y":0.483}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"38081932-FB12-087C-C075-8581D5BE8ACA"}
 ```
@@ -984,6 +1060,7 @@ TodayScreen
 ```
 
 **assistant:** Now I'll tap "Add habit" at its centre.
+
 ```tool_call
 gesture-tap {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","x":0.5,"y":0.43}
 ```
@@ -995,6 +1072,7 @@ gesture-tap {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","x":0.5,"y":0.43}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
+
 ```tool_call
 debugger-component-tree {"port":8081,"device_id":"38081932-FB12-087C-C075-8581D5BE8ACA"}
 ```
@@ -1009,6 +1087,7 @@ NewHabitScreen
 ```
 
 **assistant:** "Save" is there — tapping its centre.
+
 ```tool_call
 gesture-tap {"udid":"38081932-FB12-087C-C075-8581D5BE8ACA","x":0.5,"y":0.382}
 ```

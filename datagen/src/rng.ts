@@ -6,7 +6,7 @@ export class RNG {
 
   constructor(seed: number) {
     // Avoid a zero state which collapses mulberry32.
-    this.state = (seed >>> 0) || 0x9e3779b9;
+    this.state = seed >>> 0 || 0x9e3779b9;
   }
 
   next(): number {

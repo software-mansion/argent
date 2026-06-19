@@ -49,7 +49,11 @@ class Builder {
       name: c.name,
       arguments: c.args,
     }));
-    this.messages.push({ role: "assistant", content: narration, tool_calls: toolCalls.length ? toolCalls : undefined });
+    this.messages.push({
+      role: "assistant",
+      content: narration,
+      tool_calls: toolCalls.length ? toolCalls : undefined,
+    });
     this.assistantTurns++;
     const results: ToolResult[] = [];
     for (const tc of toolCalls) {
@@ -57,7 +61,12 @@ class Builder {
       this.toolCalls++;
       const res = execute(this.world, tc.name, tc.arguments);
       results.push(res);
-      this.messages.push({ role: "tool", tool_call_id: tc.id, name: tc.name, content: res.content });
+      this.messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        name: tc.name,
+        content: res.content,
+      });
     }
     return results;
   }
@@ -90,7 +99,9 @@ function ensureDevice(b: Builder) {
 
 function ensureLaunched(b: Builder) {
   const w = b.world;
-  b.act(narr.launch(b.rng, w.app.name), [{ name: "launch-app", args: { udid: w.deviceId, bundleId: w.app.bundleId } }]);
+  b.act(narr.launch(b.rng, w.app.name), [
+    { name: "launch-app", args: { udid: w.deviceId, bundleId: w.app.bundleId } },
+  ]);
   if (w.app.isReactNative) {
     const note =
       w.platform === "android"
@@ -102,13 +113,17 @@ function ensureLaunched(b: Builder) {
           metroPort(w) +
           "` to be reachable. With that in place I'll check the debugger status."
         : narr.connectDebugger(b.rng);
-    const res = b.act(note, [{ name: "debugger-status", args: { port: metroPort(w), device_id: w.deviceId } }]);
+    const res = b.act(note, [
+      { name: "debugger-status", args: { port: metroPort(w), device_id: w.deviceId } },
+    ]);
     if (res[0]?.isError) {
       b.hasRecovery = true;
       b.act("No CDP target yet — restarting the app so it reattaches to Metro.", [
         { name: "restart-app", args: { udid: w.deviceId, bundleId: w.app.bundleId } },
       ]);
-      b.act("Retrying the debugger status.", [{ name: "debugger-status", args: { port: metroPort(w), device_id: w.deviceId } }]);
+      b.act("Retrying the debugger status.", [
+        { name: "debugger-status", args: { port: metroPort(w), device_id: w.deviceId } },
+      ]);
     }
   }
 }
@@ -118,10 +133,14 @@ function discover(b: Builder, narration?: string): string {
   const w = b.world;
   if (w.app.isReactNative) {
     const tool = "debugger-component-tree";
-    b.act(narration ?? narr.discover(b.rng, tool), [{ name: tool, args: { port: metroPort(w), device_id: w.deviceId } }]);
+    b.act(narration ?? narr.discover(b.rng, tool), [
+      { name: tool, args: { port: metroPort(w), device_id: w.deviceId } },
+    ]);
     return tool;
   }
-  const res = b.act(narration ?? narr.discover(b.rng, "describe"), [{ name: "describe", args: { udid: w.deviceId } }]);
+  const res = b.act(narration ?? narr.discover(b.rng, "describe"), [
+    { name: "describe", args: { udid: w.deviceId } },
+  ]);
   if (res[0]?.isError) {
     b.hasRecovery = true;
     b.act(narr.describeFailRecover(b.rng), [{ name: "describe", args: { udid: w.deviceId } }]);
@@ -143,10 +162,15 @@ function tapKey(b: Builder, key: string): ElementDef {
     const hidden = currentScreenDef(w).elements.find((e) => e.key === key && e.revealedByScroll);
     if (hidden && !isScrolled(w)) {
       if (w.platform === "chromium") {
-        b.act(narr.scroll(b.rng), [{ name: "gesture-scroll", args: { udid: w.deviceId, x: 0.5, y: 0.5, deltaY: 0.6 } }]);
+        b.act(narr.scroll(b.rng), [
+          { name: "gesture-scroll", args: { udid: w.deviceId, x: 0.5, y: 0.5, deltaY: 0.6 } },
+        ]);
       } else {
         b.act(narr.scroll(b.rng), [
-          { name: "gesture-swipe", args: { udid: w.deviceId, fromX: 0.5, fromY: 0.75, toX: 0.5, toY: 0.25 } },
+          {
+            name: "gesture-swipe",
+            args: { udid: w.deviceId, fromX: 0.5, fromY: 0.75, toX: 0.5, toY: 0.25 },
+          },
         ]);
       }
       discover(b);
@@ -156,14 +180,18 @@ function tapKey(b: Builder, key: string): ElementDef {
   el = el ?? currentVisible(w)[0]!;
   const p = tapPoint(el);
   const screenBefore = w.currentScreen;
-  b.act(narr.tap(b.rng, el.label ?? key), [{ name: "gesture-tap", args: { udid: w.deviceId, x: p.x, y: p.y } }]);
+  b.act(narr.tap(b.rng, el.label ?? key), [
+    { name: "gesture-tap", args: { udid: w.deviceId, x: p.x, y: p.y } },
+  ]);
   // Injected miss: navigation didn't happen — re-discover and retry once.
   if (el.navigatesTo && w.currentScreen === screenBefore) {
     b.hasRecovery = true;
     discover(b, narr.tapMissRecover(b.rng));
     const el2 = find(b, key) ?? el;
     const p2 = tapPoint(el2);
-    b.act(narr.tap(b.rng, el2.label ?? key), [{ name: "gesture-tap", args: { udid: w.deviceId, x: p2.x, y: p2.y } }]);
+    b.act(narr.tap(b.rng, el2.label ?? key), [
+      { name: "gesture-tap", args: { udid: w.deviceId, x: p2.x, y: p2.y } },
+    ]);
   }
   return el;
 }
@@ -193,7 +221,9 @@ function solveNavigateTap(b: Builder, task: TaskSpec) {
   discover(b);
   const target = tapKey(b, task.targetElementKey);
   maybeCloseSession(b);
-  b.final(`Done — navigated through ${task.pathLabels.slice(0, -1).join(" > ") || "the app"} and tapped "${target.label}". The screen responded as expected.`);
+  b.final(
+    `Done — navigated through ${task.pathLabels.slice(0, -1).join(" > ") || "the app"} and tapped "${target.label}". The screen responded as expected.`
+  );
 }
 
 function solveToggle(b: Builder, task: TaskSpec) {
@@ -203,7 +233,9 @@ function solveToggle(b: Builder, task: TaskSpec) {
   discover(b);
   const target = tapKey(b, task.targetElementKey);
   discover(b, narr.verify(b.rng));
-  b.final(`"${target.label}" is now toggled on; I confirmed the new state with a follow-up discovery.`);
+  b.final(
+    `"${target.label}" is now toggled on; I confirmed the new state with a follow-up discovery.`
+  );
 }
 
 function solveLogin(b: Builder, task: TaskSpec) {
@@ -211,12 +243,18 @@ function solveLogin(b: Builder, task: TaskSpec) {
   ensureLaunched(b);
   discover(b);
   tapKey(b, "email");
-  b.act(narr.typeInto(b.rng, "Email"), [{ name: "keyboard", args: { udid: b.world.deviceId, text: "test.user@example.com" } }]);
+  b.act(narr.typeInto(b.rng, "Email"), [
+    { name: "keyboard", args: { udid: b.world.deviceId, text: "test.user@example.com" } },
+  ]);
   tapKey(b, "password");
-  b.act(narr.typeInto(b.rng, "Password"), [{ name: "keyboard", args: { udid: b.world.deviceId, text: "Passw0rd!" } }]);
+  b.act(narr.typeInto(b.rng, "Password"), [
+    { name: "keyboard", args: { udid: b.world.deviceId, text: "Passw0rd!" } },
+  ]);
   tapKey(b, "signin");
   discover(b, narr.verify(b.rng));
-  b.final("Login succeeded — the form submitted and we're on the Today dashboard (verified via the component tree).");
+  b.final(
+    "Login succeeded — the form submitted and we're on the Today dashboard (verified via the component tree)."
+  );
 }
 
 function solveScrollFind(b: Builder, task: TaskSpec) {
@@ -251,7 +289,9 @@ function solveRunSequence(b: Builder, task: TaskSpec) {
   ]);
   discover(b);
   const result = tapKey(b, "result-keyboard");
-  b.final(`Batched the search (tap field → type "${task.query}" → enter) in one run-sequence, then opened "${result.label}".`);
+  b.final(
+    `Batched the search (tap field → type "${task.query}" → enter) in one run-sequence, then opened "${result.label}".`
+  );
 }
 
 function solveVisualRegression(b: Builder, task: TaskSpec) {
@@ -271,7 +311,9 @@ function solveVisualRegression(b: Builder, task: TaskSpec) {
       args: { udid: w.deviceId, baselinePath, captureCurrent: true, outputDir: "/tmp/argent/diff" },
     },
   ]);
-  b.final("Visual diff complete — ~1.2% of pixels changed, localized to the region under test, no unexpected regressions elsewhere.");
+  b.final(
+    "Visual diff complete — ~1.2% of pixels changed, localized to the region under test, no unexpected regressions elsewhere."
+  );
 }
 
 function solveProfile(b: Builder, task: TaskSpec) {
@@ -287,11 +329,16 @@ function solveProfile(b: Builder, task: TaskSpec) {
     ]
   );
   const startedAt = JSON.parse(start[0]!.content).startedAtEpochMs as number;
-  const swipe = () => ({ name: "gesture-swipe", args: { udid: w.deviceId, fromX: 0.5, fromY: 0.78, toX: 0.5, toY: 0.22 } });
+  const swipe = () => ({
+    name: "gesture-swipe",
+    args: { udid: w.deviceId, fromX: 0.5, fromY: 0.78, toX: 0.5, toY: 0.22 },
+  });
   const r1 = b.act("Scrolling the list to exercise the render path.", [swipe()]);
-  const t1 = JSON.parse(r1[0]!.content.replace(/\n\n\[auto-screenshot[^\]]*\]$/, "")).timestampMs as number;
+  const t1 = JSON.parse(r1[0]!.content.replace(/\n\n\[auto-screenshot[^\]]*\]$/, ""))
+    .timestampMs as number;
   const r2 = b.act("Scrolling once more to get a few commits.", [swipe()]);
-  const t2 = JSON.parse(r2[0]!.content.replace(/\n\n\[auto-screenshot[^\]]*\]$/, "")).timestampMs as number;
+  const t2 = JSON.parse(r2[0]!.content.replace(/\n\n\[auto-screenshot[^\]]*\]$/, ""))
+    .timestampMs as number;
   b.act("Stopping both profilers.", [
     { name: "react-profiler-stop", args: { device_id: w.deviceId, port: metroPort(w) } },
     { name: "native-profiler-stop", args: { device_id: w.deviceId } },
@@ -322,13 +369,22 @@ function solveProfile(b: Builder, task: TaskSpec) {
   // Drill down on the worst offender to confirm the root cause before reporting.
   const hot = cap(w.currentScreen) + "Row";
   b.act("Drilling into the per-component renders to confirm the hot component.", [
-    { name: "react-profiler-renders", args: { device_id: w.deviceId, port: metroPort(w), top_n: 5 } },
+    {
+      name: "react-profiler-renders",
+      args: { device_id: w.deviceId, port: metroPort(w), top_n: 5 },
+    },
   ]);
   b.act("Querying the CPU hotspots for that window.", [
-    { name: "profiler-cpu-query", args: { device_id: w.deviceId, port: metroPort(w), mode: "top_functions", top_n: 5 } },
+    {
+      name: "profiler-cpu-query",
+      args: { device_id: w.deviceId, port: metroPort(w), mode: "top_functions", top_n: 5 },
+    },
   ]);
   b.act(`Opening the source of \`${hot}\` to see what's re-rendering.`, [
-    { name: "react-profiler-component-source", args: { component_name: hot, project_root: "/Users/dev/" + w.app.id } },
+    {
+      name: "react-profiler-component-source",
+      args: { component_name: hot, project_root: "/Users/dev/" + w.app.id },
+    },
   ]);
   b.final(
     "Bottleneck found: a 312ms native image-decode hang during scroll overlaps the hottest React commit (41ms), where every list row re-renders. The native thumbnail decode dominates; the row re-render is secondary. Fix order: cache/downsize thumbnails first, then memoize the row component, then re-profile."
@@ -342,7 +398,14 @@ function solveFlowRecord(b: Builder, task: TaskSpec) {
   const projectRoot = "/Users/dev/" + w.app.id;
   const prereq = `App launched on the ${currentScreenDef(w).title} screen`;
   b.act("Recording a reusable flow for this path.", [
-    { name: "flow-start-recording", args: { name: task.app.id + "-to-" + task.targetElementKey, project_root: projectRoot, executionPrerequisite: prereq } },
+    {
+      name: "flow-start-recording",
+      args: {
+        name: task.app.id + "-to-" + task.targetElementKey,
+        project_root: projectRoot,
+        executionPrerequisite: prereq,
+      },
+    },
   ]);
   const sequence = [...task.route.map((h) => h.elementKey), task.targetElementKey];
   for (const key of sequence) {
@@ -351,7 +414,13 @@ function solveFlowRecord(b: Builder, task: TaskSpec) {
     const p = tapPoint(el);
     b.act(`Labeling and recording the tap on "${el.label}".`, [
       { name: "flow-add-echo", args: { message: `Tap ${el.label}` } },
-      { name: "flow-add-step", args: { command: "gesture-tap", args: JSON.stringify({ udid: w.deviceId, x: p.x, y: p.y }) } },
+      {
+        name: "flow-add-step",
+        args: {
+          command: "gesture-tap",
+          args: JSON.stringify({ udid: w.deviceId, x: p.x, y: p.y }),
+        },
+      },
     ]);
   }
   b.act("Finishing the recording.", [{ name: "flow-finish-recording", args: {} }]);
@@ -359,11 +428,18 @@ function solveFlowRecord(b: Builder, task: TaskSpec) {
     { name: "restart-app", args: { udid: w.deviceId, bundleId: w.app.bundleId } },
   ]);
   const name = task.app.id + "-to-" + task.targetElementKey;
-  b.act("Replaying the flow to confirm it reproduces.", [{ name: "flow-execute", args: { name, project_root: projectRoot } }]);
-  b.act("The prerequisite is satisfied, so I'll acknowledge it and run the flow.", [
-    { name: "flow-execute", args: { name, project_root: projectRoot, prerequisiteAcknowledged: true } },
+  b.act("Replaying the flow to confirm it reproduces.", [
+    { name: "flow-execute", args: { name, project_root: projectRoot } },
   ]);
-  b.final(`Recorded and replayed the flow "${name}" — it reproduces the path to "${task.pathLabels.at(-1)}" cleanly.`);
+  b.act("The prerequisite is satisfied, so I'll acknowledge it and run the flow.", [
+    {
+      name: "flow-execute",
+      args: { name, project_root: projectRoot, prerequisiteAcknowledged: true },
+    },
+  ]);
+  b.final(
+    `Recorded and replayed the flow "${name}" — it reproduces the path to "${task.pathLabels.at(-1)}" cleanly.`
+  );
 }
 
 function solveNetworkInspect(b: Builder, task: TaskSpec) {
@@ -374,12 +450,19 @@ function solveNetworkInspect(b: Builder, task: TaskSpec) {
   discover(b);
   tapKey(b, task.targetElementKey);
   const reqId = `req_${w.networkLog.length}`;
-  b.act("Checking the captured network log.", [{ name: "view-network-logs", args: { device_id: w.deviceId, port: metroPort(w) } }]);
+  b.act("Checking the captured network log.", [
+    { name: "view-network-logs", args: { device_id: w.deviceId, port: metroPort(w) } },
+  ]);
   b.act("Pulling the full request/response for that call.", [
-    { name: "view-network-request-details", args: { requestId: reqId, device_id: w.deviceId, port: metroPort(w) } },
+    {
+      name: "view-network-request-details",
+      args: { requestId: reqId, device_id: w.deviceId, port: metroPort(w) },
+    },
   ]);
   const r = w.networkLog.at(-1)!;
-  b.final(`The interaction fired \`${r.method} ${r.url}\` → ${r.status} ${r.statusText} (${r.durationMs}ms). Full headers and body are in the details above.`);
+  b.final(
+    `The interaction fired \`${r.method} ${r.url}\` → ${r.status} ${r.statusText} (${r.durationMs}ms). Full headers and body are in the details above.`
+  );
 }
 
 function solveAndroidSetup(b: Builder, task: TaskSpec) {
@@ -404,7 +487,12 @@ function solveDebugInspect(b: Builder, task: TaskSpec) {
   const y = Math.round((el.frame.y + el.frame.h / 2) * px.h);
   b.act(
     `I have the component tree; debugger-inspect-element takes logical pixel coordinates (not normalized), so I'll inspect at (${x}, ${y}).`,
-    [{ name: "debugger-inspect-element", args: { x, y, port: metroPort(w), device_id: w.deviceId } }]
+    [
+      {
+        name: "debugger-inspect-element",
+        args: { x, y, port: metroPort(w), device_id: w.deviceId },
+      },
+    ]
   );
   b.final(`"${el.label}" is rendered by the component identified in the source mapping above.`);
 }
@@ -413,9 +501,13 @@ function solveDeepLink(b: Builder, task: TaskSpec) {
   const w = b.world;
   ensureDevice(b);
   const url = task.deepLinkUrl!;
-  b.act(`Opening ${w.app.name} straight to the target via its deep link.`, [{ name: "open-url", args: { udid: w.deviceId, url } }]);
+  b.act(`Opening ${w.app.name} straight to the target via its deep link.`, [
+    { name: "open-url", args: { udid: w.deviceId, url } },
+  ]);
   if (w.app.isReactNative) {
-    b.act(narr.connectDebugger(b.rng), [{ name: "debugger-status", args: { port: metroPort(w), device_id: w.deviceId } }]);
+    b.act(narr.connectDebugger(b.rng), [
+      { name: "debugger-status", args: { port: metroPort(w), device_id: w.deviceId } },
+    ]);
   }
   discover(b);
   const target = tapKey(b, task.targetElementKey);
@@ -432,9 +524,18 @@ function solveConsoleCheck(b: Builder, task: TaskSpec) {
     { name: "debugger-log-registry", args: { port: metroPort(w), device_id: w.deviceId } },
   ]);
   b.act("Evaluating an expression in the app runtime to confirm the React Native version.", [
-    { name: "debugger-evaluate", args: { port: metroPort(w), device_id: w.deviceId, expression: "require('react-native/package.json').version" } },
+    {
+      name: "debugger-evaluate",
+      args: {
+        port: metroPort(w),
+        device_id: w.deviceId,
+        expression: "require('react-native/package.json').version",
+      },
+    },
   ]);
-  b.final("Checked the logs: 26 errors clustered around a prop-type failure and 156 warnings (mostly VirtualizedList key warnings). Runtime confirms RN 0.81.0.");
+  b.final(
+    "Checked the logs: 26 errors clustered around a prop-type failure and 156 warnings (mostly VirtualizedList key warnings). Runtime confirms RN 0.81.0."
+  );
 }
 
 function solvePinchZoom(b: Builder, task: TaskSpec) {
@@ -446,10 +547,17 @@ function solvePinchZoom(b: Builder, task: TaskSpec) {
   const img = find(b, task.targetElementKey) ?? currentVisible(w)[0]!;
   const c = tapPoint(img);
   b.act(`Pinching out to zoom into "${img.label}".`, [
-    { name: "gesture-pinch", args: { udid: w.deviceId, centerX: c.x, centerY: c.y, startDistance: 0.15, endDistance: 0.6 } },
+    {
+      name: "gesture-pinch",
+      args: { udid: w.deviceId, centerX: c.x, centerY: c.y, startDistance: 0.15, endDistance: 0.6 },
+    },
   ]);
-  b.act("Rotating to landscape to check the image scales correctly.", [{ name: "rotate", args: { udid: w.deviceId, orientation: "LandscapeLeft" } }]);
-  b.act("Rotating back to portrait.", [{ name: "rotate", args: { udid: w.deviceId, orientation: "Portrait" } }]);
+  b.act("Rotating to landscape to check the image scales correctly.", [
+    { name: "rotate", args: { udid: w.deviceId, orientation: "LandscapeLeft" } },
+  ]);
+  b.act("Rotating back to portrait.", [
+    { name: "rotate", args: { udid: w.deviceId, orientation: "Portrait" } },
+  ]);
   b.final(`Zoomed into "${img.label}" and confirmed it scales cleanly across orientations.`);
 }
 
@@ -457,8 +565,12 @@ function solveChromiumTabs(b: Builder, task: TaskSpec) {
   const w = b.world;
   ensureDevice(b);
   ensureLaunched(b);
-  b.act("Listing the open tabs.", [{ name: "chromium-tabs", args: { udid: w.deviceId, action: "list" } }]);
-  b.act("Opening the target view in a new tab.", [{ name: "chromium-tabs", args: { udid: w.deviceId, action: "new", url: task.deepLinkUrl! } }]);
+  b.act("Listing the open tabs.", [
+    { name: "chromium-tabs", args: { udid: w.deviceId, action: "list" } },
+  ]);
+  b.act("Opening the target view in a new tab.", [
+    { name: "chromium-tabs", args: { udid: w.deviceId, action: "new", url: task.deepLinkUrl! } },
+  ]);
   discover(b);
   const target = tapKey(b, task.targetElementKey);
   b.final(`Opened a new tab to ${currentScreenDef(w).title} and tapped "${target.label}".`);
@@ -475,17 +587,19 @@ function solveNativeInspect(b: Builder, task: TaskSpec) {
     `For the exact UIKit identifier and class of "${target.label}", I'll use native-describe-screen (it surfaces accessibilityIdentifier and view class).`,
     [{ name: "native-describe-screen", args: { udid: w.deviceId, bundleId: w.app.bundleId } }]
   );
-  b.final(`"${target.label}" has accessibilityIdentifier "${target.identifier}" on a ${target.role === "button" ? "UIButton" : "UIView"}.`);
+  b.final(
+    `"${target.label}" has accessibilityIdentifier "${target.identifier}" on a ${target.role === "button" ? "UIButton" : "UIView"}.`
+  );
 }
 
 const SOLVERS: Record<TaskSpec["kind"], (b: Builder, t: TaskSpec) => void> = {
   "navigate-tap": solveNavigateTap,
-  toggle: solveToggle,
-  login: solveLogin,
+  "toggle": solveToggle,
+  "login": solveLogin,
   "scroll-find": solveScrollFind,
   "run-sequence": solveRunSequence,
   "visual-regression": solveVisualRegression,
-  profile: solveProfile,
+  "profile": solveProfile,
   "flow-record": solveFlowRecord,
   "network-inspect": solveNetworkInspect,
   "android-setup": solveAndroidSetup,
@@ -511,7 +625,13 @@ export interface SolveResult {
 }
 
 export function solve(task: TaskSpec, rng: RNG, userPrompt: string): SolveResult {
-  const world = buildWorld({ app: task.app, platform: task.platform, rng, inject: task.inject, deviceBooted: task.deviceBooted });
+  const world = buildWorld({
+    app: task.app,
+    platform: task.platform,
+    rng,
+    inject: task.inject,
+    deviceBooted: task.deviceBooted,
+  });
   const b = new Builder(world, rng);
   b.user(userPrompt);
   SOLVERS[task.kind](b, task);

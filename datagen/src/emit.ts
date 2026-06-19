@@ -25,7 +25,10 @@ export function assemble(
   seed: number,
   offeredTools: ToolSpec[]
 ): Trajectory {
-  const messages: Message[] = [{ role: "system", content: ARGENT_SYSTEM_PROMPT }, ...solveResult.messages];
+  const messages: Message[] = [
+    { role: "system", content: ARGENT_SYSTEM_PROMPT },
+    ...solveResult.messages,
+  ];
   const meta: TrajectoryMeta = {
     id: `argent-${task.kind}-${seed}`,
     seed,
@@ -74,13 +77,26 @@ export function toOpenAI(traj: Trajectory): unknown {
 
 /** ShareGPT-style (single conversation list), tool calls inlined as text blocks. */
 export function toShareGPT(traj: Trajectory): unknown {
-  const roleMap: Record<string, string> = { system: "system", user: "human", assistant: "gpt", tool: "tool" };
+  const roleMap: Record<string, string> = {
+    system: "system",
+    user: "human",
+    assistant: "gpt",
+    tool: "tool",
+  };
   return {
-    tools: JSON.stringify(traj.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.inputSchema }))),
+    tools: JSON.stringify(
+      traj.tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        parameters: t.inputSchema,
+      }))
+    ),
     conversations: traj.messages.map((m) => {
       if (m.role === "assistant" && m.tool_calls) {
         const calls = m.tool_calls.map((c) => ({ name: c.name, arguments: c.arguments }));
-        const text = (m.content ? m.content + "\n" : "") + calls.map((c) => `<tool_call>${JSON.stringify(c)}</tool_call>`).join("\n");
+        const text =
+          (m.content ? m.content + "\n" : "") +
+          calls.map((c) => `<tool_call>${JSON.stringify(c)}</tool_call>`).join("\n");
         return { from: "gpt", value: text };
       }
       return { from: roleMap[m.role], value: (m as { content: string }).content };

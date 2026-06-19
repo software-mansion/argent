@@ -6,8 +6,7 @@ import type { RNG } from "./rng.ts";
 const HEX = "0123456789ABCDEF";
 
 function udid(rng: RNG): string {
-  const g = (n: number) =>
-    Array.from({ length: n }, () => HEX[rng.int(16)]).join("");
+  const g = (n: number) => Array.from({ length: n }, () => HEX[rng.int(16)]).join("");
   return `${g(8)}-${g(4)}-${g(4)}-${g(4)}-${g(12)}`;
 }
 
@@ -59,7 +58,13 @@ export function buildWorld(opts: BuildWorldOpts): World {
     app,
     platform,
     devices,
-    avds: platform === "android" ? [devices[0]!.avdName!, ...ANDROID_AVDS.filter((a) => a !== devices[0]!.avdName).slice(0, 1)] : ANDROID_AVDS.slice(0, 2),
+    avds:
+      platform === "android"
+        ? [
+            devices[0]!.avdName!,
+            ...ANDROID_AVDS.filter((a) => a !== devices[0]!.avdName).slice(0, 1),
+          ]
+        : ANDROID_AVDS.slice(0, 2),
     deviceId,
     simServerRunning: false,
     metroRunning: false,

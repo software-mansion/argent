@@ -9,7 +9,11 @@ export function pick(rng: RNG, options: string[]): string {
   return options[rng.int(options.length)]!;
 }
 
-const DEVICE_WORD: Record<string, string> = { ios: "simulator", android: "emulator", chromium: "app window" };
+const DEVICE_WORD: Record<string, string> = {
+  ios: "simulator",
+  android: "emulator",
+  chromium: "app window",
+};
 
 export function deviceWord(platform: string): string {
   return DEVICE_WORD[platform] ?? "device";

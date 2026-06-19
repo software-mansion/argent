@@ -82,7 +82,12 @@ const DESCRIBE_HEADER_NOTE =
 export function formatDescribe(platform: Platform, screen: ScreenDef, scrolled: boolean): string {
   const source = describeSource(platform);
   const mode: "flat" | "nested" = platform === "ios" ? "flat" : "nested";
-  const rootRole = platform === "ios" ? "AXGroup" : platform === "android" ? "android.view.ViewGroup" : "RootWebArea";
+  const rootRole =
+    platform === "ios"
+      ? "AXGroup"
+      : platform === "android"
+        ? "android.view.ViewGroup"
+        : "RootWebArea";
 
   const header = [
     `Source: ${source}`,
@@ -124,7 +129,11 @@ function describeFlags(platform: Platform, e: ElementDef): string {
 
 // ---- debugger-component-tree (RN) ----
 
-export function formatComponentTree(platform: Platform, screen: ScreenDef, scrolled: boolean): string {
+export function formatComponentTree(
+  platform: Platform,
+  screen: ScreenDef,
+  scrolled: boolean
+): string {
   const px = SCREEN_PX[platform];
   const lines: string[] = [`Screen: ${px.w}x${px.h}`, ""];
   lines.push(`${screen.title.replace(/\s+/g, "")}Screen`);

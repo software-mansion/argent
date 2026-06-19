@@ -48,7 +48,11 @@ export function reachableScreens(app: AppArchetype): string[] {
   return [...out];
 }
 
-export function elementByKey(app: AppArchetype, screen: string, key: string): ElementDef | undefined {
+export function elementByKey(
+  app: AppArchetype,
+  screen: string,
+  key: string
+): ElementDef | undefined {
   return app.screens[screen]?.elements.find((e) => e.key === key);
 }
 

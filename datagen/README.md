@@ -5,7 +5,7 @@ iOS simulators, Android emulators, and Chromium apps — by emitting correct,
 schema-valid, policy-compliant tool-call trajectories.
 
 The headline goal is **super-high-quality data at huge volume**. We get both from
-one idea: instead of asking an LLM to *write* tool-use conversations (which
+one idea: instead of asking an LLM to _write_ tool-use conversations (which
 produces hallucinated tool schemas, ungrounded tap coordinates, and inconsistent
 tool outputs), we built a **deterministic simulator of Argent** (a "gym") and let
 an **expert policy** — the `.claude/rules/argent.md` workflow encoded as code —
@@ -33,14 +33,14 @@ node src/selfcheck.ts
 
 Outputs in `out/`:
 
-| file | what |
-|------|------|
-| `train.jsonl` / `eval.jsonl` | normalized trajectories (system + tools + messages) |
-| `train.openai.jsonl` | OpenAI fine-tune chat format (`tools` + `tool_calls`) |
-| `train.sharegpt.jsonl` | ShareGPT format (tool calls inlined) — for axolotl / LLaMA-Factory |
-| `stats.json` | tool coverage, task/platform/difficulty mix, length histogram, pass rate |
-| `samples.md` | human-readable rendering of the first N trajectories |
-| `failures.jsonl` | every rejected attempt with its validator reasons (never silently dropped) |
+| file                         | what                                                                       |
+| ---------------------------- | -------------------------------------------------------------------------- |
+| `train.jsonl` / `eval.jsonl` | normalized trajectories (system + tools + messages)                        |
+| `train.openai.jsonl`         | OpenAI fine-tune chat format (`tools` + `tool_calls`)                      |
+| `train.sharegpt.jsonl`       | ShareGPT format (tool calls inlined) — for axolotl / LLaMA-Factory         |
+| `stats.json`                 | tool coverage, task/platform/difficulty mix, length histogram, pass rate   |
+| `samples.md`                 | human-readable rendering of the first N trajectories                       |
+| `failures.jsonl`             | every rejected attempt with its validator reasons (never silently dropped) |
 
 `--n`, `--evalN`, `--seed`, `--out`, `--samples`, `--emit openai,sharegpt` are the flags.
 
@@ -51,7 +51,7 @@ A multi-turn agentic conversation:
 - **system** — the condensed Argent operating policy (`src/system-prompt.ts`).
 - **tools** — the tools offered for this example: every tool the trajectory uses
   plus a deterministic sample of distractors (default 28 total), so the model
-  learns to *select* from the real 67-tool surface.
+  learns to _select_ from the real 67-tool surface.
 - **messages** — `user` task → `assistant` (narration + `tool_calls`) → `tool`
   results → … → final `assistant` answer.
 
@@ -72,11 +72,11 @@ A trajectory ships only if it passes **all** of:
 4. **Policy** — coordinate ranges `[0,1]`; `run-sequence` steps use only allowed
    tools, carry no `udid`, and each inner step validates against its own schema.
 5. **Grounding (the core gate)** — every `gesture-tap` coordinate must fall inside
-   an element parsed from the *most recent discovery result* (box containment for
+   an element parsed from the _most recent discovery result_ (box containment for
    `describe`, tap-point proximity for `debugger-component-tree`). This is what
-   makes the data provably non-hallucinated, and it *also* enforces
+   makes the data provably non-hallucinated, and it _also_ enforces
    discovery-before-tap: a tap on a freshly-navigated screen can only be grounded
-   by a discovery taken *on that screen*.
+   by a discovery taken _on that screen_.
 
 `selfcheck.ts` is the regression test for the gates: it corrupts a known-good
 trajectory nine ways (ungrounded tap, missing discovery, schema break, unknown

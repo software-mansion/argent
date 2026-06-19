@@ -50,9 +50,9 @@ interface ElemRef {
 function isActionable(el: ElementDef): boolean {
   return Boolean(
     el.navigatesTo ||
-      el.togglesState ||
-      el.textField ||
-      ["button", "tab", "switch", "field", "link"].includes(el.role)
+    el.togglesState ||
+    el.textField ||
+    ["button", "tab", "switch", "field", "link"].includes(el.role)
   );
 }
 
@@ -394,7 +394,9 @@ function buildAndroidSetup(rng: RNG): TaskSpec | null {
 function buildDeepLink(rng: RNG): TaskSpec | null {
   const apps = ARCHETYPES.filter((a) => a.urls && Object.keys(a.urls).length);
   const app = rng.pick(apps);
-  const urlEntries = Object.entries(app.urls!).filter(([, screen]) => targetCandidates(app, screen).length);
+  const urlEntries = Object.entries(app.urls!).filter(
+    ([, screen]) => targetCandidates(app, screen).length
+  );
   if (!urlEntries.length) return null;
   const [url, screen] = rng.pick(urlEntries);
   const platform = pickPlatform(rng, app);
@@ -462,7 +464,9 @@ function buildPinchZoom(rng: RNG): TaskSpec | null {
 function buildChromiumTabs(rng: RNG): TaskSpec | null {
   const app = ARCHETYPES.find((a) => a.platforms.includes("chromium"));
   if (!app || !app.urls) return null;
-  const urlEntries = Object.entries(app.urls).filter(([, screen]) => screen !== app.entryScreen && targetCandidates(app, screen).length);
+  const urlEntries = Object.entries(app.urls).filter(
+    ([, screen]) => screen !== app.entryScreen && targetCandidates(app, screen).length
+  );
   if (!urlEntries.length) return null;
   const [url, screen] = rng.pick(urlEntries);
   const target = rng.pick(targetCandidates(app, screen));
