@@ -177,7 +177,7 @@ async function runEpisode(seed: number, gen: Gen): Promise<EpisodeResult | null>
 
   for (let step = 0; step < MAX_STEPS; step++) {
     r.steps = step + 1;
-    const out = await gen.generate(messages, 256);
+    const out = await gen.generate(messages, 180);
     const call = parseToolCall(out);
     messages.push({ role: "assistant", content: out.trim() || "(empty)" });
 

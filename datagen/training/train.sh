@@ -26,7 +26,7 @@ exec "$PY" -m mlx_lm.lora \
   --batch-size 1 \
   --iters "$ITERS" \
   --max-seq-length 2600 \
-  --learning-rate 1.5e-4 \
+  --learning-rate 5e-5 \
   --steps-per-report 20 \
   --steps-per-eval 300 \
   --val-batches 8 \
