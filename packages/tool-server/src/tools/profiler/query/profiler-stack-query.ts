@@ -257,7 +257,7 @@ function renderThreadBreakdownIos(
   return lines.join("\n");
 }
 
-function renderLeakStacksIos(
+export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
   topN: number
@@ -275,19 +275,40 @@ function renderLeakStacksIos(
       : "_No memory leaks detected._";
   }
 
-  const sorted = [...filtered].sort((a, b) => b.totalSizeBytes - a.totalSizeBytes).slice(0, topN);
+  // Attributed leaks first (so a small real leak survives the top-N slice ahead
+  // of larger unattributed system noise), then by size within each group.
+  const sorted = [...filtered]
+    .sort((a, b) => {
+      if (a.attributed !== b.attributed) return a.attributed ? -1 : 1;
+      return b.totalSizeBytes - a.totalSizeBytes;
+    })
+    .slice(0, topN);
 
   const totalBytes = sorted.reduce((s, l) => s + l.totalSizeBytes, 0);
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
+
+  const unattributedCount = sorted.filter((l) => !l.attributed).length;
 
   const lines: string[] = [
     `## Memory Leaks${objectTypeFilter ? ` (filter: "${objectTypeFilter}")` : ""}`,
     "",
     `**Total:** ${formatBytes(totalBytes)} across ${totalCount} allocations`,
     "",
-    "| Object Type | Size | Count | Responsible Frame | Library |",
-    "|---|---|---|---|---|",
   ];
+
+  if (unattributedCount > 0) {
+    lines.push(
+      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
+        "(`<Call stack limit reached>`, no library) — captured under `xctrace --attach`, which has no " +
+        "malloc-stack history. Most likely benign system allocations, not confirmed app leaks.",
+      ""
+    );
+  }
+
+  lines.push(
+    "| Object Type | Size | Count | Responsible Frame | Library |",
+    "|---|---|---|---|---|"
+  );
 
   for (const l of sorted) {
     lines.push(
