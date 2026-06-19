@@ -322,7 +322,8 @@ function buildBundle({ entry, out, format, label, external = [] }) {
     mainFields: MAIN_FIELDS,
     // ESM bundles need the require() shim (for inlined CJS deps) and must keep
     // node: builtins external; CJS bundles only externalise what the caller
-    // passes (e.g. `electron` — see the tools-server call site).
+    // passes (e.g. `electron`, or tree-sitter's native addons — see the
+    // tools-server call site).
     ...(format === "esm"
       ? { banner: ESM_REQUIRE_BANNER, external: [...new Set(["node:*", ...external])] }
       : external.length > 0
@@ -458,7 +459,11 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
 // Bundle the tools server (CJS — the dispatcher loads it via require()).
 //
-// `electron` MUST stay external. It is a runtime dependency of
+// tree-sitter / tree-sitter-typescript are native addons (.node) that esbuild
+// cannot inline; keep them external so the bundle `require()`s them at runtime
+// from the published package's own dependencies (see package.json).
+//
+// `electron` MUST stay external too. It is a runtime dependency of
 // @swmansion/argent (npm installs it into node_modules/electron). If esbuild
 // inlines electron's index.js into this bundle, electron's binary-path lookup
 // runs with __dirname = <install>/dist (no path.txt there) and throws

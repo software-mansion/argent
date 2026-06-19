@@ -111,7 +111,7 @@ export function createPreviewRouter(registry: Registry): Router {
   });
 
   router.get("/simulator-server/:udid", async (req: Request, res: Response) => {
-    const udid = req.params.udid!;
+    const udid = req.params.udid as string;
     const device = resolveDevice(udid);
     if (device.platform === "chromium") {
       // The preview UI only knows how to render simulator-server's frame stream,
@@ -240,7 +240,10 @@ export function createPreviewRouter(registry: Registry): Router {
     return [...roots];
   })();
   router.get("/variant-image/:elementId/:variantId", (req: Request, res: Response) => {
-    const v = variantProposalStore.findVariant(req.params.elementId!, req.params.variantId!);
+    const v = variantProposalStore.findVariant(
+      req.params.elementId as string,
+      req.params.variantId as string
+    );
     const src = v?.previewImage;
     if (!src || /^(https?:|data:)/i.test(src)) {
       res.status(404).end();
@@ -286,7 +289,7 @@ export function createPreviewRouter(registry: Registry): Router {
   // parses. The `describe` tool itself is intentionally left untouched.
   // Failures are non-fatal for the UI (it falls back to corner notifications).
   router.get("/describe/:udid", async (req: Request, res: Response) => {
-    const udid = req.params.udid!;
+    const udid = req.params.udid as string;
     const device = resolveDevice(udid);
     if (device.platform === "chromium") {
       // No structured tree for Chromium here: this route only dispatches the
