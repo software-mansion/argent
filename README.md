@@ -36,7 +36,7 @@ npx @swmansion/argent init
 
 #### Prerequisites
 
-- **Node.js 18** or later
+- **Node.js 20.11** or later
 - For iOS: macOS with **Xcode** installed
 - For Android: **Android SDK Platform Tools** (`adb`) on `PATH`, and the **Android Emulator** package if you want to boot AVDs from Argent. Create AVDs via Android Studio or `avdmanager`.
 
@@ -121,10 +121,11 @@ argent init
 | Claude Code | `.mcp.json` (project) or `~/.claude.json` (global)                       |
 | Cursor      | `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global)            |
 | VS Code     | `.vscode/mcp.json`                                                       |
-| Windsurf    | `.windsurf/mcp.json`                                                     |
+| Windsurf    | `~/.codeium/windsurf/mcp_config.json` (global)                           |
 | Zed         | `.zed/settings.json`                                                     |
 | Gemini CLI  | `.gemini/settings.json`                                                  |
-| Codex CLI   | `.codex/config.yaml`                                                     |
+| Codex CLI   | `.codex/config.toml` (project) or `~/.codex/config.toml` (global)        |
+| Hermes      | `~/.hermes/config.yaml` (global)                                         |
 | opencode    | `opencode.json` (project) or `~/.config/opencode/opencode.json` (global) |
 
 ## Privacy
