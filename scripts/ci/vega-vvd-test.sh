@@ -141,9 +141,27 @@ VPKG_ABS="$(readlink -f "$KEPLER_VPKG" 2>/dev/null || echo "$KEPLER_VPKG")"
 [ -f "$VPKG_ABS" ] || { echo "ERROR: fixture vpkg not found at ${VPKG_ABS}"; exit 1; }
 echo "vpkg: ${VPKG_ABS} ($(stat -c%s "$VPKG_ABS" 2>/dev/null || echo '?') bytes)"
 # `vega device <sub>` targets the single connected VVD (no -d; see vega-cli.ts).
+# adb seeing the device isn't enough: the Vega device agent attaches a beat after
+# adb, and the boot action's non-black-frame gate can report ready before it — so
+# a single `vega device install-app` can hit "No connected Vega devices". Wait for
+# `vega virtual-device status` running:true (the same signal argent's isVvdRunning
+# uses), then retry the install to ride out a late attach.
+for attempt in $(seq 1 30); do
+  if vega virtual-device status 2>/dev/null | grep -qE '"running"[[:space:]]*:[[:space:]]*true'; then
+    echo "VVD reports running"; break
+  fi
+  echo "attempt ${attempt}: vega virtual-device status not running yet; waiting..."
+  sleep 2
+done
 vega device uninstall-app -a "$APP_ID" >/dev/null 2>&1 || true
-vega device install-app -p "$VPKG_ABS" >/tmp/install-app.log 2>&1 || true
-if ! grep -qi success /tmp/install-app.log; then
+install_ok=""
+for attempt in $(seq 1 10); do
+  vega device install-app -p "$VPKG_ABS" >/tmp/install-app.log 2>&1 || true
+  if grep -qi success /tmp/install-app.log; then install_ok=1; echo "install-app succeeded"; break; fi
+  echo "attempt ${attempt}: install-app not ready; retrying..."
+  sleep 3
+done
+if [ -z "$install_ok" ]; then
   echo "ERROR: vega install-app did not report success"; cat /tmp/install-app.log; exit 1
 fi
 vega device launch-app -a "$APP_ID" >/tmp/launch-app.log 2>&1 || true
