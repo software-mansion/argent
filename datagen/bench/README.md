@@ -64,17 +64,51 @@ ANTHROPIC_API_KEY=… python3 judge.py out/*/   # re-judge everything with the r
 **Memory:** serialized by design — 26 GB M4 Pro, no CUDA; an iOS sim + Ollama + Hermes
 already fill a lot, and overload has paniced this machine. Never run two cells at once.
 
-## Results
+## Status — harness integration is the blocker (findings 2026-06-19)
 
-_Pending run._ The 4 local cells run autonomously this weekend (preliminary
-heuristic scores); the 2 Haiku cells and the real LLM-judge re-score need the API key
-(Monday). Final table lands in `RESULTS.md` + here.
+End-to-end smoke tests (real iPhone 16 Pro Max booted, real argent tool-server up)
+surfaced a real obstacle: **neither installed harness executes the local models' tool
+calls against argent**, so the local cells can't be scored as-is. Verified, not assumed:
 
-## Status / caveats
+- **Hermes** loads the MCP tools into context (argent `list_tools` = 69 tools) but never
+  executes the local ollama models' tool calls. Both `silver:e4b` and `gemma4:e4b` (base)
+  **hallucinate** the agent loop — they emit a tool call as text, then fabricate a
+  plausible tool _response_ and keep going. silver produced gym-style fakes (a
+  non-existent udid `7F845A92…`, 2025-era timestamps); the **real sim was never touched**
+  (foreground stayed Spotlight) and argent's call log shows **only `list_tools`, zero
+  executions**. Hermes' ollama tool-call→execution path simply doesn't fire for these.
+- **OpenCode** (after adding an ollama provider): silver emits text only, again **zero
+  executed tool calls** (only `list_tools` in argent's log).
 
-- `run-cell.sh`/`judge.py` are first-draft glue around Hermes; the first cell is
-  smoke-tested and adjusted before the full sweep (Hermes' transcript-export format and
-  the `-t` toolset-isolation behavior are verified live, not assumed).
-- Local 4B models may score low through a generic harness (the long toolkit system
-  prompt + tool schemas are exactly what stressed Ollama's `num_ctx`); that gap is part
-  of what the benchmark measures.
+**Root cause:** `silver:e4b` is specialized for **Argent's `<tool_call>` text protocol**
+with the Argent policy + tool list in its **SYSTEM** (baked into the Modelfile). A generic
+harness injects its _own_ system prompt + tool schemas and expects its _own_ tool-call
+format, which silver doesn't match — so it never produces a harness-executable call.
+(`gemma4:e4b` base is additionally just weak — it emitted a garbled tool name.) Claude
+Haiku, using each harness's native tool-calling, would not hit this.
+
+**This is itself a result:** a format-specialized small model does **not** drop into a
+generic agent harness and execute tools. silver works in its _native_ loop — the gym eval
+(60.3% nav, see `../training/results/RESULTS-e4b.md`) and the deployed Ollama model driven
+by a thin `<tool_call>`-parsing loop.
+
+### Decision needed (Monday)
+
+The "use an established harness" constraint conflicts with silver's format specialization.
+Options, fairest first:
+
+1. **One Argent-format loop for all models** — adapt `../training/eval.ts` to drive a
+   _real_ device via the argent tool-server (instead of the gym), using the Argent preamble
+   - `<tool_call>` parsing. Same loop for silver / gemma4 / Haiku → apples-to-apples, and it
+     works for silver. Caveat: it's a thin custom loop (reuses the existing scored harness),
+     which bends the "no custom harness" rule — but that rule is exactly what silver's format
+     breaks. **Recommended.**
+2. **Adjust Hermes/OpenCode** to (a) use the Argent preamble as the system prompt and
+   (b) parse silver's `<tool_call>` text → execute. This is the "adjust the harness" path,
+   but it reaches into each harness's internal tool-call + system-prompt handling.
+3. **Harness-per-model** (silver native, others via Hermes/OpenCode) — not apples-to-apples.
+
+Scaffolding (`tasks.jsonl`, `run-cell.sh`, `judge.py`) stands; what changes is the runner's
+backend once the harness question is settled. The Anthropic key for the Haiku cells is also
+needed (an `ANTHROPIC_API_KEY` is present in `~/.hermes/.env` but left unused per the
+"supply on Monday" note).
