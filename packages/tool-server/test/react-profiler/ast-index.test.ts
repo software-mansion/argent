@@ -67,4 +67,30 @@ describe("buildAstIndexWithDiagnostics", () => {
     expect(res.index.get("Dotted")).toMatchObject({ line: 5, isMemoized: true });
     expect(res.index.get("Nested")).toMatchObject({ line: 6, isMemoized: true });
   });
+
+  it("detects cross-referenced memo() via AST and ignores memo() in comments/strings", async () => {
+    // `function Card(){}; export default memo(Card)` is the cross-reference form
+    // (not an inline `const X = memo(...)`). The decoy `memo(Ghost)` lives only
+    // in a comment and a string literal — tree-sitter never emits a call node
+    // there, so Ghost stays unmemoized. The old raw-source regex flagged it.
+    const dir = mkdtempSync(join(tmpdir(), "ast-index-memo-ref-"));
+    mkdirSync(join(dir, "components"), { recursive: true });
+    writeFileSync(
+      join(dir, "components", "ref.tsx"),
+      [
+        `import React, { memo } from "react";`,
+        `function Card() { return <View />; }`,
+        `export default memo(Card);`,
+        `function Ghost() { return <View />; }`,
+        `// not memoized: memo(Ghost) appears only in this comment`,
+        `const note = "memo(Ghost)";`,
+        ``,
+      ].join("\n")
+    );
+
+    const res = await buildAstIndexWithDiagnostics(dir);
+
+    expect(res.index.get("Card")).toMatchObject({ isMemoized: true });
+    expect(res.index.get("Ghost")).toMatchObject({ isMemoized: false });
+  });
 });

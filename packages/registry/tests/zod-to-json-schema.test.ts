@@ -33,12 +33,41 @@ describe("zodObjectToJsonSchema", () => {
     expect(schema.required).toBeUndefined();
   });
 
-  it("emits number type for z.coerce.number().int().positive().default(100)", () => {
+  it("preserves int + positive constraints for z.coerce.number().int().positive().default(100)", () => {
     const schema = zodObjectToJsonSchema(
       z.object({ sample_interval_us: z.coerce.number().int().positive().default(100) })
     );
-    expect((schema.properties as any).sample_interval_us).toEqual({ type: "number", default: 100 });
+    // The hand-rolled converter dropped .int()/.positive() and emitted a bare
+    // { type: "number", default: 100 }; the native converter keeps them.
+    expect((schema.properties as any).sample_interval_us).toEqual({
+      type: "integer",
+      default: 100,
+      exclusiveMinimum: 0,
+      maximum: 9007199254740991,
+    });
     expect(schema.required).toBeUndefined();
+  });
+
+  it("preserves .describe() text (the hand-rolled converter dropped it)", () => {
+    const schema = zodObjectToJsonSchema(z.object({ udid: z.string().describe("device udid") }));
+    expect((schema.properties as any).udid).toEqual({ type: "string", description: "device udid" });
+  });
+
+  it("preserves numeric min/max constraints", () => {
+    const schema = zodObjectToJsonSchema(z.object({ n: z.number().int().min(1).max(5) }));
+    expect((schema.properties as any).n).toEqual({ type: "integer", minimum: 1, maximum: 5 });
+  });
+
+  it("represents a union as anyOf instead of a match-anything {}", () => {
+    const schema = zodObjectToJsonSchema(
+      z.object({ since: z.union([z.coerce.number().int().nonnegative(), z.literal("latest")]) })
+    );
+    expect((schema.properties as any).since).toHaveProperty("anyOf");
+  });
+
+  it("degrades an unrepresentable field to {} instead of throwing", () => {
+    const schema = zodObjectToJsonSchema(z.object({ when: z.date() }));
+    expect((schema.properties as any).when).toEqual({});
   });
 
   it("produces expected JSON Schema for a mixed object with required/optional/default fields", () => {
