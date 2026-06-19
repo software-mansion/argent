@@ -9,6 +9,31 @@ its taps, and navigate to targets?" — vs the untrained base model.
 Everything runs locally on Apple Silicon via MLX. Text-only (Gemma 2 2B has no
 vision), so screenshots are the scene-caption text proxy; see "Vision" below.
 
+## Result (this run)
+
+LoRA fine-tune of `mlx-community/gemma-2-2b-it-4bit` on 2,500 gym trajectories
+(500 iters, batch 1, seq 2600, LR 5e-5; val loss 2.32 → 0.064), evaluated through
+the gym on **120 held-out tasks** (seeds 5,000,000+, greedy). Full numbers in
+`results/RESULTS.md`.
+
+| metric                             | base   | gym-tuned |
+| ---------------------------------- | ------ | --------- |
+| Navigation success                 | **0%** | **44.1%** |
+| Schema-valid tool calls            | **0%** | **99.2%** |
+| Grounded taps (coords not guessed) | **0%** | **97.2%** |
+| Tool calls / episode               | 0      | 7.3       |
+| Episodes ending with no attempt    | 100%   | 31.7%     |
+
+The base model never emits a tool call — it just chats (0% everywhere). After
+training on the gym data, a 2B model issues schema-valid, coordinate-grounded
+tool calls and navigates to the target on ~44% of held-out tasks. By kind:
+`login 6/6`, `toggle 6/9`, `deep-link 4/8`, `hide-and-seek 5/12`,
+`navigate-tap 6/19`, `android-setup 2/3`. **Honest weakness: `scroll-find 0/9`** —
+the model didn't learn the scroll-to-reveal-then-tap pattern (a clear next-data
+target: more scroll demonstrations / a scroll-specific reward). The takeaway: the
+gym data demonstrably teaches Argent tool-use to a tiny model, and the eval is the
+same gym-replay recipe the $500 / $50k models will use.
+
 ## Pipeline
 
 ```bash
@@ -52,8 +77,8 @@ process (`serve.py`) only generates text; Node owns the loop and scoring.
 - Eval seeds (5,000,000+) are disjoint from train (1+), valid (2,000,000+), and
   test (3,000,000+) — nothing scored was trained on.
 - The model is offered the same tool-availability distribution as training (the
-  task's needed tools plus distractors), so it still has to *select* and
-  *sequence* correctly, ground its taps, and navigate.
+  task's needed tools plus distractors), so it still has to _select_ and
+  _sequence_ correctly, ground its taps, and navigate.
 - Greedy decoding, deterministic task generation → reproducible numbers.
 
 ## Files

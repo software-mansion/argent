@@ -1,0 +1,25 @@
+{
+  "model": "mlx-community/gemma-2-2b-it-4bit",
+  "label": "base",
+  "summary": {
+    "episodes": 120,
+    "nav_episodes": 68,
+    "nav_success_pct": 0,
+    "schema_valid_pct": 0,
+    "grounded_tap_pct": 0,
+    "policy_violations_per_ep": 0,
+    "parse_fail_episodes_pct": 0,
+    "clean_finish_pct": 100,
+    "avg_calls_per_ep": 0,
+    "nav_success_by_kind": {
+      "login": "0/6",
+      "navigate-tap": "0/19",
+      "hide-and-seek": "0/12",
+      "scroll-find": "0/9",
+      "deep-link": "0/8",
+      "toggle": "0/9",
+      "android-setup": "0/3",
+      "chromium-tabs": "0/2"
+    }
+  }
+}
