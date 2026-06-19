@@ -462,7 +462,7 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
     api.recordingExitedUnexpectedly = false;
     api.lastExitInfo = null;
 
-    const { files: exportedFiles, diagnostics } = exportIosTraceData(traceFile);
+    const { files: exportedFiles, diagnostics } = await exportIosTraceData(traceFile);
     api.exportedFiles = exportedFiles;
 
     const warning = wasTimeout
@@ -514,7 +514,7 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   api.recordingExitedUnexpectedly = false;
   api.lastExitInfo = null;
 
-  const { files: exportedFiles, diagnostics } = exportIosTraceData(api.traceFile);
+  const { files: exportedFiles, diagnostics } = await exportIosTraceData(api.traceFile);
   api.exportedFiles = exportedFiles;
 
   const stopResult: IosStopResult = {
