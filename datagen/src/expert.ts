@@ -10,7 +10,14 @@
 //     debugger drop) the way the skills prescribe
 //   - profiling / flow / network workflows follow their skill's step order
 
-import { currentScreenDef, currentVisible, execute, isScrolled, type ToolResult } from "./gym.ts";
+import {
+  currentScreenDef,
+  currentVisible,
+  execute,
+  isScrolled,
+  stripScreenshotNote,
+  type ToolResult,
+} from "./gym.ts";
 import { SCREEN_PX, tapPoint } from "./format.ts";
 import { narr } from "./narrate.ts";
 import { RNG } from "./rng.ts";
@@ -334,11 +341,9 @@ function solveProfile(b: Builder, task: TaskSpec) {
     args: { udid: w.deviceId, fromX: 0.5, fromY: 0.78, toX: 0.5, toY: 0.22 },
   });
   const r1 = b.act("Scrolling the list to exercise the render path.", [swipe()]);
-  const t1 = JSON.parse(r1[0]!.content.replace(/\n\n\[auto-screenshot[^\]]*\]$/, ""))
-    .timestampMs as number;
+  const t1 = JSON.parse(stripScreenshotNote(r1[0]!.content)).timestampMs as number;
   const r2 = b.act("Scrolling once more to get a few commits.", [swipe()]);
-  const t2 = JSON.parse(r2[0]!.content.replace(/\n\n\[auto-screenshot[^\]]*\]$/, ""))
-    .timestampMs as number;
+  const t2 = JSON.parse(stripScreenshotNote(r2[0]!.content)).timestampMs as number;
   b.act("Stopping both profilers.", [
     { name: "react-profiler-stop", args: { device_id: w.deviceId, port: metroPort(w) } },
     { name: "native-profiler-stop", args: { device_id: w.deviceId } },

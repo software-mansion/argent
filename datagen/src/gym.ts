@@ -61,9 +61,29 @@ function json(obj: unknown): string {
   return JSON.stringify(obj);
 }
 
+// The post-action screenshot, rendered as the content the image conveys. For a
+// text model this is the navigation signal (the user notes screenshots are the
+// single most valuable cue): after every action the agent "sees" which screen
+// it landed on and the key elements on it. A vision model would receive the
+// real PNG here instead (the gym can rasterize the same layout — see
+// training/render-screenshot).
+export function sceneCaption(world: World): string {
+  const screen = currentScreenDef(world);
+  const els = currentVisible(world);
+  const content = els.filter((e) => e.label && !e.isTab).map((e) => e.label!);
+  const tabs = els.filter((e) => e.isTab).map((e) => e.label!);
+  const shown = content.slice(0, 8);
+  let s = `[screenshot] "${screen.title}" screen`;
+  if (shown.length) {
+    s += ` showing: ${shown.join(", ")}`;
+    if (content.length > shown.length) s += `, …`;
+  }
+  if (tabs.length) s += ` | bottom tabs: ${tabs.join(", ")}`;
+  return s;
+}
+
 function screenshotNote(world: World): string {
-  const px = SCREEN_PX[world.platform];
-  return `\n\n[auto-screenshot attached: ${px.w}x${px.h} PNG]`;
+  return `\n\n${sceneCaption(world)}`;
 }
 
 // Track which navigation element a focused text field belongs to.
@@ -537,8 +557,8 @@ function runSequence(world: World, args: ToolArgs): ToolResult {
   };
 }
 
-function stripScreenshotNote(s: string): string {
-  return s.replace(/\n\n\[auto-screenshot attached:[^\]]*\]$/, "");
+export function stripScreenshotNote(s: string): string {
+  return s.replace(/\n\n\[screenshot\][\s\S]*$/, "");
 }
 
 function screenshot(world: World, args: ToolArgs): ToolResult {
