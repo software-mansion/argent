@@ -1,4 +1,5 @@
 import { spawn, execSync, type ChildProcess } from "child_process";
+import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import { promises as fs } from "fs";
 import { existsSync } from "node:fs";
 import * as path from "path";
@@ -90,10 +91,17 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    throw new FailureError(
       `Failed to enumerate running processes on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
         `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_PROCESS_LIST_FAILED,
+        failure_stage: "native_profiler_detect_running_processes",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "xcrun_simctl"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -108,8 +116,14 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
   }
 
   if (runningPids.size === 0) {
-    throw new Error(
-      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry."
+    throw new FailureError(
+      "No running apps detected on the simulator. Launch the app first using `launch-app`, then retry.",
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_APPS,
+        failure_stage: "native_profiler_detect_running_processes",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -121,10 +135,17 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
+    throw new FailureError(
       `Failed to list installed apps on simulator ${udid} within ${DETECT_RUNNING_APP_TIMEOUT_MS} ms. ` +
         `Verify the simulator is booted and responsive, then retry. Underlying error: ${msg}`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_LIST_FAILED,
+        failure_stage: "native_profiler_list_installed_apps",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        ...subprocessFailureMetadata(err, "xcrun_simctl"),
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -139,8 +160,14 @@ function enumerateRunningUserApps(udid: string): { info: AppInfo; pid: number }[
   }
 
   if (runningUserApps.length === 0) {
-    throw new Error(
-      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry."
+    throw new FailureError(
+      "No running user apps detected on the simulator (only system apps are running). Launch the app first using `launch-app`, then retry.",
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_USER_APPS,
+        failure_stage: "native_profiler_detect_running_user_app",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -158,8 +185,14 @@ function detectRunningApp(udid: string): DetectedApp {
           `  - ${info.CFBundleExecutable} (${info.CFBundleIdentifier}${info.CFBundleDisplayName ? `, "${info.CFBundleDisplayName}"` : ""})`
       )
       .join("\n");
-    throw new Error(
-      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`
+    throw new FailureError(
+      `Multiple user apps are running on the simulator:\n${appList}\nSpecify \`app_process\` with the CFBundleExecutable or display name of the app you want to profile.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_MULTIPLE_RUNNING_USER_APPS,
+        failure_stage: "native_profiler_detect_running_user_app",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -252,7 +285,15 @@ export async function startNativeProfilerIos(
   params: IosStartParams
 ): Promise<{ status: "recording"; pid: number; traceFile: string }> {
   if (api.profilingActive) {
-    throw new Error(`A native profiling session is already running (PID: ${api.capturePid}).`);
+    throw new FailureError(
+      `A native profiling session is already running (PID: ${api.capturePid}).`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_SESSION_ALREADY_RUNNING,
+        failure_stage: "native_profiler_start_session_state",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
   const templatePath = params.template_path ?? resolveDefaultTemplatePath();
@@ -318,7 +359,13 @@ export async function startNativeProfilerIos(
         // already dead
       }
       resetStartState(api);
-      throw new Error("xctrace process has no pid; cannot resolve start.");
+      throw new FailureError("xctrace process has no pid; cannot resolve start.", {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_NO_PID,
+        failure_stage: "native_profiler_xctrace_start",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+        failure_command: "xctrace",
+      });
     }
 
     return { child: xctraceProcess, pid: xctraceProcess.pid };
@@ -342,11 +389,17 @@ export async function startNativeProfilerIos(
       }
     }
     const totalMs = Date.now() - startMs;
-    throw new Error(
+    throw new FailureError(
       `xctrace could not find process "${appProcess}" after ${MAX_START_ATTEMPTS} attempts within ${totalMs} ms. ` +
         `The app appears to be cold-launching — its bundle is registered with launchd, but xctrace's process resolver hasn't seen it yet. ` +
         `Wait 1–2 seconds for the app to finish launching and retry. ` +
-        `If the wrong app is being detected, pass app_process explicitly with the CFBundleExecutable or display name.`
+        `If the wrong app is being detected, pass app_process explicitly with the CFBundleExecutable or display name.`,
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_PROCESS_NOT_FOUND,
+        failure_stage: "native_profiler_xctrace_start",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      }
     );
   };
 
@@ -408,7 +461,15 @@ export async function stopNativeProfilerIos(api: NativeProfilerSessionApi): Prom
   }
 
   if (!api.profilingActive || !api.captureProcess || !api.traceFile) {
-    throw new Error("No active native profiling session found. Call native-profiler-start first.");
+    throw new FailureError(
+      "No active native profiling session found. Call native-profiler-start first.",
+      {
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_ACTIVE_SESSION,
+        failure_stage: "native_profiler_stop_session_state",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
+    );
   }
 
   if (api.recordingTimeout) {
@@ -465,7 +526,12 @@ export async function analyzeNativeProfilerIos(
   api: NativeProfilerSessionApi
 ): Promise<NativeProfilerAnalyzeResult> {
   if (!api.exportedFiles) {
-    throw new Error("No exported trace data found. Call native-profiler-stop first.");
+    throw new FailureError("No exported trace data found. Call native-profiler-stop first.", {
+      error_code: FAILURE_CODES.PROFILER_NATIVE_TRACE_MISSING,
+      failure_stage: "native_profiler_analyze_load_exports",
+      failure_area: "tool_server",
+      error_kind: "validation",
+    });
   }
 
   const [cpuMissing, hangsMissing, leaksMissing] = await Promise.all([

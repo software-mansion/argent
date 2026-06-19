@@ -71,6 +71,64 @@ describe("http dependency gate", () => {
     expect(res.body.error).toMatch(/android-platform-tools/);
   });
 
+  it("records a static failure signal when a pre-flight dep is missing", async () => {
+    stubProbe(["adb"]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "android-thing",
+      requires: ["adb"],
+      zodSchema: z.object({}),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/android-thing").send({});
+    expect(res.status).toBe(424);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "android-thing",
+      {},
+      {
+        error_code: "HTTP_DEPENDENCY_PREFLIGHT_MISSING",
+        failure_stage: "http_dependency_preflight",
+        failure_area: "http",
+        error_kind: "dependency_missing",
+      },
+      expect.any(Number)
+    );
+  });
+
+  it("records a static failure signal when request validation fails", async () => {
+    stubProbe([]);
+    const recordFailure = vi.fn();
+    const registry = new Registry();
+    registry.registerTool({
+      id: "validated-thing",
+      zodSchema: z.object({ count: z.number() }),
+      services: () => ({}),
+      async execute() {
+        throw new Error("execute should have been skipped");
+      },
+    });
+    const { app } = createHttpApp(registry, { recordFailure });
+    const res = await request(app).post("/tools/validated-thing").send({ count: "nope" });
+    expect(res.status).toBe(400);
+    expect(recordFailure).toHaveBeenCalledWith(
+      "validated-thing",
+      {},
+      {
+        error_code: "HTTP_ZOD_VALIDATION_FAILED",
+        failure_stage: "http_zod_validation",
+        failure_area: "http",
+        error_kind: "validation",
+      },
+      expect.any(Number)
+    );
+    expect(JSON.stringify(recordFailure.mock.calls)).not.toContain("Expected number");
+  });
+
   it("invokes the tool normally when declared deps are present", async () => {
     stubProbe([]);
     const registry = new Registry();

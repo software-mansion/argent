@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -52,8 +52,14 @@ const zodSchema = z.object({
 
 function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
-    throw new Error(
-      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first."
+    throw new FailureError(
+      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_stack_query_load_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   return api.parsedData;
@@ -324,13 +330,23 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
   switch (params.mode) {
     case "hang_stacks": {
       if (params.hang_index == null) {
-        throw new Error("hang_stacks mode requires the hang_index parameter.");
+        throw new FailureError("hang_stacks mode requires the hang_index parameter.", {
+          error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+          failure_stage: "profiler_stack_query_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
       }
       return renderHangStacksIos(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
     }
     case "function_callers": {
       if (!params.function_name) {
-        throw new Error("function_callers mode requires the function_name parameter.");
+        throw new FailureError("function_callers mode requires the function_name parameter.", {
+          error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+          failure_stage: "profiler_stack_query_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
       }
       return renderFunctionCallersIos(data.cpuSamples, params.function_name, params.top_n);
     }
@@ -344,7 +360,12 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
     case "leak_stacks":
       return renderLeakStacksIos(data.memoryLeaks, params.object_type, params.top_n);
     default:
-      throw new Error(`Unknown mode: ${params.mode}`);
+      throw new FailureError(`Unknown mode: ${params.mode}`, {
+        error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+        failure_stage: "profiler_stack_query_mode",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
   }
 }
 
