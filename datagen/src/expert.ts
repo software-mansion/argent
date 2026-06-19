@@ -605,7 +605,10 @@ function solveHideAndSeek(b: Builder, task: TaskSpec) {
   const hops = task.route;
   for (let i = 0; i < hops.length; i++) {
     const hop = hops[i]!;
-    discover(b, `Looking for "${goal}". Let me read the ${currentScreenDef(w).title} screen to decide where to go.`);
+    discover(
+      b,
+      `Looking for "${goal}". Let me read the ${currentScreenDef(w).title} screen to decide where to go.`
+    );
     if (i === 0) {
       // Demonstrate a realistic search: try one plausible-but-wrong place first,
       // read the screen we land on, recognize the target isn't there, and
@@ -622,13 +625,15 @@ function solveHideAndSeek(b: Builder, task: TaskSpec) {
       if (wrong && b.rng.bool(0.7)) {
         b.hasRecovery = true;
         const wp = tapPoint(wrong);
-        b.act(`I'm not sure where "${goal}" lives — "${wrong.label}" looks plausible, let me check there.`, [
-          { name: "gesture-tap", args: { udid: w.deviceId, x: wp.x, y: wp.y } },
-        ]);
+        b.act(
+          `I'm not sure where "${goal}" lives — "${wrong.label}" looks plausible, let me check there.`,
+          [{ name: "gesture-tap", args: { udid: w.deviceId, x: wp.x, y: wp.y } }]
+        );
         discover(b, "Reading this screen to see if the target is here.");
-        b.act(`"${goal}" isn't on the ${currentScreenDef(w).title} screen — backtracking to try another route.`, [
-          { name: "button", args: { udid: w.deviceId, button: "back" } },
-        ]);
+        b.act(
+          `"${goal}" isn't on the ${currentScreenDef(w).title} screen — backtracking to try another route.`,
+          [{ name: "button", args: { udid: w.deviceId, button: "back" } }]
+        );
         discover(b, "Back to the previous screen; trying the more likely path now.");
       }
       tapKey(b, hop.elementKey);
@@ -638,7 +643,9 @@ function solveHideAndSeek(b: Builder, task: TaskSpec) {
   }
   discover(b, `This looks like the right screen — confirming "${goal}" is here.`);
   const target = tapKey(b, task.targetElementKey);
-  b.final(`Found "${target.label}" by exploring ${w.app.name} (it was under ${task.pathLabels.slice(0, -1).join(" > ") || "the main screen"}) and opened it.`);
+  b.final(
+    `Found "${target.label}" by exploring ${w.app.name} (it was under ${task.pathLabels.slice(0, -1).join(" > ") || "the main screen"}) and opened it.`
+  );
 }
 
 const SOLVERS: Record<TaskSpec["kind"], (b: Builder, t: TaskSpec) => void> = {

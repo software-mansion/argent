@@ -27,7 +27,9 @@ import type { ToolSpec } from "../src/types.ts";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
 const PYTHON = process.env.PYTHON ?? join(ROOT, ".venv", "bin", "python");
-const catalog: ToolSpec[] = JSON.parse(readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8"));
+const catalog: ToolSpec[] = JSON.parse(
+  readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8")
+);
 const validator = new Validator(catalog);
 
 const OFFERED_TOOLS = 16;
@@ -36,7 +38,16 @@ const HELD_OUT_BASE = 5_000_000;
 const DISCOVERY = new Set(["describe", "debugger-component-tree", "native-describe-screen"]);
 const DEVICE_TOUCH = new Set(["boot-device", "launch-app", "open-url"]);
 // Tasks whose success is "navigate to + tap the target element".
-const NAV_KINDS = new Set(["navigate-tap", "toggle", "scroll-find", "deep-link", "hide-and-seek", "chromium-tabs", "login", "android-setup"]);
+const NAV_KINDS = new Set([
+  "navigate-tap",
+  "toggle",
+  "scroll-find",
+  "deep-link",
+  "hide-and-seek",
+  "chromium-tabs",
+  "login",
+  "android-setup",
+]);
 
 // ---- generation client ----
 
@@ -99,7 +110,8 @@ function parseToolCall(text: string): { name: string; arguments: Record<string, 
   if (!jsonStr) return null;
   try {
     const o = JSON.parse(jsonStr);
-    if (o && typeof o.name === "string") return { name: o.name, arguments: (o.arguments as Record<string, unknown>) ?? {} };
+    if (o && typeof o.name === "string")
+      return { name: o.name, arguments: (o.arguments as Record<string, unknown>) ?? {} };
   } catch {
     /* malformed */
   }
@@ -108,10 +120,14 @@ function parseToolCall(text: string): { name: string; arguments: Record<string, 
 
 function grounded(disc: { name: string; content: string }, x: number, y: number): boolean {
   if (disc.name === "debugger-component-tree") {
-    return parseComponentTaps(disc.content).some((p) => Math.abs(p.x - x) <= 0.02 && Math.abs(p.y - y) <= 0.02);
+    return parseComponentTaps(disc.content).some(
+      (p) => Math.abs(p.x - x) <= 0.02 && Math.abs(p.y - y) <= 0.02
+    );
   }
   const eps = 0.005;
-  return parseDescribeBoxes(disc.content).some((b) => x >= b.x - eps && x <= b.x + b.w + eps && y >= b.y - eps && y <= b.y + b.h + eps);
+  return parseDescribeBoxes(disc.content).some(
+    (b) => x >= b.x - eps && x <= b.x + b.w + eps && y >= b.y - eps && y <= b.y + b.h + eps
+  );
 }
 
 // ---- per-episode rollout ----
@@ -145,7 +161,12 @@ async function runEpisode(seed: number, gen: Gen): Promise<EpisodeResult | null>
   // Offer the same tool-availability distribution as training: the expert's used
   // set plus distractors. The model still must select + sequence correctly.
   const expert = solve(task, new RNG(seed ^ 0x5d5d5d5d), taskPrompt);
-  const offered = buildOfferedTools(catalog, expert.toolsUsed, new RNG(seed ^ 0x1234abcd), OFFERED_TOOLS);
+  const offered = buildOfferedTools(
+    catalog,
+    expert.toolsUsed,
+    new RNG(seed ^ 0x1234abcd),
+    OFFERED_TOOLS
+  );
   const world = buildWorld({
     app: task.app,
     platform: task.platform,
@@ -214,17 +235,24 @@ async function runEpisode(seed: number, gen: Gen): Promise<EpisodeResult | null>
     try {
       if (!chk.known) obs = JSON.stringify({ error: `unknown tool '${call.name}'` });
       else {
-        const res: ToolResult = execute(world, call.name, { udid: world.deviceId, ...call.arguments });
+        const res: ToolResult = execute(world, call.name, {
+          udid: world.deviceId,
+          ...call.arguments,
+        });
         obs = res.content;
       }
     } catch (e) {
       obs = JSON.stringify({ error: String((e as Error).message ?? e) });
     }
 
-    if (DISCOVERY.has(call.name) && !/"error"\s*:/.test(obs)) lastDiscovery = { name: call.name, content: obs };
+    if (DISCOVERY.has(call.name) && !/"error"\s*:/.test(obs))
+      lastDiscovery = { name: call.name, content: obs };
     if (r.success) break;
 
-    messages.push({ role: "user", content: `<tool_response>\n${compactObservation(obs)}\n</tool_response>` });
+    messages.push({
+      role: "user",
+      content: `<tool_response>\n${compactObservation(obs)}\n</tool_response>`,
+    });
   }
   return r;
 }
@@ -246,12 +274,22 @@ function aggregate(results: EpisodeResult[]) {
   return {
     episodes: results.length,
     nav_episodes: navs.length,
-    nav_success_pct: navs.length ? +((100 * navs.filter((e) => e.success).length) / navs.length).toFixed(1) : 0,
+    nav_success_pct: navs.length
+      ? +((100 * navs.filter((e) => e.success).length) / navs.length).toFixed(1)
+      : 0,
     schema_valid_pct: calls ? +((100 * sum((e) => e.schemaOk)) / calls).toFixed(1) : 0,
     grounded_tap_pct: taps ? +((100 * sum((e) => e.groundedTaps)) / taps).toFixed(1) : 0,
-    policy_violations_per_ep: +(sum((e) => e.policyViolations) / Math.max(1, results.length)).toFixed(2),
-    parse_fail_episodes_pct: +((100 * results.filter((e) => e.parseFails > 0).length) / Math.max(1, results.length)).toFixed(1),
-    clean_finish_pct: +((100 * results.filter((e) => e.endedClean).length) / Math.max(1, results.length)).toFixed(1),
+    policy_violations_per_ep: +(
+      sum((e) => e.policyViolations) / Math.max(1, results.length)
+    ).toFixed(2),
+    parse_fail_episodes_pct: +(
+      (100 * results.filter((e) => e.parseFails > 0).length) /
+      Math.max(1, results.length)
+    ).toFixed(1),
+    clean_finish_pct: +(
+      (100 * results.filter((e) => e.endedClean).length) /
+      Math.max(1, results.length)
+    ).toFixed(1),
     avg_calls_per_ep: +(calls / Math.max(1, results.length)).toFixed(1),
     nav_success_by_kind: Object.fromEntries(
       Object.entries(byKind).map(([k, v]) => [k, `${v.success}/${v.n}`])
@@ -289,7 +327,10 @@ async function main() {
   const summary = aggregate(results);
   const outDir = join(HERE, "runs");
   mkdirSync(outDir, { recursive: true });
-  writeFileSync(join(outDir, `eval-${label}.json`), JSON.stringify({ model, adapter, label, summary }, null, 2));
+  writeFileSync(
+    join(outDir, `eval-${label}.json`),
+    JSON.stringify({ model, adapter, label, summary }, null, 2)
+  );
   console.log(`\n=== eval [${label}] ${model}${adapter ? " + " + adapter : ""} ===`);
   console.log(JSON.stringify(summary, null, 2));
 }

@@ -79,9 +79,13 @@ export class Validator {
   }
 
   /** Validate a single tool call (used by the live eval harness). */
-  checkCall(name: string, args: Record<string, unknown>): { known: boolean; schemaOk: boolean; errors: string[] } {
+  checkCall(
+    name: string,
+    args: Record<string, unknown>
+  ): { known: boolean; schemaOk: boolean; errors: string[] } {
     const errors: string[] = [];
-    if (!this.catalogNames.has(name)) return { known: false, schemaOk: false, errors: [`unknown tool '${name}'`] };
+    if (!this.catalogNames.has(name))
+      return { known: false, schemaOk: false, errors: [`unknown tool '${name}'`] };
     const v = this.validators.get(name)!;
     const schema = this.schemas.get(name)!;
     let schemaOk = true;

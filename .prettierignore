@@ -12,3 +12,6 @@ pnpm-lock.yaml
 # Generated.
 **/tsconfig.tsbuildinfo
 datagen/out/
+datagen/training/runs/
+datagen/training/data/
+datagen/training/adapters/

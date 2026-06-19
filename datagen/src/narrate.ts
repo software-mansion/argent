@@ -116,26 +116,84 @@ export interface PromptCtx {
 // user can still want a profile run — "my app is slow"), but the mix is biased
 // toward the natural asker for that task.
 const PERSONA_WEIGHTS: Record<string, [Persona, number][]> = {
-  profile: [["technical", 6], ["nontechnical", 3], ["seeker", 1]],
-  "debug-inspect": [["technical", 7], ["seeker", 2], ["nontechnical", 1]],
-  "console-check": [["technical", 8], ["nontechnical", 2]],
-  "network-inspect": [["technical", 7], ["nontechnical", 3]],
-  "native-inspect": [["technical", 8], ["seeker", 2]],
-  "run-sequence": [["technical", 5], ["nontechnical", 5]],
-  "visual-regression": [["nontechnical", 5], ["technical", 5]],
-  toggle: [["nontechnical", 6], ["seeker", 3], ["technical", 1]],
-  login: [["nontechnical", 7], ["technical", 3]],
-  "navigate-tap": [["nontechnical", 5], ["seeker", 3], ["technical", 2]],
-  "deep-link": [["technical", 5], ["nontechnical", 5]],
-  "pinch-zoom": [["nontechnical", 6], ["technical", 4]],
-  "scroll-find": [["seeker", 6], ["nontechnical", 4]],
-  "chromium-tabs": [["nontechnical", 5], ["technical", 5]],
-  "android-setup": [["technical", 5], ["nontechnical", 5]],
-  "hide-and-seek": [["seeker", 9], ["nontechnical", 1]],
+  "profile": [
+    ["technical", 6],
+    ["nontechnical", 3],
+    ["seeker", 1],
+  ],
+  "debug-inspect": [
+    ["technical", 7],
+    ["seeker", 2],
+    ["nontechnical", 1],
+  ],
+  "console-check": [
+    ["technical", 8],
+    ["nontechnical", 2],
+  ],
+  "network-inspect": [
+    ["technical", 7],
+    ["nontechnical", 3],
+  ],
+  "native-inspect": [
+    ["technical", 8],
+    ["seeker", 2],
+  ],
+  "run-sequence": [
+    ["technical", 5],
+    ["nontechnical", 5],
+  ],
+  "visual-regression": [
+    ["nontechnical", 5],
+    ["technical", 5],
+  ],
+  "toggle": [
+    ["nontechnical", 6],
+    ["seeker", 3],
+    ["technical", 1],
+  ],
+  "login": [
+    ["nontechnical", 7],
+    ["technical", 3],
+  ],
+  "navigate-tap": [
+    ["nontechnical", 5],
+    ["seeker", 3],
+    ["technical", 2],
+  ],
+  "deep-link": [
+    ["technical", 5],
+    ["nontechnical", 5],
+  ],
+  "pinch-zoom": [
+    ["nontechnical", 6],
+    ["technical", 4],
+  ],
+  "scroll-find": [
+    ["seeker", 6],
+    ["nontechnical", 4],
+  ],
+  "chromium-tabs": [
+    ["nontechnical", 5],
+    ["technical", 5],
+  ],
+  "android-setup": [
+    ["technical", 5],
+    ["nontechnical", 5],
+  ],
+  "hide-and-seek": [
+    ["seeker", 9],
+    ["nontechnical", 1],
+  ],
 };
 
 export function pickPersona(rng: RNG, kind: string): Persona {
-  const table = PERSONA_WEIGHTS[kind] ?? ([["nontechnical", 5], ["technical", 3], ["seeker", 2]] as [Persona, number][]);
+  const table =
+    PERSONA_WEIGHTS[kind] ??
+    ([
+      ["nontechnical", 5],
+      ["technical", 3],
+      ["seeker", 2],
+    ] as [Persona, number][]);
   const total = table.reduce((a, [, w]) => a + w, 0);
   let r = rng.int(total);
   for (const [p, w] of table) {
@@ -169,7 +227,10 @@ function seekerPhrase(rng: RNG, kind: string, ctx: PromptCtx): string {
         `I want to enable "${t}" in ${ctx.app} but I don't know where it lives. Find it.`,
       ]);
     case "scroll-find":
-      return pick(rng, [`"${t}" is further down somewhere in ${ctx.app} — scroll and find it.`, ...generic]);
+      return pick(rng, [
+        `"${t}" is further down somewhere in ${ctx.app} — scroll and find it.`,
+        ...generic,
+      ]);
     default:
       return pick(rng, generic);
   }
@@ -213,7 +274,9 @@ function technicalPhrase(rng: RNG, kind: string, ctx: PromptCtx): string {
         `Baseline ${ctx.app}'s ${ctx.path?.[0] ?? "screen"} at full res, reach the after-state, then screenshot-diff for unintended regressions.`,
       ]);
     case "run-sequence":
-      return pick(rng, [`Batch the ${ctx.app} search (focus field, type, submit) into one run-sequence, then open the result.`]);
+      return pick(rng, [
+        `Batch the ${ctx.app} search (focus field, type, submit) into one run-sequence, then open the result.`,
+      ]);
     default:
       return nontechnicalPhrase(rng, kind, ctx);
   }

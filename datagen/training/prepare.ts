@@ -19,7 +19,9 @@ import { Validator } from "../src/validate.ts";
 import type { ToolSpec } from "../src/types.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const catalog: ToolSpec[] = JSON.parse(readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8"));
+const catalog: ToolSpec[] = JSON.parse(
+  readFileSync(join(HERE, "..", "spec", "tools.json"), "utf8")
+);
 const validator = new Validator(catalog);
 const OFFERED_TOOLS = 16; // tools shown per example during training
 
@@ -46,7 +48,13 @@ function genRow(seed: number, maxTokens: number): GemmaRow | null {
   });
   const sr = solve(task, rng, prompt);
   // Lean tool list (used ∪ ~few distractors) keeps sequences short for the 2B.
-  const traj = assemble(sr, task, seed, buildOfferedTools(catalog, sr.toolsUsed, rng, OFFERED_TOOLS), persona);
+  const traj = assemble(
+    sr,
+    task,
+    seed,
+    buildOfferedTools(catalog, sr.toolsUsed, rng, OFFERED_TOOLS),
+    persona
+  );
   if (!validator.validate(traj).ok) return null; // never ship invalid into training
   const row = toGemmaMessages(traj);
   if (approxTokens(row) > maxTokens) return null;
@@ -70,11 +78,11 @@ function parseArgs(argv: string[]) {
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     const v = argv[i + 1];
-    if (k === "--n") (a.n = +v!), i++;
-    else if (k === "--valid") (a.valid = +v!), i++;
-    else if (k === "--test") (a.test = +v!), i++;
-    else if (k === "--maxTokens") (a.maxTokens = +v!), i++;
-    else if (k === "--out") (a.out = v!), i++;
+    if (k === "--n") ((a.n = +v!), i++);
+    else if (k === "--valid") ((a.valid = +v!), i++);
+    else if (k === "--test") ((a.test = +v!), i++);
+    else if (k === "--maxTokens") ((a.maxTokens = +v!), i++);
+    else if (k === "--out") ((a.out = v!), i++);
   }
   return a;
 }
@@ -88,7 +96,11 @@ function lenStats(rows: GemmaRow[]) {
   const turns = rows.map((r) => r.messages.length).sort((a, b) => a - b);
   return {
     tokens: { min: lens[0], median: lens[Math.floor(lens.length / 2)], max: lens[lens.length - 1] },
-    turns: { min: turns[0], median: turns[Math.floor(turns.length / 2)], max: turns[turns.length - 1] },
+    turns: {
+      min: turns[0],
+      median: turns[Math.floor(turns.length / 2)],
+      max: turns[turns.length - 1],
+    },
   };
 }
 
@@ -102,7 +114,9 @@ function main() {
   writeJsonl(join(args.out, "train.jsonl"), train);
   writeJsonl(join(args.out, "valid.jsonl"), valid);
   writeJsonl(join(args.out, "test.jsonl"), test);
-  console.log(`wrote ${train.length} train / ${valid.length} valid / ${test.length} test -> ${args.out}`);
+  console.log(
+    `wrote ${train.length} train / ${valid.length} valid / ${test.length} test -> ${args.out}`
+  );
   console.log("train length stats:", JSON.stringify(lenStats(train)));
 }
 

@@ -171,7 +171,9 @@ export function compactObservation(content: string): string {
   return content.replace(DESCRIBE_NOTE_RE, "");
 }
 
-export function toGemmaMessages(traj: Trajectory): { messages: { role: "user" | "assistant"; content: string }[] } {
+export function toGemmaMessages(traj: Trajectory): {
+  messages: { role: "user" | "assistant"; content: string }[];
+} {
   const out: { role: "user" | "assistant"; content: string }[] = [];
   const firstUserIdx = traj.messages.findIndex((m) => m.role === "user");
   const task = (traj.messages[firstUserIdx] as { content: string })?.content ?? "";
