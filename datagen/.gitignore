@@ -11,3 +11,5 @@ training/models/
 training/.cache/
 .venv/
 training/fused/
+training/base/
+training/*.gguf

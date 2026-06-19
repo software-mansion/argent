@@ -139,3 +139,55 @@ real visual fluency is a **vision model** (e.g. Gemma 3 4B / Qwen2-VL 2B) fed
 actual PNGs: the gym already holds the exact element layout, so a rasterizer that
 draws the boxes+labels would emit ground-truth screenshots with no extra
 labeling. That's the natural next step once the text benchmark validates the data.
+
+## Gemma 4 E4B (`silver:e4b`)
+
+The same pipeline scaled to **Gemma 4 E4B** (effective-4B, ~7.46B params) on the
+*identical* 2,500-trajectory dataset — a bigger-model run to confirm the gym
+teaches at scale. Recipe held constant vs the 2B (8 LoRA layers, batch 1, LR 5e-5,
+500 iters); only `MAXSEQ` changed (the gemma4 chat template is ~30% more verbose
+than gemma2's, so 46% of the same trajectories overflow 2600 tokens → raised to
+3500). Validation loss **2.57 → 0.062**. Uploaded to `LatekVo/silver`.
+
+```bash
+# 0) clean base: the mlx-community gemma-4 E4B 4-bit quant ships 126 redundant
+#    shared-KV tensors that mlx_lm's strict load rejects; re-save the real params.
+.venv/bin/python training/clean-base.py \
+  --repo mlx-community/gemma-4-e4b-it-4bit --out training/base/gemma-4-e4b-clean
+
+# 1) data (reuse the 2B's; chat-format JSONL is model-agnostic) + 2) train
+MODEL=$PWD/training/base/gemma-4-e4b-clean ITERS=500 MAXSEQ=3500 \
+  ADAPTER=adapters/gemma4-e4b-argent training/train.sh
+
+# 3) fuse + dequantize, then rewrite as a text-only Gemma4ForCausalLM
+.venv/bin/python -m mlx_lm fuse --model training/base/gemma-4-e4b-clean \
+  --adapter-path training/adapters/gemma4-e4b-argent \
+  --save-path training/fused/silver-e4b --dequantize
+.venv/bin/python training/to-causal.py   # -> training/fused/silver-e4b-causal
+```
+
+### Ollama: convert with llama.cpp, not Ollama's converter
+
+**Ollama 0.30's gemma4 *converter* is broken** for a text-only checkpoint (its
+`Gemma4ForConditionalGeneration` path drops `token_embd`; its `Gemma4ForCausalLM`
+path crashes mid-tensor-write) — but its gemma4 *runtime* is fine (the official
+`gemma4:e4b` runs). So convert with **llama.cpp's** mature converter, then *import*
+the GGUF (no Ollama-side conversion):
+
+```bash
+python convert_hf_to_gguf.py training/fused/silver-e4b-causal \
+  --outfile training/fused/silver-e4b.f16.gguf --outtype f16   # llama.cpp
+FLAVOR=gemma4 node training/make-modelfile.ts                  # -> fused/Modelfile.e4b
+ollama create silver:e4b -q q4_K_M -f training/fused/Modelfile.e4b
+```
+
+`silver:e4b` (5.3 GB, q4_K_M) then runs like `silver:2b` — `ollama run silver:e4b
+"<task>"`. The Argent preamble is in `SYSTEM`; Ollama's native `RENDERER gemma4`
+(auto-assigned) handles bos/turns, so no baked template is needed (unlike the 2B).
+Multi-turn verified: it reads the udid from a pasted `<tool_response>` and issues
+`launch-app`. Gotchas: see `clean-base.py` (redundant KV keys), `to-causal.py`
+(text-only layout so the converter maps `token_embd`), and the converter note above.
+
+### Eval (e4b)
+
+Same gym-replay recipe, held-out seeds 5,000,000+. Numbers in `results/`.

@@ -11,6 +11,11 @@ PY="../../.venv/bin/python"
 MODEL="${MODEL:-mlx-community/gemma-2-2b-it-4bit}"
 ITERS="${ITERS:-700}"
 ADAPTER="${ADAPTER:-adapters/gemma-argent}"
+# Max sequence length. The 2B's gemma2 template fit in 2600; gemma4's template is
+# more verbose (system + thinking scaffold) so ~46% of the same trajectories run
+# longer — raise to 3500 for e4b (MAXSEQ=3500) to avoid truncating answer turns.
+MAXSEQ="${MAXSEQ:-2600}"
+NUMLAYERS="${NUMLAYERS:-8}"
 mkdir -p "$(dirname "$ADAPTER")"
 
 # Train on the full sequence (no --mask-prompt): these are multi-turn
@@ -22,10 +27,10 @@ exec "$PY" -m mlx_lm.lora \
   --data data \
   --adapter-path "$ADAPTER" \
   --fine-tune-type lora \
-  --num-layers 8 \
+  --num-layers "$NUMLAYERS" \
   --batch-size 1 \
   --iters "$ITERS" \
-  --max-seq-length 2600 \
+  --max-seq-length "$MAXSEQ" \
   --learning-rate 5e-5 \
   --steps-per-report 20 \
   --steps-per-eval 300 \

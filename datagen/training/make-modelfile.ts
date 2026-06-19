@@ -1,7 +1,18 @@
-// Emit an Ollama Modelfile for silver:2b. The model was trained with the
-// Argent policy + a tool list in the first user turn, so we bake an equivalent
-// preamble into SYSTEM (Gemma's template merges it into the first user turn) and
-// a Gemma 2 chat template, so a user can type a task and get tool calls back.
+// Emit an Ollama Modelfile baking the Argent policy + tool list into the model.
+//
+//   node make-modelfile.ts            # gemma2 (silver:2b): baked chat TEMPLATE
+//   FLAVOR=gemma4 node make-modelfile.ts   # gemma4 (silver:e4b): SYSTEM preamble
+//
+// gemma2 (silver:2b): Ollama doesn't apply Gemma 2's template/bos for an imported
+// model, so we bake a multi-turn chat TEMPLATE with a literal <bos> and the
+// preamble in the first user turn (matching training exactly).
+//
+// gemma4 (silver:e4b): Ollama 0.30 has a native `RENDERER gemma4` (auto-assigned
+// when the GGUF is imported), which handles bos/turns correctly — so we just put
+// the preamble (policy + tools, minus the "# Task" trailer) in SYSTEM and let the
+// renderer fold it in. The user's typed task becomes the first user turn.
+// (The fine-tuned model tool-calls correctly with the preamble in the system turn,
+// verified empirically.)
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -9,6 +20,8 @@ import { fileURLToPath } from "node:url";
 import { buildGemmaFirstUser } from "../src/emit.ts";
 import { ARGENT_POLICY_COMPACT } from "../src/system-prompt.ts";
 import type { ToolSpec } from "../src/types.ts";
+
+const FLAVOR = process.env.FLAVOR === "gemma4" ? "gemma4" : "gemma2";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const catalog: ToolSpec[] = JSON.parse(
@@ -36,20 +49,34 @@ const DEFAULT_TOOLS = [
 ];
 const tools = DEFAULT_TOOLS.map((n) => catalog.find((t) => t.name === n)!).filter(Boolean);
 
-// Preamble ending at "# Task" — the user's typed message becomes the task.
-const preamble = buildGemmaFirstUser(ARGENT_POLICY_COMPACT, tools, "").trimEnd();
+const fullPreamble = buildGemmaFirstUser(ARGENT_POLICY_COMPACT, tools, "").trimEnd();
 
-// Multi-turn Gemma template with the Argent preamble baked into the first user
-// turn (no reliance on .System, which our earlier template failed to inject).
-// A literal <bos> is required: Gemma is bos-sensitive — the model only emits
-// tool calls with bos present, and Ollama does NOT auto-add it for this imported
-// model (verified empirically), so there's no double-bos. The first user message
-// lands right after "# Task"; later turns (e.g. pasted <tool_response>s) carry
-// the conversation so the model keeps driving.
-const template = `{{- range $i, $m := .Messages }}
+let modelfile: string;
+if (FLAVOR === "gemma4") {
+  // SYSTEM = policy + tools, minus the "# Task" trailer (the task is the user turn).
+  const system = fullPreamble.replace(/\n+# Task\s*$/, "").trimEnd();
+  // FROM the llama.cpp-converted GGUF (Ollama's own gemma4 safetensors converter is
+  // broken; see README). `ollama create -q q4_K_M -f Modelfile` quantizes + imports;
+  // RENDERER/PARSER gemma4 are auto-assigned from the GGUF.
+  const gguf = process.env.GGUF ?? "./silver-e4b.f16.gguf";
+  modelfile = `# silver:e4b — Gemma 4 E4B fine-tuned to drive the Argent toolkit.
+FROM ${gguf}
+
+SYSTEM """${system}"""
+
+# Greedy for consistent, schema-valid tool calls.
+PARAMETER temperature 0
+`;
+  writeFileSync(join(HERE, "fused", "Modelfile.e4b"), modelfile);
+  console.log(`wrote fused/Modelfile.e4b (SYSTEM ${system.length} chars, ${tools.length} tools)`);
+} else {
+  // gemma2: bake a multi-turn chat TEMPLATE with a literal <bos> and the preamble in
+  // the first user turn. Gemma is bos-sensitive and Ollama doesn't auto-add it for
+  // this imported model (verified), and .System injection failed in earlier attempts.
+  const template = `{{- range $i, $m := .Messages }}
 {{- if eq $i 0 }}<bos>{{ end }}
 {{- if eq $m.Role "user" }}<start_of_turn>user
-{{ if eq $i 0 }}${preamble}
+{{ if eq $i 0 }}${fullPreamble}
 
 {{ end }}{{ $m.Content }}<end_of_turn>
 {{ end }}
@@ -58,8 +85,7 @@ const template = `{{- range $i, $m := .Messages }}
 {{ end }}
 {{- end }}<start_of_turn>model
 `;
-
-const modelfile = `# silver:2b — Gemma 2 2B fine-tuned to drive the Argent toolkit.
+  modelfile = `# silver:2b — Gemma 2 2B fine-tuned to drive the Argent toolkit.
 FROM ./argent-silver
 
 TEMPLATE """${template}"""
@@ -68,6 +94,8 @@ TEMPLATE """${template}"""
 PARAMETER temperature 0
 PARAMETER stop "<end_of_turn>"
 `;
-
-writeFileSync(join(HERE, "fused", "Modelfile"), modelfile);
-console.log(`wrote fused/Modelfile (preamble ${preamble.length} chars, ${tools.length} tools)`);
+  writeFileSync(join(HERE, "fused", "Modelfile"), modelfile);
+  console.log(
+    `wrote fused/Modelfile (preamble ${fullPreamble.length} chars, ${tools.length} tools)`
+  );
+}
