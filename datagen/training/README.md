@@ -200,4 +200,16 @@ as structured `tool_calls`. It's an Argent model, driven via the Argent toolchai
 
 ### Eval (e4b)
 
-Same gym-replay recipe, held-out seeds 5,000,000+. Numbers in `results/`.
+Same gym-replay recipe, 120 held-out tasks (seeds 5,000,000+, greedy). Full writeup +
+raw numbers in `results/RESULTS-e4b.md`.
+
+| metric             | base   | gym-tuned (silver:e4b) | silver:2b |
+| ------------------ | ------ | ---------------------- | --------- |
+| Navigation success | **0%** | **60.3%**              | 44.1%     |
+| Schema-valid calls | 100%\* | **96.2%**              | 99.2%     |
+| Grounded taps      | **0%** | **87.9%**              | 97.2%     |
+
+The tuned E4B beats the 2B (60.3% vs 44.1% nav) and fixes its worst case
+(`scroll-find` 0/9 → 3/9). The base just chats (~0.5 calls/ep, 0% nav). _Methodology:
+the tuned model is eval'd as a 4-bit **merged** checkpoint — `eval.ts --adapter-path`
+deadlocks in mlx for gemma4; see `results/RESULTS-e4b.md`._
