@@ -31,9 +31,17 @@ const watcherMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@argent/telemetry", () => telemetryMock);
-vi.mock("@argent/registry", () => ({
-  attachRegistryLogger: vi.fn(),
-}));
+// Keep the real registry exports (notably TypedEventEmitter, which
+// variant-proposals.ts constructs at module load via index.ts) and override
+// only attachRegistryLogger — wiring the real logger onto the stubbed registry
+// here would call `.events.on` on a registry mock that has no event emitter.
+vi.mock("@argent/registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@argent/registry")>();
+  return {
+    ...actual,
+    attachRegistryLogger: vi.fn(),
+  };
+});
 vi.mock("../src/utils/setup-registry", () => ({
   createRegistry: vi.fn(() => registryMock),
 }));
