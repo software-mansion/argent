@@ -28,10 +28,19 @@ export const allProcessesStrategy: IosCaptureStrategy = {
   buildRecordArgs(input: RecordArgsInput): string[] {
     // No --device and no --attach: profile the whole host. The simulator app is
     // included because its process lives on the host kernel.
+    //
+    // Use the built-in "Time Profiler" template (CPU + Hangs) rather than the
+    // full Argent template: the Argent template's Leaks and Allocations
+    // instruments require a single-process target and abort with "cannot handle
+    // a target type of 'All Processes'", failing the whole recording. Time
+    // Profiler is the host-wide-compatible subset and yields the same ~1kHz PET
+    // CPU samples the pipeline consumes. Per-app leaks/allocations are not
+    // available in host-wide capture (they'd need a process-scoped tool such as
+    // `simctl spawn heap|leaks <pid>` — out of scope here).
     const args = [
       "record",
       "--template",
-      input.templatePath,
+      "Time Profiler",
       "--all-processes",
       "--output",
       input.outputFile,
