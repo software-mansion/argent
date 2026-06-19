@@ -108,7 +108,14 @@ so runs are reproducible and shardable. Train/eval use disjoint seed ranges.
 
 ## Extending (this is the scale lever)
 
-Coverage today is 40/67 tools across 16 task families. Adding more is mechanical:
+User prompts come in three **personas** (technical / non-technical / seeker), and
+the post-action screenshot slot carries a **scene caption** of the resulting
+screen (a text proxy for visual navigation). A `training/` dir LoRA-fine-tunes
+Gemma 2 2B on this data and scores it by replaying through the gym (see
+`training/README.md`).
+
+Coverage today is 40/67 tools across 17 task families (incl. `hide-and-seek`
+exploratory navigation). Adding more is mechanical:
 
 - **New app archetype** — drop a file in `src/archetypes/` that default-exports an
   `AppArchetype` (screen graph; reuse `helpers.ts`), import it in `index.ts`.

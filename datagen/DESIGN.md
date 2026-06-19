@@ -96,6 +96,26 @@ Treat trajectory generation as **rollouts in a simulator**, not text generation.
 - Pilot: **800 train + 100 eval, 0 rejected**, fully deterministic, with OpenAI
   and ShareGPT exports. Validator self-check: 9/9.
 
+## Phase 2: prompt mix, navigation, and the Gemma 2 2B benchmark
+
+- **Persona mix.** User prompts now come in three voices — _technical_ (digs into
+  profiling/inspection), _non-technical_ (describes UI in natural language), and
+  _seeker_ (find-it framing) — weighted per task kind and recorded in meta.
+- **Hide-and-seek.** A navigation task family where the model must _find_ a target
+  with no given path: read the screen, try a plausible wrong screen, recognize the
+  target isn't there (from the scene caption), backtrack, and continue. Directly
+  trains the weak app-navigation capability.
+- **Scene-caption screenshots.** The post-action screenshot slot carries the
+  screen's content (text proxy for vision); grounding still requires a real
+  discovery call, so the discipline holds.
+- **Benchmark (`training/`).** A live, falsifiable test that the gym teaches: LoRA
+  fine-tune Gemma 2 2B (4-bit, MLX, on a 24 GB Mac) on the gym data, then **replay
+  the model through the gym** on held-out seeds and score with the same validators.
+  The base `gemma-2-2b-it` makes **0 tool calls** (it just chats) — a clean floor;
+  the fine-tuned model is measured against it on navigation-success, schema-valid,
+  and grounded-tap. This is the same eval recipe the $500 / $50k models will use,
+  exercised end-to-end at 2B scale.
+
 ## Path to the proof model (~$500)
 
 1. Generate ~30–50k trajectories (`--n 40000`; minutes). Hold out the eval split
@@ -136,10 +156,12 @@ Treat trajectory generation as **rollouts in a simulator**, not text generation.
 
 ## Risks & limitations (honest)
 
-- **Screenshots are placeholders.** Auto-attached screenshots are represented as a
-  textual marker, not pixels. This is deliberate (text SFT), and it reinforces the
-  right lesson — read structure via `describe`/component-tree, not pixels — but a
-  vision-capable Argent model would need real image observations layered in.
+- **Screenshots are scene captions, not pixels.** The post-action screenshot is
+  delivered as a text caption of the resulting screen (title + key elements), so a
+  text model gets the navigation signal the user flagged as most valuable. True
+  pixel fluency needs a vision model fed real PNGs — and the gym already holds the
+  exact element layout, so a rasterizer would emit ground-truth screenshots with
+  no labeling (the documented next step, not built here).
 - **Simulator fidelity is a ceiling.** The gym models the screens and transitions
   the archetypes encode; it is not the real OS. Output formats are ported but can
   drift if Argent changes them — `spec/tools.json` and `format.ts` should be
