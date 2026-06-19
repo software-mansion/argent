@@ -15,3 +15,4 @@ datagen/out/
 datagen/training/runs/
 datagen/training/data/
 datagen/training/adapters/
+datagen/training/fused/

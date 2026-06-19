@@ -90,6 +90,45 @@ process (`serve.py`) only generates text; Node owns the loop and scoring.
   which would only train the last assistant turn — we want every tool-call turn).
 - `data/`, `adapters/`, `runs/` — generated (gitignored).
 
+## Run it in Ollama (`silver:2b`)
+
+Fuse the LoRA adapter into the base, dequantize, and import into Ollama:
+
+```bash
+# fuse adapter -> dequantized HF model (MLX can't GGUF-export gemma2, that's fine)
+.venv/bin/python -m mlx_lm fuse \
+  --model mlx-community/gemma-2-2b-it-4bit \
+  --adapter-path training/adapters/gemma-argent \
+  --save-path training/fused/argent-silver --dequantize
+# MLX's fuse omits the SentencePiece model — copy it in or Ollama's tokenizer breaks:
+cp ~/.cache/huggingface/hub/models--mlx-community--gemma-2-2b-it-4bit/snapshots/*/tokenizer.model \
+   training/fused/argent-silver/
+node training/make-modelfile.ts                          # writes training/fused/Modelfile
+ollama create silver:2b -f training/fused/Modelfile -q q4_K_M
+```
+
+Then chat — the Argent policy + a 16-tool list are baked into the Modelfile, so
+just give it a task:
+
+```bash
+ollama run silver:2b "In the Settings simulator, go to General and tap About."
+# -> "First, let me see what devices are available."
+#    <tool_call>{"name":"list-devices","arguments":{}}</tool_call>
+```
+
+It's a multi-turn agent: paste the `<tool_response>` back and it issues the next
+action (e.g. reads the udid from the device list and calls `launch-app` with the
+right bundle id). Two import gotchas, both handled by `make-modelfile.ts`:
+
+- **`tokenizer.model`** must be copied into the fused dir or Ollama emits
+  `[UNK_BYTE_…]` garbage (MLX's fuse only writes the fast `tokenizer.json`).
+- **`<bos>`** must be in the template literally — Gemma only emits tool calls
+  with a BOS token, and Ollama does not auto-add it for this imported model
+  (verified: without it the model chats; with it, it tool-calls).
+
+It's a 2B, so expect the held-out quality from `results/` (~44% nav, 99%
+schema-valid) — good enough to feel the behavior, not a production agent.
+
 ## Vision (screenshots)
 
 Gemma 2 2B is text-only, so the post-action screenshot is delivered as a scene

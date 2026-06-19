@@ -10,3 +10,4 @@ training/adapters/
 training/models/
 training/.cache/
 .venv/
+training/fused/
