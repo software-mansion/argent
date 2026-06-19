@@ -37,7 +37,7 @@ import {
 } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
-import { printFirstRunNotice } from "./first-run-notice.js";
+import { resolveTelemetryConsent } from "./first-run-notice.js";
 
 type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
 
@@ -116,6 +116,7 @@ function extractFlag(args: string[], flag: string): string | null {
 
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const noTelemetry = args.includes("--no-telemetry");
   const fromTar = extractFlag(args, "--from");
   const initStartTime = performance.now();
 
@@ -166,7 +167,14 @@ export async function init(args: string[]): Promise<void> {
     let version = getInstalledVersion() ?? "unknown";
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
 
-    printFirstRunNotice();
+    // Resolve telemetry consent before the first track() so the user's choice
+    // governs whether this session's installation events are collected at all.
+    const consent = await resolveTelemetryConsent({ nonInteractive, disableFlag: noTelemetry });
+    if (consent.kind === "cancelled") {
+      // No tracking on a consent-prompt cancel — the user agreed to nothing.
+      p.cancel("Initialization cancelled.");
+      process.exit(0);
+    }
 
     track("installation:cli_init_start", {
       package_manager: detectPackageManager(),
@@ -766,6 +774,11 @@ export async function init(args: string[]): Promise<void> {
     p.outro("Done.");
 
     initSucceeded = true;
+    // Persist an interactive first-run telemetry choice only now that init has
+    // completed. Until this point the pick governs the session via an in-process
+    // override but isn't written to disk, so aborting setup leaves nothing behind
+    // and the next run re-prompts instead of inheriting the abandoned choice.
+    if ("commit" in consent) consent.commit();
     await finalizeInitTelemetry();
   } catch (err) {
     // Any unclassified throw (file I/O, copyRulesAndAgents, the online check, a

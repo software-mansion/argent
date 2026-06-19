@@ -26,6 +26,14 @@ export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
 export { isDebugEnabled } from "./debug.js";
 export { getConsentState } from "./consent.js";
+// Persists the consent flag without emitting a transition event — for recording
+// an initial first-run choice. Use markDisabled() (not this) for a live opt-out
+// that should send a final telemetry:opt_out before the pipe closes.
+export { writeConsentFlag } from "./consent.js";
+// Applies a first-run choice to the current session only (in-process, not on
+// disk), so an interactive consent prompt can govern this run's events before
+// the decision is committed at install completion.
+export { setSessionConsentOverride } from "./consent.js";
 export {
   FIRST_RUN_NOTICE,
   FIRST_RUN_NOTICE_BODY_LINES,
