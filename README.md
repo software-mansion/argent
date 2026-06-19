@@ -138,7 +138,7 @@ You can opt out at any time:
 argent telemetry disable   # check status with: argent telemetry status
 ```
 
-For the full details — see the [Argent Privacy Notice (Telemetry)](https://github.com/software-mansion/argent/blob/main/TELEMETRY.md).
+For the full details — see the [Argent Privacy Notice (Telemetry)](https://github.com/software-mansion/argent/blob/main/Telemetry.md).
 
 ## License
 
