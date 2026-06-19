@@ -317,7 +317,7 @@ export async function startNativeProfilerIos(
         `samples can be isolated by PID, but no running PID was found for "${appProcess}". ` +
         `Launch the app first using \`launch-app\`, then retry.`,
       {
-        error_code: FAILURE_CODES.NATIVE_PROFILER_APP_NOT_RUNNING,
+        error_code: FAILURE_CODES.NATIVE_PROFILER_NO_RUNNING_USER_APPS,
         failure_stage: "native_profiler_start_app_detect",
         failure_area: "tool_server",
         error_kind: "validation",
