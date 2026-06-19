@@ -2,7 +2,7 @@
 
 import { ARGENT_SYSTEM_PROMPT } from "./system-prompt.ts";
 import type { RNG } from "./rng.ts";
-import type { Message, ToolSpec, Trajectory, TrajectoryMeta } from "./types.ts";
+import type { Message, Persona, ToolSpec, Trajectory, TrajectoryMeta } from "./types.ts";
 import type { SolveResult } from "./expert.ts";
 import type { TaskSpec } from "./tasks.ts";
 
@@ -23,7 +23,8 @@ export function assemble(
   solveResult: SolveResult,
   task: TaskSpec,
   seed: number,
-  offeredTools: ToolSpec[]
+  offeredTools: ToolSpec[],
+  persona: Persona
 ): Trajectory {
   const messages: Message[] = [
     { role: "system", content: ARGENT_SYSTEM_PROMPT },
@@ -33,6 +34,7 @@ export function assemble(
     id: `argent-${task.kind}-${seed}`,
     seed,
     task_type: task.kind,
+    persona,
     platform: task.platform,
     app_archetype: task.app.id,
     difficulty: task.difficulty,

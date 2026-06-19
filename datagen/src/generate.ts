@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { RNG } from "./rng.ts";
 import { generateTask, type TaskSpec } from "./tasks.ts";
 import { solve } from "./expert.ts";
-import { userTaskPhrase } from "./narrate.ts";
+import { pickPersona, userTaskPhrase } from "./narrate.ts";
 import { assemble, buildOfferedTools, toOpenAI, toShareGPT } from "./emit.ts";
 import { Validator } from "./validate.ts";
 import type { ToolSpec, Trajectory } from "./types.ts";
@@ -64,7 +64,8 @@ function generateOne(seed: number, catalog: ToolSpec[], validator: Validator): G
   const rng = new RNG(seed);
   const task = generateTask(rng);
   if (!task) return {};
-  const prompt = userTaskPhrase(rng, task.kind, {
+  const persona = pickPersona(rng, task.kind);
+  const prompt = userTaskPhrase(rng, task.kind, persona, {
     app: task.app.name,
     platform: task.platform,
     target: task.pathLabels.at(-1),
@@ -73,7 +74,7 @@ function generateOne(seed: number, catalog: ToolSpec[], validator: Validator): G
   });
   const solveResult = solve(task, rng, prompt);
   const offered = buildOfferedTools(catalog, solveResult.toolsUsed, rng);
-  const traj = assemble(solveResult, task, seed, offered);
+  const traj = assemble(solveResult, task, seed, offered, persona);
   const result = validator.validate(traj);
   if (!result.ok) return { task, errors: result.errors };
   return { traj, task };
@@ -104,6 +105,7 @@ function computeStats(records: Trajectory[], catalog: ToolSpec[]) {
   const byKind: Record<string, number> = {};
   const byPlatform: Record<string, number> = {};
   const byDifficulty: Record<string, number> = {};
+  const byPersona: Record<string, number> = {};
   const toolUse = new Map<string, number>();
   const lengths: number[] = [];
   let recovery = 0;
@@ -112,6 +114,7 @@ function computeStats(records: Trajectory[], catalog: ToolSpec[]) {
     byKind[r.meta.task_type] = (byKind[r.meta.task_type] ?? 0) + 1;
     byPlatform[r.meta.platform] = (byPlatform[r.meta.platform] ?? 0) + 1;
     byDifficulty[r.meta.difficulty] = (byDifficulty[r.meta.difficulty] ?? 0) + 1;
+    byPersona[r.meta.persona] = (byPersona[r.meta.persona] ?? 0) + 1;
     if (r.meta.has_recovery) recovery++;
     totalCalls += r.meta.n_tool_calls;
     lengths.push(r.meta.n_tool_calls);
@@ -134,6 +137,7 @@ function computeStats(records: Trajectory[], catalog: ToolSpec[]) {
     max_tool_calls: lengths[lengths.length - 1] ?? 0,
     recovery_pct: Math.round((recovery / Math.max(1, records.length)) * 1000) / 10,
     by_task_type: byKind,
+    by_persona: byPersona,
     by_platform: byPlatform,
     by_difficulty: byDifficulty,
     tool_frequency: Object.fromEntries([...toolUse.entries()].sort((a, b) => b[1] - a[1])),
@@ -143,7 +147,7 @@ function computeStats(records: Trajectory[], catalog: ToolSpec[]) {
 
 function renderSampleMarkdown(traj: Trajectory): string {
   const lines: string[] = [
-    `### ${traj.meta.id}  \`${traj.meta.task_type}/${traj.meta.platform}/${traj.meta.difficulty}\``,
+    `### ${traj.meta.id}  \`${traj.meta.task_type}/${traj.meta.persona}/${traj.meta.platform}/${traj.meta.difficulty}\``,
     "",
   ];
   lines.push(
@@ -239,6 +243,7 @@ function main() {
     `avg tool calls/traj: ${stats.train.avg_tool_calls}  (median ${stats.train.median_tool_calls}, max ${stats.train.max_tool_calls})`
   );
   console.log(`recovery trajectories: ${stats.train.recovery_pct}%`);
+  console.log(`personas:`, stats.train.by_persona);
   console.log(`task types:`, stats.train.by_task_type);
   console.log(`platforms:`, stats.train.by_platform);
   if (rejected > 0) {

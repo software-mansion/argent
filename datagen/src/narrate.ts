@@ -4,6 +4,8 @@
 // without ever risking the correctness of the actions.
 
 import type { RNG } from "./rng.ts";
+import type { Persona } from "./types.ts";
+export type { Persona };
 
 export function pick(rng: RNG, options: string[]): string {
   return options[rng.int(options.length)]!;
@@ -100,13 +102,126 @@ export const narr = {
   done: (rng: RNG, summary: string) => summary,
 };
 
-// ---- user prompt banks (per task family) ----
+// ---- personas: who is asking, and in what voice ----
 
-export function userTaskPhrase(
-  rng: RNG,
-  kind: string,
-  ctx: { app: string; platform: string; target?: string; path?: string[]; field?: string }
-): string {
+export interface PromptCtx {
+  app: string;
+  platform: string;
+  target?: string;
+  path?: string[];
+  field?: string;
+}
+
+// Per-kind persona weights. Every kind admits all three voices (a non-technical
+// user can still want a profile run — "my app is slow"), but the mix is biased
+// toward the natural asker for that task.
+const PERSONA_WEIGHTS: Record<string, [Persona, number][]> = {
+  profile: [["technical", 6], ["nontechnical", 3], ["seeker", 1]],
+  "debug-inspect": [["technical", 7], ["seeker", 2], ["nontechnical", 1]],
+  "console-check": [["technical", 8], ["nontechnical", 2]],
+  "network-inspect": [["technical", 7], ["nontechnical", 3]],
+  "native-inspect": [["technical", 8], ["seeker", 2]],
+  "run-sequence": [["technical", 5], ["nontechnical", 5]],
+  "visual-regression": [["nontechnical", 5], ["technical", 5]],
+  toggle: [["nontechnical", 6], ["seeker", 3], ["technical", 1]],
+  login: [["nontechnical", 7], ["technical", 3]],
+  "navigate-tap": [["nontechnical", 5], ["seeker", 3], ["technical", 2]],
+  "deep-link": [["technical", 5], ["nontechnical", 5]],
+  "pinch-zoom": [["nontechnical", 6], ["technical", 4]],
+  "scroll-find": [["seeker", 6], ["nontechnical", 4]],
+  "chromium-tabs": [["nontechnical", 5], ["technical", 5]],
+  "android-setup": [["technical", 5], ["nontechnical", 5]],
+  "hide-and-seek": [["seeker", 9], ["nontechnical", 1]],
+};
+
+export function pickPersona(rng: RNG, kind: string): Persona {
+  const table = PERSONA_WEIGHTS[kind] ?? ([["nontechnical", 5], ["technical", 3], ["seeker", 2]] as [Persona, number][]);
+  const total = table.reduce((a, [, w]) => a + w, 0);
+  let r = rng.int(total);
+  for (const [p, w] of table) {
+    if (r < w) return p;
+    r -= w;
+  }
+  return "nontechnical";
+}
+
+export function userTaskPhrase(rng: RNG, kind: string, persona: Persona, ctx: PromptCtx): string {
+  if (persona === "technical") return technicalPhrase(rng, kind, ctx);
+  if (persona === "seeker") return seekerPhrase(rng, kind, ctx);
+  return nontechnicalPhrase(rng, kind, ctx);
+}
+
+// ---- seeker voice: navigation / find-it framing (trains app navigation) ----
+
+function seekerPhrase(rng: RNG, kind: string, ctx: PromptCtx): string {
+  const t = ctx.target ?? "it";
+  const generic = [
+    `Somewhere in ${ctx.app} there's "${t}" — find it and open it. I don't remember the path.`,
+    `I can't find "${t}" in ${ctx.app}. Can you hunt around and get to it?`,
+    `Navigate ${ctx.app} and find the screen with "${t}", then tap it.`,
+    `Dig through ${ctx.app} until you reach "${t}" and select it.`,
+    `Where is "${t}" in ${ctx.app}? Explore and take me there.`,
+  ];
+  switch (kind) {
+    case "toggle":
+      return pick(rng, [
+        `There's a "${t}" setting somewhere in ${ctx.app} — find it and turn it on.`,
+        `I want to enable "${t}" in ${ctx.app} but I don't know where it lives. Find it.`,
+      ]);
+    case "scroll-find":
+      return pick(rng, [`"${t}" is further down somewhere in ${ctx.app} — scroll and find it.`, ...generic]);
+    default:
+      return pick(rng, generic);
+  }
+}
+
+// ---- technical voice: developer digging deeper ----
+
+function technicalPhrase(rng: RNG, kind: string, ctx: PromptCtx): string {
+  switch (kind) {
+    case "profile":
+      return pick(rng, [
+        `Profile the ${ctx.path?.[0] ?? "list"} in ${ctx.app} while scrolling — I think a row component re-renders every frame. Find the hot commit and root-cause it.`,
+        `${ctx.app} drops frames on ${ctx.path?.[0] ?? "the list"}. Run the React + native profilers, correlate, and tell me the dominant cost.`,
+      ]);
+    case "debug-inspect":
+      return pick(rng, [
+        `Which component/source file renders "${ctx.target}" in ${ctx.app}? Inspect the element and give me file:line.`,
+        `Map "${ctx.target}" in ${ctx.app} back to its source via the component tree + inspect-element.`,
+      ]);
+    case "console-check":
+      return pick(rng, [
+        `Check ${ctx.app}'s console log registry for errors/warnings and confirm the RN version at runtime.`,
+        `Pull ${ctx.app}'s logs — any errors? Also eval the RN version in the runtime.`,
+      ]);
+    case "network-inspect":
+      return pick(rng, [
+        `Capture the HTTP request ${ctx.app} fires when you open "${ctx.target}" and dump the request/response details.`,
+        `Inspect the API call behind "${ctx.target}" in ${ctx.app} — method, status, timing, body.`,
+      ]);
+    case "native-inspect":
+      return pick(rng, [
+        `Give me the accessibilityIdentifier and view class of "${ctx.target}" in ${ctx.app} via native-describe-screen.`,
+      ]);
+    case "navigate-tap":
+      return pick(rng, [
+        `Drive ${ctx.app} to ${ctx.path?.join(" > ")} and tap "${ctx.target}" — I'm verifying the nav stack.`,
+        `Walk ${ctx.app} through ${ctx.path?.join(" → ")} to "${ctx.target}" using grounded discovery at each step.`,
+      ]);
+    case "visual-regression":
+      return pick(rng, [
+        `Baseline ${ctx.app}'s ${ctx.path?.[0] ?? "screen"} at full res, reach the after-state, then screenshot-diff for unintended regressions.`,
+      ]);
+    case "run-sequence":
+      return pick(rng, [`Batch the ${ctx.app} search (focus field, type, submit) into one run-sequence, then open the result.`]);
+    default:
+      return nontechnicalPhrase(rng, kind, ctx);
+  }
+}
+
+// ---- non-technical voice: app builder, natural language, UI-by-appearance ----
+
+function nontechnicalPhrase(rng: RNG, kind: string, ctx: PromptCtx): string {
   const dev = deviceWord(ctx.platform);
   switch (kind) {
     case "navigate-tap":

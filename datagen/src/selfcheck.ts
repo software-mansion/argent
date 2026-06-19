@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { RNG } from "./rng.ts";
 import { generateTask } from "./tasks.ts";
 import { solve } from "./expert.ts";
-import { userTaskPhrase } from "./narrate.ts";
+import { pickPersona, userTaskPhrase } from "./narrate.ts";
 import { assemble, buildOfferedTools } from "./emit.ts";
 import { Validator } from "./validate.ts";
 import type { Message, ToolSpec, Trajectory } from "./types.ts";
@@ -31,14 +31,15 @@ function goodTrajectory(): Trajectory {
     const rng = new RNG(seed);
     const task = generateTask(rng);
     if (!task || (task.kind !== "navigate-tap" && task.kind !== "toggle")) continue;
-    const prompt = userTaskPhrase(rng, task.kind, {
+    const persona = pickPersona(rng, task.kind);
+    const prompt = userTaskPhrase(rng, task.kind, persona, {
       app: task.app.name,
       platform: task.platform,
       target: task.pathLabels.at(-1),
       path: task.pathLabels,
     });
     const sr = solve(task, rng, prompt);
-    const traj = assemble(sr, task, seed, buildOfferedTools(catalog, sr.toolsUsed, rng));
+    const traj = assemble(sr, task, seed, buildOfferedTools(catalog, sr.toolsUsed, rng), persona);
     if (validator.validate(traj).ok && sr.toolsUsed.includes("gesture-tap")) return traj;
   }
   throw new Error("could not build a good trajectory for selfcheck");

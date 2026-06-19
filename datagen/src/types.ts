@@ -5,6 +5,9 @@
 
 export type Platform = "ios" | "android" | "chromium";
 
+/** Who is asking, and in what voice. */
+export type Persona = "technical" | "nontechnical" | "seeker";
+
 /** Normalized [0,1] frame, exactly the coordinate space every Argent tool uses. */
 export interface Frame {
   x: number;
@@ -170,6 +173,7 @@ export interface TrajectoryMeta {
   id: string;
   seed: number;
   task_type: string;
+  persona: Persona;
   platform: Platform;
   app_archetype: string;
   difficulty: "easy" | "medium" | "hard";
