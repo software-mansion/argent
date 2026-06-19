@@ -78,6 +78,36 @@ export class Validator {
     return { ok: errors.length === 0, errors, warnings };
   }
 
+  /** Validate a single tool call (used by the live eval harness). */
+  checkCall(name: string, args: Record<string, unknown>): { known: boolean; schemaOk: boolean; errors: string[] } {
+    const errors: string[] = [];
+    if (!this.catalogNames.has(name)) return { known: false, schemaOk: false, errors: [`unknown tool '${name}'`] };
+    const v = this.validators.get(name)!;
+    const schema = this.schemas.get(name)!;
+    let schemaOk = true;
+    if (!v(args)) {
+      schemaOk = false;
+      errors.push(this.ajv.errorsText(v.errors));
+    }
+    const props = Object.keys((schema.properties as Record<string, unknown>) ?? {});
+    for (const k of Object.keys(args)) {
+      if (!props.includes(k)) {
+        schemaOk = false;
+        errors.push(`unknown argument '${k}'`);
+      }
+    }
+    if (name.startsWith("gesture-")) {
+      for (const f of GESTURE_COORD_FIELDS) {
+        const val = args[f];
+        if (typeof val === "number" && (val < 0 || val > 1)) {
+          schemaOk = false;
+          errors.push(`${f}=${val} out of [0,1]`);
+        }
+      }
+    }
+    return { known: true, schemaOk, errors };
+  }
+
   // --- structure: roles, alternation, tool_call_id pairing ---
   private checkStructure(msgs: Message[], errors: string[]) {
     if (msgs[0]?.role !== "system") errors.push("first message must be system");

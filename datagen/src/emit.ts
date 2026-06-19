@@ -143,17 +143,22 @@ export function renderToolCall(name: string, args: Record<string, unknown>): str
   return `${TOOL_CALL_OPEN}\n${JSON.stringify({ name, arguments: args })}\n${TOOL_CALL_CLOSE}`;
 }
 
-/** The first user turn: policy + tools + task, with the tool-call protocol. */
-export function gemmaSystemPreamble(traj: Trajectory, task: string): string {
-  const sys = traj.messages.find((m) => m.role === "system")?.content ?? "";
+/** The first user turn: policy + tools + task, with the tool-call protocol.
+ *  Shared by the training exporter and the live eval harness so they match. */
+export function buildGemmaFirstUser(systemPrompt: string, tools: ToolSpec[], task: string): string {
   return (
-    `${sys}\n\n` +
+    `${systemPrompt}\n\n` +
     `# Tool-call protocol\n` +
     `To call a tool, emit exactly one block:\n${TOOL_CALL_OPEN}\n{"name": "<tool>", "arguments": { ... }}\n${TOOL_CALL_CLOSE}\n` +
     `You will then receive a <tool_response> with the result (including a [screenshot] line showing the resulting screen). When the task is done, reply with a short plain-text answer and no tool call.\n\n` +
-    `# Available tools\n${renderToolsCompact(traj.tools)}\n\n` +
+    `# Available tools\n${renderToolsCompact(tools)}\n\n` +
     `# Task\n${task}`
   );
+}
+
+export function gemmaSystemPreamble(traj: Trajectory, task: string): string {
+  const sys = traj.messages.find((m) => m.role === "system")?.content ?? "";
+  return buildGemmaFirstUser(sys, traj.tools, task);
 }
 
 // The describe header repeats a long, constant coordinate explanation on every
@@ -162,7 +167,7 @@ export function gemmaSystemPreamble(traj: Trajectory, task: string): string {
 const DESCRIBE_NOTE_RE =
   /Coordinates are normalized \[0,1\][^\n]*tap_y = frame\.y \+ frame\.height \/ 2\.\n?/;
 
-function compactObservation(content: string): string {
+export function compactObservation(content: string): string {
   return content.replace(DESCRIBE_NOTE_RE, "");
 }
 
