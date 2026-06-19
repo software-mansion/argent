@@ -157,27 +157,55 @@ export function makeComponentTreeScript(opts: {
     return t.displayName || t.name || null;
   }
 
+  // Per-host dedup/measure cache key. MUST be a primitive: on Fabric the host
+  // "node" is a shadow-node OBJECT, so the old key ('f' + hi.n) stringified it
+  // to "f[object Object]" for EVERY node — collapsing all hosts to one entry and
+  // giving every component the first (root) view's full-screen rect, i.e. a
+  // (0.5, 0.5) tap for everything. Key by the numeric nativeTag instead, with a
+  // WeakMap-by-identity fallback so distinct nodes never share a key.
+  var _hostKeySeq = 0;
+  var _fabricKeyMap = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+  // Prefer the numeric nativeTag; when it is unavailable, assign a stable
+  // WeakMap-by-identity id so distinct shadow nodes never collide.
+  function fabricKey(nativeTag, node) {
+    if (typeof nativeTag === 'number') return 'f' + nativeTag;
+    if (_fabricKeyMap && node) {
+      var k = _fabricKeyMap.get(node);
+      if (k === undefined) { k = 'fo' + (++_hostKeySeq); _fabricKeyMap.set(node, k); }
+      return k;
+    }
+    return 'fo' + (++_hostKeySeq);
+  }
+
   function getHostInfo(fiber) {
     if (typeof fiber.type !== 'string' || !fiber.stateNode) return null;
     if (useFabric && fiber.stateNode.canonical) {
       // New-arch Fabric host instance: stateNode = { node, canonical }. Carry the
-      // public instance (ReactNativeElement, exposes measureInWindow), the shadow
-      // node for the legacy nativeFabricUIManager.measure fallback, and use the
-      // numeric nativeTag as a stable per-host cache key.
+      // public instance (ReactNativeElement, exposes measureInWindow) and the shadow
+      // node for the legacy nativeFabricUIManager.measure fallback; key the host by
+      // a primitive id (numeric nativeTag, WeakMap-by-identity fallback) per above.
       var _canon = fiber.stateNode.canonical;
+      var _sn = fiber.stateNode.node || null;
       return {
         f: true,
-        n: typeof _canon.nativeTag === 'number' ? _canon.nativeTag : fiber.stateNode.node,
+        n: typeof _canon.nativeTag === 'number' ? _canon.nativeTag : _sn,
+        key: fabricKey(_canon.nativeTag, _sn),
         pi: _canon.publicInstance || null,
-        sn: fiber.stateNode.node || null
+        sn: _sn
       };
     }
-    if (useFabric && fiber.stateNode.node) return { f: true, n: fiber.stateNode.node, sn: fiber.stateNode.node };
+    if (useFabric && fiber.stateNode.node) {
+      // Older Fabric host without a canonical instance: only the shadow node
+      // is available. Still needs a primitive key.
+      var _sn2 = fiber.stateNode.node;
+      return { f: true, n: _sn2, key: fabricKey(null, _sn2), sn: _sn2 };
+    }
     if (!useFabric) {
       if (fiber.stateNode.canonical && typeof fiber.stateNode.canonical.nativeTag === 'number')
-        return { f: false, n: fiber.stateNode.canonical.nativeTag };
+        return { f: false, n: fiber.stateNode.canonical.nativeTag, key: 'p' + fiber.stateNode.canonical.nativeTag };
       if (typeof fiber.stateNode._nativeTag === 'number')
-        return { f: false, n: fiber.stateNode._nativeTag };
+        return { f: false, n: fiber.stateNode._nativeTag, key: 'p' + fiber.stateNode._nativeTag };
     }
     return null;
   }
@@ -297,7 +325,7 @@ export function makeComponentTreeScript(opts: {
   for (var ci = 0; ci < candidates.length; ci++) {
     var hi = candidates[ci].hostInfo;
     if (!hi) continue;
-    var key = (hi.f ? 'f' : 'p') + hi.n;
+    var key = hi.key;
     if (!(key in hostKeyMap)) {
       hostKeyMap[key] = uniqueHosts.length;
       uniqueHosts.push(hi);
@@ -341,7 +369,7 @@ export function makeComponentTreeScript(opts: {
   var rects = await Promise.all(uniqueHosts.map(measureOne));
 
   for (var ri = 0; ri < uniqueHosts.length; ri++) {
-    var rKey = (uniqueHosts[ri].f ? 'f' : 'p') + uniqueHosts[ri].n;
+    var rKey = uniqueHosts[ri].key;
     rectCache[rKey] = rects[ri];
   }
 
@@ -349,7 +377,7 @@ export function makeComponentTreeScript(opts: {
   for (var ai = 0; ai < candidates.length; ai++) {
     var h = candidates[ai].hostInfo;
     if (h) {
-      var rk = (h.f ? 'f' : 'p') + h.n;
+      var rk = h.key;
       candidates[ai].rect = rectCache[rk] || null;
     }
   }

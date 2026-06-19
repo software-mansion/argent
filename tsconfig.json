@@ -5,12 +5,13 @@
     { "path": "packages/update-core" },
     { "path": "packages/native-devtools-ios" },
     { "path": "packages/native-devtools-android" },
-    { "path": "packages/tool-server" },
+    { "path": "packages/preview-window" },
     { "path": "packages/argent-tools-client" },
     { "path": "packages/configuration-core" },
+    { "path": "packages/argent-cli" },
+    { "path": "packages/tool-server" },
     { "path": "packages/argent-installer" },
     { "path": "packages/argent-mcp" },
-    { "path": "packages/argent-cli" },
     { "path": "packages/argent" },
     { "path": "packages/argent-ios-profiling" }
   ]

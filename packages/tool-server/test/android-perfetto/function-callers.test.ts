@@ -99,16 +99,38 @@ describe("function_callers thread resolution", () => {
     expect(calls[0]!.substitutions.FUNCTION_NAME).toBe("uncompressLZW");
   });
 
-  it("spells out the real mangled leaf symbols when the match was a substring", async () => {
+  it("spells out the matched leaf symbols (demangled) when the match was a substring", async () => {
     // Demangled query → SQL matched the mangled leaf; rows come back is_exact=0
-    // with the real frame name in matched_function.
+    // with the real frame name in matched_function. The display demangles it for
+    // readability (SQL matching upstream still uses the raw mangled name).
     const mangled = "_Z13uncompressLZWP7_JNIEnvP8_jobjectS2_P10_jintArrayiS4_iiihP11_jbyteArray";
     const out = await query(undefined, [
       callerRow("FrameDecoderExe", 0, `decode <- ${mangled}`, 8, mangled, 0),
     ]);
     expect(out).toContain("Substring match: `uncompressLZW` hit 1 leaf symbol(s):");
-    expect(out).toContain(`- \`${mangled}\``);
+    expect(out).toContain("- `uncompressLZW`");
+    expect(out).not.toContain(mangled); // raw mangled name no longer shown
     expect(out).toContain("(8×) [FrameDecoderExe]");
+  });
+
+  it("dedups overloaded leaves AFTER demangling (two overloads → one bullet, count of 1)", async () => {
+    // Two distinct mangled overloads of foo::bar that demangle to the same name
+    // once the argument list is dropped. The bullet list must show it once and
+    // the count must agree (not say 2 while printing the same line twice).
+    const barVoid = "_ZN3foo3barEv";
+    const barInt = "_ZN3foo3barEi";
+    const out = await query(undefined, [
+      callerRow("WorkerA", 0, `caller <- ${barVoid}`, 4, barVoid, 0),
+      callerRow("WorkerB", 0, `caller <- ${barInt}`, 3, barInt, 0),
+    ]);
+    // Count and bullets agree: one distinct leaf symbol after demangling.
+    expect(out).toContain("hit 1 leaf symbol(s):");
+    // Exactly one bullet for foo::bar (not two).
+    const bullets = out.split("\n").filter((l) => l.trim() === "- `foo::bar`");
+    expect(bullets).toHaveLength(1);
+    // Raw mangled overloads never appear in the human-facing bullet list.
+    expect(out).not.toContain(barVoid);
+    expect(out).not.toContain(barInt);
   });
 
   it("does NOT add the substring note when the match was exact and singular", async () => {

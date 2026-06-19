@@ -25,6 +25,14 @@ export default tseslint.config(
     ],
   },
 
+  // Keep the gate honest: a stale or unjustified `eslint-disable` is a hard
+  // error, so suppressions can't quietly pile up or be used to dodge a rule.
+  {
+    linterOptions: {
+      reportUnusedDisableDirectives: "error",
+    },
+  },
+
   // Type-aware linting for the TypeScript sources — this is where the value is
   // (floating promises, misused promises, throwing non-Errors, etc.).
   {
