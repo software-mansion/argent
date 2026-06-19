@@ -41,10 +41,10 @@ same gym-replay recipe the $500 / $50k models will use.
 python3.12 -m venv .venv && .venv/bin/pip install "mlx-lm>=0.20"
 
 # 1) build the dataset (seed-disjoint train/valid/test, Gemma chat format)
-node training/prepare.ts --n 2500 --valid 200 --test 250 --maxTokens 3400
+node training/prepare.ts --n 2500 --valid 150 --test 150 --maxTokens 2500
 
-# 2) LoRA fine-tune Gemma 2 2B 4-bit  (~1h for 600 iters on an M-series, 24GB)
-ITERS=600 training/train.sh        # adapter -> training/adapters/gemma-argent
+# 2) LoRA fine-tune Gemma 2 2B 4-bit  (~50 min for 500 iters on an M-series, 24GB)
+ITERS=500 training/train.sh        # adapter -> training/adapters/gemma-argent
 
 # 3) eval BASE vs TUNED through the gym (held-out seeds 5_000_000+)
 node training/eval.ts --model mlx-community/gemma-2-2b-it-4bit --n 120 --label base
