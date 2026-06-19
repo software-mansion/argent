@@ -36,6 +36,15 @@ const GESTURE_COORD_FIELDS = [
   "endDistance",
 ];
 
+// Tools that change which screen is visible, invalidating the current discovery.
+// (A navigating gesture-tap also changes the screen, but the expert always
+// re-discovers after one, which resets grounding on its own.)
+const NAV_TOOLS = new Set(["launch-app", "open-url", "restart-app"]);
+
+function isBackOrHome(args: Record<string, unknown>): boolean {
+  return args.button === "back" || args.button === "home";
+}
+
 const RUN_SEQUENCE_ALLOWED = new Set([
   "gesture-tap",
   "gesture-swipe",
@@ -239,6 +248,14 @@ export class Validator {
       }
       if (m.role !== "assistant" || !m.tool_calls) continue;
       for (const c of m.tool_calls) {
+        // Navigation changes the screen, so the prior discovery no longer
+        // describes what's visible: any tap after it must be re-grounded by a
+        // fresh discovery. This is what makes discovery-before-tap hold across
+        // screen transitions, not just at the start of a trajectory.
+        if (NAV_TOOLS.has(c.name) || (c.name === "button" && isBackOrHome(c.arguments))) {
+          lastDiscovery = null;
+          continue;
+        }
         if (c.name === "gesture-tap") {
           const x = Number(c.arguments.x);
           const y = Number(c.arguments.y);

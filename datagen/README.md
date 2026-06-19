@@ -79,10 +79,10 @@ A trajectory ships only if it passes **all** of:
    by a discovery taken _on that screen_.
 
 `selfcheck.ts` is the regression test for the gates: it corrupts a known-good
-trajectory nine ways (ungrounded tap, missing discovery, schema break, unknown
-arg, out-of-range coord, wrong device order, unknown tool, un-offered tool) and
-asserts each is rejected. **A gate that passes everything is worthless** — this
-keeps them honest.
+trajectory ten ways (ungrounded tap, missing discovery, stale discovery across a
+navigation, schema break, unknown arg, out-of-range coord, wrong device order,
+unknown tool, un-offered tool) and asserts each is rejected. **A gate that passes
+everything is worthless** — this keeps them honest.
 
 ## Architecture
 
@@ -114,7 +114,7 @@ screen (a text proxy for visual navigation). A `training/` dir LoRA-fine-tunes
 Gemma 2 2B on this data and scores it by replaying through the gym (see
 `training/README.md`).
 
-Coverage today is 40/67 tools across 17 task families (incl. `hide-and-seek`
+Coverage today is 41/67 tools across 17 task families (incl. `hide-and-seek`
 exploratory navigation). Adding more is mechanical:
 
 - **New app archetype** — drop a file in `src/archetypes/` that default-exports an

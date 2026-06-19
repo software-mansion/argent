@@ -150,6 +150,44 @@ const cases: { name: string; mutate: (t: Trajectory) => void; expectReject: bool
     },
     expectReject: true,
   },
+  {
+    name: "stale discovery: navigate (restart-app) between discovery and tap, no re-discover",
+    mutate: (t) => {
+      const i = firstTapMsgIndex(t.messages);
+      // Insert a navigation turn right before the tap. The screen changed, so the
+      // earlier discovery no longer describes it — the tap is now ungrounded.
+      const dev = (
+        t.messages.find(
+          (m) =>
+            m.role === "assistant" &&
+            m.tool_calls?.some((c) => c.name === "launch-app" || c.name === "gesture-tap")
+        ) as { tool_calls?: { arguments: Record<string, unknown> }[] } | undefined
+      )?.tool_calls?.[0]?.arguments;
+      const udid = (dev?.udid as string) ?? "device";
+      t.messages.splice(
+        i,
+        0,
+        {
+          role: "assistant",
+          content: "restarting the app",
+          tool_calls: [
+            {
+              id: "selfcheck_nav",
+              name: "restart-app",
+              arguments: { udid, bundleId: "com.example.app" },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          tool_call_id: "selfcheck_nav",
+          name: "restart-app",
+          content: '{"restarted":true}',
+        }
+      );
+    },
+    expectReject: true,
+  },
 ];
 
 const base = goodTrajectory();

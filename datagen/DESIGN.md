@@ -87,14 +87,14 @@ Treat trajectory generation as **rollouts in a simulator**, not text generation.
 - 67-tool catalog extracted and used as the validation ground truth.
 - 4 app archetypes (native iOS Settings, RN e-commerce, RN auth, Chromium
   dashboard) across iOS / Android / Chromium.
-- 16 task families: navigate-tap, toggle, login, scroll-find, run-sequence,
+- 17 task families: navigate-tap, toggle, login, scroll-find, run-sequence,
   visual-regression, profile (+ drill-down), flow record/replay, network-inspect,
   android-setup (cold boot), debug-inspect, deep-link, console-check, pinch-zoom,
-  chromium-tabs, native-inspect.
-- **40/67 tools (60%) exercised**; ~9 tool calls/trajectory; ~10% include a
+  chromium-tabs, native-inspect, hide-and-seek (exploratory navigation).
+- **41/67 tools (61%) exercised**; ~9 tool calls/trajectory; ~15% include a
   recovery sub-trajectory; balanced platform mix.
 - Pilot: **800 train + 100 eval, 0 rejected**, fully deterministic, with OpenAI
-  and ShareGPT exports. Validator self-check: 9/9.
+  and ShareGPT exports. Validator self-check: 10/10.
 
 ## Phase 2: prompt mix, navigation, and the Gemma 2 2B benchmark
 
@@ -170,7 +170,7 @@ Treat trajectory generation as **rollouts in a simulator**, not text generation.
 - **Expert monoculture.** Every trajectory is the _one_ optimal path. That's ideal
   for SFT but narrow; injected failures, multiple valid routes (the screen graph
   often has several), and later preference data widen the distribution.
-- **Coverage is partial (40/67).** Documented and mechanical to extend; not a
+- **Coverage is partial (41/67).** Documented and mechanical to extend; not a
   design limitation.
 
 ## TL;DR
