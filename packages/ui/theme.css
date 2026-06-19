@@ -1,0 +1,231 @@
+/* =============================================================================
+ * Argent Preview — THEME
+ *
+ * The ONE place every visual value lives. index.html must not contain a single
+ * hardcoded colour, pixel, duration, easing, z-index or opacity — only
+ * var(--token) references into this file. Tokens are named for what they ARE
+ * (their role), not an abstract scale, and shared only when they represent the
+ * same design decision. The "Motion & feel" block at the bottom is also read
+ * by the JS at boot (getComputedStyle), so animation feel is configured here
+ * too — not buried in the script.
+ *
+ * Light and dark are colocated per token via light-dark(LIGHT, DARK). The
+ * active side follows `color-scheme` on :root — the OS theme by default, or a
+ * forced value the in-app theme toggle writes to documentElement.style. So
+ * every consumer themes for free, with no second palette to keep in sync.
+ * ========================================================================== */
+
+:root {
+  color-scheme: light dark;
+
+  /* ── Palette ─────────────────────────────────────────────────────────── */
+  /* Light + dark live side by side via light-dark(LIGHT, DARK); the active
+     side follows the `color-scheme` above (so the OS theme by default, or a
+     forced value when the user flips the in-app theme toggle). Tokens that are
+     self-contained ink-on-fill pairs (pin, danger) or only ever sit over the
+     device stream (touch dots, spotlight scrim, ring) read on any backdrop and
+     so stay single-valued. */
+  --color-bg: light-dark(#f4f5f7, #0e0e10);
+  --color-fg: light-dark(#1b1d21, #eaeaea);
+  --color-muted: light-dark(#5f636b, #8a8a90);
+  --color-accent: light-dark(
+    #2f6fd0,
+    #9bc7f0
+  ); /* brand sky-blue on dark; a deeper blue carries the same role on light */
+  --color-on-accent: light-dark(#ffffff, #06122b); /* ink on accent-filled surfaces */
+  --color-border: light-dark(#d8dbe2, #2a2a2e);
+  --color-surface: light-dark(#ffffff, #16161a); /* panels (toolbar, cards, pops) */
+  --color-surface-raised: light-dark(#f6f7f9, #1c1c21); /* card header — lifted off surface */
+  --color-surface-hover: light-dark(#eef1f5, #1c1c22); /* hovered list item */
+  --color-row-hover: light-dark(#e8ecf3, #20202a); /* hovered variant row */
+  --color-ok: light-dark(#138a48, #5cdc8b);
+  --color-error: light-dark(#cf2f2f, #ff8080);
+  --color-thumb-bg: light-dark(#e3e5ea, #000000); /* letterbox behind variant previews */
+  --color-pin-bg: #d8a657; /* saved-annotation pin */
+  --color-pin-fg: #1a1205;
+  --color-danger-bg: light-dark(#c2334a, #7a2230); /* destructive (delete) button */
+  --color-danger-fg: #ffd9df;
+
+  /* ── Translucent effect colours ──────────────────────────────────────── */
+  --color-row-staged: light-dark(
+    rgba(19, 138, 72, 0.12),
+    rgba(92, 220, 139, 0.13)
+  ); /* ok tint on staged row */
+  --touch-fill: rgba(155, 199, 240, 0.25); /* multi-touch dot body (accent) */
+  --touch-fill-pressed: rgba(155, 199, 240, 0.55);
+  --touch-stroke: rgba(155, 199, 240, 0.9); /* multi-touch dot ring */
+  --touch-anchor-fill: rgba(255, 200, 80, 0.9); /* anchored-touch dot */
+  --touch-anchor-stroke: rgba(255, 200, 80, 1);
+  --spotlight-scrim: rgba(8, 8, 10, 0.55); /* dim/blur over the stream */
+  --footbar-bg: light-dark(
+    rgba(255, 255, 255, 0.94),
+    rgba(22, 22, 26, 0.94)
+  ); /* surface, semi-opaque */
+
+  /* ── Elevation (box-shadow values, by purpose) ───────────────────────── */
+  /* Only the shadow COLOUR flips per theme: heavy black halos read as grime on
+     a light surface, so light mode uses a soft blue-grey ink at low alpha. */
+  --shadow-stream: 0 10px 48px light-dark(rgba(18, 26, 42, 0.14), #0008);
+  --shadow-pill: 0 4px 14px light-dark(rgba(18, 26, 42, 0.12), #0008);
+  --shadow-card: 0 10px 30px light-dark(rgba(18, 26, 42, 0.13), #0009);
+  --shadow-pin: 0 3px 10px light-dark(rgba(18, 26, 42, 0.16), #0008);
+  --shadow-pop: 0 12px 36px light-dark(rgba(18, 26, 42, 0.18), #000b);
+  --ring-outline: 0 0 0 1px #000a; /* spotlight ring edge (over the stream) */
+  --touch-glow: 0 0 12px rgba(155, 199, 240, 0.5);
+  --dot-glow: 0 0 8px var(--color-ok);
+  --glow-accent: 0 10px 34px light-dark(rgba(47, 111, 208, 0.32), rgba(155, 199, 240, 0.3)); /* accent halo — footbar "ready to submit" pop */
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  --fs-title: 15px;
+  --fs-body: 13px;
+  --fs-note: 12px;
+  --fs-read: 12.5px;
+  --fs-label: 11px;
+  --fs-tag: 10px;
+  --fs-mini: 9px;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-extrabold: 800;
+  --lh-normal: 1.5;
+  --lh-snug: 1.45;
+  --tracking-label: 0.04em;
+  --tracking-where: 0.03em;
+
+  /* ── Radii (by role) ─────────────────────────────────────────────────── */
+  /* Brand geometry: the argent site rounds generously (terminal card, pills).
+     Mid radii bumped a notch toward that softer feel; tiny tags and the
+     pin-tail teardrop stay tight so their shape doesn't distort. */
+  --radius-chip: 4px;
+  --radius-control: 6px; /* toolbar controls, spot ring */
+  --radius-input: 7px; /* textareas, pop buttons */
+  --radius-button: 8px;
+  --radius-item: 10px; /* device-picker item */
+  --radius-card: 14px; /* stream, cards, popovers, footbar */
+  --radius-pin-tail: 2px; /* annotation-pin teardrop corner */
+  --radius-round: 50%;
+  --radius-pill: 999px;
+
+  /* ── Borders ─────────────────────────────────────────────────────────── */
+  --border-hairline: 1px;
+  --border-strong: 2px; /* spotlight ring, touch dot */
+  --connector-width: 1.5; /* SVG stroke-width (unitless) */
+
+  /* ── Spacing — gaps (recurring roles) ────────────────────────────────── */
+  --gap-tight: 5px;
+  --gap-inline: 6px;
+  --gap-list: 8px;
+  --gap-bar: 10px;
+  --gap-stack: 12px;
+
+  /* ── Spacing — padding (per role) ────────────────────────────────────── */
+  --pad-bar: 8px 12px; /* toolbar */
+  --pad-control: 4px 10px; /* select / button */
+  --pad-toggle: 4px 12px;
+  --pad-view: 12px; /* viewport */
+  --pad-empty: 32px;
+  --pad-picker: 24px;
+  --pad-item: 12px 14px; /* device-picker item */
+  --pad-refresh: 6px 12px;
+  --pad-code: 2px 6px;
+  --pad-pill: 3px 11px;
+  --pad-card-head: 7px 10px;
+  --pad-row: 8px 10px;
+  --pad-cmt: 6px 10px; /* in-card comment box */
+  --pad-input: 6px 8px; /* popover textareas */
+  --pad-pop: 10px; /* comment / annotation popover */
+  --pad-btn: 6px 10px; /* popover buttons */
+  --pad-lab: 1px 7px; /* spotlight ring label */
+  --pad-footbar: 8px 10px;
+  --pad-footbar-input: 6px 9px;
+  --pad-complete: 8px 14px;
+
+  /* one-off margins / nudges (kept named by what they position) */
+  --sub-margin: -4px 0 6px; /* device-picker caption */
+  --comment-title-gap: 7px; /* comment popover heading → body */
+  --annrow-mt: 9px; /* annotation popover button row */
+  --annpop-gap: 8px; /* popover ↔ pin gap, resting */
+  --annpop-gap-show: 14px; /* popover ↔ pin gap, shown */
+  --press-shift: 1px; /* :active downward nudge */
+
+  /* ── Component sizes ─────────────────────────────────────────────────── */
+  --card-width: 232px;
+  --vcard-body-max-h: none; /* JS sets a per-card max-height only when the column overflows the viewport; otherwise the body fits its variant count. */
+  --thumb-size: 96px;
+  --collapsed-thumb-h: 58px; /* once a variant is picked, the others collapse to a row with the preview ~3 lines of body text tall (3 × --fs-body × --lh-normal ≈ 58px) */
+  --pin-size: 20px;
+  --dot-size: 8px; /* status dot, device-picker dot */
+  --card-dot-size: 7px; /* card-header dot */
+  --icon-btn-size: 34px; /* floating top-right icon controls (theme, comment, close) */
+  --icon-size: 17px; /* glyph inside an icon button */
+  --comment-pop-width: 248px;
+  --annpop-width: 232px;
+  --annpop-txt-max-h: 160px;
+  --textarea-min-h: 64px;
+  --cmt-min-h: 28px;
+  --footbar-input-width: 260px;
+  --footbar-bottom: 14px;
+  --footbar-right: 14px;
+  --resize-edge: 6px; /* drag-layer inset so the frameless window's edges still resize */
+  --footbar-max-width: 70%;
+  --select-min-width: 240px;
+  --debug-min-width: 220px;
+  --empty-max-width: 480px;
+  --picker-max-width: 420px;
+  --lab-max-width: 240px;
+  --lab-top: -22px;
+  --complete-note-max-width: 200px;
+  --modal-max-width: 360px;
+  --pad-modal: 18px;
+  --stream-max-h: 80dvh; /* dvh, not vh: in a browser tab `vh` is the toolbar-retracted (large) viewport, so the centered stream overflowed the %-height container and got clipped at the bottom. `dvh` tracks the visible viewport. In the frameless Electron window (no toolbar) dvh == vh, so production is unchanged. */
+  --backdrop-blur: 1.67px; /* light haze over the dimmed stream (3× softer than the former 5px) */
+
+  /* ── Opacities ───────────────────────────────────────────────────────── */
+  --opacity-disabled: 0.45;
+  --opacity-connector: 0.7;
+  --opacity-pill: 0.92;
+
+  /* ── Z-index layers ──────────────────────────────────────────────────── */
+  --z-connectors: 4;
+  --z-cards: 5;
+  --z-pin: 7;
+  --z-spot-hit: 8;
+  --z-pop: 9; /* off-screen pill, comment popover */
+  --z-overlay: 10; /* annotation popover, footbar */
+  --z-modal: 12; /* confirm modal (above the footbar) */
+
+  /* ── Motion & feel (CSS transitions AND read by JS at boot) ──────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-press: 0.06s;
+  --dur-hover: 0.15s;
+  --dur-fade: 0.18s;
+  --dur-pill: 0.2s;
+  --dur-card-in: 0.22s;
+  --dur-spot: 0.28s;
+  --dur-card-move: 0.34s;
+  --dither-dur: 0.72s; /* light↔dark dithered wavefront sweep */
+  --card-gone-scale: 0.8; /* shrink as a card pops away */
+  --footbar-ready-scale: 1.05; /* footbar grows a touch once every element is chosen */
+
+  /* Spring feel — JS integrates these (ω rad/s, ζ damping ratio). The bubble
+     spring is slow & barely-overshooting (cards drift into place); the tight
+     spring is fast & critically damped (connectors/pins track every frame). */
+  --spring-bubble-omega: 4.2;
+  --spring-bubble-zeta: 1; /* DEMO: critically damped — no overshoot/bounce on cards */
+  --spring-tight-omega: 26;
+  --spring-tight-zeta: 1;
+  --card-gone-grace-ms: 550; /* ride out brief edge drop-outs before fading */
+  --poll-interval-ms: 1200; /* /preview/variants poll cadence */
+  --tree-stale-ms: 6000; /* drop the describe tree if older than this */
+  --flick-max-vel: 1500; /* clamp thrown-card release velocity (px/s) */
+  --spot-idle-dismiss-ms: 150; /* stopped-aimless grace before releasing spotlight */
+  --spot-traj-window-ms: 80; /* recent-sample window used to derive pointer velocity */
+  --spot-traj-stopped-speed: 0.05; /* below this normalized speed (1/s) the pointer counts as stopped */
+  --spot-traj-reach: 0.5; /* normalized forward distance to look for a trajectory target */
+  --spot-traj-hitbox-margin: 0.2; /* per-side margin (fraction of element size). Inflates BOTH the sticky focus hitbox (so a tiny drift out of an element keeps it focused) and the trajectory predictor hitbox. Strict containment still wins, so margins never steal focus from an obviously hovered element. */
+  --spot-max-frame-area: 0.85; /* nodes whose frame covers more than this fraction of the screen are not treated as highlightables (catches Android full-screen container roots that lack iOS's explicit root flag) */
+  --annpop-hover-grace-ms: 280; /* hover-card grace: pin ↔ popover travel */
+  --success-toast-show-ms: 1200; /* how long the post-submit confirmation card lingers (browser mode; in Electron the window closes around it sooner) */
+}

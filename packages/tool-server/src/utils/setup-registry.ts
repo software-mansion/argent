@@ -1,4 +1,5 @@
 import { Registry } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
 import { simulatorServerBlueprint } from "../blueprints/simulator-server";
 import { nativeDevtoolsBlueprint } from "../blueprints/native-devtools";
 import { androidDevtoolsBlueprint } from "../blueprints/android-devtools";
@@ -73,12 +74,18 @@ import { gatherWorkspaceDataTool } from "../tools/workspace/gather-workspace-dat
 import { updateArgentTool } from "../tools/system/update-argent";
 import { dismissUpdateTool } from "../tools/system/dismiss-update";
 import { screenshotDiffTool } from "../tools/screenshot-diff";
+import { createProposeVariantTool } from "../tools/variants/propose-variant";
+import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
 
 export function createRegistry(): Registry {
-  const registry = new Registry();
+  // Inject the real feature-flag check so the gate is enforced for EVERY
+  // dispatch path (flow-execute, flow-add-step, run-sequence) — not only the
+  // HTTP edge in http.ts. Re-read per invocation, so `argent enable/disable
+  // <flag>` takes effect without restarting the long-lived tool-server.
+  const registry = new Registry({ isFlagEnabled: (flag) => isFlagEnabled(flag) });
 
   registry.registerBlueprint(simulatorServerBlueprint);
   registry.registerBlueprint(jsRuntimeDebuggerBlueprint);
@@ -164,6 +171,16 @@ export function createRegistry(): Registry {
   // System tools
   registry.registerTool(updateArgentTool);
   registry.registerTool(dismissUpdateTool);
+
+  // Variant proposal tools (non-blocking propose + single blocking await).
+  // Both declare `featureFlag: "argent-lens"`, so the HTTP layer
+  // (http.ts) hides them from GET /tools and rejects invocation when the flag
+  // is off — re-checked on every request, so `argent enable/disable
+  // argent-lens` takes effect on the next tools/list WITHOUT restarting
+  // the long-lived tool-server. Registered unconditionally; the flag gates at
+  // the exposure boundary, not at registration.
+  registry.registerTool(createProposeVariantTool(registry));
+  registry.registerTool(awaitUserSelectionTool);
 
   return registry;
 }
