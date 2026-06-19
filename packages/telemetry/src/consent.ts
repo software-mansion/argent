@@ -1,10 +1,16 @@
 import * as fs from "node:fs";
-import { argentHomeDir, configFilePath } from "./paths.js";
+import { configFilePath } from "./paths.js";
+import { updateConfig } from "./config-file.js";
 
 // Consent is evaluated on every track() so a running tool server sees opt-outs.
 // The config file is re-parsed only when its mtime or inode changes.
 export interface ConsentSource {
-  source: "env_do_not_track" | "env_argent_telemetry" | "config_file" | "default";
+  source:
+    | "env_do_not_track"
+    | "env_argent_telemetry"
+    | "session_override"
+    | "config_file"
+    | "default";
   /** Detailed override identifier for `argent telemetry status` output. */
   detail?: string;
 }
@@ -21,6 +27,12 @@ interface CachedConfig {
 }
 
 const cache: { current: CachedConfig | null } = { current: null };
+
+// Non-persisted, in-process consent decision for the current run. Set while a
+// first-run consent choice is pending commit so the pick governs THIS session's
+// events immediately, without writing to config.json. null means "no in-process
+// override — fall through to the env / config / default precedence below".
+let sessionOverride: boolean | null = null;
 
 function readConfigOverride(): boolean | null {
   let stats: fs.Stats;
@@ -103,6 +115,15 @@ export function getConsentState(env: NodeJS.ProcessEnv = process.env): ConsentSt
     };
   }
 
+  // An in-process first-run choice that hasn't been committed to disk yet. It
+  // loses to an explicit environment opt-out (handled above) but beats the
+  // config file and the default, so a pending "Disabled" pick suppresses this
+  // session's events even though the choice isn't persisted until the install
+  // completes.
+  if (sessionOverride !== null) {
+    return { enabled: sessionOverride, source: { source: "session_override" } };
+  }
+
   const persisted = readConfigOverride();
   if (persisted === false) {
     return { enabled: false, source: { source: "config_file", detail: "config.json" } };
@@ -121,37 +142,30 @@ export function isEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 
 /** Persist the telemetry flag without discarding other config keys. */
 export function writeConsentFlag(enabled: boolean): void {
-  fs.mkdirSync(argentHomeDir(), { recursive: true });
-
-  let existing: Record<string, unknown> = {};
-  try {
-    const raw = fs.readFileSync(configFilePath(), "utf8");
-    const json = JSON.parse(raw) as unknown;
-    if (json && typeof json === "object") {
-      existing = json as Record<string, unknown>;
-    }
-  } catch {
-    /* missing or malformed — write a fresh document */
-  }
-
-  const telemetryBlock =
-    typeof existing.telemetry === "object" && existing.telemetry
-      ? (existing.telemetry as Record<string, unknown>)
-      : {};
-
-  const next: Record<string, unknown> = {
-    ...existing,
-    telemetry: {
-      ...telemetryBlock,
-      enabled,
-    },
-  };
-
-  fs.writeFileSync(configFilePath(), JSON.stringify(next, null, 2) + "\n");
+  updateConfig((config) => {
+    const telemetryBlock =
+      typeof config.telemetry === "object" && config.telemetry
+        ? (config.telemetry as Record<string, unknown>)
+        : {};
+    config.telemetry = { ...telemetryBlock, enabled };
+  });
   cache.current = null;
 }
 
-/** Test seam: blow away the in-memory mtime cache. */
+/**
+ * Apply (or clear) an in-process consent decision for the current run without
+ * touching config.json. `argent init` uses this so a first-run "Enable/Disable"
+ * pick governs the session immediately, while the durable record is only written
+ * once the install actually completes — an aborted init leaves nothing behind
+ * (the override dies with the process) and the next run re-prompts. Pass null to
+ * clear it. See `writeConsentFlag` for the persisted counterpart.
+ */
+export function setSessionConsentOverride(enabled: boolean | null): void {
+  sessionOverride = enabled;
+}
+
+/** Test seam: blow away the in-memory mtime cache and any session override. */
 export function _resetConsentCacheForTest(): void {
   cache.current = null;
+  sessionOverride = null;
 }

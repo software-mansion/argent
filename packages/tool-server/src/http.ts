@@ -1,7 +1,15 @@
 import express, { Request, Response } from "express";
 import { isFlagEnabled } from "@argent/configuration-core";
 import { randomUUID } from "node:crypto";
-import type { FileInputSpec, Platform, Registry, ResolvedFileInput } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  type FailureSignal,
+  type FileInputSpec,
+  type Platform,
+  type Registry,
+  type ResolvedFileInput,
+} from "@argent/registry";
+import { AI_CLIENTS, AI_CLIENT_NAME_PATTERN, type AiTelemetryProps } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -64,10 +72,17 @@ function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
+  return findErrorInCauseChain(err, DependencyMissingError);
+}
+
+function findErrorInCauseChain<T extends Error>(
+  err: unknown,
+  ctor: new (...args: never[]) => T
+): T | null {
   let current: unknown = err;
   // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
   for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
-    if (current instanceof DependencyMissingError) return current;
+    if (current instanceof ctor) return current;
     current = current.cause;
   }
   return null;
@@ -81,19 +96,60 @@ function extractDeviceArg(data: unknown): string | null {
   return null;
 }
 
-type InvocationMeta = { platform?: Platform };
+type InvocationMeta = { platform?: Platform } & AiTelemetryProps;
+// Only coarse platform context is retained for failure telemetry. The raw
+// device id (UDID / serial) is used transiently to infer platform and never
+// stored or forwarded.
+type HttpFailureMeta = { platform?: Platform } & AiTelemetryProps;
 
-function extractInvocationMeta(hasCapability: boolean, data: unknown): InvocationMeta | null {
-  if (!hasCapability || !data || typeof data !== "object") return null;
-  const record = data as Record<string, unknown>;
-  const deviceArg = extractDeviceArg(record);
-  if (deviceArg) {
-    return { platform: resolveDevice(deviceArg).platform };
+function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | null {
+  if (!deviceId) return null;
+  try {
+    return resolveDevice(deviceId).platform;
+  } catch {
+    return null;
   }
-  if (typeof record.avdName === "string") {
-    return { platform: "android" };
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+// The MCP server forwards the coarse AI-client identity as request headers (it
+// lives in a different process). We re-validate here against the same allowlist /
+// pattern the sanitizer enforces, so a misbehaving client can't inject arbitrary
+// values into telemetry. The free-form name is only retained when the client is
+// `other` — mirroring the producer and the documented `AiTelemetryProps` contract,
+// so a recognized (or absent) client can never carry a stray name.
+function extractAiTelemetryMeta(req: Request): AiTelemetryProps {
+  const meta: AiTelemetryProps = {};
+  const client = firstHeader(req.headers["x-argent-ai-client"]);
+  if (client && (AI_CLIENTS as readonly string[]).includes(client)) {
+    meta.ai_client = client as AiTelemetryProps["ai_client"];
   }
-  return null;
+  const clientName = firstHeader(req.headers["x-argent-ai-client-name"]);
+  if (meta.ai_client === "other" && clientName && AI_CLIENT_NAME_PATTERN.test(clientName)) {
+    meta.ai_client_name = clientName;
+  }
+  return meta;
+}
+
+function extractInvocationMeta(
+  hasCapability: boolean,
+  data: unknown,
+  aiMeta: AiTelemetryProps
+): InvocationMeta | null {
+  const meta: InvocationMeta = { ...aiMeta };
+  if (hasCapability && data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    const deviceArg = extractDeviceArg(record);
+    if (deviceArg) {
+      meta.platform = resolveDevice(deviceArg).platform;
+    } else if (typeof record.avdName === "string") {
+      meta.platform = "android";
+    }
+  }
+  return Object.keys(meta).length > 0 ? meta : null;
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -114,6 +170,13 @@ export interface HttpAppOptions {
   bindHost?: string;
   /** Optional telemetry hook for per-invocation platform/device metadata. */
   recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
+  /** Optional telemetry hook for HTTP failures that happen before registry invocation. */
+  recordFailure?: (
+    toolId: string,
+    meta: HttpFailureMeta,
+    signal: FailureSignal,
+    durationMs: number
+  ) => void;
 }
 
 export interface HttpAppHandle {
@@ -350,9 +413,35 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     },
     async (req: Request, res: Response) => {
       const name = req.params.name as string;
+      const requestStartedAt = performance.now();
+      const aiMeta = extractAiTelemetryMeta(req);
+
+      const emitHttpFailure = (
+        signal: FailureSignal,
+        parsedDataForMeta: unknown = req.body
+      ): void => {
+        if (!options?.recordFailure) return;
+        const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
+        const platform = inferPlatform(failedDeviceArg);
+        options.recordFailure(
+          name,
+          {
+            ...(platform ? { platform } : {}),
+            ...aiMeta,
+          },
+          signal,
+          performance.now() - requestStartedAt
+        );
+      };
 
       const def = registry.getTool(name);
       if (!def) {
+        emitHttpFailure({
+          error_code: FAILURE_CODES.HTTP_TOOL_NOT_FOUND,
+          failure_stage: "http_lookup_tool",
+          failure_area: "http",
+          error_kind: "not_found",
+        });
         res.status(404).json({ error: `Tool "${name}" not found` });
         return;
       }
@@ -394,6 +483,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (def.zodSchema) {
         const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+              failure_stage: "http_zod_validation",
+              failure_area: "http",
+              error_kind: "validation",
+            },
+            req.body
+          );
           res.status(400).json({ error: parseResult.error.message });
           return;
         }
@@ -418,10 +516,33 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           assertSupported(def.id, def.capability, device);
         } catch (err) {
           if (err instanceof UnsupportedOperationError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_CAPABILITY_UNSUPPORTED_OPERATION,
+                failure_stage: "http_capability_gate",
+                failure_area: "http",
+                error_kind: "unsupported",
+              },
+              parsedData
+            );
             res.status(400).json({ error: err.message });
             return;
           }
-          throw err;
+          // Reaching here means resolveDevice/assertSupported threw something
+          // other than UnsupportedOperationError (today only a custom supports()
+          // refiner can) — an internal fault, not a client validation error, so
+          // surface it as 500/unknown rather than mislabeling it 400/validation.
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
+              failure_stage: "http_capability_device_resolution",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            parsedData
+          );
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
         }
       }
 
@@ -436,6 +557,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           await ensureDeps(def.requires);
         } catch (err) {
           if (err instanceof DependencyMissingError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_DEPENDENCY_PREFLIGHT_MISSING,
+                failure_stage: "http_dependency_preflight",
+                failure_area: "http",
+                error_kind: "dependency_missing",
+              },
+              parsedData
+            );
             res.status(424).json({ error: err.message, missing: err.missing });
             return;
           }
@@ -459,12 +589,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           : null;
       if (keepAlive) keepAlive.unref?.();
 
-      // The HTTP layer owns the invocation id so request metadata can be
-      // correlated without relying on same-tool FIFO ordering.
+      // Hashing happens in the telemetry listener, not in the HTTP layer.
       const toolInvocationId = randomUUID();
       let releaseInvocationMeta: (() => void) | undefined;
       if (options?.recordInvocation) {
-        const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData);
+        const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
         if (invocationMeta) {
           releaseInvocationMeta = options.recordInvocation(toolInvocationId, invocationMeta);
         }
@@ -509,16 +638,18 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(424).json({ error: depErr.message, missing: depErr.missing });
           return;
         }
-        if (err instanceof UnsupportedOperationError) {
-          res.status(400).json({ error: err.message });
+        const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
+        if (unsupportedErr) {
+          res.status(400).json({ error: unsupportedErr.message });
           return;
         }
-        if (err instanceof NotImplementedOnPlatformError) {
+        const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
+        if (notImplementedErr) {
           res.status(501).json({
-            error: err.message,
-            toolId: err.toolId,
-            platform: err.platform,
-            hint: err.hint,
+            error: notImplementedErr.message,
+            toolId: notImplementedErr.toolId,
+            platform: notImplementedErr.platform,
+            hint: notImplementedErr.hint,
           });
           return;
         }

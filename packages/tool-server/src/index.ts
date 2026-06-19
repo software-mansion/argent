@@ -1,9 +1,10 @@
-import { attachRegistryLogger } from "@argent/registry";
+import { FAILURE_CODES, attachRegistryLogger, type FailureSignal } from "@argent/registry";
 import {
   init as telemetryInit,
   attachRegistryTelemetry,
   track as telemetryTrack,
   shutdown as telemetryShutdown,
+  aiTelemetryFromMeta,
 } from "@argent/telemetry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
@@ -74,6 +75,18 @@ export function start(): void {
     crashing = true;
     shutdownReason = "crash";
     finalExitCode = 1;
+    shutdownFailureSignal = {
+      error_code:
+        label === "Unhandled rejection"
+          ? FAILURE_CODES.TOOLSERVER_UNHANDLED_REJECTION
+          : FAILURE_CODES.TOOLSERVER_UNCAUGHT_EXCEPTION,
+      failure_stage:
+        label === "Unhandled rejection"
+          ? "toolserver_unhandled_rejection"
+          : "toolserver_uncaught_exception",
+      failure_area: "tool_server",
+      error_kind: "crash",
+    };
     setTimeout(() => process.exit(1), PROCESS_TIMEOUT_MS);
     if (shutdown) {
       shutdown(1).catch(() => process.exit(1));
@@ -110,6 +123,7 @@ export function start(): void {
   const telemetryHandle = attachRegistryTelemetry(registry);
   const serverStartedAt = Date.now();
   let shutdownReason: "idle" | "signal" | "crash" = "signal";
+  let shutdownFailureSignal: FailureSignal | null = null;
 
   const updateChecker = startUpdateChecker();
 
@@ -191,12 +205,28 @@ export function start(): void {
     stopWatcher();
     httpHandle.dispose();
 
-    // Emit toolserver:stop before tearing the registry down.
+    // Tear the registry down BEFORE recording toolserver:stop. A crash that
+    // escalates mid-shutdown (crashShutdown sets shutdownReason="crash" plus a
+    // failure signal, then re-enters here and the guard short-circuits it) would
+    // otherwise be lost behind an already-sent reason:"signal" stop event — the
+    // exit code escalates via finalExitCode but the telemetry didn't. Recording
+    // the stop event last means it reflects everything up to this point.
+    // Guarded so a dispose failure can't skip the stop event itself.
+    try {
+      await registry.dispose();
+    } catch (err) {
+      process.stderr.write(`[tool-server] registry dispose failed: ${String(err)}\n`);
+    }
+
+    // Capture toolserver:stop, then drain — the final telemetry action, so the
+    // reason/signal are as fresh as possible. (A crash during the drain below is
+    // inherently unobservable: the queue is already closing.)
     try {
       telemetryTrack("toolserver:stop", {
         reason: shutdownReason,
         uptime_ms: Date.now() - serverStartedAt,
         total_tool_calls: telemetryHandle.getTotalToolCalls(),
+        ...(shutdownFailureSignal ?? {}),
       });
       telemetryHandle.detach();
       await telemetryShutdown(1500);
@@ -204,7 +234,6 @@ export function start(): void {
       // Telemetry must never block process exit.
     }
 
-    await registry.dispose();
     if (server) {
       const forceExit = setTimeout(() => process.exit(finalExitCode), PROCESS_TIMEOUT_MS);
       await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -222,6 +251,15 @@ export function start(): void {
     onShutdown: shutdown,
     bindHost: HOST,
     recordInvocation: telemetryHandle.recordInvocation,
+    recordFailure: (toolId, meta, signal, durationMs) => {
+      telemetryTrack("tool:fail", {
+        tool: toolId,
+        ...(meta.platform ? { platform: meta.platform } : {}),
+        duration_ms: durationMs,
+        ...signal,
+        ...aiTelemetryFromMeta(meta),
+      });
+    },
   });
 
   // Block advertising readiness until the first watcher poll completes — this

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import { getCachedProfilerPaths } from "../../../blueprints/react-profiler-session";
 import type {
@@ -133,8 +133,14 @@ Fails if react-profiler-stop has not been called or no CPU profile is stored.`,
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
     if (!sessionPaths?.cpuProfilePath) {
-      throw new Error(
-        "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop."
+      throw new FailureError(
+        "No CPU profile stored. Call react-profiler-start, exercise the app, then react-profiler-stop.",
+        {
+          error_code: FAILURE_CODES.REACT_PROFILER_NO_CPU_PROFILE,
+          failure_stage: "react_profiler_cpu_summary_load_data",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 

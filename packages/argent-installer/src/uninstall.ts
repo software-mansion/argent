@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { init as telemetryInit, track, forget as telemetryForget } from "@argent/telemetry";
+import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
   getManagedContentTargets,
@@ -23,6 +24,31 @@ import {
 import { PACKAGE_NAME } from "./constants.js";
 import { killToolServer } from "@argent/tools-client";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
+
+type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+
+const UNINSTALL_TOOLSERVER_STOP_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_TOOLSERVER_STOP_FAILED,
+  failure_stage: "installer_uninstall_toolserver_stop",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const UNINSTALL_PACKAGE_ACTION_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_PACKAGE_ACTION_FAILED,
+  failure_stage: "installer_uninstall_package_action",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+// Catch-all for any unexpected throw in the prune/cleanup section or a prompt,
+// so the buffered cli_uninstall_start still flushes with a terminal event.
+const UNINSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.UNINSTALL_UNCLASSIFIED_FAILED,
+  failure_stage: "installer_uninstall_unclassified",
+  failure_area: "installer",
+  error_kind: "unknown",
+};
 
 export interface BundledContentRemoval {
   removedPaths: string[];
@@ -290,11 +316,12 @@ export async function uninstall(args: string[]): Promise<void> {
 
   telemetryInit("installer");
   track("installation:cli_uninstall_start", {});
-  let telemetryFinalized = false;
 
+  let telemetryFinalized = false;
   const finalizeUninstallTelemetry = async (
     hasPrunedContent: boolean,
-    hasUninstalledPackage: boolean
+    hasUninstalledPackage: boolean,
+    failureSignal?: InstallerFailureSignal
   ): Promise<void> => {
     if (telemetryFinalized) return;
     telemetryFinalized = true;
@@ -302,10 +329,12 @@ export async function uninstall(args: string[]): Promise<void> {
       track("installation:cli_uninstall_complete", {
         has_pruned_content: hasPrunedContent,
         has_uninstalled_package: hasUninstalledPackage,
+        ...(failureSignal ?? {}),
       });
     });
   };
 
+  // Declared before the try so the catch can report what actually completed.
   let shouldPrune = nonInteractive;
   let hasUninstalledPackage = false;
 
@@ -471,9 +500,7 @@ export async function uninstall(args: string[]): Promise<void> {
     const globallyInstalled = isGloballyInstalled();
     let shouldUninstallPackage = nonInteractive && globallyInstalled;
 
-    if (!globallyInstalled) {
-      p.log.info(pc.dim(`${PACKAGE_NAME} is not installed globally; skipping package uninstall.`));
-    } else if (!nonInteractive) {
+    if (!nonInteractive && globallyInstalled) {
       p.log.message(pc.dim("  Press y for yes, n for no, enter to confirm."));
 
       const uninstallPkg = await p.confirm({
@@ -491,7 +518,13 @@ export async function uninstall(args: string[]): Promise<void> {
       const cmd = globalUninstallCommand(pm, PACKAGE_NAME);
       p.log.info(`Running: ${pc.dim(formatShellCommand(cmd))}`);
 
-      await killToolServer();
+      try {
+        await killToolServer();
+      } catch (err) {
+        p.log.error(`Could not stop the running tool server: ${err}`);
+        await finalizeUninstallTelemetry(shouldPrune, false, UNINSTALL_TOOLSERVER_STOP_FAILED);
+        throw err;
+      }
 
       try {
         execFileSync(cmd.bin, cmd.args, { stdio: "inherit" });
@@ -499,11 +532,12 @@ export async function uninstall(args: string[]): Promise<void> {
         hasUninstalledPackage = true;
       } catch (err) {
         p.log.error(`Uninstall failed: ${err}`);
+        await finalizeUninstallTelemetry(shouldPrune, false, UNINSTALL_PACKAGE_ACTION_FAILED);
+        return;
       }
     }
 
     await finalizeUninstallTelemetry(shouldPrune, hasUninstalledPackage);
-
     if (hasUninstalledPackage) {
       try {
         await telemetryForget({ disableConsent: false });
@@ -514,7 +548,13 @@ export async function uninstall(args: string[]): Promise<void> {
 
     p.outro(pc.green("argent has been removed."));
   } catch (err) {
-    await finalizeUninstallTelemetry(shouldPrune, hasUninstalledPackage);
+    // Any unclassified throw in the prune/cleanup section or a prompt still
+    // drains the buffered cli_uninstall_start with a terminal cli_uninstall_complete.
+    await finalizeUninstallTelemetry(
+      shouldPrune,
+      hasUninstalledPackage,
+      UNINSTALL_UNCLASSIFIED_FAILED
+    );
     throw err;
   }
 }

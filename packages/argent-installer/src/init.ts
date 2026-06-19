@@ -3,7 +3,8 @@ import pc from "picocolors";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { init as telemetryInit, track, isEnabled as telemetryIsEnabled } from "@argent/telemetry";
+import { init as telemetryInit, track } from "@argent/telemetry";
+import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   detectAdapters,
   ALL_ADAPTERS,
@@ -29,9 +30,61 @@ import {
   withNpmForce,
   type ShellCommand,
 } from "./utils.js";
-import { refreshArgentSkills, formatSkillRefreshSummary } from "./skills.js";
+import {
+  refreshArgentSkills,
+  formatSkillRefreshSummary,
+  summarizeSkillRefreshForTelemetry,
+} from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { finalizeTelemetry } from "./telemetry-finalize.js";
+import { resolveTelemetryConsent } from "./first-run-notice.js";
+
+type InstallerFailureSignal = FailureSignal & { failure_area: "installer" };
+
+const INSTALL_GLOBAL_PACKAGE_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_GLOBAL_PACKAGE_FAILED,
+  failure_stage: "installer_global_package_install",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const INSTALL_FROM_TAR_PACKAGE_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_FROM_TAR_PACKAGE_FAILED,
+  failure_stage: "installer_from_tar_package_install",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const INSTALL_REGISTRY_CHECK_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_REGISTRY_CHECK_FAILED,
+  failure_stage: "installer_registry_update_check",
+  failure_area: "installer",
+  error_kind: "network",
+};
+
+const INSTALL_INIT_TRIGGERED_UPDATE_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_INIT_TRIGGERED_UPDATE_FAILED,
+  failure_stage: "installer_init_triggered_update",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+const INSTALL_SKILLS_REFRESH_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_SKILLS_REFRESH_FAILED,
+  failure_stage: "installer_skills_refresh",
+  failure_area: "installer",
+  error_kind: "subprocess",
+};
+
+// Catch-all for any unexpected throw that escapes the classified paths (file
+// I/O, copyRulesAndAgents, the online check, a clack prompt). Without it the
+// outer wrapper would drain telemetry but report no error code.
+const INSTALL_UNCLASSIFIED_FAILED: InstallerFailureSignal = {
+  error_code: FAILURE_CODES.INSTALL_UNCLASSIFIED_FAILED,
+  failure_stage: "installer_init_unclassified",
+  failure_area: "installer",
+  error_kind: "unknown",
+};
 
 function runShellCommand(cmd: ShellCommand): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -63,21 +116,16 @@ function extractFlag(args: string[], flag: string): string | null {
 
 export async function init(args: string[]): Promise<void> {
   const nonInteractive = args.includes("--yes") || args.includes("-y");
+  const noTelemetry = args.includes("--no-telemetry");
   const fromTar = extractFlag(args, "--from");
   const initStartTime = performance.now();
 
   telemetryInit("installer");
-  printTelemetryNotice();
-
-  track("installation:cli_init_start", {
-    package_manager: detectPackageManager(),
-    is_non_interactive: nonInteractive,
-  });
 
   let editorsConfiguredCount = 0;
   let initSucceeded = false;
   let telemetryFinalized = false;
-  const finalizeInitTelemetry = async (): Promise<void> => {
+  const finalizeInitTelemetry = async (failureSignal?: InstallerFailureSignal): Promise<void> => {
     if (telemetryFinalized) return;
     telemetryFinalized = true;
     await finalizeTelemetry(() => {
@@ -85,6 +133,7 @@ export async function init(args: string[]): Promise<void> {
         duration_ms: performance.now() - initStartTime,
         is_success: initSucceeded,
         editors_configured_count: editorsConfiguredCount,
+        ...(failureSignal ?? {}),
       });
     });
   };
@@ -98,13 +147,15 @@ export async function init(args: string[]): Promise<void> {
       | "update_skipped"
       | "update_failed",
     startedAt: number,
-    isSuccess: boolean
+    isSuccess: boolean,
+    failureSignal?: InstallerFailureSignal
   ): Promise<void> => {
     track("installation:package_action", {
       trigger: "init",
       action,
       is_success: isSuccess,
       duration_ms: performance.now() - startedAt,
+      ...(failureSignal ?? {}),
     });
   };
 
@@ -115,6 +166,20 @@ export async function init(args: string[]): Promise<void> {
 
     let version = getInstalledVersion() ?? "unknown";
     p.log.info(`${pc.dim("Package:")} ${PACKAGE_NAME}@${version}`);
+
+    // Resolve telemetry consent before the first track() so the user's choice
+    // governs whether this session's installation events are collected at all.
+    const consent = await resolveTelemetryConsent({ nonInteractive, disableFlag: noTelemetry });
+    if (consent.kind === "cancelled") {
+      // No tracking on a consent-prompt cancel — the user agreed to nothing.
+      p.cancel("Initialization cancelled.");
+      process.exit(0);
+    }
+
+    track("installation:cli_init_start", {
+      package_manager: detectPackageManager(),
+      is_non_interactive: nonInteractive,
+    });
 
     // ── Step 0: Install / Update Check ──────────────────────────────────────────
 
@@ -164,8 +229,13 @@ export async function init(args: string[]): Promise<void> {
         spinner.stop(pc.red("Installation failed."));
         p.log.error(`${err}`);
         p.log.info(`Install Argent manually with: ${pc.cyan(cmdStr)}`);
-        await trackPackageAction("fresh_install", packageActionStartedAt, false);
-        await finalizeInitTelemetry();
+        await trackPackageAction(
+          "fresh_install",
+          packageActionStartedAt,
+          false,
+          INSTALL_GLOBAL_PACKAGE_FAILED
+        );
+        await finalizeInitTelemetry(INSTALL_GLOBAL_PACKAGE_FAILED);
         process.exit(1);
       }
     } else if (fromTar) {
@@ -183,7 +253,7 @@ export async function init(args: string[]): Promise<void> {
         spinner.stop(pc.red("Installation failed."));
         p.log.error(`${err}`);
         p.log.info(`Install manually with: ${pc.cyan(cmdStr)}`);
-        await finalizeInitTelemetry();
+        await finalizeInitTelemetry(INSTALL_FROM_TAR_PACKAGE_FAILED);
         process.exit(1);
       }
     } else {
@@ -196,10 +266,13 @@ export async function init(args: string[]): Promise<void> {
       try {
         latest = getLatestVersion();
       } catch {
-        // Registry unreachable — silently skip. The `already_installed`
-        // package_action above already records this step; a failed update
-        // *check* is not a second package action, and reusing "update_skipped"
-        // here would conflate it with the user explicitly choosing Skip.
+        await trackPackageAction(
+          "update_skipped",
+          packageActionStartedAt,
+          false,
+          INSTALL_REGISTRY_CHECK_FAILED
+        );
+        // Registry unreachable - silently skip
       }
       spinner.stop(pc.dim("Version check complete."));
 
@@ -250,17 +323,29 @@ export async function init(args: string[]): Promise<void> {
               // is the only point in init where we can surface orphans
               // (skills removed from a previous argent version) before
               // Step 2's single-scope `skills add`.
-              const skillSummary = formatSkillRefreshSummary(
-                refreshArgentSkills(resolveProjectRoot(process.cwd()))
-              );
+              const skillRefreshResults = refreshArgentSkills(resolveProjectRoot(process.cwd()));
+              const skillSummary = formatSkillRefreshSummary(skillRefreshResults);
               if (skillSummary) {
                 p.note(skillSummary, "Skills Updated");
+              }
+              const skillTelemetrySummary = summarizeSkillRefreshForTelemetry(skillRefreshResults);
+              if (skillTelemetrySummary.scope_count > 0) {
+                track("installation:skill_refresh_result", {
+                  is_success: skillTelemetrySummary.failed_count === 0,
+                  ...skillTelemetrySummary,
+                  ...(skillTelemetrySummary.failed_count > 0 ? INSTALL_SKILLS_REFRESH_FAILED : {}),
+                });
               }
             } catch (err) {
               updateSpinner.stop(pc.red("Update failed."));
               p.log.error(`${err}`);
               p.log.info(`You can update manually later: ${pc.cyan(cmdStr)}`);
-              await trackPackageAction("update_failed", updateStartedAt, false);
+              await trackPackageAction(
+                "update_failed",
+                updateStartedAt,
+                false,
+                INSTALL_INIT_TRIGGERED_UPDATE_FAILED
+              );
             }
           }
         }
@@ -496,6 +581,7 @@ export async function init(args: string[]): Promise<void> {
           );
           continue;
         }
+
         try {
           adapter.addAllowlist!(effectiveRoot, normalizedScope);
           allowlistResults.push(`${pc.green("+")} ${adapter.name}`);
@@ -688,30 +774,19 @@ export async function init(args: string[]): Promise<void> {
     p.outro("Done.");
 
     initSucceeded = true;
+    // Persist an interactive first-run telemetry choice only now that init has
+    // completed. Until this point the pick governs the session via an in-process
+    // override but isn't written to disk, so aborting setup leaves nothing behind
+    // and the next run re-prompts instead of inheriting the abandoned choice.
+    if ("commit" in consent) consent.commit();
     await finalizeInitTelemetry();
   } catch (err) {
-    await finalizeInitTelemetry();
+    // Any unclassified throw (file I/O, copyRulesAndAgents, the online check, a
+    // clack prompt) still drains buffered events and records a terminal
+    // cli_init_complete before propagating to main().catch() in cli.ts.
+    await finalizeInitTelemetry(INSTALL_UNCLASSIFIED_FAILED);
     throw err;
   }
-}
-
-// Print the notice only when this run may send telemetry.
-function printTelemetryNotice(): void {
-  if (!telemetryIsEnabled()) return;
-  p.log.info(
-    [
-      pc.bold("Telemetry"),
-      pc.dim("Argent collects anonymous, opt-out usage telemetry (PostHog EU) so we can"),
-      pc.dim("prioritise the features and bugs that matter most. No raw arguments, paths,"),
-      pc.dim("error messages, or environment values are ever sent — only event names and"),
-      pc.dim("a small set of typed, validator-enforced properties."),
-      pc.dim(""),
-      pc.dim("A lifetime-stable anonymous UUID is generated on first run. To opt out,"),
-      pc.dim("run `argent telemetry disable` or set `DO_NOT_TRACK=1` /"),
-      pc.dim("`ARGENT_TELEMETRY=0`. To audit what is sent,"),
-      pc.dim("set `ARGENT_TELEMETRY_DEBUG=1` and inspect `~/.argent/telemetry-debug.log`."),
-    ].join("\n")
-  );
 }
 
 function sanitizeEditorName(raw: string): string {

@@ -15,6 +15,13 @@ import {
   type ToolsServerPaths,
 } from "@argent/tools-client";
 import {
+  canonicalizeAiClient,
+  AI_CLIENT_NAME_PATTERN,
+  FIRST_RUN_NOTICE,
+  markFirstRunNoticeShown,
+  shouldShowFirstRunNotice,
+} from "@argent/telemetry";
+import {
   toMcpContent,
   flowRunToMcpContent,
   screenshotDiffToMcpContent,
@@ -87,6 +94,16 @@ export interface StartMcpServerOptions {
 }
 
 export async function startMcpServer(options: StartMcpServerOptions): Promise<void> {
+  // First-run telemetry notice, once per installation, for users who reach a
+  // telemetry-enabled build via an update: `argent update` runs the OLD binary
+  // (postinstall skipped), so the editor relaunching `argent mcp` is often the
+  // first time the new code runs. stdout is the JSON-RPC channel — the notice
+  // MUST go to stderr to avoid corrupting it.
+  if (shouldShowFirstRunNotice()) {
+    process.stderr.write(`[argent] ${FIRST_RUN_NOTICE}\n`);
+    markFirstRunNoticeShown();
+  }
+
   // isFlagEnabled hits disk, so resolve it once at startup rather than on every
   // tool call. A flag change therefore needs an MCP restart to take effect.
   const autoScreenshotOn = autoScreenshotEnabled();
@@ -113,6 +130,24 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
 
   function authHeader(): Record<string, string> {
     return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {};
+  }
+
+  // Coarse identity of the AI tool driving this MCP server, forwarded to the
+  // tool-server (a separate process that owns tool telemetry) as request headers.
+  // The signal is the MCP handshake clientInfo.name; unrecognized tools are
+  // reported as `other` with a bounded free-form name. Never carries prompts,
+  // model output, or tool args.
+  function aiClientHeaders(): Record<string, string> {
+    const rawName = server.getClientVersion()?.name?.trim() || undefined;
+    const aiClient = canonicalizeAiClient(rawName);
+    if (aiClient) return { "X-Argent-AI-Client": aiClient };
+    if (rawName) {
+      return {
+        "X-Argent-AI-Client": "other",
+        ...(AI_CLIENT_NAME_PATTERN.test(rawName) ? { "X-Argent-AI-Client-Name": rawName } : {}),
+      };
+    }
+    return {};
   }
 
   let reconnectPromise: Promise<void> | null = null;
@@ -186,7 +221,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
     const res = await fetchWithReconnect(() => `${TOOLS_URL}/tools/${name}`, reconnect, {
       init: {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeader() },
+        headers: { "Content-Type": "application/json", ...authHeader(), ...aiClientHeaders() },
         body: JSON.stringify(finalArgs ?? {}),
       },
       fetchTimeoutMs: meta?.longRunning ? null : FETCH_TIMEOUT_MS,

@@ -8,6 +8,8 @@ import {
   type ToolsServerPaths,
   type MaterializedImage,
 } from "@argent/tools-client";
+import { init as telemetryInit, shutdown as telemetryShutdown, track } from "@argent/telemetry";
+import { FAILURE_CODES, type FailureCode, type FailureKind } from "@argent/registry";
 import {
   parseFlags,
   formatSchemaUsage,
@@ -125,7 +127,33 @@ function renderResult(
   return JSON.stringify(result, null, 2);
 }
 
+const SAFE_TOOL_RE = /^[a-z][a-z0-9-]{0,63}$/;
+
+function safeToolName(toolName: string | undefined): string {
+  return toolName && SAFE_TOOL_RE.test(toolName) ? toolName : "unknown";
+}
+
+async function trackRunFailure(
+  toolName: string | undefined,
+  startedAt: number,
+  signal: {
+    error_code: FailureCode;
+    failure_stage: string;
+    failure_area: "cli";
+    error_kind: FailureKind;
+  }
+): Promise<void> {
+  track("cli:run_fail", {
+    tool: safeToolName(toolName),
+    duration_ms: performance.now() - startedAt,
+    ...signal,
+  });
+  await telemetryShutdown();
+}
+
 export async function run(argv: string[], options: RunCommandOptions): Promise<void> {
+  telemetryInit("cli");
+  const startedAt = performance.now();
   const { fetchTool, callTool, baseUrl } = createToolsClient({ paths: options.paths });
   const [toolName, ...rest] = argv;
 
@@ -150,6 +178,12 @@ Examples:
   const meta = await fetchTool(toolName);
   if (!meta) {
     console.error(`Tool "${toolName}" not found. Run \`argent tools\` to list available tools.`);
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_TOOL_NOT_FOUND,
+      failure_stage: "cli_run_fetch_tool",
+      failure_area: "cli",
+      error_kind: "not_found",
+    });
     process.exit(1);
   }
 
@@ -160,6 +194,12 @@ Examples:
     if (err instanceof FlagParseException) {
       console.error(`Error: ${err.message}\n`);
       printToolHelp(meta);
+      await trackRunFailure(toolName, startedAt, {
+        error_code: FAILURE_CODES.CLI_RUN_FLAG_PARSE_FAILED,
+        failure_stage: "cli_run_parse_flags",
+        failure_area: "cli",
+        error_kind: "validation",
+      });
       process.exit(2);
     }
     throw err;
@@ -183,11 +223,23 @@ Examples:
       const parsedRaw = JSON.parse(rawJson);
       if (parsedRaw === null || typeof parsedRaw !== "object" || Array.isArray(parsedRaw)) {
         console.error("--args must be a JSON object");
+        await trackRunFailure(toolName, startedAt, {
+          error_code: FAILURE_CODES.CLI_RUN_ARGS_NOT_OBJECT,
+          failure_stage: "cli_run_parse_raw_args",
+          failure_area: "cli",
+          error_kind: "validation",
+        });
         process.exit(2);
       }
       payload = parsedRaw as Record<string, unknown>;
     } catch (err) {
       console.error(`--args is not valid JSON: ${err instanceof Error ? err.message : err}`);
+      await trackRunFailure(toolName, startedAt, {
+        error_code: FAILURE_CODES.CLI_RUN_ARGS_JSON_INVALID,
+        failure_stage: "cli_run_parse_raw_args",
+        failure_area: "cli",
+        error_kind: "validation",
+      });
       process.exit(2);
     }
   }
@@ -214,6 +266,12 @@ Examples:
     note = resp.note;
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_TOOL_CALL_FAILED,
+      failure_stage: "cli_run_call_tool",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
     process.exit(1);
   }
 
@@ -231,6 +289,12 @@ Examples:
       }
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
+      await trackRunFailure(toolName, startedAt, {
+        error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
+        failure_stage: "cli_run_save_image",
+        failure_area: "cli",
+        error_kind: "unknown",
+      });
       process.exit(1);
     }
   }

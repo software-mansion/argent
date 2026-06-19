@@ -1,7 +1,6 @@
 // Anonymous opt-out telemetry for Argent. Public functions swallow telemetry
 // failures and surface diagnostics only when ARGENT_TELEMETRY_DEBUG=1.
 
-import * as fs from "node:fs";
 import {
   getClient,
   getConstructedClient,
@@ -11,8 +10,7 @@ import {
 } from "./posthog.js";
 import { sanitize } from "./sanitize.js";
 import { getBaseProps, type Runtime } from "./base-props.js";
-import { readOrCreateAnonId } from "./identity.js";
-import { identityFilePath } from "./paths.js";
+import { readOrCreateAnonId, peekAnonId } from "./identity.js";
 import { isEnabled as consentIsEnabled, writeConsentFlag, getConsentState } from "./consent.js";
 import { emitDebugError, emitDebugPayload, isDebugEnabled } from "./debug.js";
 import { forget as forgetImpl, type ForgetOptions, type ForgetResult } from "./erasure.js";
@@ -28,7 +26,33 @@ export { _resetConsentCacheForTest } from "./consent.js";
 export { EVENT_NAMES } from "./events.js";
 export { isDebugEnabled } from "./debug.js";
 export { getConsentState } from "./consent.js";
+// Persists the consent flag without emitting a transition event — for recording
+// an initial first-run choice. Use markDisabled() (not this) for a live opt-out
+// that should send a final telemetry:opt_out before the pipe closes.
+export { writeConsentFlag } from "./consent.js";
+// Applies a first-run choice to the current session only (in-process, not on
+// disk), so an interactive consent prompt can govern this run's events before
+// the decision is committed at install completion.
+export { setSessionConsentOverride } from "./consent.js";
+export {
+  FIRST_RUN_NOTICE,
+  FIRST_RUN_NOTICE_BODY_LINES,
+  TELEMETRY_OPT_OUT_COMMAND,
+  TELEMETRY_DETAILS_URL,
+  hasShownFirstRunNotice,
+  markFirstRunNoticeShown,
+  resetFirstRunNotice,
+  shouldShowFirstRunNotice,
+} from "./notice.js";
 export { getSessionId } from "./base-props.js";
+export {
+  AI_CLIENTS,
+  AI_CLIENT_NAME_PATTERN,
+  canonicalizeAiClient,
+  aiTelemetryFromMeta,
+  type AiClient,
+  type AiTelemetryProps,
+} from "./ai-identity.js";
 
 const SHORT_FLUSH_TIMEOUT_MS = 1_500;
 
@@ -214,17 +238,9 @@ export function status(): {
   const consent = getConsentState();
 
   // Read the id without creating one; status must be side-effect free.
-  let anonIdPrefix: string | null = null;
-  let hasAnonIdOnDisk = false;
-  try {
-    const raw = fs.readFileSync(identityFilePath(), "utf8").trim();
-    if (/^[0-9a-fA-F-]{32,128}$/.test(raw)) {
-      hasAnonIdOnDisk = true;
-      anonIdPrefix = raw.slice(0, 8);
-    }
-  } catch {
-    /* missing — keep nulls */
-  }
+  const anonId = peekAnonId();
+  const hasAnonIdOnDisk = anonId !== null;
+  const anonIdPrefix = anonId ? anonId.slice(0, 8) : null;
 
   const config = resolveConfig();
   return {

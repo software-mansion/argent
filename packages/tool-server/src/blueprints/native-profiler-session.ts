@@ -1,4 +1,6 @@
 import {
+  FAILURE_CODES,
+  FailureError,
   ServiceRef,
   TypedEventEmitter,
   type DeviceInfo,
@@ -83,15 +85,27 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
   async factory(_deps, _payload, options) {
     const opts = options as unknown as NativeProfilerSessionFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${NATIVE_PROFILER_SESSION_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use nativeProfilerSessionRef(device) when registering the service ref.`
+          `Use nativeProfilerSessionRef(device) when registering the service ref.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_FACTORY_OPTIONS_MISSING,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     const { device } = opts;
     if (device.platform !== "ios" && device.platform !== "android") {
-      throw new Error(
-        `${NATIVE_PROFILER_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`
+      throw new FailureError(
+        `${NATIVE_PROFILER_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_WRONG_PLATFORM,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     const state: NativeProfilerSessionApi = {

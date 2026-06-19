@@ -132,10 +132,14 @@ describe("uninstall — telemetry consent preservation", () => {
 
     await uninstall(["--yes"]);
 
-    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
-      has_pruned_content: true,
-      has_uninstalled_package: false,
-    });
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_PACKAGE_ACTION_FAILED",
+        has_pruned_content: true,
+        has_uninstalled_package: false,
+      })
+    );
     expect(telemetryMock.forget).not.toHaveBeenCalled();
   });
 
@@ -145,10 +149,36 @@ describe("uninstall — telemetry consent preservation", () => {
 
     await expect(uninstall(["--yes"])).rejects.toThrow("tool server busy");
 
-    expect(telemetryMock.track).toHaveBeenCalledWith("installation:cli_uninstall_complete", {
-      has_pruned_content: true,
-      has_uninstalled_package: false,
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_TOOLSERVER_STOP_FAILED",
+        has_pruned_content: true,
+        has_uninstalled_package: false,
+      })
+    );
+    expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
+    expect(telemetryMock.forget).not.toHaveBeenCalled();
+  });
+
+  it("drains uninstall telemetry on an unclassified throw outside the classified paths", async () => {
+    process.chdir(tmpDir);
+    // An unexpected failure that no classified handler covers (e.g. a clack
+    // prompt or a cleanup step blowing up). The outer wrapper must still flush
+    // the buffered cli_uninstall_start with a terminal cli_uninstall_complete.
+    const clack = await import("@clack/prompts");
+    vi.mocked(clack.log.step).mockImplementationOnce(() => {
+      throw new Error("unexpected boom");
     });
+
+    await expect(uninstall(["--yes"])).rejects.toThrow("unexpected boom");
+
+    expect(telemetryMock.track).toHaveBeenCalledWith(
+      "installation:cli_uninstall_complete",
+      expect.objectContaining({
+        error_code: "UNINSTALL_UNCLASSIFIED_FAILED",
+      })
+    );
     expect(telemetryMock.shutdown).toHaveBeenCalledOnce();
     expect(telemetryMock.forget).not.toHaveBeenCalled();
   });
