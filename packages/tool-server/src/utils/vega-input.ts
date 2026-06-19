@@ -19,8 +19,9 @@ import { adbShell, shellQuote } from "./adb";
 import { emulatorSerial } from "./vega-automation";
 
 // TV-remote button → Linux input KEY_ name accepted by `inputd-cli button_press`.
-// Names verified against a known-good Vega navigation script: select is
-// KEY_ENTER (KEY_SELECT is a no-op), home is KEY_HOME (not KEY_HOMEPAGE).
+// Codes verified against the VVD remote skin keymap (vmtools/agent/skins/
+// tv-remote/layout) and on-device: select is KEY_ENTER (KEY_SELECT is a no-op),
+// home is KEY_HOMEPAGE (KEY_HOME is inert).
 export const REMOTE_KEYCODES = {
   up: "KEY_UP",
   down: "KEY_DOWN",
@@ -28,7 +29,7 @@ export const REMOTE_KEYCODES = {
   right: "KEY_RIGHT",
   select: "KEY_ENTER",
   back: "KEY_BACK",
-  home: "KEY_HOME",
+  home: "KEY_HOMEPAGE",
   menu: "KEY_MENU",
   playPause: "KEY_PLAYPAUSE",
   rewind: "KEY_REWIND",

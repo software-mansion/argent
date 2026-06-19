@@ -14,11 +14,11 @@ describe("vega-input keycode maps", () => {
     }
   });
 
-  it("uses the verified non-obvious codes (select=ENTER, home=HOME)", () => {
-    // select is KEY_ENTER (KEY_SELECT is a no-op on Vega); home is KEY_HOME
-    // (not KEY_HOMEPAGE). These are the ones easy to get wrong.
+  it("uses the verified non-obvious codes (select=ENTER, home=HOMEPAGE)", () => {
+    // select is KEY_ENTER (KEY_SELECT is a no-op on Vega); home is KEY_HOMEPAGE
+    // (KEY_HOME is inert — verified against the VVD remote skin keymap).
     expect(REMOTE_KEYCODES.select).toBe("KEY_ENTER");
-    expect(REMOTE_KEYCODES.home).toBe("KEY_HOME");
+    expect(REMOTE_KEYCODES.home).toBe("KEY_HOMEPAGE");
     expect(REMOTE_KEYCODES.next).toBe("KEY_NEXTSONG");
   });
 
