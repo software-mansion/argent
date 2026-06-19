@@ -13,3 +13,4 @@ training/.cache/
 training/fused/
 training/base/
 training/*.gguf
+bench/out/
