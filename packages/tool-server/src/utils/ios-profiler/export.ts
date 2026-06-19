@@ -33,7 +33,7 @@ export interface ExportDiagnostics {
  * Run `xctrace export --toc` to discover what tables/schemas exist in the trace.
  * Returns an array of schema names found in the TOC.
  */
-function discoverTraceSchemas(traceFile: string): string[] {
+function discoverTraceSchemas(traceFile: string, diagnostics?: ExportDiagnostics): string[] {
   try {
     const toc = execSyncWithTimeout(`xctrace export --input "${traceFile}" --toc`, {
       encoding: "utf-8",
@@ -46,7 +46,13 @@ function discoverTraceSchemas(traceFile: string): string[] {
       schemas.push(m[1]);
     }
     return schemas;
-  } catch {
+  } catch (err) {
+    // Record rather than swallow: a `--toc` failure (e.g. ENOBUFS, timeout)
+    // leaves us with no schema list, which previously surfaced downstream as a
+    // misleading "schema not found / brute-force failed" message.
+    if (diagnostics) {
+      diagnostics.errors.toc = err instanceof Error ? err.message : String(err);
+    }
     return [];
   }
 }
@@ -56,7 +62,7 @@ function discoverTraceSchemas(traceFile: string): string[] {
  * Falls back to trying known schema candidates if TOC parsing fails.
  */
 function resolveCpuXpath(traceFile: string, diagnostics: ExportDiagnostics): string | null {
-  const tocSchemas = discoverTraceSchemas(traceFile);
+  const tocSchemas = discoverTraceSchemas(traceFile, diagnostics);
   diagnostics.tocSchemas = tocSchemas;
 
   if (tocSchemas.length > 0) {
