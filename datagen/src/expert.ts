@@ -597,6 +597,50 @@ function solveNativeInspect(b: Builder, task: TaskSpec) {
   );
 }
 
+function solveHideAndSeek(b: Builder, task: TaskSpec) {
+  const w = b.world;
+  const goal = task.pathLabels.at(-1) ?? "the target";
+  ensureDevice(b);
+  ensureLaunched(b);
+  const hops = task.route;
+  for (let i = 0; i < hops.length; i++) {
+    const hop = hops[i]!;
+    discover(b, `Looking for "${goal}". Let me read the ${currentScreenDef(w).title} screen to decide where to go.`);
+    if (i === 0) {
+      // Demonstrate a realistic search: try one plausible-but-wrong place first,
+      // read the screen we land on, recognize the target isn't there, and
+      // backtrack — exactly the navigation+recovery behavior to train.
+      const correct = find(b, hop.elementKey);
+      const correctNav = correct?.navigatesTo;
+      const wrong = currentVisible(w).find(
+        (e) =>
+          e.navigatesTo &&
+          e.key !== hop.elementKey &&
+          e.navigatesTo !== correctNav &&
+          !w.app.screens[e.navigatesTo]?.elements.some((x) => x.key === task.targetElementKey)
+      );
+      if (wrong && b.rng.bool(0.7)) {
+        b.hasRecovery = true;
+        const wp = tapPoint(wrong);
+        b.act(`I'm not sure where "${goal}" lives — "${wrong.label}" looks plausible, let me check there.`, [
+          { name: "gesture-tap", args: { udid: w.deviceId, x: wp.x, y: wp.y } },
+        ]);
+        discover(b, "Reading this screen to see if the target is here.");
+        b.act(`"${goal}" isn't on the ${currentScreenDef(w).title} screen — backtracking to try another route.`, [
+          { name: "button", args: { udid: w.deviceId, button: "back" } },
+        ]);
+        discover(b, "Back to the previous screen; trying the more likely path now.");
+      }
+      tapKey(b, hop.elementKey);
+    } else {
+      tapKey(b, hop.elementKey);
+    }
+  }
+  discover(b, `This looks like the right screen — confirming "${goal}" is here.`);
+  const target = tapKey(b, task.targetElementKey);
+  b.final(`Found "${target.label}" by exploring ${w.app.name} (it was under ${task.pathLabels.slice(0, -1).join(" > ") || "the main screen"}) and opened it.`);
+}
+
 const SOLVERS: Record<TaskSpec["kind"], (b: Builder, t: TaskSpec) => void> = {
   "navigate-tap": solveNavigateTap,
   "toggle": solveToggle,
@@ -614,6 +658,7 @@ const SOLVERS: Record<TaskSpec["kind"], (b: Builder, t: TaskSpec) => void> = {
   "pinch-zoom": solvePinchZoom,
   "chromium-tabs": solveChromiumTabs,
   "native-inspect": solveNativeInspect,
+  "hide-and-seek": solveHideAndSeek,
 };
 
 function cap(s: string): string {

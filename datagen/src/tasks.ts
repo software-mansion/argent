@@ -23,7 +23,8 @@ export type TaskKind =
   | "console-check"
   | "pinch-zoom"
   | "chromium-tabs"
-  | "native-inspect";
+  | "native-inspect"
+  | "hide-and-seek";
 
 export interface TaskSpec {
   kind: TaskKind;
@@ -108,6 +109,8 @@ const TASK_WEIGHTS: [TaskKind, number][] = [
   ["pinch-zoom", 5],
   ["chromium-tabs", 4],
   ["native-inspect", 5],
+  // Navigation is the weak capability we most want to train, so weight it high.
+  ["hide-and-seek", 16],
 ];
 
 function pickKind(rng: RNG): TaskKind {
@@ -154,6 +157,8 @@ export function generateTask(rng: RNG): TaskSpec | null {
       return buildChromiumTabs(rng);
     case "native-inspect":
       return buildNativeInspect(rng);
+    case "hide-and-seek":
+      return buildHideAndSeek(rng);
     default:
       return buildNavigateTap(rng);
   }
@@ -497,6 +502,33 @@ function buildNativeInspect(rng: RNG): TaskSpec | null {
     app,
     platform: "ios",
     difficulty: difficultyForRoute(route),
+    targetScreen,
+    targetElementKey: target.key,
+    route,
+    pathLabels: [...pathLabelsFor(app, route), target.label ?? target.key],
+    inject: {},
+    deviceBooted: true,
+  };
+}
+
+function buildHideAndSeek(rng: RNG): TaskSpec | null {
+  const app = rng.pick(ARCHETYPES);
+  const platform = pickPlatform(rng, app);
+  // Target must require at least one navigation hop so there's something to find.
+  const reachable = reachableScreens(app)
+    .filter((s) => s !== app.entryScreen)
+    .map((s) => ({ s, route: routeToScreen(app, s) }))
+    .filter((x): x is { s: string; route: Hop[] } => Boolean(x.route && x.route.length >= 1));
+  if (!reachable.length) return null;
+  const { s: targetScreen, route } = rng.pick(reachable);
+  const cands = targetCandidates(app, targetScreen);
+  if (!cands.length) return null;
+  const target = rng.pick(cands);
+  return {
+    kind: "hide-and-seek",
+    app,
+    platform,
+    difficulty: route.length >= 2 ? "hard" : "medium",
     targetScreen,
     targetElementKey: target.key,
     route,
