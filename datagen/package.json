@@ -1,0 +1,14 @@
+{
+  "name": "argent-finetune-datagen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Schema-grounded synthetic trajectory generator for fine-tuning a model to drive the Argent toolkit.",
+  "scripts": {
+    "generate": "node src/generate.ts",
+    "selfcheck": "node src/selfcheck.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.18.0"
+  }
+}
