@@ -6,6 +6,11 @@ const readdir = vi.fn();
 vi.mock("node:fs/promises", () => ({ readdir: (...a: unknown[]) => readdir(...a) }));
 vi.mock("node:os", () => ({ tmpdir: () => "/var/folders/T" }));
 
+const listAndroidDevices = vi.fn();
+vi.mock("../src/utils/adb", () => ({
+  listAndroidDevices: (...a: unknown[]) => listAndroidDevices(...a),
+}));
+
 import {
   discoverQmpSocket,
   discoverVegaConsolePort,
@@ -16,8 +21,23 @@ function withSockets(byDir: Record<string, string[]>): void {
   readdir.mockImplementation(async (dir: string) => byDir[dir] ?? []);
 }
 
+function withConnectedPorts(...ports: number[]): void {
+  listAndroidDevices.mockResolvedValue(
+    ports.map((p) => ({
+      serial: `emulator-${p}`,
+      state: "device",
+      isEmulator: true,
+      model: null,
+      avdName: null,
+      sdkLevel: null,
+    }))
+  );
+}
+
 beforeEach(() => {
   readdir.mockReset();
+  listAndroidDevices.mockReset();
+  withConnectedPorts(5554, 5556);
 });
 
 describe("discoverQmpSocket", () => {
@@ -33,7 +53,25 @@ describe("discoverQmpSocket", () => {
 
   it("throws an actionable error when no VVD socket is present", async () => {
     withSockets({});
-    await expect(discoverQmpSocket()).rejects.toThrow(/No Vega Virtual Device QMP socket/);
+    await expect(discoverQmpSocket()).rejects.toThrow(/No running Vega Virtual Device QMP socket/);
+  });
+
+  it("filters out an orphaned socket not backed by a live adb device", async () => {
+    withSockets({ "/tmp": ["qmp-socket-5554.sock", "qmp-socket-5558.sock"] });
+    withConnectedPorts(5554);
+    expect(await discoverQmpSocket()).toBe("/tmp/qmp-socket-5554.sock");
+  });
+
+  it("reports no running VVD (mentioning stale sockets) when every socket is orphaned", async () => {
+    withSockets({ "/tmp": ["qmp-socket-5558.sock"] });
+    withConnectedPorts();
+    await expect(discoverQmpSocket()).rejects.toThrow(/stale socket/);
+  });
+
+  it("falls back to the unfiltered socket when adb cannot be queried", async () => {
+    withSockets({ "/tmp": ["qmp-socket-5554.sock"] });
+    listAndroidDevices.mockRejectedValue(new Error("adb not found"));
+    expect(await discoverQmpSocket()).toBe("/tmp/qmp-socket-5554.sock");
   });
 
   it("throws a typed MultipleVegaDevicesError rather than silently targeting one", async () => {

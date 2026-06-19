@@ -1,16 +1,20 @@
 import { runVega, resolveVegaBinary } from "./vega-cli";
-import { registerVegaDevices } from "./device-info";
+import { listVvdImages } from "./vega-sdk";
 
 /**
- * A Vega (Fire TV) device as surfaced to `list-devices`. The `serial` is the
- * stable host identifier reported by `vega device list` / `info.hostname`
- * (e.g. `amazon-4a27df03c9777152`) and is what an agent passes as `udid` to
- * Vega tools. `kind` is `"vvd"` for the QEMU Virtual Device (the iOS-
- * simulator / Android-emulator analogue) and `"device"` for physical Fire TV.
+ * A Vega (Fire TV) device as surfaced to `list-devices`. A VVD is listed whether
+ * or not it is running (like a Shutdown iOS simulator): `state` is `"running"` or
+ * `"stopped"` for a VVD, `"device"` for a physical Fire TV.
+ *
+ * `serial` is the runtime host id (`amazon-…`, from `vega device list` / `info`)
+ * an agent passes as `udid` to drive a *running* device; it is `null` for a
+ * stopped VVD (none is connected to query). `vvdImage` is the SDK image name to
+ * pass to `boot-device {vvdImage}` to start it — set for VVDs, `null` for physical.
  */
 export interface VegaDevice {
   platform: "vega";
-  serial: string;
+  serial: string | null;
+  vvdImage: string | null;
   kind: "vvd" | "device";
   state: string;
   product: string | null;
@@ -68,33 +72,6 @@ export function parseVegaDeviceList(stdout: string): Array<{ serial: string; typ
 }
 
 /**
- * Strip the surface-specific prefix from a serial so a Vega serial
- * (`amazon-4a27df03c9777152`) and an adb-reported device serial
- * (`emulator-*` transports report the bare hardware id) compare equal.
- */
-function normalizeSerial(s: string): string {
-  return s
-    .trim()
-    .toLowerCase()
-    .replace(/^(amazon-|emulator-)/, "");
-}
-
-/**
- * Whether an adb emulator's reported device serial (`ro.serialno` /
- * `ro.boot.serialno`) belongs to the given Vega VVD. A running VVD reports the
- * same hardware id under both the `vega device list` serial and adb, so a
- * normalized match (allowing one to be a suffix of the other) identifies the
- * duplicate. Unrelated serials never match, so genuine Android emulators are
- * left alone.
- */
-export function vegaSerialMatchesAdbSerial(vegaSerial: string, adbReportedSerial: string): boolean {
-  const v = normalizeSerial(vegaSerial);
-  const a = normalizeSerial(adbReportedSerial);
-  if (v.length < 6 || a.length < 6) return false;
-  return v === a || v.endsWith(a) || a.endsWith(v);
-}
-
-/**
  * A running VVD auto-registers on adb as an `emulator-XXXX` transport, so a
  * single VVD otherwise surfaces in `list-devices` twice — once as
  * `platform:"android"` and once as `platform:"vega"`. Drop the Android rows
@@ -118,16 +95,6 @@ async function readVegaInfo(): Promise<VegaInfo | null> {
   }
 }
 
-async function isVirtualDeviceRunning(): Promise<boolean> {
-  try {
-    const { stdout } = await runVega(["virtual-device", "status"], { timeoutMs: 15_000 });
-    const parsed = JSON.parse(stdout) as { running?: boolean };
-    return parsed.running === true;
-  } catch {
-    return false;
-  }
-}
-
 function classifyKind(type: string, info: VegaInfo | null): "vvd" | "device" {
   if (/virtual/i.test(type)) return "vvd";
   if (info?.simulated === true) return "vvd";
@@ -136,42 +103,31 @@ function classifyKind(type: string, info: VegaInfo | null): "vvd" | "device" {
 }
 
 /**
- * Discover Vega devices via the `vega`/`kepler` CLI and register them in the
- * device-classification inventory so `resolveDevice` maps their serials to the
- * `vega` platform. Returns [] (and registers nothing) when the Vega SDK is not
- * installed, so callers can merge unconditionally.
- *
- * v1 enriches via `vega device info` (no `-d`), which targets the single
- * connected device — so enrichment is only attached when exactly one device is
- * present. Bare entries (serial only) are still returned and registered.
+ * Discover Vega devices for `list-devices`. Returns [] when the Vega SDK isn't on
+ * PATH.
  */
 export async function listVegaDevices(): Promise<VegaDevice[]> {
   if (!(await resolveVegaBinary())) return [];
 
-  let listOut: string;
+  // Connected/running devices (these carry the `amazon-` runtime serial).
+  let rows: Array<{ serial: string; type: string }>;
   try {
-    ({ stdout: listOut } = await runVega(["device", "list"], { timeoutMs: 20_000 }));
+    const { stdout } = await runVega(["device", "list"], { timeoutMs: 20_000 });
+    rows = parseVegaDeviceList(stdout);
   } catch {
-    return [];
-  }
-
-  const rows = parseVegaDeviceList(listOut);
-  if (rows.length === 0) {
-    registerVegaDevices([]);
-    return [];
+    rows = []; // CLI listing failed; still surface installed images below
   }
 
   const info = rows.length === 1 ? await readVegaInfo() : null;
-  const virtualRunning = await isVirtualDeviceRunning();
 
-  const devices: VegaDevice[] = rows.map((row) => {
+  const connected: VegaDevice[] = rows.map((row): VegaDevice => {
     const kind = classifyKind(row.type, info);
-    const state = kind === "vvd" ? (virtualRunning ? "running" : "stopped") : "device";
     return {
       platform: "vega",
       serial: row.serial,
+      vvdImage: kind === "vvd" ? (info?.profile ?? null) : null,
       kind,
-      state,
+      state: kind === "vvd" ? "running" : "device",
       product: info?.product ?? null,
       profile: info?.profile ?? null,
       buildDescription: info?.buildDescription ?? null,
@@ -179,34 +135,40 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
     };
   });
 
-  registerVegaDevices(
-    devices.map((d) => ({
-      id: d.serial,
-      kind: d.kind,
-      name: d.product ?? undefined,
-      state: d.state,
-    }))
+  const connectedImages = new Set(
+    connected.filter((d) => d.kind === "vvd" && d.vvdImage).map((d) => d.vvdImage)
   );
+  const stopped: VegaDevice[] = (await listVvdImages())
+    .filter((img) => !connectedImages.has(img.name))
+    .map(
+      (img): VegaDevice => ({
+        platform: "vega",
+        serial: null,
+        vvdImage: img.name,
+        kind: "vvd",
+        state: "stopped",
+        product: null,
+        profile: img.name,
+        buildDescription: null,
+        simulated: true,
+      })
+    );
 
-  return devices;
+  return [...connected, ...stopped];
 }
 
-const VEGA_POLL_INTERVAL_MS = 15_000;
-
 /**
- * Keep the Vega device inventory warm so `resolveDevice` classifies Vega serials
- * correctly even when a tool is called before `list-devices`. Mirrors
- * `startSimulatorWatcher`: a periodic, best-effort poll. `listVegaDevices`
- * returns early (no shell-out) when the Vega SDK isn't installed, so this is
- * effectively free on non-Vega hosts. The first poll is fire-and-forget so
- * server startup never blocks on the Vega CLI.
+ * Resolve the `amazon-` runtime serial of the currently-running VVD — e.g. right
+ * after `boot-device` starts it. A freshly-started VVD can take a moment to
+ * surface in `vega device list`, so retry a few times before giving up.
  */
-export function startVegaWatcher(): { stop: () => void } {
-  void listVegaDevices().catch(() => {});
-  const interval = setInterval(() => {
-    void listVegaDevices().catch(() => {});
-  }, VEGA_POLL_INTERVAL_MS);
-  // Don't keep the event loop alive solely for this poll.
-  interval.unref?.();
-  return { stop: () => clearInterval(interval) };
+export async function resolveRunningVvdSerial(): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const vvd = (await listVegaDevices()).find(
+      (d) => d.kind === "vvd" && d.state === "running" && d.serial
+    );
+    if (vvd?.serial) return vvd.serial;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  throw new Error("Vega Virtual Device reported running but did not appear in `vega device list`.");
 }

@@ -6,10 +6,8 @@ import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromi
 import {
   listVegaDevices,
   filterVvdShadowsFromAndroid,
-  vegaSerialMatchesAdbSerial,
   type VegaDevice,
 } from "../../utils/vega-devices";
-
 type IosDevice = IosSimulator & { platform: "ios" };
 
 type AndroidDevice = {
@@ -59,39 +57,33 @@ function readinessRank(d: IosDevice | AndroidDevice | ChromiumDevice | VegaDevic
   return 0; // Chromium entries are only listed when their CDP is responsive
 }
 
-// Read an adb emulator's reported hardware serial so it can be matched against
-// the `vega device list` serials. Returns null when adb is missing or the
-// device is still mid-boot (getprop empty) — the dedup then simply doesn't fire.
+// Read an adb emulator's reported hardware serial.
+//   real Android emulator -> a bare serial token (e.g. "EMULATOR36X6X11X0")
+//   Vega VVD shadow        -> guest OS isn't Android, so `getprop` is absent. adb.
 async function readAdbDeviceSerial(serial: string): Promise<string | null> {
   for (const prop of ["ro.serialno", "ro.boot.serialno"]) {
     try {
       const out = (await adbShell(serial, `getprop ${prop}`, { timeoutMs: 5_000 })).trim();
-      if (out) return out;
+      if (out && !/\s/.test(out)) return out;
     } catch {
-      // adb unavailable / device not ready — try the next prop, else give up.
+      // adb missing / device not ready / remote command failed  - exits with 127
     }
   }
   return null;
 }
 
-// Resolve the adb serials of running VVDs so their duplicate Android rows can be
-// filtered. Only probes when at least one VVD is present, so non-Vega hosts pay
-// nothing.
 async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   androidDevices: readonly T[],
   vega: readonly VegaDevice[]
 ): Promise<Set<string>> {
-  const vvds = vega.filter((d) => d.kind === "vvd");
+  const vvdRunning = vega.some((d) => d.kind === "vvd" && d.state === "running");
   const emulators = androidDevices.filter((d) => d.serial.startsWith("emulator-"));
-  if (vvds.length === 0 || emulators.length === 0) return new Set();
+  if (!vvdRunning || emulators.length === 0) return new Set();
 
   const shadows = new Set<string>();
   await Promise.all(
     emulators.map(async (d) => {
-      const reported = await readAdbDeviceSerial(d.serial);
-      if (reported && vvds.some((v) => vegaSerialMatchesAdbSerial(v.serial, reported))) {
-        shadows.add(d.serial);
-      }
+      if ((await readAdbDeviceSerial(d.serial)) === null) shadows.add(d.serial);
     })
   );
   return shadows;
@@ -103,7 +95,7 @@ export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesR
   id: "list-devices",
   description: `List iOS simulators, Android emulators, connected physical Android devices, running Chromium apps, and Vega (Fire TV) devices in one place.
 Use at the start of a session to pick a target id ('udid' for iOS entries, 'serial' for Android/Vega entries, 'id' for Chromium) to pass to interaction tools, and to see which targets are already running.
-Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'), and 'avds' lists Android AVDs that can be booted via boot-device.
+Returns { devices, avds } where each device carries a 'platform' discriminator ('ios', 'android', 'chromium', or 'vega'); 'avds' lists Android AVDs bootable via boot-device. A Vega VVD is listed under 'devices' whether running or stopped (state 'running'/'stopped'); start a stopped one with boot-device using its 'vvdImage'.
 Android entries also carry a 'kind' ('emulator' for a local AVD, 'device' for a physical phone connected over USB / wireless adb) — physical phones are detected from \`adb devices\` (any serial that is not an \`emulator-*\` one) and are driven through the same interaction tools as emulators; they do not need boot-device (just connect the phone with USB debugging authorised).
 Chromium apps are discovered by probing CDP debugging ports (default 9222; extend via the ARGENT_CHROMIUM_PORTS=<comma-separated-ports> env var). They must already be running with --remote-debugging-port=<port> — use boot-device with chromiumAppPath to launch one.
 Booted/ready devices are listed first. Platforms whose CLI is unavailable are silently omitted — an empty result usually means xcode-select, Android platform-tools, or the Vega SDK is not installed.`,

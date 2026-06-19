@@ -1,6 +1,9 @@
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runVega } from "./vega-cli";
+import { listAndroidDevices } from "./adb";
+import { parseVegaDeviceList } from "./vega-devices";
 
 /**
  * Vega Virtual Device (VVD) discovery.
@@ -31,6 +34,23 @@ export class MultipleVegaDevicesError extends Error {
   }
 }
 
+function consolePortFromSocketName(name: string): number | null {
+  const m = name.match(/^qmp-socket-(\d+)\.sock$/);
+  return m ? parseInt(m[1]!, 10) : null;
+}
+
+async function filterLiveSockets(names: string[]): Promise<string[]> {
+  const connected = await listAndroidDevices().catch(() => null);
+  if (!connected) return names;
+  const liveSerials = new Set(
+    connected.filter((d) => d.state === "device").map((d) => d.serial)
+  );
+  return names.filter((name) => {
+    const port = consolePortFromSocketName(name);
+    return port !== null && liveSerials.has(`emulator-${port}`);
+  });
+}
+
 /**
  * Locate the running VVD's QMP socket file.
  *
@@ -59,11 +79,15 @@ export async function discoverQmpSocket(): Promise<string> {
       if (isQmp(name) && !byName.has(name)) byName.set(name, join(dir, name));
     }
   }
-  const names = [...byName.keys()].sort();
+  const candidates = [...byName.keys()].sort();
+  const names = await filterLiveSockets(candidates);
   if (names.length === 0) {
+    const stale = candidates.length
+      ? ` (${candidates.length} stale socket(s) found but no matching adb device — a prior VVD likely crashed)`
+      : "";
     throw new Error(
-      "No Vega Virtual Device QMP socket found (looked for /tmp/qmp-socket-*.sock). " +
-        "Start the VVD with `vega virtual-device start` and retry."
+      "No running Vega Virtual Device QMP socket found (looked for /tmp/qmp-socket-*.sock)" +
+        `${stale}. Start the VVD with \`boot-device {vvdImage:...}\` (or \`vega virtual-device start\`) and retry.`
     );
   }
   if (names.length > 1) {
@@ -86,4 +110,37 @@ export async function discoverVegaConsolePort(): Promise<number> {
     throw new Error(`Could not derive emulator console port from QMP socket name: ${socket}`);
   }
   return parseInt(m[1]!, 10);
+}
+
+export async function isVvdRunning(): Promise<boolean> {
+  try {
+    const { stdout } = await runVega(["device", "list"], { timeoutMs: 20_000 });
+    return parseVegaDeviceList(stdout).some((r) => /virtual/i.test(r.type));
+  } catch {
+    return false;
+  }
+}
+
+export async function startVvd(params: { timeoutSeconds: number }): Promise<void> {
+  await runVega(["virtual-device", "start", "-t", String(params.timeoutSeconds)], {
+    timeoutMs: params.timeoutSeconds * 1_000 + 15_000,
+  });
+}
+
+export async function stopVvd(options: { timeoutMs?: number } = {}): Promise<void> {
+  await runVega(["virtual-device", "stop"], { timeoutMs: options.timeoutMs ?? 60_000 });
+}
+
+const VVD_RUNNING_POLL_INTERVAL_MS = 1_000;
+
+export async function waitForVvdRunning(timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isVvdRunning()) return;
+    await new Promise((r) => setTimeout(r, VVD_RUNNING_POLL_INTERVAL_MS));
+  }
+  throw new Error(
+    `Vega Virtual Device did not appear in \`vega device list\` within ` +
+      `${Math.round(timeoutMs / 1000)}s of \`vega virtual-device start\`.`
+  );
 }

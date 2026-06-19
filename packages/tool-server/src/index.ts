@@ -2,7 +2,6 @@ import { attachRegistryLogger } from "@argent/registry";
 import { createHttpApp } from "./http";
 import { createRegistry } from "./utils/setup-registry";
 import { startSimulatorWatcher } from "./utils/simulator-watcher";
-import { startVegaWatcher } from "./utils/vega-devices";
 import { startUpdateChecker } from "./utils/update-checker";
 import { createPreviewWindowManager } from "./utils/preview-window";
 import { variantProposalStore } from "./utils/variant-proposals";
@@ -92,7 +91,6 @@ export function start(): void {
   const updateChecker = startUpdateChecker();
 
   const { stop: stopWatcher, ready: watcherReady } = startSimulatorWatcher(registry);
-  const { stop: stopVegaWatcher } = startVegaWatcher();
 
   let server: ReturnType<typeof httpHandle.app.listen> | null = null;
 
@@ -162,7 +160,6 @@ export function start(): void {
     previewWindow.dispose();
     updateChecker.dispose();
     stopWatcher();
-    stopVegaWatcher();
     httpHandle.dispose();
     await registry.dispose();
     if (server) {

@@ -1,24 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { vegaSerialMatchesAdbSerial, filterVvdShadowsFromAndroid } from "../src/utils/vega-devices";
-
-describe("vegaSerialMatchesAdbSerial", () => {
-  it("matches a Vega serial to its adb-reported hardware serial across prefixes", () => {
-    // `vega device list` reports `amazon-<id>`; adb reports the bare id.
-    expect(vegaSerialMatchesAdbSerial("amazon-4a27df03c9777152", "4a27df03c9777152")).toBe(true);
-    expect(vegaSerialMatchesAdbSerial("amazon-4a27df03c9777152", "emulator-4a27df03c9777152")).toBe(
-      true
-    );
-  });
-
-  it("does not match unrelated serials (genuine Android emulator)", () => {
-    expect(vegaSerialMatchesAdbSerial("amazon-4a27df03c9777152", "EMU30X9KQ")).toBe(false);
-    expect(vegaSerialMatchesAdbSerial("amazon-4a27df03c9777152", "")).toBe(false);
-  });
-
-  it("rejects too-short serials to avoid trivial substring collisions", () => {
-    expect(vegaSerialMatchesAdbSerial("amazon-abc", "abc")).toBe(false);
-  });
-});
+import { filterVvdShadowsFromAndroid } from "../src/utils/vega-devices";
 
 describe("filterVvdShadowsFromAndroid", () => {
   const android = [
