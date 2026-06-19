@@ -65,6 +65,7 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
       };
       throw new Error("stub ensureEnv failure");
     },
+    reverifyEnv: async () => {},
     getInitFailure: () => initFailure,
     isConnected: () => false,
     isAppRunning: async () => false,
@@ -119,7 +120,7 @@ afterEach(() => {
 
 describe("simulator-watcher with api-owned init failure state", () => {
   it("stops calling ensureEnvReady after the api reports givenUp", async () => {
-    let bootedUdids: string[] = [UDID];
+    const bootedUdids: string[] = [UDID];
     execFileMock.mockImplementation((cmd: string) => {
       if (cmd === "xcrun") return bootedListResponse(bootedUdids);
       return { stdout: "", stderr: "" };
@@ -153,7 +154,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
   });
 
   it("makes no further ensureEnvReady calls for a healthy UDID after init", async () => {
-    let bootedUdids: string[] = [UDID];
+    const bootedUdids: string[] = [UDID];
     execFileMock.mockImplementation((cmd: string) => {
       if (cmd === "xcrun") return bootedListResponse(bootedUdids);
       return { stdout: "", stderr: "" };
@@ -166,6 +167,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
       ensureEnvReady: async () => {
         calls += 1;
       },
+      reverifyEnv: async () => {},
       getInitFailure: () => null,
       isConnected: () => false,
       isAppRunning: async () => false,

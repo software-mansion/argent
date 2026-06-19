@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyDevice, resolveDevice } from "../src/utils/device-info";
+import { classifyDevice, isAndroidEmulatorSerial, resolveDevice } from "../src/utils/device-info";
 
 describe("classifyDevice", () => {
   it("classifies iOS simulator UUIDs as ios", () => {
@@ -21,9 +21,29 @@ describe("resolveDevice", () => {
     expect(d.id).toBe("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA");
   });
 
-  it("returns android+emulator for an adb serial", () => {
+  it("returns android+emulator for an emulator serial", () => {
     const d = resolveDevice("emulator-5554");
     expect(d.platform).toBe("android");
     expect(d.kind).toBe("emulator");
+  });
+
+  it("returns android+device for a physical phone's USB serial", () => {
+    const d = resolveDevice("HT82A0203045");
+    expect(d.platform).toBe("android");
+    expect(d.kind).toBe("device");
+  });
+
+  it("returns android+device for a wireless-adb ip:port serial", () => {
+    const d = resolveDevice("192.168.1.5:5555");
+    expect(d.platform).toBe("android");
+    expect(d.kind).toBe("device");
+  });
+});
+
+describe("isAndroidEmulatorSerial", () => {
+  it("is true only for emulator-* serials", () => {
+    expect(isAndroidEmulatorSerial("emulator-5554")).toBe(true);
+    expect(isAndroidEmulatorSerial("HT82A0203045")).toBe(false);
+    expect(isAndroidEmulatorSerial("192.168.1.5:5555")).toBe(false);
   });
 });

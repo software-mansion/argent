@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
 

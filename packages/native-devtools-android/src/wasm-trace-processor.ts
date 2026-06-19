@@ -192,7 +192,7 @@ function silenceDecoderWarning(): void {
   decoderWarningSilenced = true;
   const orig = console.warn.bind(console);
   console.warn = (...args: unknown[]): void => {
-    if (/Unexpected QueryResult field/.test(String(args[0] ?? ""))) return;
+    if (/Unexpected QueryResult field/.test(JSON.stringify(args[0] ?? ""))) return;
     orig(...args);
   };
 }

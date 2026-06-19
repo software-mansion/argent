@@ -93,19 +93,6 @@ export async function sendCharInsert(cdp: CDPClient, text: string): Promise<void
   await cdp.send("Input.dispatchKeyEvent", { type: "char", text });
 }
 
-const BUTTON_TO_KEY: Record<ButtonType, { key: string; codeName: string; vk: number } | null> = {
-  // Hardware buttons don't map cleanly to a desktop renderer. We do best-effort
-  // for the ones that *do* have an analogue, and reject the rest with a clear
-  // error so callers don't think they worked.
-  Home: null, // No browser equivalent — would need main-process ipc.
-  Back: { key: "Alt", codeName: "AltLeft", vk: 18 }, // Will be paired with ArrowLeft below.
-  Power: null,
-  VolumeUp: null,
-  VolumeDown: null,
-  AppSwitch: null,
-  ActionButton: null,
-};
-
 /**
  * Best-effort hardware-button translation. Only `Back` has a sane
  * desktop-renderer equivalent (Alt+Left to walk navigation history). The

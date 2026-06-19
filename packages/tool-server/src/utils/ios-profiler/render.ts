@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import type { TraceProcessorUnavailableError } from "@argent/native-devtools-android";
+import { demangleSymbol } from "../profiler-shared/demangle";
 import type {
   ProfilerPayload,
   Bottleneck,
@@ -228,7 +229,7 @@ function renderFullReport(
     cpuHotspots.forEach((b, i) => {
       const hangFlag = b.duringHang ? "Yes" : "—";
       lines.push(
-        `| ${i + 1} | \`${b.dominantFunction}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${demangleSymbol(b.dominantFunction)}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
 
@@ -248,17 +249,17 @@ function renderFullReport(
       : cpuHotspots;
     for (const b of hotspotDetailSlice) {
       lines.push(``);
-      lines.push(`### \`${b.dominantFunction}\` (${b.thread})`);
+      lines.push(`### \`${demangleSymbol(b.dominantFunction)}\` (${b.thread})`);
       lines.push(``);
 
       if (b.topCallChains && b.topCallChains.length > 0) {
         lines.push(`**Call chains:**`);
         for (const { chain, count } of b.topCallChains) {
-          lines.push(`- (${count}×) \`${chain.join(" > ")}\``);
+          lines.push(`- (${count}×) \`${chain.map(demangleSymbol).join(" > ")}\``);
         }
         lines.push(``);
       } else if (b.topCallChain.length > 0) {
-        lines.push(`**Call chain:** \`${b.topCallChain.join(" > ")}\``);
+        lines.push(`**Call chain:** \`${b.topCallChain.map(demangleSymbol).join(" > ")}\``);
         lines.push(``);
       }
 
@@ -330,20 +331,24 @@ function renderFullReport(
           lines.push(``);
           lines.push(`App call chains during this hang:`);
           hang.appCallChains.forEach((entry, i) => {
-            lines.push(`${i + 1}. \`${entry.chain.join(" > ")}\` (${entry.sampleCount} samples)`);
+            lines.push(
+              `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+            );
           });
         }
       } else if (hang.appCallChains.length > 0) {
         lines.push(``);
         lines.push(`${header} — app call chains during this hang:`);
         hang.appCallChains.forEach((entry, i) => {
-          lines.push(`${i + 1}. \`${entry.chain.join(" > ")}\` (${entry.sampleCount} samples)`);
+          lines.push(
+            `${i + 1}. \`${entry.chain.map(demangleSymbol).join(" > ")}\` (${entry.sampleCount} samples)`
+          );
         });
       } else if (hang.suspectedFunctions.length > 0) {
         lines.push(``);
         lines.push(`${header} — during this hang, the most active functions were:`);
         for (const fn of hang.suspectedFunctions) {
-          lines.push(`- \`${fn}\``);
+          lines.push(`- \`${demangleSymbol(fn)}\``);
         }
       } else {
         lines.push(``);
@@ -367,7 +372,7 @@ function renderFullReport(
     );
     memoryLeaks.forEach((b, i) => {
       lines.push(
-        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${b.responsibleFrame}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
       );
     });
   }
@@ -400,7 +405,7 @@ function renderFullReport(
           ? `Emulator/kernel overhead (GPU-transport pipe or syscall), not app code — it does not appear on a physical device, so it is not directly actionable. Re-profile on a real device to see the app's own CPU cost.`
           : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${b.dominantFunction}\` on ${b.thread} (${b.weightPercentage}%): ${advice}`
+        `- ${severityEmoji(b.severity)} \`${demangleSymbol(b.dominantFunction)}\` on ${b.thread} (${b.weightPercentage}%): ${advice}`
       );
     }
     lines.push(``);
@@ -410,7 +415,9 @@ function renderFullReport(
     lines.push(`### UI Hangs`, ``);
     for (const b of uiHangs) {
       const funcNote =
-        b.suspectedFunctions.length > 0 ? ` Likely caused by: \`${b.suspectedFunctions[0]}\`.` : "";
+        b.suspectedFunctions.length > 0
+          ? ` Likely caused by: \`${demangleSymbol(b.suspectedFunctions[0]!)}\`.`
+          : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
         `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
@@ -423,7 +430,7 @@ function renderFullReport(
     lines.push(`### Memory Leaks`, ``);
     for (const b of memoryLeaks) {
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${b.responsibleFrame}\`: Check for retain cycles or strong delegate references.`
+        `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
     }
     lines.push(``);
@@ -449,6 +456,8 @@ function renderFullReport(
     // using cpuHotspots[0] unchanged.
     const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system");
     if (callerHotspot) {
+      // Keep the RAW (possibly mangled) name here: function_callers matches it as a
+      // SQL substring of the mangled frame, and a demangled name isn't a substring.
       lines.push(
         `   - mode=\`function_callers\` function_name=\`${callerHotspot.dominantFunction}\` — who calls this hot function`
       );

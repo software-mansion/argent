@@ -96,6 +96,45 @@ echo ""
 echo "Downloaded simulator-server binaries:"
 find "${DEST_DIR}" -name simulator-server -type f -exec ls -la {} \;
 
+# Physical-Android-device support: the simulator-server `android_device`
+# controller pushes the screen-sharing agent (a host-independent .jar + a
+# per-ABI .so) to the phone over adb, resolving them at runtime from
+# `resources/android/` relative to its working directory — which the blueprint
+# sets to the binary's own platform dir. The agent payload runs on the phone,
+# not the host, so a single release tarball serves every host platform; extract
+# a copy next to each downloaded binary. Tolerate a missing asset the same way
+# as a missing binary so macOS/Linux-only consumers and older releases (before
+# the agent was published) still work — physical-device support just won't be
+# available until the asset is present.
+AGENT_ASSET="screen-sharing-agent.tar.gz"
+AGENT_TMP="$(mktemp -d)"
+echo ""
+echo "Downloading ${AGENT_ASSET} (Android physical-device screen-sharing agent)"
+GH_STDERR="$(mktemp)"
+if gh release download "${TAG}" \
+     --repo "${REPO}" \
+     --pattern "${AGENT_ASSET}" \
+     --dir "${AGENT_TMP}" \
+     --clobber 2>"${GH_STDERR}"; then
+  rm -f "${GH_STDERR}"
+  # Extract once into every platform dir that actually has a binary, so the
+  # agent sits at <platform>/resources/android/ next to simulator-server.
+  while IFS= read -r bin; do
+    plat_dir="$(dirname "${bin}")"
+    res_dir="${plat_dir}/resources/android"
+    rm -rf "${res_dir}"
+    mkdir -p "${res_dir}"
+    tar -xzf "${AGENT_TMP}/${AGENT_ASSET}" -C "${res_dir}"
+    echo "  ✓ screen-sharing agent → ${res_dir}"
+  done < <(find "${DEST_DIR}" -name simulator-server -type f)
+else
+  GH_MSG=$(<"${GH_STDERR}")
+  rm -f "${GH_STDERR}"
+  echo "  ⚠ ${AGENT_ASSET} not downloaded — physical Android device support will be unavailable"
+  [[ -n "${GH_MSG}" ]] && printf '    gh: %s\n' "${GH_MSG//$'\n'/$'\n    gh: '}"
+fi
+rm -rf "${AGENT_TMP}"
+
 # Only the macOS binary is signed and codesignable; the Linux ELF doesn't
 # carry an Apple signature, and `codesign` would noisily fail on it.
 if command -v codesign &>/dev/null && [[ -f "${DEST_DIR}/darwin/simulator-server" ]]; then

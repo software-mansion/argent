@@ -30,7 +30,6 @@ let sharpLoadWarningEmitted = false;
 function tryLoadSharp(): SharpModule | null {
   if (sharpCache !== undefined) return sharpCache;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require("sharp") as SharpModule;
     sharpCache = mod;
     return mod;

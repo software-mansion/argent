@@ -7,11 +7,12 @@ import { sendButton, sendKey, sendRotate, sendTouch, sendWheel, sendCharInsert }
 import { goBack, goForward, navigate, reload } from "./navigation";
 import { ScreencastManager } from "./screencast";
 import { captureScreenshot, copyScreenshotToClipboard } from "./screenshot";
+import { createTabsManager } from "./tabs";
+import { createNetworkManager } from "./network";
 import type {
   ButtonType,
   ChromiumServer,
   KeyDirection,
-  MediaReady,
   Point,
   Rotation,
   ScreencastFrame,
@@ -63,7 +64,7 @@ export interface CreateChromiumServerOpts {
 export async function createChromiumServer(
   opts: CreateChromiumServerOpts
 ): Promise<ChromiumServer> {
-  const { cdp, wsUrl } = await connectCdp(opts.port);
+  const { cdp, wsUrl, target } = await connectCdp(opts.port);
   await enableCoreDomains(cdp);
 
   let viewport: ViewportSize = await readViewport(cdp);
@@ -76,10 +77,34 @@ export async function createChromiumServer(
     events.emit("terminated", err ?? new Error(`Chromium CDP on port ${opts.port} disconnected`));
   });
 
+  // Network recording + request routing (Network/Fetch domains). Created before
+  // `tabs` so a tab switch can re-attach it to the new page.
+  const network = createNetworkManager({ cdp });
+
+  // Multi-tab: the manager re-points `cdp` in place when the active tab
+  // changes, so every page-scoped subsystem below (which captured `cdp`)
+  // automatically follows. After a switch we re-prime the page's core domains,
+  // refresh the cached viewport, and re-attach network recording/routes to the
+  // new document.
+  const tabs = createTabsManager({
+    cdp,
+    port: opts.port,
+    initialTargetId: target.id,
+    onActivated: async () => {
+      await enableCoreDomains(cdp);
+      viewport = await readViewport(cdp);
+      await network.reattach();
+    },
+  });
+
+  // Start passive request recording on the active page (capped ring buffer).
+  await network.reattach();
+
   const server: ChromiumServer = {
     port: opts.port,
     cdp,
     pageWebSocketUrl: wsUrl,
+    network,
     getViewport: () => viewport,
     refreshViewport: async () => {
       viewport = await readViewport(cdp);
@@ -123,6 +148,7 @@ export async function createChromiumServer(
       await goForward(cdp);
     },
     setFpsReporting: (enabled: boolean) => fps.setEnabled(enabled),
+    tabs,
     evaluate: async (
       expression: string,
       options?: { returnByValue?: boolean }
@@ -145,6 +171,7 @@ export async function createChromiumServer(
         /* ignore */
       }
       fps.dispose();
+      network.dispose();
       try {
         await cdp.disconnect();
       } catch {
@@ -157,6 +184,9 @@ export async function createChromiumServer(
 
 // Re-exported for use from the blueprint when we need a low-level CDP handle.
 export { ensureCdpReachable, discoverPrimaryPage } from "./cdp-session";
+export type { TabInfo, TabsManager } from "./tabs";
+export type { NetworkManager, NetworkRequestRecord } from "./network";
+export type { Cookie, SetCookieParams, DeleteCookieParams, StorageType } from "./storage";
 
 // Re-exported so the http-api / blueprint can call them directly without
 // pulling them out of a ChromiumServer instance.
