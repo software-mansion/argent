@@ -188,6 +188,16 @@ Multi-turn verified: it reads the udid from a pasted `<tool_response>` and issue
 `launch-app`. Gotchas: see `clean-base.py` (redundant KV keys), `to-causal.py`
 (text-only layout so the converter maps `token_embd`), and the converter note above.
 
+**`num_ctx` matters for agent harnesses.** Ollama defaults gemma4 to `num_ctx=4096`.
+A harness (OpenCode, etc.) sends a long system prompt + many tool schemas that
+overflow 4096 → Ollama truncates the input → the model emits degenerate `TheThe…`
+output until max tokens (looks like a model bug; it's input truncation, and it hits
+the official `gemma4:e4b` too). The Modelfile bakes `PARAMETER num_ctx 32768`; to fix
+*any* Ollama model globally, run the server with `OLLAMA_CONTEXT_LENGTH=32768`.
+Note: `silver:e4b` emits the Argent `<tool_call>` **text** protocol (tools in SYSTEM),
+not Ollama's native gemma4 tool-calling — so a generic harness won't parse its calls
+as structured `tool_calls`. It's an Argent model, driven via the Argent toolchain.
+
 ### Eval (e4b)
 
 Same gym-replay recipe, held-out seeds 5,000,000+. Numbers in `results/`.

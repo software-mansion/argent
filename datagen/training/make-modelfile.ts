@@ -66,6 +66,11 @@ SYSTEM """${system}"""
 
 # Greedy for consistent, schema-valid tool calls.
 PARAMETER temperature 0
+# Ollama defaults gemma4 to num_ctx=4096; agent harnesses (OpenCode, etc.) send a
+# long system prompt + many tool schemas that overflow it, so Ollama truncates the
+# input and the model emits degenerate "TheThe…" output until max tokens. Raise the
+# default context so harness payloads fit (model supports up to 131072).
+PARAMETER num_ctx 32768
 `;
   writeFileSync(join(HERE, "fused", "Modelfile.e4b"), modelfile);
   console.log(`wrote fused/Modelfile.e4b (SYSTEM ${system.length} chars, ${tools.length} tools)`);
