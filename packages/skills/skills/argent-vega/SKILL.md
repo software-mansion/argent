@@ -11,7 +11,6 @@ description: Use when interacting with vega (fire tv) devices, task mentions Veg
 
 Every tool takes the Vega `serial` (from `list-devices`) as `udid`.
 
-- `list-installed-apps {udid}` → installed app ids
 - `launch-app {udid, bundleId}` — `bundleId` = interactive component app id from manifest.toml (e.g. `com.example.app.main`)
 - `restart-app {udid, bundleId}` — terminate + launch
 - `reinstall-app {udid, bundleId, appPath}` — uninstall + install; `appPath` = a `.vpkg`
