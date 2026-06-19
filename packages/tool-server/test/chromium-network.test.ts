@@ -142,7 +142,7 @@ describe("NetworkManager (recording)", () => {
 // ── view-network-logs / view-network-request-details: Chromium branch ────────
 import { networkLogsTool } from "../src/tools/network/network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
-import { assertSupported, UnsupportedOperationError } from "../src/utils/capability";
+import { assertSupported } from "../src/utils/capability";
 import { resolveDevice } from "../src/utils/device-info";
 import type { NetworkRequestRecord } from "../src/chromium-server/network";
 

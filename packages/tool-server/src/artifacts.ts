@@ -57,7 +57,7 @@ export function requireArtifacts(ctx?: Partial<ToolContext>): ArtifactStore {
  */
 export function makeArtifactRoute(registry: Registry) {
   return async function handleArtifactRequest(req: Request, res: Response): Promise<void> {
-    const id = req.params.id!;
+    const id = req.params.id as string;
     const entry = registry.artifacts.get(id);
     if (!entry) {
       res.status(404).json({ error: `Artifact "${id}" not found` });

@@ -425,7 +425,6 @@ export async function link(argv: string[]): Promise<void> {
 
   // Pre-flight health check (unless --no-verify)
   if (!flags.noVerify) {
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       const spinnerActive = !flags.yes;
       let spinner: ReturnType<typeof p.spinner> | null = null;

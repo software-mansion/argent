@@ -42,7 +42,7 @@ export async function describeAndroid(
       // recoverable because the legacy path has independent failure modes.
       // Surface at debug level so the failure is observable without leaking
       // into the per-call result.
-      // eslint-disable-next-line no-console
+
       console.debug(
         `[describe.android] devtools service failed, falling back to uiautomator dump: ${
           serviceErr instanceof Error ? serviceErr.message : String(serviceErr)

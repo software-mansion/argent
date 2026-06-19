@@ -189,8 +189,6 @@ function buildFullMarkdown(
     sessionContext.reactCompilerEnabled,
     anyRuntimeCompilerDetected
   );
-  const hotCount = input.hotCommitSummaries.filter((s) => !s.isMargin).length;
-
   const lines: string[] = [
     `# Profiling Analysis — ${durationS}s session`,
     `${compilerLine}  **Hot commits:** ${totalHotCommits} of ${input.reactCommits} total`,
@@ -296,7 +294,7 @@ function buildFullMarkdown(
 function renderCommit(
   summary: HotCommitSummary,
   annotations: Array<{ offsetMs: number; label: string }>,
-  sessionContext: SessionContext
+  _sessionContext: SessionContext
 ): string[] {
   const relativeMs = Math.max(0, summary.timestampMs);
   const relativeS = (relativeMs / 1000).toFixed(1);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Registry, ServiceState } from "@argent/registry";
 import { createStopSimulatorServerTool } from "../src/tools/simulator/stop-simulator-server";
 import { createStopAllSimulatorServersTool } from "../src/tools/simulator/stop-all-simulator-servers";

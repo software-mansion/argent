@@ -190,7 +190,9 @@ function startListener(
     if (endpoint.transport === "unix") {
       try {
         fs.unlinkSync(endpoint.socketPath);
-      } catch {}
+      } catch {
+        /* no stale socket to remove; ignore */
+      }
     }
 
     const server = net.createServer(onConnection);
@@ -413,7 +415,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       if (endpoint.transport === "unix") {
         try {
           fs.unlinkSync(endpoint.socketPath);
-        } catch {}
+        } catch {
+          /* best-effort socket cleanup; ignore errors */
+        }
       }
       throw err;
     }
@@ -478,7 +482,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         if (endpoint.transport === "unix") {
           try {
             fs.unlinkSync(endpoint.socketPath);
-          } catch {}
+          } catch {
+            /* best-effort socket cleanup; ignore errors */
+          }
         }
       },
       events,

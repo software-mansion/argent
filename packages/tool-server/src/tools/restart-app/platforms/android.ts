@@ -33,7 +33,9 @@ export const androidImpl: PlatformImpl<
     try {
       assertAmStartOk(out);
     } catch (err) {
-      throw new Error(`relaunch failed: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`relaunch failed: ${err instanceof Error ? err.message : String(err)}`, {
+        cause: err,
+      });
     }
     return { restarted: true, bundleId };
   },

@@ -73,7 +73,7 @@ export function getFlowsDir(): string {
   return path.join(requireActiveProjectRoot(), FLOWS_DIR_NAME);
 }
 
-const FLOW_NAME_PATTERN = /^[A-Za-z0-9_\-]+$/;
+const FLOW_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export function assertSafeFlowName(name: string): void {
   if (!FLOW_NAME_PATTERN.test(name)) {

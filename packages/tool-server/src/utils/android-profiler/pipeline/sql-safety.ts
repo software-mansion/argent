@@ -27,7 +27,7 @@ export function sanitizeProcessName(name: string): string {
  * templates/demangled names; rejects quotes/semicolons).
  */
 export function sanitizeIdentifier(name: string): string {
-  if (!/^[A-Za-z0-9_.:+\/\-<> ]+$/.test(name)) {
+  if (!/^[A-Za-z0-9_.:+/\-<> ]+$/.test(name)) {
     throw new Error(`Refusing to substitute identifier with unsafe characters: "${name}"`);
   }
   return name;

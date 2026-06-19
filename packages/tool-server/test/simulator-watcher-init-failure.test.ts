@@ -120,7 +120,7 @@ afterEach(() => {
 
 describe("simulator-watcher with api-owned init failure state", () => {
   it("stops calling ensureEnvReady after the api reports givenUp", async () => {
-    let bootedUdids: string[] = [UDID];
+    const bootedUdids: string[] = [UDID];
     execFileMock.mockImplementation((cmd: string) => {
       if (cmd === "xcrun") return bootedListResponse(bootedUdids);
       return { stdout: "", stderr: "" };
@@ -154,7 +154,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
   });
 
   it("makes no further ensureEnvReady calls for a healthy UDID after init", async () => {
-    let bootedUdids: string[] = [UDID];
+    const bootedUdids: string[] = [UDID];
     execFileMock.mockImplementation((cmd: string) => {
       if (cmd === "xcrun") return bootedListResponse(bootedUdids);
       return { stdout: "", stderr: "" };

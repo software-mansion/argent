@@ -16,6 +16,7 @@ import {
 } from "../../../utils/android-profiler/pipeline/index";
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes } from "../../../utils/profiler-shared/format";
+import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator UDID or Android serial."),
@@ -82,7 +83,7 @@ function renderHangStacksIos(
     lines.push("### Suspected Functions (by sample frequency)");
     lines.push("");
     for (let i = 0; i < hang.suspectedFunctions.length; i++) {
-      lines.push(`${i + 1}. \`${hang.suspectedFunctions[i]}\``);
+      lines.push(`${i + 1}. \`${demangleSymbol(hang.suspectedFunctions[i]!)}\``);
     }
     lines.push("");
   }
@@ -91,7 +92,9 @@ function renderHangStacksIos(
     lines.push("### App Call Chains During Hang");
     lines.push("");
     for (const { chain, sampleCount } of hang.appCallChains) {
-      lines.push(`- (${sampleCount} samples) ${chain.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(
+        `- (${sampleCount} samples) ${chain.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`
+      );
     }
     lines.push("");
   }
@@ -119,7 +122,7 @@ function renderHangStacksIos(
 
     const sorted = [...uniqueStacks.values()].sort((a, b) => b.count - a.count).slice(0, topN);
     for (const { stack, count } of sorted) {
-      lines.push(`- (${count}×) ${stack.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(`- (${count}×) ${stack.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`);
     }
   }
 
@@ -173,7 +176,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallers) {
-      lines.push(`| \`${name}\` | ${count} |`);
+      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -185,7 +188,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallees) {
-      lines.push(`| \`${name}\` | ${count} |`);
+      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -245,7 +248,7 @@ function renderThreadBreakdownIos(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${h.dominantFunction}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${demangleSymbol(h.dominantFunction)}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }
@@ -288,7 +291,7 @@ function renderLeakStacksIos(
 
   for (const l of sorted) {
     lines.push(
-      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${l.responsibleFrame}\` | ${l.responsibleLibrary || "—"} |`
+      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${demangleSymbol(l.responsibleFrame)}\` | ${l.responsibleLibrary || "—"} |`
     );
   }
 

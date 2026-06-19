@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   filterInspectItems,
+  debuggerInspectElementTool,
   type InspectItem,
 } from "../../src/tools/debugger/debugger-inspect-element";
 
@@ -263,5 +264,149 @@ describe("filterInspectItems — includeSkipped=true", () => {
     expect(result).toHaveLength(items.length);
     const skippedCount = result.filter((i) => i.skipped).length;
     expect(skippedCount).toBeGreaterThan(0);
+  });
+});
+
+type RawFrame = {
+  fn: string;
+  file: string;
+  line: number;
+  col: number;
+  original?: boolean;
+};
+
+/**
+ * Builds a minimal fake JsRuntimeDebuggerApi that exercises the real
+ * `execute` resolution path without a live CDP connection. `symbolicate`
+ * returns whatever `symbolicateImpl` yields so we can simulate a failed
+ * symbolication (null) and assert the raw-frame fallback.
+ */
+function fakeServices(
+  rawItems: Array<{ name: string; frame: RawFrame | null }>,
+  symbolicateImpl: () => Promise<InspectItem["source"]>
+) {
+  const symbolicate = vi.fn(symbolicateImpl);
+  const readSourceFragment = vi.fn(async () => "  >  1 | code");
+  return {
+    services: {
+      debugger: {
+        deviceName: "iPhone 16",
+        appName: "MyApp",
+        logicalDeviceId: "device-1",
+        cdp: {
+          evaluateWithBinding: vi.fn(async () => ({ items: rawItems })),
+        },
+        sourceResolver: { symbolicate, readSourceFragment },
+      },
+    } as unknown as Record<string, unknown>,
+    symbolicate,
+    readSourceFragment,
+  };
+}
+
+const params = {
+  port: 8081,
+  device_id: "device-1",
+  x: 100,
+  y: 200,
+  contextLines: 3,
+  resolveSourceMaps: true,
+  maxItems: 35,
+  includeSkipped: false,
+};
+
+describe("filterInspectItems — raw bundle-URL fallback must not defeat skip pruning", () => {
+  // When symbolication fails, debuggerInspectElementTool falls back to the raw
+  // bundle frame as `source` (file: "http://localhost:8081/index.bundle"). That
+  // URL is not an openable source (readSourceFragment rejects it, code stays
+  // null), so the skip filter must still prune framework/navigation wrappers —
+  // otherwise the whole hierarchy leaks through in exactly the failure mode the
+  // fallback exists to handle.
+  const BUNDLE = "http://localhost:8081/index.bundle";
+
+  it("prunes a skip-rule wrapper whose only source is an unresolved bundle URL (Pass 1)", () => {
+    const items = [
+      item("Button", src("btn.tsx", 10)),
+      item("ScrollViewContext", src(BUNDLE, 200)),
+      item("SignInPage", src(BUNDLE, 220)),
+    ];
+    const result = filterInspectItems(items);
+    expect(result.map((i) => i.name)).toEqual(["Button", "SignInPage"]);
+  });
+
+  it("prunes an anonymous View whose only source is an unresolved bundle URL (Pass 3)", () => {
+    const items = [item("Button", src("btn.tsx", 10)), item("View", src(BUNDLE, 300))];
+    const result = filterInspectItems(items);
+    expect(result.map((i) => i.name)).toEqual(["Button"]);
+  });
+
+  it("keeps a real (non-bundle) source so genuine app components still surface", () => {
+    const items = [
+      item("Button", src("btn.tsx", 10)),
+      item("SignInPage", src("SignInPage.tsx", 5)),
+    ];
+    const result = filterInspectItems(items);
+    expect(result.map((i) => i.name)).toEqual(["Button", "SignInPage"]);
+  });
+});
+
+describe("debuggerInspectElementTool — raw fallback when symbolication fails", () => {
+  it("retains the raw bundled frame location when symbolicate returns null", async () => {
+    const { services, readSourceFragment } = fakeServices(
+      [
+        {
+          name: "Screen",
+          frame: {
+            fn: "Screen",
+            file: "http://localhost:8081/index.bundle",
+            line: 4321,
+            col: 17,
+            original: false,
+          },
+        },
+      ],
+      async () => null // symbolication failed / echoed bundle URL
+    );
+
+    const result = await debuggerInspectElementTool.execute(services, params);
+    if ("error" in result) throw new Error(`unexpected error: ${result.error}`);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].name).toBe("Screen");
+    // Raw fallback mirrors the resolveSourceMaps:false shape: column <- frame.col
+    expect(result.items[0].source).toEqual({
+      file: "http://localhost:8081/index.bundle",
+      line: 4321,
+      column: 17,
+    });
+    // No source file was read because symbolication produced no mapped location.
+    expect(result.items[0].code).toBeNull();
+    expect(readSourceFragment).not.toHaveBeenCalled();
+  });
+
+  it("uses the mapped location when symbolicate succeeds", async () => {
+    const mapped = { file: "app/screen.tsx", line: 12, column: 4 };
+    const { services, readSourceFragment } = fakeServices(
+      [
+        {
+          name: "Screen",
+          frame: {
+            fn: "Screen",
+            file: "http://localhost:8081/index.bundle",
+            line: 4321,
+            col: 17,
+            original: false,
+          },
+        },
+      ],
+      async () => mapped
+    );
+
+    const result = await debuggerInspectElementTool.execute(services, params);
+    if ("error" in result) throw new Error(`unexpected error: ${result.error}`);
+
+    expect(result.items[0].source).toEqual(mapped);
+    expect(result.items[0].code).toBe("  >  1 | code");
+    expect(readSourceFragment).toHaveBeenCalledOnce();
   });
 });
