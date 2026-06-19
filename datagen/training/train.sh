@@ -13,15 +13,15 @@ ITERS="${ITERS:-700}"
 ADAPTER="${ADAPTER:-adapters/gemma-argent}"
 mkdir -p "$(dirname "$ADAPTER")"
 
-# --mask-prompt: compute loss only on the model (assistant) turns, so the model
-# learns to *emit* tool calls / answers, not to reproduce the user/tool text.
+# Train on the full sequence (no --mask-prompt): these are multi-turn
+# trajectories and we want loss on EVERY assistant tool-call turn, not just the
+# final answer (mlx-lm's mask-prompt masks all but the last assistant turn).
 exec "$PY" -m mlx_lm.lora \
   --model "$MODEL" \
   --train \
   --data data \
   --adapter-path "$ADAPTER" \
   --fine-tune-type lora \
-  --mask-prompt \
   --num-layers 12 \
   --batch-size 2 \
   --iters "$ITERS" \
