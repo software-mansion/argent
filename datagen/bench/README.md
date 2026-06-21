@@ -1,114 +1,104 @@
 # Toolkit × model benchmark — Argent vs agent-device, Silver vs Gemma 4 vs Haiku
 
-Compares **6 cells = 2 device-control toolkits × 3 models** on a small suite of
-real iOS-Settings tasks, using **Hermes** as the agent harness (an established
-runtime — we do not reimplement the agent loop) plus a thin LLM-judge scoring pass.
+Compares device-control agents on a suite of real iOS-Settings tasks, using **OpenCode**
+as the agent harness (an established runtime — we do not reimplement the agent loop)
+driving a model through a toolkit's MCP tools against a **real booted iOS simulator**,
+plus a thin judge pass for task success.
 
-|                  | **Argent** (MCP) | **agent-device** (MCP) |
-| ---------------- | ---------------- | ---------------------- |
-| **silver:e4b**   | local (Ollama)   | local (Ollama)         |
-| **gemma4:e4b**   | local (Ollama)   | local (Ollama)         |
-| **Claude Haiku** | API (key Monday) | API (key Monday)       |
+Planned matrix (2 toolkits × 3 models):
 
-`silver:e4b` is the Argent-fine-tuned Gemma 4 E4B; `gemma4:e4b` is the untuned base;
-Claude Haiku is the strong-model reference. Running all three through the **same**
-harness + toolkit is the apples-to-apples comparison (note: silver was trained for
-Argent's specific tool-call format, so a generic harness is _off_ its home turf — a
-deliberate real-world test of whether the specialization transfers).
+|                  | **Argent** (MCP)  | **agent-device** (MCP) |
+| ---------------- | ----------------- | ---------------------- |
+| **gemma4:e4b**   | ✅ baseline (25%) | pending (build)        |
+| **silver:e4b**   | ⚠️ see "Silver"   | pending                |
+| **Claude Haiku** | pending (key)     | pending (key)          |
 
-## Pieces (no custom harness)
+## The setup that works (OpenCode + ollama + argent)
 
-- **Harness:** Hermes (`~/dev/hermes-agent`, installed `~/.hermes`). One headless
-  `hermes chat` run per task, isolated to a single MCP toolset via `-t`.
+Getting a local model to actually _execute_ argent tools through OpenCode took three
+fixes — the earlier "harness doesn't execute tool calls" conclusion was wrong; the real
+cause was **context overflow** (the model never had room to emit a call):
+
+1. **`OLLAMA_CONTEXT_LENGTH=32768` on the ollama _server_.** OpenCode's default "build"
+   agent sends a ~34K-char system prompt + 117 tools (its built-ins + every configured
+   MCP) with `max_tokens=32000`; at the default `num_ctx=4096` the prompt fills the
+   context (`input=4095, output=1, finish=length`) and the model emits one token. (This
+   is the same `num_ctx` issue baked into `silver:e4b`'s Modelfile.)
+2. **A lean custom agent** (`~/.config/opencode/agent/argentbench.md`): `tools: {"*":
+false, "argent_*": true}` (argent-only, 117→69 tools) and a ~600-char device-control
+   prompt replacing the 34K build prompt. The **same agent for both models** → identical
+   system prompt (only the weights differ).
+3. **Direct ollama** (`baseURL http://localhost:11434/v1`), not a logging proxy (a
+   non-streaming proxy hangs multi-turn runs); `radon`/`linear` MCP disabled.
+
+With this, `gemma4:e4b` issues real structured `tool_calls`, OpenCode executes them
+against the live sim (verified `tool_called`/`tool_result` in `~/.argent/mcp-calls.log`),
+and it reports the correct live udid.
+
+## Pieces
+
 - `tasks.jsonl` — 8 toolkit-agnostic iOS-Settings tasks (zero-install, deterministic),
   each with a `goal` for the judge.
-- `run-cell.sh <model> <toolkit> <out>` — runs the suite for one cell, saving each
-  task's final answer + transcript (tool calls) via `hermes sessions export`.
-- `judge.py` — LLM-as-judge scoring (Claude when `ANTHROPIC_API_KEY` is set; a labeled
-  heuristic proxy otherwise) → `out/<cell>/scores.json` + a comparison table.
-- `run-all.sh` — the 4 local cells, serialized, then scores.
+- `run-cell-opencode.sh <model> <agent> <out>` — runs the suite for one cell via headless
+  `opencode run … --format json`, resetting the sim between tasks and saving each task's
+  JSON event stream (tool calls + results + final text) + an after-screenshot.
+- `judge.py` — parses the OpenCode JSON transcripts; scores task success via Claude
+  (`ANTHROPIC_API_KEY`) or a labeled heuristic. Manual Claude judgement is used for the
+  committed numbers below (no API spend before the key is supplied Monday).
+- Agent file: `~/.config/opencode/agent/argentbench.md` (not in repo — see fix #2).
 
-## Prerequisites
+## Results so far
 
-1. **Ollama** running with both models: `ollama pull gemma4:e4b` (silver:e4b is built
-   by `../training` — see that README).
-2. **One iOS simulator booted** (iPhone 16 Pro Max), Settings app reachable.
-3. **Toolkits installed**: `argent` and `agent-device` on PATH (both expose `<tool> mcp`).
-4. **Hermes config** (`~/.hermes/config.yaml`):
-   ```yaml
-   model: { default: silver:e4b, provider: ollama-launch }
-   providers:
-     ollama-launch:
-       api: http://127.0.0.1:11434/v1
-       default_model: silver:e4b
-       models: [silver:e4b, gemma4:e4b]
-     anthropic: {} # key via ~/.hermes/.env ANTHROPIC_API_KEY (Monday)
-   mcp_servers:
-     argent: { command: argent, args: [mcp] }
-     agent-device: { command: agent-device, args: [mcp] }
-   agent: { max_turns: 18 }
-   ```
+### Argent × gemma4:e4b — **2/8 (25%)** baseline
+
+Honest per-task judgement of the transcripts (`out/argent_gemma4/`):
+
+| task                 | verdict | note                                                          |
+| -------------------- | ------- | ------------------------------------------------------------- |
+| ios-version          | PASS    | navigated General→About via `describe`, reported iOS 18.5     |
+| accessibility-option | PASS    | reached Accessibility, reported a real option (Motion)        |
+| device-name          | fail    | 20-call loop, no answer                                       |
+| airplane-on          | fail    | got lost near VPN & Device Management; toggle never confirmed |
+| wifi-state           | fail    | empty answer after many blind swipes                          |
+| appearance           | fail    | derailed by "Cannot read image" errors                        |
+| search-bluetooth     | fail    | confused at end; Bluetooth screen not confirmed               |
+| back-to-root         | fail    | 2 calls, empty answer                                         |
+
+Non-zero, matching the team's prior "works but poorly." A recurring drag: every argent
+interaction tool auto-returns a **screenshot image** the text-only ollama model can't read
+("Cannot read image"), wasting turns — this handicaps gemma and silver **equally**, so the
+comparison stays fair.
+
+### Argent × silver:e4b — does NOT tool-call in OpenCode (needs retrain)
+
+`silver:e4b` **narrates instead of emitting a parseable tool call** under OpenCode's
+prompt structure (verified with both `PARSER gemma4` and `PARSER qwen3`, with and without
+a baked system prompt; `out/_silver_probe/`). It emits, inconsistently, its trained
+`<tool_call>{json}</tool_call>` text, gemma4-native `<|tool_call>` tokens, or plain prose —
+none reliably parsed. There is **no packaging fix**.
+
+**Root cause (the important finding).** The gym trained silver on a _bespoke_ format — the
+Argent policy + tool list in the **first user turn**, output as `<tool_call>` **text** —
+which does not match how a standard harness presents tools (a **system** message +
+gemma4-native tool rendering, expecting gemma4-native tool calls). Stripped of its exact
+training context (required so its prompt matches gemma's), silver doesn't recognise the
+tool-call opportunity and narrates. So it scores ~60% in the gym (its native format) but
+**~0% in OpenCode** — the fine-tune did not transfer to the real deployment harness.
+
+This is precisely the "only the weights should change" point: the weights were trained on
+the wrong format/structure. The fix is in the **weights** — retrain the gym in the
+harness-native format (system-role prompt + tools via the gemma4 chat template + native
+tool-call output), so silver becomes a true drop-in for gemma. Tracked as the next step.
 
 ## Run
 
 ```bash
-./run-all.sh                       # 4 local cells + scoring
-# one cell:
-./run-cell.sh silver:e4b argent out/argent_silvere4b
-python3 judge.py out/argent_silvere4b
-# Haiku (Monday, with the key in ~/.hermes/.env):
-./run-cell.sh claude-haiku argent out/argent_haiku --provider anthropic
-ANTHROPIC_API_KEY=… python3 judge.py out/*/   # re-judge everything with the real LLM judge
+# prereqs: ollama up with OLLAMA_CONTEXT_LENGTH=32768; iPhone 16 Pro Max booted;
+#          argentbench agent installed; opencode ollama provider -> localhost:11434/v1
+./run-cell-opencode.sh ollama/gemma4:e4b argentbench out/argent_gemma4
+python3 judge.py out/argent_gemma4
 ```
 
-**Memory:** serialized by design — 26 GB M4 Pro, no CUDA; an iOS sim + Ollama + Hermes
-already fill a lot, and overload has paniced this machine. Never run two cells at once.
-
-## Status — harness integration is the blocker (findings 2026-06-19)
-
-End-to-end smoke tests (real iPhone 16 Pro Max booted, real argent tool-server up)
-surfaced a real obstacle: **neither installed harness executes the local models' tool
-calls against argent**, so the local cells can't be scored as-is. Verified, not assumed:
-
-- **Hermes** loads the MCP tools into context (argent `list_tools` = 69 tools) but never
-  executes the local ollama models' tool calls. Both `silver:e4b` and `gemma4:e4b` (base)
-  **hallucinate** the agent loop — they emit a tool call as text, then fabricate a
-  plausible tool _response_ and keep going. silver produced gym-style fakes (a
-  non-existent udid `7F845A92…`, 2025-era timestamps); the **real sim was never touched**
-  (foreground stayed Spotlight) and argent's call log shows **only `list_tools`, zero
-  executions**. Hermes' ollama tool-call→execution path simply doesn't fire for these.
-- **OpenCode** (after adding an ollama provider): silver emits text only, again **zero
-  executed tool calls** (only `list_tools` in argent's log).
-
-**Root cause:** `silver:e4b` is specialized for **Argent's `<tool_call>` text protocol**
-with the Argent policy + tool list in its **SYSTEM** (baked into the Modelfile). A generic
-harness injects its _own_ system prompt + tool schemas and expects its _own_ tool-call
-format, which silver doesn't match — so it never produces a harness-executable call.
-(`gemma4:e4b` base is additionally just weak — it emitted a garbled tool name.) Claude
-Haiku, using each harness's native tool-calling, would not hit this.
-
-**This is itself a result:** a format-specialized small model does **not** drop into a
-generic agent harness and execute tools. silver works in its _native_ loop — the gym eval
-(60.3% nav, see `../training/results/RESULTS-e4b.md`) and the deployed Ollama model driven
-by a thin `<tool_call>`-parsing loop.
-
-### Decision needed (Monday)
-
-The "use an established harness" constraint conflicts with silver's format specialization.
-Options, fairest first:
-
-1. **One Argent-format loop for all models** — adapt `../training/eval.ts` to drive a
-   _real_ device via the argent tool-server (instead of the gym), using the Argent preamble
-   - `<tool_call>` parsing. Same loop for silver / gemma4 / Haiku → apples-to-apples, and it
-     works for silver. Caveat: it's a thin custom loop (reuses the existing scored harness),
-     which bends the "no custom harness" rule — but that rule is exactly what silver's format
-     breaks. **Recommended.**
-2. **Adjust Hermes/OpenCode** to (a) use the Argent preamble as the system prompt and
-   (b) parse silver's `<tool_call>` text → execute. This is the "adjust the harness" path,
-   but it reaches into each harness's internal tool-call + system-prompt handling.
-3. **Harness-per-model** (silver native, others via Hermes/OpenCode) — not apples-to-apples.
-
-Scaffolding (`tasks.jsonl`, `run-cell.sh`, `judge.py`) stands; what changes is the runner's
-backend once the harness question is settled. The Anthropic key for the Haiku cells is also
-needed (an `ANTHROPIC_API_KEY` is present in `~/.hermes/.env` but left unused per the
-"supply on Monday" note).
+**Memory:** serialized by design — 26 GB M4 Pro, no CUDA; an iOS sim + a 9.6 GB model +
+32K KV cache fill most of it. One model at a time; kill orphaned `llama-server` runners
+between models (they survive `ollama stop` and starve the next run).

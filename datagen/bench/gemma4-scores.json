@@ -1,0 +1,57 @@
+{
+  "cell": "argent_gemma4",
+  "n": 8,
+  "passed": 2,
+  "success_pct": 25.0,
+  "backend": "manual-claude",
+  "rows": [
+    {
+      "id": "ios-version",
+      "pass": true,
+      "reason": "navigated Settings>General>About via describe, reported iOS 18.5",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "device-name",
+      "pass": false,
+      "reason": "20-call loop, complained images unreadable, no device name reported",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "airplane-on",
+      "pass": false,
+      "reason": "got lost near VPN & Device Management, never confirmed Airplane toggle on",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "wifi-state",
+      "pass": false,
+      "reason": "empty final answer; many blind swipes, never reported wifi state",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "appearance",
+      "pass": false,
+      "reason": "derailed by 'Cannot read image' errors, never reported Light/Dark",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "accessibility-option",
+      "pass": true,
+      "reason": "reached Accessibility, reported a real option (Motion)",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "search-bluetooth",
+      "pass": false,
+      "reason": "confused at end, did not confirm Bluetooth screen opened",
+      "backend": "manual-claude"
+    },
+    {
+      "id": "back-to-root",
+      "pass": false,
+      "reason": "only 2 calls (list-devices, launch-app), empty answer",
+      "backend": "manual-claude"
+    }
+  ]
+}

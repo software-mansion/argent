@@ -14,3 +14,4 @@ training/fused/
 training/base/
 training/*.gguf
 bench/out/
+bench/__pycache__/
