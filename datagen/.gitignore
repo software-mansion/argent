@@ -15,3 +15,5 @@ training/base/
 training/*.gguf
 bench/out/
 bench/__pycache__/
+training/data-native/
+training/data-native-poc/
