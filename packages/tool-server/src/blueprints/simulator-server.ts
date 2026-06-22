@@ -194,7 +194,7 @@ export const simulatorServerBlueprint: ServiceBlueprint<SimulatorServerApi, Devi
       // attach to a hardware UDID.
       throw new Error(
         `simulator-server cannot drive the physical iOS device ${device.id}. ` +
-          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, and button only.`
+          `Physical iPhones support screenshot, gesture-tap, gesture-swipe, button, and launch-app only.`
       );
     }
 
