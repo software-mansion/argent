@@ -76,26 +76,14 @@ interaction tool auto-returns a **screenshot image** the text-only ollama model 
 ("Cannot read image"), wasting turns — this handicaps gemma and silver **equally**, so the
 comparison stays fair.
 
-### Argent × silver:e4b — does NOT tool-call in OpenCode (needs retrain)
+### Argent × silver — retrained to a true drop-in; 0/8 (see RESULTS.md)
 
-`silver:e4b` **narrates instead of emitting a parseable tool call** under OpenCode's
-prompt structure (verified with both `PARSER gemma4` and `PARSER qwen3`, with and without
-a baked system prompt; `out/_silver_probe/`). It emits, inconsistently, its trained
-`<tool_call>{json}</tool_call>` text, gemma4-native `<|tool_call>` tokens, or plain prose —
-none reliably parsed. There is **no packaging fix**.
-
-**Root cause (the important finding).** The gym trained silver on a _bespoke_ format — the
-Argent policy + tool list in the **first user turn**, output as `<tool_call>` **text** —
-which does not match how a standard harness presents tools (a **system** message +
-gemma4-native tool rendering, expecting gemma4-native tool calls). Stripped of its exact
-training context (required so its prompt matches gemma's), silver doesn't recognise the
-tool-call opportunity and narrates. So it scores ~60% in the gym (its native format) but
-**~0% in OpenCode** — the fine-tune did not transfer to the real deployment harness.
-
-This is precisely the "only the weights should change" point: the weights were trained on
-the wrong format/structure. The fix is in the **weights** — retrain the gym in the
-harness-native format (system-role prompt + tools via the gemma4 chat template + native
-tool-call output), so silver becomes a true drop-in for gemma. Tracked as the next step.
+The original `silver:e4b` could not tool-call in OpenCode at all (it was trained on a
+bespoke `<tool_call>` text format + a user-turn preamble). It was **retrained** until it
+became a true gemma drop-in — native gemma4 tool format (executes argent tools) and, with
+`--no-narration`, full multi-step navigation. It still completes **0/8** (wanders,
+hallucinates tool names, derailed by unreadable screenshots) vs gemma's 2/8. The complete
+fine-tuning journey, root causes, and next steps are in **[RESULTS.md](./RESULTS.md)**.
 
 ## Run
 
