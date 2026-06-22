@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INSPECT_NO_DEVTOOLS_HOOK_ERROR,
   INSPECT_NO_FIBER_ROOT_ERROR,

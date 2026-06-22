@@ -70,7 +70,7 @@ describe("chromium-server/screenshot", () => {
     // Force the dynamic `require("sharp")` to throw — independent of whether
     // sharp is actually installed in the test environment — by stubbing
     // Module._resolveFilename to fail for "sharp" specifically.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
+
     const Module = require("node:module") as {
       _resolveFilename: (...args: unknown[]) => string;
     };

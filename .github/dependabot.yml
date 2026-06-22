@@ -21,6 +21,16 @@ updates:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
       include: "scope"
+    ignore:
+      # tree-sitter 0.25.0 ships no Node 24 prebuilds and its binding.gyp forces
+      # C++17 while Node 22+ v8 (cppgc) headers require C++20, so the native
+      # build fails `npm install`/`npm ci` on current Node. Stay on ^0.21.1,
+      # which ships N-API prebuilds (no compile). Patch updates stay allowed;
+      # drop this ignore once upstream restores prebuilt binaries.
+      - dependency-name: "tree-sitter"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
     groups:
       # Batch all minor + patch updates into one PR per week to cut noise.
       npm-minor-patch:

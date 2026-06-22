@@ -75,6 +75,7 @@ Commands:
   enable      Enable a feature flag (global by default, --scope project for project)
   disable     Disable a feature flag (global by default, --scope project for project)
   flags       Show current feature-flag state
+  telemetry   Manage anonymous opt-out telemetry (status / enable / disable)
 
 Options:
   --help, -h     Show this help message
@@ -90,15 +91,12 @@ Package: ${PACKAGE_NAME}
 // scripts/bundle-tools.cjs and shipped alongside this dispatcher in dist/.
 // Typed against the workspace packages so calls are still checked.
 async function loadInstaller(): Promise<typeof Installer> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await import("./installer.mjs" as any)) as typeof Installer;
 }
 async function loadMcp(): Promise<typeof Mcp> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await import("./mcp-server.mjs" as any)) as typeof Mcp;
 }
 async function loadCli(): Promise<typeof Cli> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (await import("./cli-cmds.mjs" as any)) as typeof Cli;
 }
 
@@ -130,6 +128,8 @@ async function main(): Promise<void> {
       return (await loadCli()).disable(rest);
     case "flags":
       return (await loadCli()).flags(rest);
+    case "telemetry":
+      return (await loadCli()).telemetry(rest);
     case "--version":
     case "-v":
       console.log(getInstalledVersion() ?? "unknown");

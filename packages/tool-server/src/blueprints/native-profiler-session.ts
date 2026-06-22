@@ -1,4 +1,6 @@
 import {
+  FAILURE_CODES,
+  FailureError,
   ServiceRef,
   TypedEventEmitter,
   type DeviceInfo,
@@ -46,6 +48,13 @@ export interface NativeProfilerSessionApi {
   profilingActive: boolean;
   wallClockStartMs: number | null;
   parsedData: NativeProfilerParsedData | null;
+  /**
+   * iOS-only: PID the exported CPU samples must be filtered to, or null to keep
+   * all samples. Set by the capture strategy at start — the all-processes
+   * fallback records host-wide and filters to the app PID; the device strategy
+   * scopes via --attach and leaves this null. See utils/ios-profiler/capture-strategy.
+   */
+  cpuFilterPid: number | null;
   recordingTimeout: NodeJS.Timeout | null;
   recordingTimedOut: boolean;
   recordingExitedUnexpectedly: boolean;
@@ -83,15 +92,27 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
   async factory(_deps, _payload, options) {
     const opts = options as unknown as NativeProfilerSessionFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${NATIVE_PROFILER_SESSION_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use nativeProfilerSessionRef(device) when registering the service ref.`
+          `Use nativeProfilerSessionRef(device) when registering the service ref.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_FACTORY_OPTIONS_MISSING,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     const { device } = opts;
     if (device.platform !== "ios" && device.platform !== "android") {
-      throw new Error(
-        `${NATIVE_PROFILER_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`
+      throw new FailureError(
+        `${NATIVE_PROFILER_SESSION_NAMESPACE}: unsupported platform "${device.platform}" for device '${device.id}'.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_PROFILER_WRONG_PLATFORM,
+          failure_stage: "native_profiler_session_factory_options",
+          failure_area: "tool_server",
+          error_kind: "unsupported",
+        }
       );
     }
     const state: NativeProfilerSessionApi = {
@@ -105,6 +126,7 @@ export const nativeProfilerSessionBlueprint: ServiceBlueprint<
       profilingActive: false,
       wallClockStartMs: null,
       parsedData: null,
+      cpuFilterPid: null,
       recordingTimeout: null,
       recordingTimedOut: false,
       recordingExitedUnexpectedly: false,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   REACT_PROFILER_SESSION_NAMESPACE,
@@ -150,11 +150,21 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
     let result = await evalFiberTree();
 
     if (result?.exceptionDetails) {
-      throw new Error(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`);
+      throw new FailureError(`Runtime exception: ${result.exceptionDetails.text ?? "unknown"}`, {
+        error_code: FAILURE_CODES.REACT_PROFILER_RUNTIME_EXCEPTION,
+        failure_stage: "react_profiler_fiber_tree_runtime_eval",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
 
     if (!result?.result?.value) {
-      throw new Error("No data returned from runtime evaluation.");
+      throw new FailureError("No data returned from runtime evaluation.", {
+        error_code: FAILURE_CODES.REACT_PROFILER_NO_RUNTIME_DATA,
+        failure_stage: "react_profiler_fiber_tree_runtime_eval",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
     }
 
     let parsed = JSON.parse(result.result.value) as unknown;
@@ -175,7 +185,14 @@ Fails if the React DevTools hook is not present or no fiber roots have been comm
 
     if (typeof parsed === "object" && parsed !== null && "error" in parsed) {
       const errorMsg = (parsed as { error: string }).error;
-      throw new Error(messageForHookError(errorMsg));
+      throw new FailureError(messageForHookError(errorMsg), {
+        error_code: HOOK_NOT_PRESENT_ERRORS.has(errorMsg)
+          ? FAILURE_CODES.REACT_PROFILER_DEVTOOLS_HOOK_MISSING
+          : FAILURE_CODES.REACT_PROFILER_HOOK_ERROR,
+        failure_stage: "react_profiler_fiber_tree_hook_read",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
     }
 
     if (Array.isArray(parsed) && parsed.length === 0) {

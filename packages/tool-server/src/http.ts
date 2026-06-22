@@ -1,13 +1,23 @@
 import express, { Request, Response } from "express";
-import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
+import { isFlagEnabled } from "@argent/configuration-core";
+import { randomUUID } from "node:crypto";
+import {
+  FAILURE_CODES,
+  type FailureSignal,
+  type FileInputSpec,
+  type Platform,
+  type Registry,
+  type ResolvedFileInput,
+} from "@argent/registry";
+import { AI_CLIENTS, type AiTelemetryProps } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
-import { createIdleTimer } from "./utils/idle-timer";
+import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
 import { formatErrorForAgent } from "./utils/format-error";
 import { getUpdateState, isUpdateNoteSuppressed, suppressUpdateNote } from "./utils/update-checker";
 import { buildUpdateNote } from "./update-utils";
 import { createPreviewRouter } from "./preview";
-import { makeArtifactRoute } from "./artifacts";
+import { makeArtifactListRoute, makeArtifactRoute } from "./artifacts";
 import { FileInputError, resolveFileInputs } from "./file-inputs";
 import {
   assertSupported,
@@ -31,6 +41,7 @@ const AUTO_SUPPRESS_MS = 30 * 60 * 1000; // 30 minutes
 
 const AUTH_TOKEN_ENV = "ARGENT_AUTH_TOKEN";
 const BEARER_PREFIX = "Bearer ";
+const ARTIFACTS_LIST_ENDPOINT_FLAG = "artifacts-list-endpoint";
 
 // Constant-time comparison so a leaked token can't be recovered byte-by-byte
 // via response-timing measurements. Both strings must be the same length to
@@ -50,14 +61,90 @@ function extractBearerToken(authHeader: string | undefined): string | null {
   return authHeader.slice(BEARER_PREFIX.length).trim() || null;
 }
 
+// A tool that declares a `featureFlag` is exposed (listed + invocable) only
+// while that flag is enabled. Re-evaluated on every request — reading the tiny
+// `~/.argent/flags.json` (and project override) each time — so toggling
+// `argent enable/disable <flag>` takes effect on the next `tools/list` without
+// restarting the long-lived tool-server. Tools without a `featureFlag` are
+// always exposed (no flag read).
+function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
+  return !!def && (!def.featureFlag || isFlagEnabled(def.featureFlag));
+}
+
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
+  return findErrorInCauseChain(err, DependencyMissingError);
+}
+
+function findErrorInCauseChain<T extends Error>(
+  err: unknown,
+  ctor: new (...args: never[]) => T
+): T | null {
   let current: unknown = err;
   // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
   for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
-    if (current instanceof DependencyMissingError) return current;
+    if (current instanceof ctor) return current;
     current = current.cause;
   }
   return null;
+}
+
+function extractDeviceArg(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.udid === "string") return record.udid;
+  if (typeof record.device_id === "string") return record.device_id;
+  return null;
+}
+
+type InvocationMeta = { platform?: Platform } & AiTelemetryProps;
+// Only coarse platform context is retained for failure telemetry. The raw
+// device id (UDID / serial) is used transiently to infer platform and never
+// stored or forwarded.
+type HttpFailureMeta = { platform?: Platform } & AiTelemetryProps;
+
+function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | null {
+  if (!deviceId) return null;
+  try {
+    return resolveDevice(deviceId).platform;
+  } catch {
+    return null;
+  }
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+// The MCP server forwards the coarse AI-client identity as a request header (it
+// lives in a different process). We re-validate here against the same allowlist
+// the sanitizer enforces, so a misbehaving client can't inject an arbitrary value
+// into telemetry. Only the coarse client slug is carried — we never record the
+// raw client name.
+function extractAiTelemetryMeta(req: Request): AiTelemetryProps {
+  const meta: AiTelemetryProps = {};
+  const client = firstHeader(req.headers["x-argent-ai-client"]);
+  if (client && (AI_CLIENTS as readonly string[]).includes(client)) {
+    meta.ai_client = client as AiTelemetryProps["ai_client"];
+  }
+  return meta;
+}
+
+function extractInvocationMeta(
+  hasCapability: boolean,
+  data: unknown,
+  aiMeta: AiTelemetryProps
+): InvocationMeta | null {
+  const meta: InvocationMeta = { ...aiMeta };
+  if (hasCapability && data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    const deviceArg = extractDeviceArg(record);
+    if (deviceArg) {
+      meta.platform = resolveDevice(deviceArg).platform;
+    } else if (typeof record.avdName === "string") {
+      meta.platform = "android";
+    }
+  }
+  return Object.keys(meta).length > 0 ? meta : null;
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -76,6 +163,15 @@ export interface HttpAppOptions {
    * opted into network exposure (and is warned at startup).
    */
   bindHost?: string;
+  /** Optional telemetry hook for per-invocation platform/device metadata. */
+  recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
+  /** Optional telemetry hook for HTTP failures that happen before registry invocation. */
+  recordFailure?: (
+    toolId: string,
+    meta: HttpFailureMeta,
+    signal: FailureSignal,
+    durationMs: number
+  ) => void;
 }
 
 export interface HttpAppHandle {
@@ -218,6 +314,9 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // Artifact retrieval: streams files produced by tools (screenshots, profiler
   // exports) over the remote-aware HTTP boundary so the MCP client can fetch
   // them via TOOLS_URL instead of an unreachable 127.0.0.1 host path/URL.
+  if (isFlagEnabled(ARTIFACTS_LIST_ENDPOINT_FLAG)) {
+    app.get("/artifacts", makeArtifactListRoute(registry));
+  }
   app.get("/artifacts/:id", makeArtifactRoute(registry));
 
   // Per-Chromium-device HTTP surface that mirrors sim-server's API: a
@@ -230,7 +329,7 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   // (preview UI, integration tests, custom dashboards).
   app.use("/chromium-server/:deviceId", async (req: Request, res: Response, next) => {
     idleTimer.touch();
-    const deviceId = req.params.deviceId!;
+    const deviceId = req.params.deviceId as string;
     const device = resolveDevice(deviceId);
     if (device.platform !== "chromium") {
       res.status(400).json({
@@ -272,29 +371,32 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
   app.get("/tools", (_req: Request, res: Response) => {
     idleTimer.touch();
     const snapshot = registry.getSnapshot();
-    const tools = snapshot.tools.map((id) => {
-      const def = registry.getTool(id);
-      const entry: {
-        name: string;
-        description: string;
-        inputSchema: Record<string, unknown>;
-        outputHint?: string;
-        fileInputs?: FileInputSpec[];
-        alwaysLoad?: boolean;
-        searchHint?: string;
-        longRunning?: boolean;
-      } = {
-        name: id,
-        description: def?.description ?? "",
-        inputSchema: def?.inputSchema ?? { type: "object", properties: {} },
-      };
-      if (def?.outputHint) entry.outputHint = def.outputHint;
-      if (def?.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
-      if (def?.alwaysLoad) entry.alwaysLoad = true;
-      if (def?.searchHint) entry.searchHint = def.searchHint;
-      if (def?.longRunning) entry.longRunning = true;
-      return entry;
-    });
+    const tools = snapshot.tools
+      .map((id) => registry.getTool(id))
+      // Hide feature-flagged tools whose flag is currently off.
+      .filter((def): def is NonNullable<typeof def> => isToolExposed(def))
+      .map((def) => {
+        const entry: {
+          name: string;
+          description: string;
+          inputSchema: Record<string, unknown>;
+          outputHint?: string;
+          fileInputs?: FileInputSpec[];
+          alwaysLoad?: boolean;
+          searchHint?: string;
+          longRunning?: boolean;
+        } = {
+          name: def.id,
+          description: def.description ?? "",
+          inputSchema: def.inputSchema ?? { type: "object", properties: {} },
+        };
+        if (def.outputHint) entry.outputHint = def.outputHint;
+        if (def.fileInputs && def.fileInputs.length > 0) entry.fileInputs = def.fileInputs;
+        if (def.alwaysLoad) entry.alwaysLoad = true;
+        if (def.searchHint) entry.searchHint = def.searchHint;
+        if (def.longRunning) entry.longRunning = true;
+        return entry;
+      });
     res.json({ tools });
   });
 
@@ -305,10 +407,43 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       next();
     },
     async (req: Request, res: Response) => {
-      const name = req.params.name!;
+      const name = req.params.name as string;
+      const requestStartedAt = performance.now();
+      const aiMeta = extractAiTelemetryMeta(req);
+
+      const emitHttpFailure = (
+        signal: FailureSignal,
+        parsedDataForMeta: unknown = req.body
+      ): void => {
+        if (!options?.recordFailure) return;
+        const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
+        const platform = inferPlatform(failedDeviceArg);
+        options.recordFailure(
+          name,
+          {
+            ...(platform ? { platform } : {}),
+            ...aiMeta,
+          },
+          signal,
+          performance.now() - requestStartedAt
+        );
+      };
 
       const def = registry.getTool(name);
       if (!def) {
+        emitHttpFailure({
+          error_code: FAILURE_CODES.HTTP_TOOL_NOT_FOUND,
+          failure_stage: "http_lookup_tool",
+          failure_area: "http",
+          error_kind: "not_found",
+        });
+        res.status(404).json({ error: `Tool "${name}" not found` });
+        return;
+      }
+      // A feature-flagged tool with its flag off is hidden from /tools and
+      // must not be invocable either — report it as not found (re-checked here
+      // per call, so the gate tracks `argent enable/disable` without a restart).
+      if (!isToolExposed(def)) {
         res.status(404).json({ error: `Tool "${name}" not found` });
         return;
       }
@@ -317,7 +452,11 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // server-readable paths BEFORE schema validation, so the tool's zod
       // schema only ever sees the string params it declares. 422 on a file
       // that is reachable neither in place nor via uploaded content.
-      let bodyArgs = req.body;
+      // Type kept as `any` (matching req.body) so the downstream optional-chained
+      // access below — parsedData?.udid / parsedData?.device_id — type-checks as
+      // it did before. The `= req.body` initializer was dead: the try always
+      // assigns bodyArgs before it is read, and the catch never falls through.
+      let bodyArgs: any;
       let resolvedFileInputs: Record<string, ResolvedFileInput> | undefined;
       try {
         const resolved = await resolveFileInputs(def, req.body);
@@ -339,6 +478,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (def.zodSchema) {
         const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+              failure_stage: "http_zod_validation",
+              failure_area: "http",
+              error_kind: "validation",
+            },
+            req.body
+          );
           res.status(400).json({ error: parseResult.error.message });
           return;
         }
@@ -356,22 +504,40 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // tools). Honour both so an Android serial reaching an iOS-only
       // device_id-tool is rejected at the gate instead of falling through
       // to the deeper blueprint error (which surfaces as a generic 500).
-      const deviceArg =
-        typeof parsedData?.udid === "string"
-          ? parsedData.udid
-          : typeof parsedData?.device_id === "string"
-            ? parsedData.device_id
-            : null;
+      const deviceArg = extractDeviceArg(parsedData);
       if (def.capability && deviceArg) {
         try {
           const device = resolveDevice(deviceArg);
           assertSupported(def.id, def.capability, device);
         } catch (err) {
           if (err instanceof UnsupportedOperationError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_CAPABILITY_UNSUPPORTED_OPERATION,
+                failure_stage: "http_capability_gate",
+                failure_area: "http",
+                error_kind: "unsupported",
+              },
+              parsedData
+            );
             res.status(400).json({ error: err.message });
             return;
           }
-          throw err;
+          // Reaching here means resolveDevice/assertSupported threw something
+          // other than UnsupportedOperationError (today only a custom supports()
+          // refiner can) — an internal fault, not a client validation error, so
+          // surface it as 500/unknown rather than mislabeling it 400/validation.
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
+              failure_stage: "http_capability_device_resolution",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            parsedData
+          );
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
         }
       }
 
@@ -386,6 +552,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           await ensureDeps(def.requires);
         } catch (err) {
           if (err instanceof DependencyMissingError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_DEPENDENCY_PREFLIGHT_MISSING,
+                failure_stage: "http_dependency_preflight",
+                failure_area: "http",
+                error_kind: "dependency_missing",
+              },
+              parsedData
+            );
             res.status(424).json({ error: err.message, missing: err.missing });
             return;
           }
@@ -398,10 +573,32 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (!res.writableFinished) controller.abort();
       });
 
+      // A long-running tool (e.g. await_user_selection) can legitimately hold
+      // the request open for many minutes while it waits on external input.
+      // An in-flight invocation IS activity, so keep the idle timer warm for
+      // its whole duration — otherwise the auto-shutdown reaps the server out
+      // from under the still-open request. Cleared as soon as it settles.
+      const keepAlive =
+        def.longRunning && options?.idleTimeoutMs && options.idleTimeoutMs > 0
+          ? setInterval(() => idleTimer.touch(), Math.max(1_000, IDLE_CHECK_INTERVAL_MS / 2))
+          : null;
+      if (keepAlive) keepAlive.unref?.();
+
+      // Hashing happens in the telemetry listener, not in the HTTP layer.
+      const toolInvocationId = randomUUID();
+      let releaseInvocationMeta: (() => void) | undefined;
+      if (options?.recordInvocation) {
+        const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
+        if (invocationMeta) {
+          releaseInvocationMeta = options.recordInvocation(toolInvocationId, invocationMeta);
+        }
+      }
+
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          toolInvocationId,
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
@@ -436,20 +633,25 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           res.status(424).json({ error: depErr.message, missing: depErr.missing });
           return;
         }
-        if (err instanceof UnsupportedOperationError) {
-          res.status(400).json({ error: err.message });
+        const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
+        if (unsupportedErr) {
+          res.status(400).json({ error: unsupportedErr.message });
           return;
         }
-        if (err instanceof NotImplementedOnPlatformError) {
+        const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
+        if (notImplementedErr) {
           res.status(501).json({
-            error: err.message,
-            toolId: err.toolId,
-            platform: err.platform,
-            hint: err.hint,
+            error: notImplementedErr.message,
+            toolId: notImplementedErr.toolId,
+            platform: notImplementedErr.platform,
+            hint: notImplementedErr.hint,
           });
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });
+      } finally {
+        if (keepAlive) clearInterval(keepAlive);
+        releaseInvocationMeta?.();
       }
     }
   );

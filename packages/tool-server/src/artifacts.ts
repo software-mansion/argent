@@ -17,13 +17,20 @@ import { access } from "node:fs/promises";
 import { dirname, basename } from "node:path";
 import { spawn } from "node:child_process";
 import type { Request, Response } from "express";
-import type { Registry, ArtifactEntry, ArtifactStore, ToolContext } from "@argent/registry";
+import type {
+  Registry,
+  ArtifactEntry,
+  ArtifactListItem,
+  ArtifactStore,
+  ToolContext,
+} from "@argent/registry";
 
 export {
   ArtifactStore,
   ARTIFACT_MARKER,
   type ArtifactHandle,
   type ArtifactEntry,
+  type ArtifactListItem,
   type RegisterArtifactOptions,
 } from "@argent/registry";
 
@@ -50,7 +57,7 @@ export function requireArtifacts(ctx?: Partial<ToolContext>): ArtifactStore {
  */
 export function makeArtifactRoute(registry: Registry) {
   return async function handleArtifactRequest(req: Request, res: Response): Promise<void> {
-    const id = req.params.id!;
+    const id = req.params.id as string;
     const entry = registry.artifacts.get(id);
     if (!entry) {
       res.status(404).json({ error: `Artifact "${id}" not found` });
@@ -83,6 +90,17 @@ export function makeArtifactRoute(registry: Registry) {
       else res.destroy();
     });
     stream.pipe(res);
+  };
+}
+
+/**
+ * Build the Express handler for `GET /artifacts`. Returns the current
+ * in-memory artifact inventory without exposing tool-server host paths.
+ */
+export function makeArtifactListRoute(registry: Registry) {
+  return function handleArtifactListRequest(_req: Request, res: Response): void {
+    const artifacts: ArtifactListItem[] = registry.artifacts.list();
+    res.json({ artifacts });
   };
 }
 

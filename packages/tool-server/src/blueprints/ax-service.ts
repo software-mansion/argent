@@ -7,6 +7,8 @@ import * as readline from "node:readline";
 import { promisify } from "node:util";
 import { execFile, ChildProcess } from "node:child_process";
 import {
+  FAILURE_CODES,
+  FailureError,
   TypedEventEmitter,
   type DeviceInfo,
   type ServiceBlueprint,
@@ -190,7 +192,9 @@ function startListener(
     if (endpoint.transport === "unix") {
       try {
         fs.unlinkSync(endpoint.socketPath);
-      } catch {}
+      } catch {
+        /* no stale socket to remove; ignore */
+      }
     }
 
     const server = net.createServer(onConnection);
@@ -257,21 +261,46 @@ function waitForDaemonConnection(
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error(`ax-service exited with code ${code} before connecting`));
+      reject(
+        new FailureError(`ax-service exited with code ${code} before connecting`, {
+          error_code: FAILURE_CODES.AX_DAEMON_EXITED_BEFORE_READY,
+          failure_stage: "ax_service_spawn_ready",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        })
+      );
     };
 
     const onError = (err: Error) => {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(err);
+      reject(
+        new FailureError(
+          err instanceof Error ? err.message : String(err),
+          {
+            error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
+            failure_stage: "ax_service_spawn_process",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          },
+          { cause: err instanceof Error ? err : new Error(String(err)) }
+        )
+      );
     };
 
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(new Error("Timed out waiting for ax-service to connect"));
+      reject(
+        new FailureError("Timed out waiting for ax-service to connect", {
+          error_code: FAILURE_CODES.AX_DAEMON_READY_TIMEOUT,
+          failure_stage: "ax_service_spawn_ready",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        })
+      );
     }, timeoutMs);
 
     const cleanup = () => {
@@ -297,16 +326,28 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
   async factory(_deps, _payload, options) {
     const opts = options as unknown as AxServiceFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${AX_SERVICE_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use axServiceRef(device) when registering the service ref.`
+          `Use axServiceRef(device) when registering the service ref.`,
+        {
+          error_code: FAILURE_CODES.AX_FACTORY_OPTIONS_MISSING,
+          failure_stage: "ax_service_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
     const { device } = opts;
     if (device.platform !== "ios") {
-      throw new Error(
-        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — describe uses uiautomator on Android and the CDP DOM walker on Chromium, neither of which needs this service.`
+      throw new FailureError(
+        `${AX_SERVICE_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — describe uses uiautomator on Android and the CDP DOM walker on Chromium, neither of which needs this service.`,
+        {
+          error_code: FAILURE_CODES.AX_WRONG_PLATFORM,
+          failure_stage: "ax_service_factory_platform",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     // Reject before spawning. An undefined `device.id` slips through when an
@@ -314,8 +355,14 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     // schema. Without this guard `getSocketPath(undefined).slice` would crash
     // and `udid.slice` in the stderr handler below would later be fatal.
     if (typeof device.id !== "string" || device.id.length === 0) {
-      throw new Error(
-        `${AX_SERVICE_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`
+      throw new FailureError(
+        `${AX_SERVICE_NAMESPACE}.factory requires a non-empty device.id; got ${JSON.stringify(device.id)}.`,
+        {
+          error_code: FAILURE_CODES.AX_DEVICE_ID_INVALID,
+          failure_stage: "ax_service_factory_device_id",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
@@ -366,7 +413,15 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         clearTimeout(pending.timer);
         if (msg.error !== undefined && msg.error !== null) {
           pending.reject(
-            new Error(typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error))
+            new FailureError(
+              typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error),
+              {
+                error_code: FAILURE_CODES.AX_QUERY_FAILED,
+                failure_stage: "ax_service_query_rpc",
+                failure_area: "tool_server",
+                error_kind: "unknown",
+              }
+            )
           );
         } else {
           pending.resolve(msg.result);
@@ -378,7 +433,12 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         if (daemonSocket === socket) {
           daemonSocket = null;
           if (!disposed) {
-            const err = new Error("ax-service daemon disconnected");
+            const err = new FailureError("ax-service daemon disconnected", {
+              error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
+              failure_stage: "ax_service_socket_close",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+            });
             failPending(err);
             events.emit("terminated", err);
           }
@@ -394,14 +454,29 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
 
     proc.on("exit", (code) => {
       if (disposed) return;
-      const err = new Error(`ax-service exited with code ${code}`);
+      const err = new FailureError(`ax-service exited with code ${code}`, {
+        error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
+        failure_stage: "ax_service_process_exit",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      });
       failPending(err);
       events.emit("terminated", err);
     });
     proc.on("error", (err) => {
       if (disposed) return;
-      failPending(err);
-      events.emit("terminated", err);
+      const error = new FailureError(
+        err instanceof Error ? err.message : String(err),
+        {
+          error_code: FAILURE_CODES.AX_DAEMON_PROCESS_ERROR,
+          failure_stage: "ax_service_spawn_process",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        },
+        { cause: err instanceof Error ? err : new Error(String(err)) }
+      );
+      failPending(error);
+      events.emit("terminated", error);
     });
 
     try {
@@ -413,7 +488,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       if (endpoint.transport === "unix") {
         try {
           fs.unlinkSync(endpoint.socketPath);
-        } catch {}
+        } catch {
+          /* best-effort socket cleanup; ignore errors */
+        }
       }
       throw err;
     }
@@ -421,14 +498,28 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
     function query(command: string, timeoutMs = 5000): Promise<unknown> {
       return new Promise((resolve, reject) => {
         if (!daemonSocket || daemonSocket.destroyed) {
-          reject(new Error("ax-service not connected"));
+          reject(
+            new FailureError("ax-service not connected", {
+              error_code: FAILURE_CODES.AX_QUERY_FAILED,
+              failure_stage: "ax_service_query_socket",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+            })
+          );
           return;
         }
         const id = nextRpcId++;
         const timer = setTimeout(() => {
           if (pendingRpc.has(id)) {
             pendingRpc.delete(id);
-            reject(new Error(`ax-service query timed out: ${command}`));
+            reject(
+              new FailureError(`ax-service query timed out: ${command}`, {
+                error_code: FAILURE_CODES.AX_QUERY_TIMEOUT,
+                failure_stage: "ax_service_query_socket",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+              })
+            );
           }
         }, timeoutMs);
         pendingRpc.set(id, { resolve, reject, timer });
@@ -440,7 +531,17 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
       degraded: !entitlementBypassActive,
 
       async describe(): Promise<AXDescribeResponse> {
-        const result = (await query("describe", 10_000)) as AXDescribeResponse;
+        const result = (await query("describe", 10_000)) as AXDescribeResponse & {
+          error?: string;
+        };
+        if (result.error) {
+          throw new FailureError(`ax-service describe error: ${result.error}`, {
+            error_code: FAILURE_CODES.AX_DESCRIBE_ERROR,
+            failure_stage: "ax_service_describe",
+            failure_area: "tool_server",
+            error_kind: "unknown",
+          });
+        }
         return {
           alertVisible: result.alertVisible ?? false,
           screenFrame: result.screenFrame,
@@ -478,7 +579,9 @@ export const axServiceBlueprint: ServiceBlueprint<AXServiceApi, DeviceInfo> = {
         if (endpoint.transport === "unix") {
           try {
             fs.unlinkSync(endpoint.socketPath);
-          } catch {}
+          } catch {
+            /* best-effort socket cleanup; ignore errors */
+          }
         }
       },
       events,

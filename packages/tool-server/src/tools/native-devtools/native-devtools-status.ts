@@ -54,7 +54,17 @@ Fails if the simulator server is not running for the given UDID or the bundleId 
 
     const appRunning = await api.isAppRunning(params.bundleId);
     const connected = api.isConnected(params.bundleId);
+
+    // When the app isn't connected, the cached env latch can be stale: an
+    // out-of-band simulator reboot wipes DYLD_INSERT_LIBRARIES from launchd
+    // while isEnvSetup() still reports the stale `true`. Re-apply it so the
+    // reported envSetup / nextLaunchWillBeInjected reflect reality — and so a
+    // subsequent launch actually gets injected. Idempotent no-op when correct.
+    if (!connected) {
+      await api.reverifyEnv().catch(() => {});
+    }
     const envSetup = api.isEnvSetup();
+
     return {
       envSetup,
       appRunning,

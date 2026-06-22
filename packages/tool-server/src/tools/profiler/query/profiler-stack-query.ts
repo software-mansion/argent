@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeProfilerSessionRef,
   type NativeProfilerSessionApi,
@@ -16,6 +16,7 @@ import {
 } from "../../../utils/android-profiler/pipeline/index";
 import { normalizeThreadName } from "../../../utils/profiler-shared/thread";
 import { formatBytes } from "../../../utils/profiler-shared/format";
+import { demangleSymbol } from "../../../utils/profiler-shared/demangle";
 
 const zodSchema = z.object({
   device_id: z.string().describe("iOS Simulator UDID or Android serial."),
@@ -51,8 +52,14 @@ const zodSchema = z.object({
 
 function getIosParsedData(api: NativeProfilerSessionApi) {
   if (!api.parsedData) {
-    throw new Error(
-      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first."
+    throw new FailureError(
+      "No parsed trace data. Run native-profiler-stop → native-profiler-analyze first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_stack_query_load_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
   return api.parsedData;
@@ -82,7 +89,7 @@ function renderHangStacksIos(
     lines.push("### Suspected Functions (by sample frequency)");
     lines.push("");
     for (let i = 0; i < hang.suspectedFunctions.length; i++) {
-      lines.push(`${i + 1}. \`${hang.suspectedFunctions[i]}\``);
+      lines.push(`${i + 1}. \`${demangleSymbol(hang.suspectedFunctions[i]!)}\``);
     }
     lines.push("");
   }
@@ -91,7 +98,9 @@ function renderHangStacksIos(
     lines.push("### App Call Chains During Hang");
     lines.push("");
     for (const { chain, sampleCount } of hang.appCallChains) {
-      lines.push(`- (${sampleCount} samples) ${chain.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(
+        `- (${sampleCount} samples) ${chain.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`
+      );
     }
     lines.push("");
   }
@@ -119,7 +128,7 @@ function renderHangStacksIos(
 
     const sorted = [...uniqueStacks.values()].sort((a, b) => b.count - a.count).slice(0, topN);
     for (const { stack, count } of sorted) {
-      lines.push(`- (${count}×) ${stack.map((f) => `\`${f}\``).join(" → ")}`);
+      lines.push(`- (${count}×) ${stack.map((f) => `\`${demangleSymbol(f)}\``).join(" → ")}`);
     }
   }
 
@@ -173,7 +182,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallers) {
-      lines.push(`| \`${name}\` | ${count} |`);
+      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -185,7 +194,7 @@ function renderFunctionCallersIos(
     lines.push("| Function | Samples |");
     lines.push("|---|---|");
     for (const [name, count] of sortedCallees) {
-      lines.push(`| \`${name}\` | ${count} |`);
+      lines.push(`| \`${demangleSymbol(name)}\` | ${count} |`);
     }
     lines.push("");
   }
@@ -245,7 +254,7 @@ function renderThreadBreakdownIos(
       lines.push("|---|---|---|---|");
       for (const h of threadHotspots.slice(0, topN)) {
         lines.push(
-          `| \`${h.dominantFunction}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
+          `| \`${demangleSymbol(h.dominantFunction)}\` | ${h.totalWeightMs} | ${h.weightPercentage}% | ${h.duringHang ? "Yes" : "No"} |`
         );
       }
     }
@@ -254,7 +263,7 @@ function renderThreadBreakdownIos(
   return lines.join("\n");
 }
 
-function renderLeakStacksIos(
+export function renderLeakStacksIos(
   memoryLeaks: MemoryLeak[],
   objectTypeFilter: string | undefined,
   topN: number
@@ -272,23 +281,44 @@ function renderLeakStacksIos(
       : "_No memory leaks detected._";
   }
 
-  const sorted = [...filtered].sort((a, b) => b.totalSizeBytes - a.totalSizeBytes).slice(0, topN);
+  // Attributed leaks first (so a small real leak survives the top-N slice ahead
+  // of larger unattributed system noise), then by size within each group.
+  const sorted = [...filtered]
+    .sort((a, b) => {
+      if (a.attributed !== b.attributed) return a.attributed ? -1 : 1;
+      return b.totalSizeBytes - a.totalSizeBytes;
+    })
+    .slice(0, topN);
 
   const totalBytes = sorted.reduce((s, l) => s + l.totalSizeBytes, 0);
   const totalCount = sorted.reduce((s, l) => s + l.count, 0);
+
+  const unattributedCount = sorted.filter((l) => !l.attributed).length;
 
   const lines: string[] = [
     `## Memory Leaks${objectTypeFilter ? ` (filter: "${objectTypeFilter}")` : ""}`,
     "",
     `**Total:** ${formatBytes(totalBytes)} across ${totalCount} allocations`,
     "",
-    "| Object Type | Size | Count | Responsible Frame | Library |",
-    "|---|---|---|---|---|",
   ];
+
+  if (unattributedCount > 0) {
+    lines.push(
+      `> 🟡 ${unattributedCount} of ${sorted.length} group(s) are unattributed ` +
+        "(`<Call stack limit reached>`, no library) — captured under `xctrace --attach`, which has no " +
+        "malloc-stack history. Most likely benign system allocations, not confirmed app leaks.",
+      ""
+    );
+  }
+
+  lines.push(
+    "| Object Type | Size | Count | Responsible Frame | Library |",
+    "|---|---|---|---|---|"
+  );
 
   for (const l of sorted) {
     lines.push(
-      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${l.responsibleFrame}\` | ${l.responsibleLibrary || "—"} |`
+      `| \`${l.objectType}\` | ${formatBytes(l.totalSizeBytes)} | ${l.count} | \`${demangleSymbol(l.responsibleFrame)}\` | ${l.responsibleLibrary || "—"} |`
     );
   }
 
@@ -300,13 +330,23 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
   switch (params.mode) {
     case "hang_stacks": {
       if (params.hang_index == null) {
-        throw new Error("hang_stacks mode requires the hang_index parameter.");
+        throw new FailureError("hang_stacks mode requires the hang_index parameter.", {
+          error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+          failure_stage: "profiler_stack_query_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
       }
       return renderHangStacksIos(data.cpuSamples, data.uiHangs, params.hang_index, params.top_n);
     }
     case "function_callers": {
       if (!params.function_name) {
-        throw new Error("function_callers mode requires the function_name parameter.");
+        throw new FailureError("function_callers mode requires the function_name parameter.", {
+          error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+          failure_stage: "profiler_stack_query_params",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
       }
       return renderFunctionCallersIos(data.cpuSamples, params.function_name, params.top_n);
     }
@@ -320,7 +360,12 @@ async function executeIos(api: NativeProfilerSessionApi, params: z.infer<typeof 
     case "leak_stacks":
       return renderLeakStacksIos(data.memoryLeaks, params.object_type, params.top_n);
     default:
-      throw new Error(`Unknown mode: ${params.mode}`);
+      throw new FailureError(`Unknown mode: ${params.mode}`, {
+        error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+        failure_stage: "profiler_stack_query_mode",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      });
   }
 }
 
@@ -357,9 +402,13 @@ Use when drilling into native hang stacks, thread CPU breakdown, or memory leaks
 Returns a markdown report with native call stacks, thread weights, or leak details for the selected mode.
 Fails if native-profiler-analyze has not been run or no parsed trace data is in memory.`,
   zodSchema,
-  // iOS-only: reads xctrace output. Android native profiling is on the roadmap;
-  // Chromium has no native trace capture.
-  capability: { apple: { simulator: true, device: true } },
+  // iOS: reads xctrace output. Android: queries the Perfetto .pftrace via the
+  // in-process trace-processor engine (see executeAndroid). Chromium has no
+  // native trace capture.
+  capability: {
+    apple: { simulator: true, device: true },
+    android: { emulator: true, device: true, unknown: true },
+  },
   services: (params) => ({
     session: nativeProfilerSessionRef(resolveDevice(params.device_id)),
   }),
