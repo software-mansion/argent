@@ -16,7 +16,7 @@
     "@argent/registry": "file:../registry",
     "@argent/telemetry": "file:../telemetry",
     "@argent/tools-client": "file:../argent-tools-client",
-    "@clack/prompts": "^1.5.1",
+    "@clack/prompts": "^1.6.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
