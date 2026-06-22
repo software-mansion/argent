@@ -23,6 +23,47 @@ describe("classifyNativeFrame", () => {
     expect(classifyNativeFrame("_Z23__pthread_internal_findlPKc")).toBe("system");
   });
 
+  it("flags arm64 (aarch64) kernel syscall-entry + exception-vector leaves as system", () => {
+    // The Android profiler runs on an arm64 emulator/device, whose kernel
+    // entry-path symbols are named entirely differently from x86-64: the EL0
+    // synchronous-exception vector dispatches to the SVC (syscall) handler,
+    // which calls invoke_syscall → __arm64_sys_<name>. None of the x86 patterns
+    // (do_syscall_64 / entry_SYSCALL_64 / x64_sys_call) match these, so without
+    // arm64 patterns these kernel leaves were misclassified as `app` and got
+    // app-flavoured advice. arch/arm64/kernel/{entry.S,entry-common.c,syscall.c}.
+    for (const leaf of [
+      "el0t_64_sync",
+      "el0t_64_sync_handler",
+      "el0_svc",
+      "el0_svc_common",
+      "do_el0_svc",
+      "invoke_syscall",
+      "el0_da", // data-abort (page-fault) handler
+      "el0_ia", // instruction-abort handler
+      "__arm64_sys_read",
+      "__arch_copy_from_user", // arm64 uaccess copy helpers (copy_{from,to}_user.S)
+      "__arch_copy_to_user",
+    ]) {
+      expect(classifyNativeFrame(leaf), `${leaf} should be system`).toBe("system");
+    }
+  });
+
+  it("does not misclassify app frames that merely resemble arm64 kernel tokens", () => {
+    // The arm64 patterns are word-boundaried so distinctive kernel tokens do not
+    // bleed into legitimate app symbols (e.g. a bare `vectors` substring would
+    // collide with std::vector). Guard against that regressing.
+    for (const leaf of [
+      "std::vector<int>::push_back",
+      "myVectorsHelper",
+      "el0_svc_handler_factory_app",
+      "MainActivity.onCreate",
+      "nativeRender",
+      "folly::detail::function::FunctionTraits",
+    ]) {
+      expect(classifyNativeFrame(leaf), `${leaf} should stay app`).toBe("app");
+    }
+  });
+
   it("treats real app / RN frames as app code", () => {
     expect(classifyNativeFrame("facebook::react::JSIExecutor::callFunction")).toBe("app");
     expect(classifyNativeFrame("_ZN16GrDrawingManager5flushE")).toBe("app");

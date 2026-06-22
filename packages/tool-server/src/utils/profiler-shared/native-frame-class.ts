@@ -25,11 +25,23 @@ const SYSTEM_FRAME_PATTERNS: RegExp[] = [
   /rcCreateSync/,
   /_enc\b/, // gl*Enc / rc*_enc emulator encoder trampolines
   // Linux kernel syscall entry + mm/vfs internals (no app symbol to act on).
+  // x86-64 entry path:
   /\bdo_syscall_64\b/,
   /\bentry_SYSCALL/,
   /\b__x64_sys_/,
-  /\b__arm64_sys_/,
   /\bx64_sys_call\b/,
+  // arm64 (aarch64) entry path — the emulator/device the Android profiler runs
+  // on is arm64, so these are the leaves actually seen there. The names differ
+  // entirely from x86: the EL0 synchronous-exception vector dispatches to the
+  // SVC (syscall) handler, which calls invoke_syscall → __arm64_sys_<name>.
+  // arch/arm64/kernel/{entry.S,entry-common.c,syscall.c}.
+  /\b__arm64_sys_/,
+  /\bel0t_64_sync(_handler)?\b/, // exception-vector entry + its C handler
+  /\bel0_svc(_common)?\b/, // SVC (syscall) exception handler
+  /\bdo_el0_svc\b/,
+  /\binvoke_syscall\b/,
+  /\bel0_(da|ia)\b/, // data / instruction abort handlers (page-fault leaves)
+  /\b__arch_copy_(from|to)_user\b/, // arm64 uaccess copy helpers (copy_{from,to}_user.S)
   /\bksys_/,
   /\bvfs_(read|write|fsync)\b/,
   /\bgup_/,
