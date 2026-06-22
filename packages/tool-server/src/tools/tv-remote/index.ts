@@ -33,14 +33,11 @@ const buttonSchema = z
     z.union([z.enum(BUTTONS), z.array(z.enum(BUTTONS)).min(1).max(64)])
   )
   .describe(
-    "A single TV-remote button, or a path of them run in ONE device round-trip. " +
+    "A single TV-remote button, or a path of them run in one call. " +
       "Buttons: up/down/left/right (D-pad), select (OK), back, home, menu, playPause, " +
       "rewind, fastForward, next, previous, volumeUp, volumeDown, mute. " +
       'For multi-step navigation pass an array, e.g. ["up","right","right","select"] — ' +
-      "STRONGLY PREFER this over multiple `tv-remote` calls: a whole path is injected in " +
-      "ONE `adb shell inputd-cli` round-trip (presses settle ~0.3s apart on-device), " +
-      "whereas N separate calls pay N adb round-trips plus N agent turns. The on-device " +
-      "settle is the same either way, so batching is pure savings."
+      "strongly prefer this over multiple `tv-remote` calls: the whole path runs in a single call."
   );
 
 const zodSchema = z.object({
