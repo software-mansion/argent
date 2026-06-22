@@ -1,5 +1,5 @@
 import * as path from "path";
-import { execSyncWithTimeout } from "./run-with-timeout";
+import { execFileWithTimeout } from "./run-with-timeout";
 
 /**
  * Known xctrace schema names that contain CPU time-profile data.
@@ -30,14 +30,24 @@ export interface ExportDiagnostics {
 }
 
 function getXctraceVersion(): number {
-  try {
-    const output = execSyncWithTimeout("xctrace version 2>&1 || true", {
-      encoding: "utf-8",
-    }) as string;
-    const match = output.match(/(\d+)\./);
+  const parseMajor = (text: string): number => {
+    const match = text.match(/(\d+)\./);
     return match ? parseInt(match[1]!, 10) : 0;
-  } catch {
-    return 0;
+  };
+  try {
+    const output = execFileWithTimeout("xctrace", ["version"], {
+      encoding: "utf-8",
+      // Capture both streams: most builds print the version banner to stdout,
+      // but some emit it on stderr — mirrors the old `2>&1` redirect.
+      stdio: ["ignore", "pipe", "pipe"],
+    }) as string;
+    return parseMajor(output);
+  } catch (err) {
+    // xctrace can exit non-zero while still having printed the version line;
+    // the old `|| true` swallowed that exit code, so recover the banner from
+    // whatever was captured on stdout/stderr before falling back to 0.
+    const e = err as { stdout?: Buffer | string; stderr?: Buffer | string };
+    return parseMajor(`${e.stdout?.toString() ?? ""}\n${e.stderr?.toString() ?? ""}`);
   }
 }
 
@@ -47,7 +57,7 @@ function getXctraceVersion(): number {
  */
 function discoverTraceSchemas(traceFile: string): string[] {
   try {
-    const toc = execSyncWithTimeout(`xctrace export --input "${traceFile}" --toc`, {
+    const toc = execFileWithTimeout("xctrace", ["export", "--input", traceFile, "--toc"], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     }) as string;
@@ -100,11 +110,10 @@ function tryCpuExportFallback(
   for (const candidate of CPU_SCHEMA_CANDIDATES) {
     const xpath = `/trace-toc/run[@number="1"]/data/table[@schema="${candidate}"]`;
     try {
-      execSyncWithTimeout(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${xpath}'`,
-        {
-          stdio: "pipe",
-        }
+      execFileWithTimeout(
+        "xctrace",
+        ["export", "--input", traceFile, "--output", outPath, "--xpath", xpath],
+        { stdio: "pipe" }
       );
       diagnostics.cpuSchemaUsed = candidate;
       return true;
@@ -140,8 +149,9 @@ export function exportIosTraceData(traceFile: string): {
 
       if (resolvedXpath) {
         try {
-          execSyncWithTimeout(
-            `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${resolvedXpath}'`,
+          execFileWithTimeout(
+            "xctrace",
+            ["export", "--input", traceFile, "--output", outPath, "--xpath", resolvedXpath],
             { stdio: "pipe" }
           );
           exportedFiles[key] = outPath;
@@ -164,20 +174,25 @@ export function exportIosTraceData(traceFile: string): {
 
     if (key === "leaks") {
       const xcVersion = getXctraceVersion();
-      const halFlag = xcVersion >= 15 ? " --hal" : "";
+      const useHal = xcVersion >= 15;
+      const leaksArgs = [
+        "export",
+        "--input",
+        traceFile,
+        "--output",
+        outPath,
+        "--xpath",
+        config.xpath,
+      ];
       try {
-        execSyncWithTimeout(
-          `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'${halFlag}`,
-          { stdio: "pipe" }
-        );
+        execFileWithTimeout("xctrace", useHal ? [...leaksArgs, "--hal"] : leaksArgs, {
+          stdio: "pipe",
+        });
         exportedFiles[key] = outPath;
       } catch {
-        if (halFlag) {
+        if (useHal) {
           try {
-            execSyncWithTimeout(
-              `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
-              { stdio: "pipe" }
-            );
+            execFileWithTimeout("xctrace", leaksArgs, { stdio: "pipe" });
             exportedFiles[key] = outPath;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -193,8 +208,9 @@ export function exportIosTraceData(traceFile: string): {
 
     // Default export (hangs, etc.)
     try {
-      execSyncWithTimeout(
-        `xctrace export --input "${traceFile}" --output "${outPath}" --xpath '${config.xpath}'`,
+      execFileWithTimeout(
+        "xctrace",
+        ["export", "--input", traceFile, "--output", outPath, "--xpath", config.xpath],
         { stdio: "pipe" }
       );
       exportedFiles[key] = outPath;
