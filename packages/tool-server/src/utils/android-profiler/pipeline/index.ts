@@ -137,7 +137,7 @@ export async function runAndroidProfilerPipeline(
   // layer can label goldfish/QEMU/kernel frames and avoid giving them
   // app-flavoured advice.
   for (const hotspot of cpuHotspots) {
-    hotspot.frameClass = classifyNativeFrame(hotspot.dominantFunction);
+    hotspot.frameClass = classifyNativeFrame(hotspot.dominantFunction, hotspot.dominantMapping);
   }
 
   const uiHangsBase = hangRowsToBottlenecks(hangRows, traceStartNs);
@@ -522,6 +522,9 @@ function cpuRowsToAggregatorRows(
     const thread = normaliseAndroidThread(row.thread_name, row.is_main_thread === 1);
     out.push({
       dominantFunction: dominant,
+      // Mapping of the leaf frame (from cpu-hotspots.sql's MIN(spm.name)) —
+      // threaded through so classifyNativeFrame can recognise `/kernel` leaves.
+      ...(row.leaf_mapping != null ? { dominantMapping: row.leaf_mapping } : {}),
       thread,
       weightNs: row.sample_count * SAMPLE_PERIOD_NS,
       // Android ships SQL-precomputed bursts, no raw timestamps. Empty array

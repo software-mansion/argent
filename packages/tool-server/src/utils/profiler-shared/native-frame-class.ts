@@ -13,8 +13,31 @@ import type { UiHangStateBreakdownEntry } from "./types";
  * Patterns are matched as substrings (not anchored) because perf leaf frames
  * are often C++-mangled (e.g. `_Z23__pthread_internal_findlPKc`), so the bare
  * symbol appears verbatim inside the mangled name.
+ *
+ * Name patterns are inherently whack-a-mole: kernel leaves like `writel` (a
+ * goldfish/QEMU MMIO write — the GPU-pipe transport) or `mod_node_state`
+ * (vmstat accounting) carry no recognisable substring, so they slip through as
+ * "app". The robust signal is the leaf's *mapping* (the loaded object the symbol
+ * lives in): on Android perf traces every kernel frame maps to `/kernel` while
+ * user-space frames map to a real module path (`/system/lib64/libhwui.so`,
+ * `/apex/com.android.art/lib64/libart.so`, …). So a leaf whose mapping is the
+ * kernel is unambiguously a system frame — checked first, before the names.
+ * Android's cpu-hotspots.sql now carries this mapping through; iOS does not pass
+ * one (the arg defaults undefined), so iOS classification is unchanged.
  */
 export type NativeFrameClass = "app" | "system";
+
+/**
+ * Mapping names that denote the Linux kernel image (not a user-space module).
+ * On the arm64 Android emulator/device the perf sampler labels every kernel leaf
+ * `/kernel`; `[kernel.kallsyms]` and a bare `kallsyms` are the common Perfetto /
+ * simpleperf variants. Deliberately narrow — real module paths
+ * (`/system/lib64/*.so`, `/apex/.../*.so`, `/vendor/.../*.so`) must NOT match,
+ * so user-space emulator encoders still fall through to the name patterns.
+ */
+function isKernelMapping(mapping: string): boolean {
+  return mapping === "/kernel" || mapping === "[kernel.kallsyms]" || /kallsyms/.test(mapping);
+}
 
 const SYSTEM_FRAME_PATTERNS: RegExp[] = [
   // QEMU / goldfish / gfxstream emulator GPU + pipe transport.
@@ -54,8 +77,18 @@ const SYSTEM_FRAME_PATTERNS: RegExp[] = [
   /\bfutex_/,
 ];
 
-export function classifyNativeFrame(name: string | null | undefined): NativeFrameClass {
+export function classifyNativeFrame(
+  name: string | null | undefined,
+  mapping?: string | null
+): NativeFrameClass {
+  // Mapping is the strongest signal and is checked first: a leaf in the kernel
+  // image is system overhead regardless of its (often unrecognisable) name.
+  // This catches `writel`, `mod_node_state`, etc. that no name pattern matches.
+  if (mapping && isKernelMapping(mapping)) return "system";
   if (!name) return "app";
+  // Name patterns still catch USER-SPACE emulator frames (gfxstream / goldfish
+  // encoders living in `.so` mappings, which are NOT `/kernel`) and any kernel
+  // frame whose mapping wasn't carried through (iOS, or a missing mapping).
   for (const re of SYSTEM_FRAME_PATTERNS) {
     if (re.test(name)) return "system";
   }

@@ -40,6 +40,13 @@ export interface CpuHotspot {
    * Undefined on iOS.
    */
   frameClass?: "app" | "system";
+  /**
+   * Android-only: the mapping (loaded object) the dominant leaf lives in —
+   * `/kernel` for kernel frames, a real module path for user space. Fed to
+   * classifyNativeFrame so kernel leaves with unrecognisable names are still
+   * classed as system. Undefined on iOS (no mapping in the iOS sample data).
+   */
+  dominantMapping?: string;
 }
 
 export interface UiHangStateBreakdownEntry {

@@ -71,6 +71,83 @@ describe("classifyNativeFrame", () => {
   });
 });
 
+describe("classifyNativeFrame — mapping-based classification", () => {
+  it("classes a kernel-mapped leaf as system even when NO name pattern matches", () => {
+    // These are real arm64-emulator hotspot leaves whose names match none of the
+    // SYSTEM_FRAME_PATTERNS (writel is a goldfish/QEMU MMIO write; mod_node_state
+    // is vmstat accounting), so they were misclassified as `app`. Without the
+    // mapping signal they are indistinguishable from app code by name alone.
+    expect(classifyNativeFrame("writel")).toBe("app"); // name-only: misses
+    expect(classifyNativeFrame("mod_node_state")).toBe("app"); // name-only: misses
+    // With the leaf's `/kernel` mapping, both are unambiguously system.
+    for (const leaf of [
+      "writel",
+      "mod_node_state",
+      "mod_node_page_state",
+      "try_to_wake_up",
+      "_raw_spin_unlock_irqrestore",
+      "arch_counter_get_cntvct",
+    ]) {
+      expect(classifyNativeFrame(leaf, "/kernel"), `${leaf} @ /kernel should be system`).toBe(
+        "system"
+      );
+    }
+  });
+
+  it("accepts the common Perfetto/simpleperf kernel-mapping variants", () => {
+    expect(classifyNativeFrame("writel", "[kernel.kallsyms]")).toBe("system");
+    expect(classifyNativeFrame("writel", "kallsyms")).toBe("system");
+    expect(classifyNativeFrame("writel", "/some/path/kallsyms")).toBe("system");
+  });
+
+  it("falls back to name patterns for user-space (.so) mappings", () => {
+    // A user-space mapping is NOT the kernel, so the name patterns still decide:
+    // a gfxstream/goldfish encoder living in a .so is still system overhead...
+    expect(classifyNativeFrame("goldfish_pipe_read_write", "/vendor/lib64/libGLESv2_enc.so")).toBe(
+      "system"
+    );
+    expect(classifyNativeFrame("gfxstream_vk_thing", "/vendor/lib64/libvulkan_enc.so")).toBe(
+      "system"
+    );
+    // ...but an ordinary app/framework symbol in a .so stays app.
+    expect(classifyNativeFrame("_ZN12GrRenderTask10makeClosedEv", "/system/lib64/libhwui.so")).toBe(
+      "app"
+    );
+    expect(classifyNativeFrame("MainActivity.onCreate", "/data/app/com.example/lib/base.apk")).toBe(
+      "app"
+    );
+  });
+
+  it("does NOT treat a real module path as kernel (no over-broadening)", () => {
+    // The kernel test must not match real module paths, or every user-space leaf
+    // would be wrongly flagged system. A plain app symbol in a real module stays app.
+    for (const mapping of [
+      "/system/lib64/libhwui.so",
+      "/apex/com.android.art/lib64/libart.so",
+      "/vendor/lib64/libGLESv2_enc.so",
+      "/data/app/com.example/lib/base.apk",
+    ]) {
+      expect(classifyNativeFrame("someAppSymbol", mapping), `${mapping} must not be kernel`).toBe(
+        "app"
+      );
+    }
+  });
+
+  it("is unchanged on the no-mapping (iOS) path", () => {
+    // iOS passes no mapping; classification must be byte-identical to name-only.
+    expect(classifyNativeFrame("writel")).toBe("app");
+    expect(classifyNativeFrame("writel", undefined)).toBe("app");
+    expect(classifyNativeFrame("goldfish_pipe_read_write")).toBe("system");
+    expect(classifyNativeFrame("goldfish_pipe_read_write", undefined)).toBe("system");
+    expect(classifyNativeFrame("facebook::react::JSIExecutor::callFunction", undefined)).toBe(
+      "app"
+    );
+    // A null/empty mapping must not crash and falls through to the name patterns.
+    expect(classifyNativeFrame("writel", null)).toBe("app");
+    expect(classifyNativeFrame("do_syscall_64", null)).toBe("system");
+  });
+});
+
 describe("summarizeHangBlocking", () => {
   it("returns null with no state breakdown", () => {
     expect(summarizeHangBlocking(undefined)).toBeNull();
