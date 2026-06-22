@@ -15,10 +15,14 @@ export const CHROMIUM_ID_PREFIX = "chromium-cdp-";
 
 /**
  * Vega serial prefix. `vega device list` reports VVD / Fire-TV serials as
- * `amazon-<id>` (e.g. `amazon-4a27df03c9777152`); no Android adb serial
+ * `amazon-<id>` (e.g. `amazon-4a27df03c9777152`). No *known* Android adb serial
  * (`emulator-<port>`, a hardware serial, or `ip:port`) starts with it, so the
- * prefix classifies Vega by shape — the same approach as Chromium above. v1
- * supports the Virtual Device only, so a Vega serial resolves to kind `vvd`.
+ * prefix classifies Vega by shape — the same approach as Chromium above. This is
+ * a practical heuristic, not a guarantee: `ro.serialno` is vendor-defined and not
+ * constrained by adb, so an Android device whose serial happened to start with
+ * `amazon-` would be misrouted to the Vega paths (no shipping device is known to
+ * collide). v1 supports the Virtual Device only, so a Vega serial resolves to
+ * kind `vvd`.
  */
 export const VEGA_SERIAL_PREFIX = "amazon-";
 
