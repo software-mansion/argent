@@ -200,6 +200,18 @@ done
 echo "Vega serial: ${SERIAL}"
 endg
 
+# ── Relaunch through argent so the automation toolkit attaches ───────────────
+# The bootstrap launch above used the raw `vega device launch-app`, which does
+# NOT set the toolkit-enable flag. That flag is only read at app launch, so the
+# on-device introspection server never attaches and TEST 3 (describe) returns an
+# empty tree. argent's restart-app (re)asserts the flag, then terminate+launches
+# — the canonical way to make an app introspectable — so the toolkit attaches.
+group "Relaunch via argent (attach automation toolkit)"
+resp="$(post_tool restart-app "$(printf '{"udid":"%s","bundleId":"%s"}' "$SERIAL" "$APP_ID")")" || resp=""
+echo "  restart-app response: ${resp:0:200}"
+sleep 10
+endg
+
 # ── TEST 1: screenshot (adb emu — arch-agnostic baseline) ───────────────────
 group "TEST screenshot"
 SHOT_BEFORE="${OUT_DIR}/kepler-before.png"
@@ -259,8 +271,11 @@ for attempt in 1 2 3 4 5; do
   # toolkit attached and produced on-screen content.
   elems="$(printf '%s\n' "$desc" | awk '/^ROOT /{seen=1; next} seen && NF {c++} END{print c+0}')"
   if [ "$src" = "vega-automation" ] && [ "${elems:-0}" -ge 1 ] 2>/dev/null; then desc_ok=1; break; fi
-  echo "attempt ${attempt}: describe empty/not ready (element lines beyond header: ${elems:-0}); retrying..."
+  echo "attempt ${attempt}: describe empty/not ready (element lines beyond header: ${elems:-0}); relaunch + retry..."
   echo "  response: ${resp:0:200}"
+  # describe's own recovery hint: the toolkit attaches only at app launch, so
+  # relaunch via restart-app (re-asserts the enable flag) to (re)attach it.
+  post_tool restart-app "$(printf '{"udid":"%s","bundleId":"%s"}' "$SERIAL" "$APP_ID")" >/dev/null 2>&1 || true
   sleep 4
 done
 if [ -n "$desc_ok" ]; then
