@@ -22,13 +22,15 @@ describe("vega-input keycode maps", () => {
     expect(REMOTE_KEYCODES.next).toBe("KEY_NEXTSONG");
   });
 
-  it("maps named keys, including Vega's KEY_FN_F<n> function keys", () => {
+  it("maps named keys, including Vega's KEY_FN_F<n> function keys and aliases", () => {
     expect(NAMED_KEYCODES.enter).toBe("KEY_ENTER");
+    expect(NAMED_KEYCODES.return).toBe("KEY_ENTER");
     expect(NAMED_KEYCODES.escape).toBe("KEY_BACK");
+    expect(NAMED_KEYCODES.esc).toBe("KEY_BACK");
     expect(NAMED_KEYCODES["arrow-up"]).toBe("KEY_UP");
     expect(NAMED_KEYCODES.f1).toBe("KEY_FN_F1");
     expect(NAMED_KEYCODES.f11).toBe("KEY_FN_F11");
-    expect(NAMED_KEYCODES.f12).toBeUndefined();
+    expect(NAMED_KEYCODES.f12).toBe("KEY_FN_F12");
   });
 });
 

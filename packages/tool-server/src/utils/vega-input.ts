@@ -50,7 +50,10 @@ export const REMOTE_BUTTONS = Object.keys(REMOTE_KEYCODES) as RemoteButton[];
 // Named keys (the keyboard tool's `key` vocabulary) → KEY_ names.
 export const NAMED_KEYCODES: Record<string, string> = {
   "enter": "KEY_ENTER",
+  "return": "KEY_ENTER", // alias of enter (matches iOS/Android/Chromium)
+  // Back is the TV analog of Escape; KEY_ESC is inert for the focus engine.
   "escape": "KEY_BACK",
+  "esc": "KEY_BACK", // alias of escape
   "backspace": "KEY_BACKSPACE",
   "delete": "KEY_DELETE",
   "tab": "KEY_TAB",
@@ -59,8 +62,9 @@ export const NAMED_KEYCODES: Record<string, string> = {
   "arrow-down": "KEY_DOWN",
   "arrow-left": "KEY_LEFT",
   "arrow-right": "KEY_RIGHT",
-  // Vega names function keys KEY_FN_F<n> (not KEY_F<n>); F1–F11 exist.
-  ...Object.fromEntries(Array.from({ length: 11 }, (_, i) => [`f${i + 1}`, `KEY_FN_F${i + 1}`])),
+  // Vega names function keys KEY_FN_F<n> (not KEY_F<n>); KEY_FN_F1..F12 all exist
+  // in the device key-name table (verified against system.ext4, SDK 0.22.6759).
+  ...Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`f${i + 1}`, `KEY_FN_F${i + 1}`])),
 };
 
 // Settle between presses so the focus engine keeps up (CI's llvmpipe render is
