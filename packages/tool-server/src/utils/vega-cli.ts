@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
+import { existsSync, constants as fsConstants } from "node:fs";
+import { access } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -32,6 +33,18 @@ const execFileAsync = promisify(execFile);
 const VEGA_BINARY_TTL_MS = 60_000;
 let cachedVegaBinary: { path: string | null; checkedAt: number } | undefined;
 
+// X_OK, not F_OK (mirrors android-binary.ts): a present-but-non-executable file at
+// the canonical `~/vega/bin/vega` path is a partial/corrupt SDK install. Returning
+// it would only produce an opaque EACCES at spawn, so prefer the not-found message.
+async function isExecutable(p: string): Promise<boolean> {
+  try {
+    await access(p, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function commandOnPath(name: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("/bin/sh", ["-c", `command -v ${name}`], {
@@ -51,7 +64,7 @@ export async function resolveVegaBinary(): Promise<string | null> {
   }
   const onPath = (await commandOnPath("vega")) ?? (await commandOnPath("kepler"));
   const fallback = join(homedir(), "vega", "bin", "vega");
-  const path = onPath ?? (existsSync(fallback) ? fallback : null);
+  const path = onPath ?? ((await isExecutable(fallback)) ? fallback : null);
   cachedVegaBinary = { path, checkedAt: now };
   return path;
 }
