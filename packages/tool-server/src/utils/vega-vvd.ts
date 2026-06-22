@@ -1,123 +1,72 @@
-import { readdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { runVega } from "./vega-cli";
-import { listAndroidDevices } from "./adb";
+import { runAdb, parseAdbDevices } from "./adb";
 import { parseVegaDeviceList } from "./vega-devices";
+import { listRunningVvdConsolePorts } from "./vega-process";
 
 /**
- * Vega Virtual Device (VVD) discovery.
- *
- * The VVD is an Android-emulator-derived QEMU. It writes a QMP control socket
- * under /tmp named for its emulator console port (`/tmp/qmp-socket-<port>.sock`).
- * argent never speaks the QMP protocol — input, screen capture, describe, and
- * the toolkit flag all go through `adb` (`inputd-cli`, `emu screenrecord`,
- * `forward` + JSON-RPC). We only parse that socket's *filename* to recover the
- * console port, which yields the `emulator-<port>` serial the whole adb stack
- * targets. So this module is filename parsing, not a network client.
+ * VVD lifecycle — start / stop / liveness. Running-VVD console-port discovery lives
+ * in `vega-process.ts`; this module wraps it and drives `vega virtual-device
+ * start|stop`. argent never speaks QMP — all device I/O goes through `adb`.
  */
 
 /**
- * Thrown when more than one Vega Virtual Device is running. v1 cannot
- * disambiguate which one a tool call targets (see `discoverQmpSocket`), so tools
- * surface this rather than acting on an arbitrary device. Typed so callers that
- * normally swallow discovery failures (e.g. `describe`) can still let it through.
+ * Thrown when >1 VVD is running — v1 can't tell which one a call targets. Typed so
+ * callers that otherwise swallow discovery failures (e.g. `describe`) re-throw it.
  */
 export class MultipleVegaDevicesError extends Error {
-  constructor(sockets: string[]) {
+  constructor(consolePorts: number[]) {
     super(
-      `Multiple Vega Virtual Devices detected (${sockets.length} QMP sockets: ` +
-        `${sockets.join(", ")}). argent v1 targets a single running VVD and cannot ` +
-        "tell which one a tool call refers to — stop all but one VVD and retry."
+      `Multiple Vega Virtual Devices detected (console ports: ${consolePorts.join(", ")}). ` +
+        "argent v1 targets a single running VVD and cannot tell which one a tool call " +
+        "refers to — stop all but one VVD and retry."
     );
     this.name = "MultipleVegaDevicesError";
   }
 }
 
-function consolePortFromSocketName(name: string): number | null {
-  const m = name.match(/^qmp-socket-(\d+)\.sock$/);
-  return m ? parseInt(m[1]!, 10) : null;
-}
+const ADB_READY_POLL_MS = 400;
 
-async function filterLiveSockets(names: string[]): Promise<string[]> {
-  const connected = await listAndroidDevices().catch(() => null);
-  if (!connected) return names;
-  const liveSerials = new Set(connected.filter((d) => d.state === "device").map((d) => d.serial));
-  return names.filter((name) => {
-    const port = consolePortFromSocketName(name);
-    return port !== null && liveSerials.has(`emulator-${port}`);
-  });
+// A VVD registers on adb (`emulator-<port>`) a beat after its process appears, so a
+// tool call right after boot can resolve a port whose adb transport isn't up yet.
+// Poll `adb devices` (transport-only — the non-Android guest has no
+// `getprop sys.boot_completed`, so `waitForBootCompleted` can't be reused) so callers
+// get a drivable serial instead of a downstream "device not found".
+async function waitForAdbDevice(serial: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const { stdout } = await runAdb(["devices"], { timeoutMs: 5_000 }).catch(() => ({
+      stdout: "",
+    }));
+    if (parseAdbDevices(stdout).some((d) => d.serial === serial && d.state === "device")) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Vega VVD is running (${serial}) but it has not registered with adb yet — its adb ` +
+          "transport may still be coming up. Retry in a moment."
+      );
+    }
+    await new Promise((r) => setTimeout(r, ADB_READY_POLL_MS));
+  }
 }
 
 /**
- * Locate the running VVD's QMP socket file.
- *
- * v1 supports a single running VVD. If more than one socket is present we throw
- * rather than silently pick one (`matches.sort()[0]` used to): every Vega tool
- * resolves its target through here (→ `discoverVegaConsolePort` →
- * `emulator-<port>`), so picking blindly would route a call to whichever device
- * sorts first — a stale entry, or simply the wrong VVD. The caller-supplied
- * `udid` can't be mapped back to a specific socket (the Vega CLI serial does not
- * match the console port), so "exactly one" is the only target we can resolve
- * unambiguously. Erroring keeps multi-VVD honest until per-device targeting
- * exists.
+ * The single running VVD's console port → its `emulator-<port>` adb serial (the
+ * target every Vega tool drives), once that serial is adb-ready (registration lags
+ * VVD start). Throws if none runs / never registers; `MultipleVegaDevicesError` if >1.
  */
-export async function discoverQmpSocket(): Promise<string> {
-  const isQmp = (name: string) => name.startsWith("qmp-socket-") && name.endsWith(".sock");
-  // The socket lives in the OS temp dir; on macOS `tmpdir()` is /var/folders/…
-  // but the VVD writes to the canonical /tmp, so probe both. Dedupe by socket
-  // *filename* (which encodes the console port = one device), not full path, so
-  // the same socket seen under two probed dirs counts once rather than tripping
-  // the multi-device guard below.
-  const dirs = Array.from(new Set([tmpdir(), "/tmp"]));
-  const byName = new Map<string, string>();
-  for (const dir of dirs) {
-    const entries = await readdir(dir).catch(() => [] as string[]);
-    for (const name of entries) {
-      if (isQmp(name) && !byName.has(name)) byName.set(name, join(dir, name));
-    }
-  }
-  const candidates = [...byName.keys()].sort();
-  // A freshly-booted VVD registers on adb *asynchronously* — the boot path only
-  // waits on `vega device list` (`waitForVvdRunning`), not on adb, so the socket
-  // file can exist a beat before its `emulator-<port>` shows up in `adb devices`.
-  // Retry the adb correlation a few times so the first describe/screenshot/
-  // tv-remote right after boot doesn't spuriously throw the "stale socket" path.
-  let names = await filterLiveSockets(candidates);
-  for (let attempt = 0; attempt < 4 && names.length === 0 && candidates.length > 0; attempt++) {
-    await new Promise((r) => setTimeout(r, 500));
-    names = await filterLiveSockets(candidates);
-  }
-  if (names.length === 0) {
-    const stale = candidates.length
-      ? ` (${candidates.length} socket(s) found but no matching adb device after retrying — ` +
-        "the VVD's adb transport may still be coming up, or a prior VVD crashed and left a stale socket)"
-      : "";
+export async function discoverVegaConsolePort(
+  opts: { adbReadyTimeoutMs?: number } = {}
+): Promise<number> {
+  const ports = await listRunningVvdConsolePorts();
+  if (ports.size === 0) {
     throw new Error(
-      "No running Vega Virtual Device QMP socket found (looked for /tmp/qmp-socket-*.sock)" +
-        `${stale}. Start the VVD with \`boot-device {vvdImage:...}\` (or \`vega virtual-device start\`) and retry.`
+      "No running Vega Virtual Device found. Start one with `boot-device {vvdImage:...}` " +
+        "(or `vega virtual-device start`) and retry."
     );
   }
-  if (names.length > 1) {
-    throw new MultipleVegaDevicesError(names);
-  }
-  return byName.get(names[0]!)!;
-}
-
-/**
- * Derive the VVD's emulator console port from its QMP socket name
- * (`qmp-socket-<consolePort>.sock`). The VVD is an Android-emulator-derived
- * QEMU, so this port is the standard emulator console (5554, 5556, …) and the
- * device appears to adb as `emulator-<consolePort>` — the serial every Vega tool
- * (input, screen capture, describe, toolkit flag) drives over `adb`.
- */
-export async function discoverVegaConsolePort(): Promise<number> {
-  const socket = await discoverQmpSocket();
-  const m = socket.match(/qmp-socket-(\d+)\.sock$/);
-  if (!m) {
-    throw new Error(`Could not derive emulator console port from QMP socket name: ${socket}`);
-  }
-  return parseInt(m[1]!, 10);
+  if (ports.size > 1) throw new MultipleVegaDevicesError([...ports]);
+  const port = [...ports][0]!;
+  await waitForAdbDevice(`emulator-${port}`, opts.adbReadyTimeoutMs ?? 8_000);
+  return port;
 }
 
 export async function isVvdRunning(): Promise<boolean> {

@@ -1,92 +1,58 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Control the filesystem the VVD socket discovery probes. tmpdir() is forced to
-// a distinct path from /tmp so both probed dirs are exercised (the macOS case).
-const readdir = vi.fn();
-vi.mock("node:fs/promises", () => ({ readdir: (...a: unknown[]) => readdir(...a) }));
-vi.mock("node:os", () => ({ tmpdir: () => "/var/folders/T" }));
-
-const listAndroidDevices = vi.fn();
-vi.mock("../src/utils/adb", () => ({
-  listAndroidDevices: (...a: unknown[]) => listAndroidDevices(...a),
+// The running VVD's console port comes from the process table; mock that source.
+const listRunningVvdConsolePorts = vi.fn();
+vi.mock("../src/utils/vega-process", () => ({
+  listRunningVvdConsolePorts: (...a: unknown[]) => listRunningVvdConsolePorts(...a),
 }));
 
-import {
-  discoverQmpSocket,
-  discoverVegaConsolePort,
-  MultipleVegaDevicesError,
-} from "../src/utils/vega-vvd";
+// discoverVegaConsolePort also confirms the VVD's `emulator-<port>` is adb-ready;
+// mock the `adb devices` call but keep the real parser.
+const runAdb = vi.fn();
+vi.mock("../src/utils/adb", async () => {
+  const actual = await vi.importActual<typeof import("../src/utils/adb")>("../src/utils/adb");
+  return { ...actual, runAdb: (...a: unknown[]) => runAdb(...a) };
+});
 
-function withSockets(byDir: Record<string, string[]>): void {
-  readdir.mockImplementation(async (dir: string) => byDir[dir] ?? []);
-}
+import { discoverVegaConsolePort, MultipleVegaDevicesError } from "../src/utils/vega-vvd";
 
-function withConnectedPorts(...ports: number[]): void {
-  listAndroidDevices.mockResolvedValue(
-    ports.map((p) => ({
-      serial: `emulator-${p}`,
-      state: "device",
-      isEmulator: true,
-      model: null,
-      avdName: null,
-      sdkLevel: null,
-    }))
-  );
+function adbDevices(...serials: string[]): { stdout: string; stderr: string } {
+  return {
+    stdout: ["List of devices attached", ...serials.map((s) => `${s}\tdevice`)].join("\n") + "\n",
+    stderr: "",
+  };
 }
 
 beforeEach(() => {
-  readdir.mockReset();
-  listAndroidDevices.mockReset();
-  withConnectedPorts(5554, 5556);
+  listRunningVvdConsolePorts.mockReset();
+  runAdb.mockReset();
+  runAdb.mockResolvedValue(adbDevices("emulator-5556")); // adb-ready by default
 });
 
-describe("discoverQmpSocket", () => {
-  it("returns the sole VVD socket path (ignoring unrelated files)", async () => {
-    withSockets({ "/tmp": ["qmp-socket-5554.sock", "not-a-socket.txt"] });
-    expect(await discoverQmpSocket()).toBe("/tmp/qmp-socket-5554.sock");
-  });
-
-  it("derives the emulator console port from the socket name", async () => {
-    withSockets({ "/tmp": ["qmp-socket-5556.sock"] });
+describe("discoverVegaConsolePort", () => {
+  it("returns the sole running VVD's console port once it is adb-ready", async () => {
+    listRunningVvdConsolePorts.mockResolvedValue(new Set([5556]));
     expect(await discoverVegaConsolePort()).toBe(5556);
   });
 
-  it("throws an actionable error when no VVD socket is present", async () => {
-    withSockets({});
-    await expect(discoverQmpSocket()).rejects.toThrow(/No running Vega Virtual Device QMP socket/);
+  it("throws an actionable error when no VVD process is running", async () => {
+    listRunningVvdConsolePorts.mockResolvedValue(new Set());
+    await expect(discoverVegaConsolePort()).rejects.toThrow(/No running Vega Virtual Device/);
   });
 
-  it("filters out an orphaned socket not backed by a live adb device", async () => {
-    withSockets({ "/tmp": ["qmp-socket-5554.sock", "qmp-socket-5558.sock"] });
-    withConnectedPorts(5554);
-    expect(await discoverQmpSocket()).toBe("/tmp/qmp-socket-5554.sock");
+  it("throws a typed MultipleVegaDevicesError when more than one VVD is running", async () => {
+    listRunningVvdConsolePorts.mockResolvedValue(new Set([5554, 5556]));
+    await expect(discoverVegaConsolePort()).rejects.toBeInstanceOf(MultipleVegaDevicesError);
+    await expect(discoverVegaConsolePort()).rejects.toThrow(
+      /Multiple Vega Virtual Devices detected/
+    );
   });
 
-  it("reports no running VVD (mentioning stale sockets) when every socket is orphaned", async () => {
-    withSockets({ "/tmp": ["qmp-socket-5558.sock"] });
-    withConnectedPorts();
-    await expect(discoverQmpSocket()).rejects.toThrow(/stale socket/);
-  });
-
-  it("falls back to the unfiltered socket when adb cannot be queried", async () => {
-    withSockets({ "/tmp": ["qmp-socket-5554.sock"] });
-    listAndroidDevices.mockRejectedValue(new Error("adb not found"));
-    expect(await discoverQmpSocket()).toBe("/tmp/qmp-socket-5554.sock");
-  });
-
-  it("throws a typed MultipleVegaDevicesError rather than silently targeting one", async () => {
-    withSockets({ "/tmp": ["qmp-socket-5554.sock", "qmp-socket-5556.sock"] });
-    await expect(discoverQmpSocket()).rejects.toBeInstanceOf(MultipleVegaDevicesError);
-    await expect(discoverQmpSocket()).rejects.toThrow(/Multiple Vega Virtual Devices detected/);
-  });
-
-  it("counts one device when the same socket surfaces under both probed dirs", async () => {
-    // The VVD writes to /tmp; if tmpdir() also surfaced it, dedupe-by-filename
-    // must keep it a single device rather than tripping the multi-device guard.
-    withSockets({
-      "/var/folders/T": ["qmp-socket-5554.sock"],
-      "/tmp": ["qmp-socket-5554.sock"],
-    });
-    expect(await discoverQmpSocket()).toMatch(/qmp-socket-5554\.sock$/);
+  it("waits for adb and throws a clear error if the VVD's emulator never registers", async () => {
+    listRunningVvdConsolePorts.mockResolvedValue(new Set([5556]));
+    runAdb.mockResolvedValue(adbDevices()); // emulator-5556 absent from `adb devices`
+    await expect(discoverVegaConsolePort({ adbReadyTimeoutMs: 0 })).rejects.toThrow(
+      /has not registered with adb/
+    );
   });
 });

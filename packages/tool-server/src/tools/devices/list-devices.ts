@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@argent/registry";
-import { listAndroidDevices, listAvds, adbShell } from "../../utils/adb";
+import { listAndroidDevices, listAvds, consolePortFromAdbSerial } from "../../utils/adb";
+import { listRunningVvdConsolePorts } from "../../utils/vega-process";
 import { listIosSimulators, type IosSimulator } from "../../utils/ios-devices";
 import { discoverChromiumDevices, type ChromiumDevice } from "../../utils/chromium-discovery";
 import {
@@ -57,45 +58,23 @@ function readinessRank(d: IosDevice | AndroidDevice | ChromiumDevice | VegaDevic
   return 0; // Chromium entries are only listed when their CDP is responsive
 }
 
-// Read an adb emulator's reported hardware serial.
-//   real Android emulator -> a bare serial token (e.g. "EMULATOR36X6X11X0")
-//   Vega VVD shadow        -> guest OS isn't Android, so `getprop` is absent. adb.
-//
-// A single failed read is ambiguous: a Vega VVD shadow fails *every* read (no
-// getprop), but a genuine emulator can fail one *transiently* (mid-boot, busy
-// adb, a timed-out shell). Treating that transient null as "shadow" would filter
-// a real running emulator out of list-devices entirely. So retry a few times
-// (like resolveRunningVvdSerial) and only conclude `null` when every attempt
-// fails — a real VVD fast-fails each attempt, so the loop stays cheap.
-async function readAdbDeviceSerial(serial: string): Promise<string | null> {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    for (const prop of ["ro.serialno", "ro.boot.serialno"]) {
-      try {
-        const out = (await adbShell(serial, `getprop ${prop}`, { timeoutMs: 5_000 })).trim();
-        if (out && !/\s/.test(out)) return out;
-      } catch {
-        // adb missing / device not ready / remote command failed  - exits with 127
-      }
-    }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 300));
-  }
-  return null;
-}
-
+// A running VVD also shows on adb as `emulator-<consolePort>` (or `127.0.0.1:<port+1>`
+// after `adb connect`). Drop the adb row(s) whose console port matches a running VVD
+// (from the process table); a real emulator / physical device sits elsewhere and stays.
 async function resolveVvdShadowAdbSerials<T extends { serial: string }>(
   androidDevices: readonly T[],
   vega: readonly VegaDevice[]
 ): Promise<Set<string>> {
-  const vvdRunning = vega.some((d) => d.kind === "vvd" && d.state === "running");
-  const emulators = androidDevices.filter((d) => d.serial.startsWith("emulator-"));
-  if (!vvdRunning || emulators.length === 0) return new Set();
-
+  // Nothing to dedup unless a VVD is actually running — skip the `ps` spawn on the
+  // common (no-Vega) path; list-devices is alwaysLoad and called often.
+  if (!vega.some((d) => d.kind === "vvd" && d.state === "running")) return new Set();
+  const vvdPorts = await listRunningVvdConsolePorts();
+  if (vvdPorts.size === 0) return new Set();
   const shadows = new Set<string>();
-  await Promise.all(
-    emulators.map(async (d) => {
-      if ((await readAdbDeviceSerial(d.serial)) === null) shadows.add(d.serial);
-    })
-  );
+  for (const d of androidDevices) {
+    const port = consolePortFromAdbSerial(d.serial);
+    if (port !== null && vvdPorts.has(port)) shadows.add(d.serial);
+  }
   return shadows;
 }
 
@@ -134,8 +113,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       avdName: d.avdName,
       sdkLevel: d.sdkLevel,
     }));
-    // A running VVD shows up on adb as `emulator-XXXX` too; drop those Android
-    // rows so it appears only once, as `platform:"vega"`.
+    // Drop a running VVD's adb shadow row so it appears only once (as vega).
     const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
     const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, vvdShadowSerials);
     androidDeduped.sort(sortAndroid);

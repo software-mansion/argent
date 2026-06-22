@@ -16,9 +16,7 @@ beforeEach(() => {
 
 describe("describeVega failure handling", () => {
   it("rethrows the multi-VVD ambiguity error instead of burying it in the relaunch hint", async () => {
-    fetchVegaPageSource.mockRejectedValue(
-      new MultipleVegaDevicesError(["/tmp/qmp-socket-5554.sock", "/tmp/qmp-socket-5556.sock"])
-    );
+    fetchVegaPageSource.mockRejectedValue(new MultipleVegaDevicesError([5554, 5556]));
     await expect(describeVega("amazon-abc")).rejects.toBeInstanceOf(MultipleVegaDevicesError);
   });
 

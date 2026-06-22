@@ -196,8 +196,8 @@ describe("list-devices", () => {
     expect(result.avds).toEqual([]);
   });
 
-  // A running VVD auto-registers on adb as `emulator-XXXX`, so without dedup it
-  // surfaces twice — once `platform:"android"`, once `platform:"vega"`.
+  // A running VVD surfaces on adb as `emulator-XXXX`; the dedup reads its console
+  // port from the `vega-virtual-device` process (mocked via the `ps` branch).
   function mockVegaVvd(cmd: string, args: string[]): { stdout: string; stderr: string } | null {
     if (cmd === "/bin/sh" && args[0] === "-c" && args[1]?.includes("command -v vega")) {
       return { stdout: "/usr/bin/vega\n", stderr: "" };
@@ -219,20 +219,31 @@ describe("list-devices", () => {
     return null;
   }
 
+  // A `ps` listing with a `vega-virtual-device` process per console port.
+  function psWithVvds(...consolePorts: number[]): { stdout: string; stderr: string } {
+    const lines = ["/sbin/launchd", "/usr/libexec/secd"];
+    for (const p of consolePorts) {
+      lines.push(
+        "/Users/me/vega/sdk/vega-sdk/main/0.22.6759/vvd/images/tv/vmtools/agent/qemu/" +
+          `darwin-aarch64/vega-virtual-device -avd-arch arm64 -ports ${p},${p + 1} ` +
+          `-qemu -qmp unix:/tmp/qmp-socket-${p}.sock,server,nowait`
+      );
+    }
+    return { stdout: lines.join("\n") + "\n", stderr: "" };
+  }
+
   it("de-duplicates a running VVD that also auto-registers on adb (shows only as vega)", async () => {
     __resetVegaBinaryCacheForTests();
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
+      if (cmd === "ps") return psWithVvds(5554); // VVD on console port 5554
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
       }
       if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        // The VVD's guest OS isn't Android: `getprop` is absent, so adb shell
-        // exits 127 and execFile rejects (shell protocol v2). readAdbDeviceSerial
-        // catches that → null → the row is recognised as the shadow.
-        return new Error("adb: shell command exited with code 127");
+        return { stdout: "", stderr: "" }; // enrichment getprops — irrelevant to dedup
       }
       return { stdout: "", stderr: "" };
     });
@@ -247,13 +258,36 @@ describe("list-devices", () => {
     expect(android).toHaveLength(0);
   });
 
-  it("keeps a genuine Android emulator while filtering the VVD shadow running alongside it", async () => {
-    // Live scenario: a real emulator (emulator-5554, reports a serial) and a VVD
-    // that auto-registered as emulator-5556 (non-Android guest, empty getprop).
+  it("de-duplicates a VVD reached via `adb connect` 127.0.0.1:5555 (edge 1)", async () => {
     __resetVegaBinaryCacheForTests();
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
+      if (cmd === "ps") return psWithVvds(5554);
+      if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
+      if (cmd === "adb" && args[0] === "devices") {
+        // adb port = console + 1, so the `adb connect` serial is 127.0.0.1:5555.
+        return { stdout: "List of devices attached\n127.0.0.1:5555\tdevice\n", stderr: "" };
+      }
+      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
+        return { stdout: "", stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await listDevicesTool.execute!({}, {});
+    expect(result.devices.filter((d) => d.platform === "android")).toHaveLength(0);
+    expect(result.devices.filter((d) => d.platform === "vega")).toHaveLength(1);
+  });
+
+  it("keeps a real Android emulator running alongside the VVD (edge 2 / distinguishes QEMU)", async () => {
+    // Real emulator on 5554, VVD on 5556 (from its process). Only the VVD's row is
+    // dropped; a co-running emulator / QEMU is never mistaken for the VVD.
+    __resetVegaBinaryCacheForTests();
+    execFileMock.mockImplementation((cmd: string, args: string[]) => {
+      const vega = mockVegaVvd(cmd, args);
+      if (vega) return vega;
+      if (cmd === "ps") return psWithVvds(5556); // VVD on console port 5556
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return {
@@ -262,18 +296,10 @@ describe("list-devices", () => {
         };
       }
       if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        const serial = args[1];
         const shellCmd = args[3] ?? "";
-        // The VVD shadow on legacy adb (shell v1): the missing-`getprop` error is
-        // merged onto stdout with a zero exit, so the read is non-empty but isn't a
-        // serial. readAdbDeviceSerial's whitespace guard rejects it.
-        if (serial === "emulator-5556") {
-          return { stdout: "/bin/sh: getprop: command not found", stderr: "" };
-        }
-        // The genuine emulator reports a real hardware serial.
         if (shellCmd.includes("ro.product.model")) return { stdout: "Pixel_7\n", stderr: "" };
         if (shellCmd.includes("ro.build.version.sdk")) return { stdout: "34\n", stderr: "" };
-        if (shellCmd.includes("serialno")) return { stdout: "EMULATOR34X1X8X0\n", stderr: "" };
+        return { stdout: "", stderr: "" };
       }
       return { stdout: "", stderr: "" };
     });
@@ -283,14 +309,14 @@ describe("list-devices", () => {
     const vega = result.devices.filter((d) => d.platform === "vega");
 
     expect(vega).toHaveLength(1);
-    // The empty-serial shadow (emulator-5556) is dropped; the real emulator stays.
+    // The shadow (emulator-5556) is dropped; the real emulator stays.
     expect(android).toHaveLength(1);
     expect((android[0] as { serial: string }).serial).toBe("emulator-5554");
   });
 
-  it("does not filter an empty-serial emulator when no VVD is running (e.g. mid-boot)", async () => {
-    // Vega SDK present but no device connected → no running VVD. An emulator that
-    // is still mid-boot (getprop transiently empty) must NOT be mistaken for a shadow.
+  it("does not filter an emulator when no VVD process is running (e.g. mid-boot)", async () => {
+    // Vega SDK present but no `vega-virtual-device` process → no running VVD. A
+    // standalone emulator must NOT be mistaken for a shadow.
     __resetVegaBinaryCacheForTests();
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       if (cmd === "/bin/sh" && args[0] === "-c" && args[1]?.includes("command -v vega")) {
@@ -300,12 +326,13 @@ describe("list-devices", () => {
       if (cmd.endsWith("vega") && args[0] === "device" && args[1] === "list") {
         return { stdout: "Found the following device:\n", stderr: "" }; // no devices
       }
+      if (cmd === "ps") return { stdout: "/sbin/launchd\n", stderr: "" }; // no VVD process
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
       }
       if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        return { stdout: "", stderr: "" }; // mid-boot: getprop empty
+        return { stdout: "", stderr: "" };
       }
       return { stdout: "", stderr: "" };
     });
@@ -319,52 +346,6 @@ describe("list-devices", () => {
     expect((android[0] as { serial: string }).serial).toBe("emulator-5554");
   });
 
-  it("keeps a real emulator whose getprop fails transiently before a VVD shadow is resolved", async () => {
-    // VVD shadow (emulator-5554) never has getprop; a genuine emulator
-    // (emulator-5556) fails its first serial read transiently, then succeeds.
-    // The retry in readAdbDeviceSerial must give the real emulator another chance
-    // so it isn't mistaken for a shadow and filtered out.
-    __resetVegaBinaryCacheForTests();
-    let realSerialReads = 0;
-    execFileMock.mockImplementation((cmd: string, args: string[]) => {
-      const vega = mockVegaVvd(cmd, args);
-      if (vega) return vega;
-      if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
-      if (cmd === "adb" && args[0] === "devices") {
-        return {
-          stdout: "List of devices attached\nemulator-5554\tdevice\nemulator-5556\tdevice\n",
-          stderr: "",
-        };
-      }
-      if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        const serial = args[1];
-        const shellCmd = args[3] ?? "";
-        if (serial === "emulator-5554") {
-          return new Error("adb: shell command exited with code 127"); // VVD shadow
-        }
-        // The genuine emulator: model/sdk succeed so it lists; the serial read
-        // fails on the first attempt and succeeds thereafter.
-        if (shellCmd.includes("ro.product.model")) return { stdout: "Pixel_7\n", stderr: "" };
-        if (shellCmd.includes("ro.build.version.sdk")) return { stdout: "34\n", stderr: "" };
-        if (shellCmd.includes("serialno")) {
-          realSerialReads++;
-          if (realSerialReads <= 2) return new Error("adb: device offline"); // both props, attempt 1
-          return { stdout: "EMULATOR34X1X8X0\n", stderr: "" };
-        }
-      }
-      return { stdout: "", stderr: "" };
-    });
-
-    const result = await listDevicesTool.execute!({}, {});
-    const android = result.devices.filter((d) => d.platform === "android");
-    const vega = result.devices.filter((d) => d.platform === "vega");
-
-    expect(vega).toHaveLength(1);
-    // The transiently-failing real emulator is retried and kept, not filtered.
-    expect(android).toHaveLength(1);
-    expect((android[0] as { serial: string }).serial).toBe("emulator-5556");
-  });
-
   it("does not re-list a running VVD as a phantom stopped image when its profile is absent", async () => {
     // `vega device info` omits `profile`, but an image named "tv" is installed.
     // The running VVD must dedup against that image (single installed image) so it
@@ -374,12 +355,13 @@ describe("list-devices", () => {
     execFileMock.mockImplementation((cmd: string, args: string[]) => {
       const vega = mockVegaVvd(cmd, args);
       if (vega) return vega;
+      if (cmd === "ps") return psWithVvds(5554);
       if (cmd === "xcrun") return { stdout: simctlJson(), stderr: "" };
       if (cmd === "adb" && args[0] === "devices") {
         return { stdout: "List of devices attached\nemulator-5554\tdevice\n", stderr: "" };
       }
       if (cmd === "adb" && args[0] === "-s" && args[2] === "shell") {
-        return new Error("adb: shell command exited with code 127"); // VVD shadow
+        return { stdout: "", stderr: "" };
       }
       return { stdout: "", stderr: "" };
     });

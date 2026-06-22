@@ -278,6 +278,19 @@ export function parseAdbDevices(stdout: string): Array<{ serial: string; state: 
 }
 
 /**
+ * Emulator *console* port for an adb serial, or `null`. `emulator-5554`→5554;
+ * loopback `127.0.0.1:5555`→5554 (adb port = console+1). Loopback-only, so a
+ * wireless physical device (`192.168.x.x:5555`) is never taken for an emulator/VVD.
+ */
+export function consolePortFromAdbSerial(serial: string): number | null {
+  const emu = serial.match(/^emulator-(\d+)$/);
+  if (emu) return parseInt(emu[1]!, 10);
+  const tcp = serial.match(/^(?:127\.0\.0\.1|localhost|::1):(\d+)$/);
+  if (tcp) return parseInt(tcp[1]!, 10) - 1;
+  return null;
+}
+
+/**
  * Light-weight listing for callers that only need which serials exist.
  * Skips the per-device getprop round-trips so the call is one `adb devices`
  * shell-out, not 1 + 3N. Used by `listAndroidDevices` as the first hop before
