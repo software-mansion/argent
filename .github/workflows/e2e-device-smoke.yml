@@ -78,7 +78,7 @@ jobs:
           cd packages/tool-server
           # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
           # typecheck job already enforces types). Without it a cold start on a
-          # loaded macOS arm runner can take >60s to bind and flakily times out.
+          # loaded CI runner can take >60s to bind and flakily times out.
           nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
           for i in $(seq 1 60); do
@@ -101,7 +101,7 @@ jobs:
           DEVICE_ID: ${{ env.UDID }}
 
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-ios-sim-macos
           path: |
@@ -152,7 +152,7 @@ jobs:
           cd packages/tool-server
           # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
           # typecheck job already enforces types). Without it a cold start on a
-          # loaded macOS arm runner can take >60s to bind and flakily times out.
+          # loaded CI runner can take >60s to bind and flakily times out.
           nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
           for i in $(seq 1 60); do
@@ -169,7 +169,7 @@ jobs:
           DEVICE_ID: chromium-cdp-19222
 
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-chromium-linux
           path: |
@@ -208,7 +208,7 @@ jobs:
           cd packages/tool-server
           # TS_NODE_TRANSPILE_ONLY skips ts-node's whole-program type-check (the
           # typecheck job already enforces types). Without it a cold start on a
-          # loaded macOS arm runner can take >60s to bind and flakily times out.
+          # loaded CI runner can take >60s to bind and flakily times out.
           nohup env ARGENT_PORT=3033 TS_NODE_TRANSPILE_ONLY=1 npx ts-node src/index.ts start \
             > ~/.argent/tool-server.log 2>&1 &
           for i in $(seq 1 60); do
@@ -227,7 +227,7 @@ jobs:
           DEVICE_ID: chromium-cdp-19222
 
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-chromium-macos
           path: |

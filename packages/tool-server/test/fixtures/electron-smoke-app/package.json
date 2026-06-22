@@ -2,7 +2,7 @@
   "name": "electron-smoke-app",
   "version": "0.0.0",
   "private": true,
-  "description": "Minimal self-contained Electron app used as the boot target for the Chromium cells of .github/workflows/e2e-device-smoke.yml. Not part of the workspace build: CI runs `npm install` inside this directory so it vendors its OWN electron (keeping electron out of the repo's root lockfile). boot-electron resolves ./node_modules/.bin/electron from here.",
+  "description": "Minimal self-contained Electron app used as the boot target for the Chromium cells of .github/workflows/e2e-device-smoke.yml. Not part of the workspace build: CI runs `npm ci` inside this directory so it vendors its OWN electron (keeping electron out of the repo's root lockfile). boot-electron resolves ./node_modules/.bin/electron from here.",
   "main": "main.js",
   "scripts": {
     "start": "electron ."
