@@ -24,6 +24,7 @@ function makeApi(wallClockStartMs: number | null): NativeProfilerSessionApi {
     platform: "ios",
     appProcess: "MyApp",
     capturePid: null,
+    cpuFilterPid: null,
     captureProcess: null,
     traceFile: "/tmp/native-profiler-ios.trace",
     // null exporter paths → checkExportFileMissing short-circuits (no fs access);
