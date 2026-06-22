@@ -17,3 +17,5 @@ bench/out/
 bench/__pycache__/
 training/data-native/
 training/data-native-poc/
+training/data-realistic/
+training/data-nonarr/

@@ -33,6 +33,94 @@ const OFFERED_TOOLS = +(process.argv[process.argv.indexOf("--tools") + 1] || 8);
 
 const NO_NARRATION = process.argv.includes("--no-narration");
 
+// --realistic: train the model the way it is actually deployed.
+//  (a) FIXED tool set every example (= the set the benchmark agent exposes), so the
+//      model never sees an unfamiliar tool at inference and stops confabulating tool
+//      names (a 8-random-tools-train vs 69-tools-infer mismatch caused that).
+//  (b) Observations that match REAL argent: the gym otherwise appends a free
+//      `[screenshot] "Title" showing: <elements>` to every result, so the model learns
+//      to "see" the screen for free — but real argent returns an UNREADABLE image and a
+//      path, so the only text screen-state is `describe`. We strip the free caption and,
+//      for screen-changing tools, append argent's real `--- Screen after action ---`
+//      note. The expert already calls describe before every tap, so trajectories stay
+//      coherent; the model now learns the correct describe-then-tap loop.
+const REALISTIC = process.argv.includes("--realistic");
+
+// The fixed nav/interaction tool set (covers iOS-native, RN, Android, Chromium nav).
+const FIXED_TOOL_NAMES = [
+  "list-devices",
+  "launch-app",
+  "open-url",
+  "describe",
+  "gesture-tap",
+  "gesture-swipe",
+  "keyboard",
+  "button",
+  "screenshot",
+  "stop-all-simulator-servers",
+];
+const FIXED_TOOLS: ToolSpec[] = FIXED_TOOL_NAMES.map(
+  (n) => catalog.find((t) => t.name === n)!
+).filter(Boolean);
+
+// Nav-style task kinds the fixed tool set covers (drop profiling/flow/network kinds).
+const NAV_KINDS = new Set([
+  "navigate-tap",
+  "toggle",
+  "scroll-find",
+  "deep-link",
+  "hide-and-seek",
+  "login",
+  "android-setup",
+  "chromium-tabs",
+]);
+
+// Tools that change the screen — real argent appends a screenshot after these.
+const INTERACTION_TOOLS = new Set([
+  "launch-app",
+  "open-url",
+  "restart-app",
+  "reinstall-app",
+  "gesture-tap",
+  "gesture-swipe",
+  "gesture-scroll",
+  "gesture-pinch",
+  "gesture-rotate",
+  "gesture-drag",
+  "gesture-custom",
+  "keyboard",
+  "button",
+  "run-sequence",
+  "rotate",
+]);
+
+const SCENE_CAPTION = /\n\n\[screenshot\][\s\S]*$/; // the gym's free post-action caption
+
+/** Rewrite tool observations to match what OpenCode + argent actually return. */
+function realizeObservations(
+  messages: {
+    role: string;
+    content?: string;
+    tool_calls?: { id?: string; function: { name: string } }[];
+    tool_call_id?: string;
+  }[]
+) {
+  const idToName = new Map<string, string>();
+  for (const m of messages)
+    if (m.role === "assistant" && m.tool_calls)
+      for (const c of m.tool_calls) if (c.id) idToName.set(c.id, c.function.name);
+  let shot = 0;
+  for (const m of messages) {
+    if (m.role !== "tool" || typeof m.content !== "string") continue;
+    const name = m.tool_call_id ? idToName.get(m.tool_call_id) : undefined;
+    let c = m.content.replace(SCENE_CAPTION, ""); // drop the idealized free screen view
+    if (name && INTERACTION_TOOLS.has(name))
+      c += `\n\n--- Screen after action ---\n\nSaved: /tmp/argent/screen-${++shot}.png`;
+    m.content = c;
+  }
+  return messages;
+}
+
 /** OpenAI-style {messages, tools} with tool_call arguments as OBJECTS (the gemma4
  *  chat template renders dicts, not JSON strings). */
 function toNative(traj: Trajectory) {
@@ -59,6 +147,7 @@ function toNative(traj: Trajectory) {
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.inputSchema },
   }));
+  if (REALISTIC) realizeObservations(messages);
   return { messages, tools };
 }
 
@@ -66,6 +155,7 @@ function genRow(seed: number) {
   const rng = new RNG(seed);
   const task = generateTask(rng);
   if (!task) return null;
+  if (REALISTIC && !NAV_KINDS.has(task.kind)) return null; // nav-focused, fixed tool set
   const persona = pickPersona(rng, task.kind);
   const prompt = userTaskPhrase(rng, task.kind, persona, {
     app: task.app.name,
@@ -75,13 +165,14 @@ function genRow(seed: number) {
     field: task.field,
   });
   const sr = solve(task, rng, prompt);
-  const traj = assemble(
-    sr,
-    task,
-    seed,
-    buildOfferedTools(catalog, sr.toolsUsed, rng, OFFERED_TOOLS),
-    persona
-  );
+  // REALISTIC: same FIXED tool set every example (train == inference). Otherwise a
+  // per-example used∪distractors sample. Either way the validator drops a trajectory
+  // whose calls aren't all in the offered set.
+  const offered = REALISTIC
+    ? FIXED_TOOLS
+    : buildOfferedTools(catalog, sr.toolsUsed, rng, OFFERED_TOOLS);
+  if (REALISTIC && !sr.toolsUsed.every((n) => FIXED_TOOL_NAMES.includes(n))) return null;
+  const traj = assemble(sr, task, seed, offered, persona);
   if (!validator.validate(traj).ok) return null;
   return toNative(traj);
 }
