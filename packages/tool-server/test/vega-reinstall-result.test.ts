@@ -39,7 +39,9 @@ describe("vega reinstall — install-app result detection", () => {
 
   it("accepts a clean single-phase success", async () => {
     mockInstallOutput("Installing 'app' ...success\n");
-    await expect(vegaImpl.handler(SERVICES, PARAMS, DEVICE)).resolves.toMatchObject({ reinstalled: true });
+    await expect(vegaImpl.handler(SERVICES, PARAMS, DEVICE)).resolves.toMatchObject({
+      reinstalled: true,
+    });
   });
 
   it("rejects when no phase reports success", async () => {
