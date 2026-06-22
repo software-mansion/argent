@@ -11,9 +11,15 @@ import type { RestartAppParams, RestartAppResult, RestartAppVegaServices } from 
  *
  * The toolkit enable flag is (re)asserted before relaunch (best-effort) so a
  * restart is the canonical way to make an app introspectable by `describe`.
+ *
+ * Requires both `vega` (the CLI that performs terminate/launch) and `adb` (used
+ * by `ensureAutomationToolkitEnabled`). Declaring `adb` fails fast with a clean
+ * install hint instead of silently skipping the toolkit-enable step; the
+ * `.catch` below still tolerates non-dep hiccups (e.g. VVD console-port
+ * discovery).
  */
 export const vegaImpl: PlatformImpl<RestartAppVegaServices, RestartAppParams, RestartAppResult> = {
-  requires: ["vega"],
+  requires: ["vega", "adb"],
   handler: async (_services, params) => {
     await ensureAutomationToolkitEnabled(params.udid).catch(() => {});
     await vegaDevice(params.udid, ["terminate-app", "-a", params.bundleId], {

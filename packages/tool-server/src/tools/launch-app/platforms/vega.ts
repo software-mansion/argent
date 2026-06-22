@@ -13,9 +13,15 @@ import type { LaunchAppParams, LaunchAppResult, LaunchAppVegaServices } from "..
  * We set the automation-toolkit enable flag *before* launching (best-effort) so
  * the launched app attaches the introspection server `describe` reads — the flag
  * is only consulted at app launch.
+ *
+ * Requires both `vega` (the CLI that performs the launch) and `adb` (used by
+ * `ensureAutomationToolkitEnabled`). Declaring `adb` fails fast with a clean
+ * install hint instead of silently skipping the toolkit-enable step and leaving
+ * the launched app un-introspectable; the `.catch` below still tolerates
+ * non-dep hiccups (e.g. VVD console-port discovery).
  */
 export const vegaImpl: PlatformImpl<LaunchAppVegaServices, LaunchAppParams, LaunchAppResult> = {
-  requires: ["vega"],
+  requires: ["vega", "adb"],
   handler: async (_services, params) => {
     await ensureAutomationToolkitEnabled(params.udid).catch(() => {});
     await vegaDevice(params.udid, ["launch-app", "-a", params.bundleId], { timeoutMs: 60_000 });
