@@ -24,6 +24,7 @@ export type FailureKind = (typeof FAILURE_KINDS)[number];
 export const FAILURE_COMMANDS = [
   "adb",
   "emulator",
+  "vega",
   "xcrun_simctl",
   "xctrace",
   "native_devtools",

@@ -29,11 +29,15 @@ import {
 import { ensureDep } from "../../utils/check-deps";
 import { linuxBootDiagnostics } from "../../utils/linux-preflight";
 import { listIosSimulators } from "../../utils/ios-devices";
+import { listVvdImages } from "../../utils/vega-sdk";
+import { startVvd, stopVvd, isVvdRunning, waitForVvdRunning } from "../../utils/vega-vvd";
+import { resolveRunningVvdSerial, listVegaDevices } from "../../utils/vega-devices";
 import { bootElectronApp, type ElectronBootResult } from "./boot-electron";
 
 const execFileAsync = promisify(execFile);
 
-// NOTE on mutual exclusion: `udid` and `avdName` are exactly-one — but zod's
+// NOTE on mutual exclusion: `udid` / `avdName` / `vvdImage` / `electronAppPath`
+// are exactly-one — but zod's
 // `.refine()` returns a ZodEffects that our Registry ToolDefinition type does
 // not accept (it requires a ZodObject so the JSON Schema generator can walk
 // `.shape`). The exactly-one check therefore lives inside `execute` and
@@ -45,13 +49,19 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid` or `avdName`."
+      "iOS: simulator UDID to boot (from `list-devices`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   avdName: z
     .string()
     .optional()
     .describe(
-      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid` or `avdName`."
+      "Android: AVD name to launch a new emulator from (from `list-devices` → `avds[].name`). Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
+    ),
+  vvdImage: z
+    .string()
+    .optional()
+    .describe(
+      "Vega (Fire TV): VVD image to boot — the `vvdImage` of a Vega device from `list-devices` (e.g. `tv`). Starts the single SDK-managed Vega Virtual Device. Provide exactly one of `udid`, `avdName`, `vvdImage`, or `electronAppPath`."
     ),
   bootTimeoutMs: z
     .number()
@@ -60,7 +70,7 @@ const zodSchema = z.object({
     .max(900_000)
     .optional()
     .describe(
-      "Android-only: overall budget for the full boot sequence. Defaults to 480000 (8 min). Clamped to [30s, 15min]. Ignored on iOS."
+      "Android/Vega: overall budget for the boot sequence. Default 480000 (8 min) on Android, 120000 (2 min) on Vega. Clamped to [30s, 15min]. Ignored on iOS."
     ),
   force: z
     .boolean()
@@ -94,6 +104,7 @@ type BootDeviceParams = z.infer<typeof zodSchema>;
 type BootDeviceResult =
   | { platform: "ios"; udid: string; booted: true }
   | { platform: "android"; serial: string; avdName: string; booted: true }
+  | VegaBootResult
   | ElectronBootResult
   | NativeDevtoolsInitFailedResult;
 
@@ -1102,10 +1113,106 @@ function createEarlyExitRacer(getExit: () => Error | null): {
 // input). Capability is still declared so the HTTP gate rejects an iOS udid
 // on a host without xcrun, etc., and so `list-devices` consumers can rely on
 // uniform metadata.
+type VegaBootResult = { platform: "vega"; serial: string; vvdImage: string; booted: true };
+
+// Coalesce concurrent Vega boots (mirrors `inFlightBoots` for Android): two
+// callers must not both shell out `vega virtual-device start` for the same image.
+const inFlightVegaBoots = new Map<string, Promise<VegaBootResult>>();
+
+async function bootVegaImpl(params: {
+  vvdImage: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<VegaBootResult> {
+  await ensureDep("vega");
+
+  const images = await listVvdImages();
+  const image = images.find((i) => i.name === params.vvdImage);
+  if (!image) {
+    const available = images.map((i) => i.name).join(", ") || "(none found)";
+    throw new Error(
+      `Vega VVD image "${params.vvdImage}" not found. Available: ${available}. ` +
+        "Image names come from `list-devices` → the `vvdImage` field on a Vega device."
+    );
+  }
+
+  const running = await isVvdRunning();
+  if (running && !params.force) {
+    // Already up. v1 supports a single running VVD and can't boot a second, so
+    // don't pretend we honored the request: resolve the image that is *actually*
+    // running and label the payload with it. If the caller asked for a different
+    // image, surface that rather than returning the running device mislabeled.
+    const current = await listVegaDevices();
+    const runningVvd = current.find((d) => d.kind === "vvd" && d.state === "running" && d.serial);
+    const runningImage = runningVvd?.vvdImage ?? null;
+    // Only report the request as already-satisfied when we can POSITIVELY confirm
+    // the running image is the requested one. An unconfirmable running image
+    // (`null` — e.g. an unresolved profile with 2+ installed images, or 2+ running
+    // VVDs) must be treated as a mismatch, not a match: otherwise we'd return
+    // booted:true for `params.vvdImage` while a *different* VVD is actually running
+    // and every later tool would silently drive that other device.
+    if (runningImage !== params.vvdImage) {
+      const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
+      throw new Error(
+        `A Vega VVD ${which} is already running; argent v1 supports a single running VVD. ` +
+          `To boot "${params.vvdImage}", re-run boot-device with force:true (stops the current ` +
+          "VVD first) or stop it via `vega virtual-device stop`."
+      );
+    }
+    return {
+      platform: "vega",
+      serial: runningVvd?.serial ?? (await resolveRunningVvdSerial()),
+      vvdImage: runningImage, // == params.vvdImage (positively confirmed above)
+      booted: true,
+    };
+  }
+  if (running && params.force) {
+    await stopVvd();
+  }
+
+  // One shared boot budget across both stages: startVvd consumes part of
+  // bootTimeoutMs, so waitForVvdRunning gets only the time remaining rather than
+  // the full value again. Otherwise the budget is spent twice and the worst-case
+  // wall-clock before a boot failure surfaces is ~2x the requested deadline.
+  const bootDeadline = Date.now() + params.bootTimeoutMs;
+  await startVvd({
+    timeoutSeconds: Math.ceil(params.bootTimeoutMs / 1_000),
+    imagePath: image.path,
+  });
+  await waitForVvdRunning(Math.max(0, bootDeadline - Date.now()));
+
+  return {
+    platform: "vega",
+    serial: await resolveRunningVvdSerial(),
+    vvdImage: params.vvdImage,
+    booted: true,
+  };
+}
+
+function bootVega(params: {
+  vvdImage: string;
+  bootTimeoutMs: number;
+  force?: boolean;
+}): Promise<VegaBootResult> {
+  // Key the coalescing on `force` too: a `force:true` boot does a stop+start
+  // restart, so it must NOT join an in-flight non-force boot (which would skip
+  // the restart and hand back the stale device). Two same-mode boots of the same
+  // image still share one promise.
+  const key = `${params.vvdImage} ${params.force ? "force" : "normal"}`;
+  const existing = inFlightVegaBoots.get(key);
+  if (existing) return existing;
+  const promise = bootVegaImpl(params).finally(() => {
+    inFlightVegaBoots.delete(key);
+  });
+  inFlightVegaBoots.set(key, promise);
+  return promise;
+}
+
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 export function createBootDeviceTool(
@@ -1113,24 +1220,26 @@ export function createBootDeviceTool(
 ): ToolDefinition<BootDeviceParams, BootDeviceResult> {
   return {
     id: "boot-device",
-    description: `Start an iOS simulator, launch an Android emulator, or spawn an Electron app and wait until it is ready to accept interactions.
-Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
+    description: `Start an iOS simulator, launch an Android emulator, start a Vega (Fire TV) Virtual Device, or spawn an Electron app and wait until it is ready to accept interactions.
+Pick the platform by which argument you pass: 'udid' for an iOS simulator from list-devices, 'avdName' for an Android AVD (a serial is assigned automatically), 'vvdImage' for a Vega VVD (the 'vvdImage' of a vega device from list-devices, e.g. 'tv'), or 'electronAppPath' for an Electron app (a CDP remote-debugging port is picked automatically, or pass 'electronPort' to fix one).
 Use at the start of a session once you have picked a target.
-Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
-Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. If any boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
+Returns a tagged payload: { platform: 'ios', udid, booted } or { platform: 'android', serial, avdName, booted } or { platform: 'vega', serial, vvdImage, booted } or { platform: 'chromium', id, port, pid, booted } (an Electron app boots as a Chromium/CDP device).
+Android boots take 2–10 minutes depending on machine and cold/warm state; the tool transparently hot-boots from the AVD's default_boot snapshot when usable and falls back to cold boot otherwise. Vega starts the single SDK-managed VVD via the vega CLI (~10s) and returns once it reports running. If an Android/Electron boot stage fails, the tool terminates the device it spawned so the next retry starts clean.`,
     alwaysLoad: true,
-    searchHint: "boot start launch simulator emulator avd device session ios android cold hot",
+    searchHint:
+      "boot start launch simulator emulator avd device session ios android vega vvd firetv cold hot",
     zodSchema,
     capability,
     services: () => ({}),
     async execute(_services, params) {
       const hasUdid = Boolean(params.udid);
       const hasAvd = Boolean(params.avdName);
+      const hasVega = Boolean(params.vvdImage);
       const hasElectron = Boolean(params.electronAppPath);
-      const provided = [hasUdid, hasAvd, hasElectron].filter(Boolean).length;
+      const provided = [hasUdid, hasAvd, hasVega, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
         throw new FailureError(
-          "Provide exactly one of `udid` (iOS), `avdName` (Android), or `electronAppPath` (Electron).",
+          "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron).",
           {
             error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
             failure_stage: "boot_device_target_selection",
@@ -1146,6 +1255,13 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
         return bootAndroid({
           avdName: params.avdName!,
           bootTimeoutMs: params.bootTimeoutMs ?? 480_000,
+          force: params.force,
+        });
+      }
+      if (hasVega) {
+        return bootVega({
+          vvdImage: params.vvdImage!,
+          bootTimeoutMs: params.bootTimeoutMs ?? 120_000,
           force: params.force,
         });
       }
