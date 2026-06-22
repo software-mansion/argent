@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -77,7 +77,12 @@ Fails if native devtools are not connected, the app is not running, or status is
     )) as { matches?: unknown[]; error?: string };
 
     if (result.error) {
-      throw new Error(result.error);
+      throw new FailureError(result.error, {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_FIND_VIEWS_ERROR,
+        failure_stage: "native_devtools_find_views",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
 
     return { status: "ok", matches: result.matches ?? [] };

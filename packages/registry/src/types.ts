@@ -69,6 +69,8 @@ export interface InvokeToolOptions {
    * "legacy caller — behave exactly as before the file boundary existed".
    */
   fileInputs?: Record<string, ResolvedFileInput>;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
 }
 
 /**
@@ -178,6 +180,16 @@ export interface ToolDefinition<TParams = void, TResult = unknown> {
    * aborted mid-flight.
    */
   longRunning?: boolean;
+  /**
+   * Gates this tool behind a feature flag (a name in @argent/configuration-core's
+   * FLAG_REGISTRY). Enforced in TWO places, both re-checked on every request so
+   * `argent enable/disable <flag>` takes effect without restarting the long-lived
+   * tool-server: (1) the HTTP layer hides the tool from `GET /tools` and rejects
+   * `POST /tools/:name` with 404, and (2) `Registry.invokeTool` rejects it so
+   * internal dispatch paths (flows, run-sequence) can't bypass the gate. The tool
+   * is still registered; gating happens at invocation, not at registration.
+   */
+  featureFlag?: string;
   /** Per-platform support declaration. Cross-platform tools assert against this before dispatching. */
   capability?: ToolCapability;
   /**
@@ -212,7 +224,7 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string) => void;
-  toolCompleted: (toolId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, error: Error) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string) => void;
+  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
+  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
 };

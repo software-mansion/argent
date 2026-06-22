@@ -18,9 +18,16 @@
     "pack:mcp:local": "npm run download:simulator-server && npm run build:ios-binaries && npm run build:android-binaries && npm run download:trace-processor && npm run build && npm run build -w @swmansion/argent && npm pack -w @swmansion/argent --pack-destination .",
     "dev": "node scripts/dev.cjs",
     "format": "prettier --write .",
-    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json"
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
+    "check:versions": "node scripts/check-workspace-versions.mjs"
   },
   "devDependencies": {
-    "prettier": "^3.8.3"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.5.0",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.4",
+    "typescript-eslint": "^8.61.1"
   }
 }

@@ -6,6 +6,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   TypedEventEmitter,
+  FAILURE_CODES,
+  FailureError,
   type DeviceInfo,
   type ServiceBlueprint,
   type ServiceEvents,
@@ -336,7 +338,7 @@ async function listRunningUIKitApplicationBundleIds(udid: string): Promise<Set<s
 
   const bundleIds = new Set<string>();
   for (const line of stdout.split("\n")) {
-    const match = line.match(/UIKitApplication:([^\[]+)/);
+    const match = line.match(/UIKitApplication:([^[]+)/);
     if (match) {
       bundleIds.add(match[1].trim());
     }
@@ -354,17 +356,29 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
   async factory(_deps, _payload, options) {
     const opts = options as unknown as NativeDevtoolsFactoryOptions | undefined;
     if (!opts?.device) {
-      throw new Error(
+      throw new FailureError(
         `${NATIVE_DEVTOOLS_NAMESPACE}.factory requires a resolved DeviceInfo via options.device. ` +
-          `Use nativeDevtoolsRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`
+          `Use nativeDevtoolsRef(device) when registering the service ref, or pass { device } when calling resolveService directly.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_FACTORY_OPTIONS_MISSING,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
 
     const { device } = opts;
     const transport: NativeDevtoolsTransport = opts.transport ?? "unix";
     if (device.platform !== "ios") {
-      throw new Error(
-        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`
+      throw new FailureError(
+        `${NATIVE_DEVTOOLS_NAMESPACE} is iOS-only. The target '${device.id}' classifies as ${device.platform} — native-devtools tools (native-describe-screen, native-find-views, etc.) only drive iOS simulators. Pick an iOS udid from list-devices.`,
+        {
+          error_code: FAILURE_CODES.NATIVE_DEVTOOLS_WRONG_PLATFORM,
+          failure_stage: "native_devtools_factory_options",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     if (device.kind === "device") {
@@ -463,7 +477,12 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
       const conn = connections.get(targetBundleId);
       if (!conn) {
         return Promise.reject(
-          new Error("Native devtools not connected for bundleId: " + targetBundleId)
+          new FailureError("Native devtools not connected for bundleId: " + targetBundleId, {
+            error_code: FAILURE_CODES.NATIVE_DEVTOOLS_NOT_CONNECTED,
+            failure_stage: "native_devtools_rpc_connection",
+            failure_area: "tool_server",
+            error_kind: "not_found",
+          })
         );
       }
       const id = nextRpcId++;
@@ -478,7 +497,14 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         setTimeout(() => {
           if (pendingRpc.has(id)) {
             pendingRpc.delete(id);
-            reject(new Error(`ViewInspector RPC timed out: ${method}`));
+            reject(
+              new FailureError(`ViewInspector RPC timed out: ${method}`, {
+                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT,
+                failure_stage: "native_devtools_rpc_request",
+                failure_area: "tool_server",
+                error_kind: "timeout",
+              })
+            );
           }
         }, 5000);
       });
@@ -488,7 +514,9 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     if (transport === "unix") {
       try {
         fs.unlinkSync(socketPath);
-      } catch {}
+      } catch {
+        /* no stale socket to remove; ignore */
+      }
     }
 
     // ── Socket server ─────────────────────────────────────────────────────────
@@ -554,8 +582,16 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
           const pending = pendingRpc.get(p.id);
           if (!pending) return;
           pendingRpc.delete(p.id);
-          if (p.error) pending.reject(new Error(p.error.message));
-          else pending.resolve(p.result);
+          if (p.error) {
+            pending.reject(
+              new FailureError(p.error.message, {
+                error_code: FAILURE_CODES.NATIVE_DEVTOOLS_RPC_ERROR,
+                failure_stage: "native_devtools_rpc_response",
+                failure_area: "tool_server",
+                error_kind: "subprocess",
+              })
+            );
+          } else pending.resolve(p.result);
         }
       });
 
@@ -697,10 +733,19 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (transport === "unix") {
           try {
             fs.unlinkSync(socketPath);
-          } catch {}
+          } catch {
+            /* best-effort socket cleanup; ignore errors */
+          }
         }
         for (const { reject } of pendingRpc.values()) {
-          reject(new Error("NativeDevtools service disposed"));
+          reject(
+            new FailureError("NativeDevtools service disposed", {
+              error_code: FAILURE_CODES.NATIVE_DEVTOOLS_SERVICE_DISPOSED,
+              failure_stage: "native_devtools_dispose",
+              failure_area: "tool_server",
+              error_kind: "unknown",
+            })
+          );
         }
         pendingRpc.clear();
       },

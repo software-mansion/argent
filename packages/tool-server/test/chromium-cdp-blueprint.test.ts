@@ -114,7 +114,7 @@ async function startFakeCdp(): Promise<FakeCdp> {
           }
         }
         ws.send(JSON.stringify({ id: msg.id, result }));
-      } catch (err) {
+      } catch {
         // Ignore malformed payloads — the blueprint guards against bad replies on its own.
       }
     });

@@ -13,3 +13,4 @@ export {
   type FlagScope,
   type FlagDefinition,
 } from "@argent/configuration-core";
+export { telemetry } from "./telemetry.js";

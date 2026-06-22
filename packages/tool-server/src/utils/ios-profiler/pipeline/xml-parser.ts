@@ -51,7 +51,7 @@ function isSystemLibraryPath(path: string): boolean {
  * - `<binary id="N" name="..." path="...">` defines a binary
  * - `<binary ref="N"/>` references a previously-defined binary
  */
-export function parseCpuXml(xml: string): CpuSample[] {
+export function parseCpuXml(xml: string, targetPid: number | null = null): CpuSample[] {
   const frameRegistry = new Map<string, StackFrame>();
   const backtraceRegistry = new Map<string, StackFrame[]>();
   const binaryRegistry = new Map<string, { name: string; path: string }>();
@@ -62,6 +62,26 @@ export function parseCpuXml(xml: string): CpuSample[] {
   let bm;
   while ((bm = binaryRe.exec(xml)) !== null) {
     binaryRegistry.set(bm[1], { name: bm[2], path: bm[3] });
+  }
+
+  // Optional per-process filtering for the host-wide (--all-processes) capture.
+  // Pre-register every process id → PID: `<process id="N" fmt="Name (PID)">`
+  // defines it (the PID is the LAST parenthesised group in fmt — process names
+  // can themselves contain parens, e.g. "Code Helper (Plugin) (54394)"); rows
+  // reference it via `<process ref="N"/>`. `pidByIndex` runs parallel to
+  // `samples` so we can drop non-target rows after the two parse passes without
+  // disturbing their row↔sample alignment. All a no-op when no filter is set.
+  const processPid = new Map<string, number>();
+  const pidByIndex: (number | undefined)[] = [];
+  if (targetPid != null) {
+    const procRe = /<process\s+id="(\d+)"\s+fmt="([^"]*)"/g;
+    let pm;
+    while ((pm = procRe.exec(xml)) !== null) {
+      const parens = [...pm[2].matchAll(/\((\d+)\)/g)];
+      if (parens.length > 0) {
+        processPid.set(pm[1], parseInt(parens[parens.length - 1][1], 10));
+      }
+    }
   }
 
   const rows = extractRows(xml);
@@ -104,6 +124,9 @@ export function parseCpuXml(xml: string): CpuSample[] {
     // Extract backtrace
     const stack = resolveBacktrace(row, frameRegistry, backtraceRegistry, binaryRegistry);
 
+    if (targetPid != null) {
+      pidByIndex.push(rowProcessPid(row, processPid));
+    }
     samples.push({ timestampNs, threadFmt, weightNs, stack });
   }
 
@@ -149,7 +172,22 @@ export function parseCpuXml(xml: string): CpuSample[] {
     sampleIdx++;
   }
 
+  if (targetPid != null) {
+    return samples.filter((_sample, i) => pidByIndex[i] === targetPid);
+  }
   return samples;
+}
+
+/**
+ * Resolve the PID a time-profile row belongs to. A row defines its process
+ * inline (`<process id="N" …>`, nested in `<thread>`) or references one
+ * (`<process ref="N"/>`); either way the id maps to a pre-registered PID.
+ */
+function rowProcessPid(rowXml: string, processPid: Map<string, number>): number | undefined {
+  const def = rowXml.match(/<process\s+id="(\d+)"/);
+  const ref = rowXml.match(/<process\s+ref="(\d+)"\s*\/>/);
+  const id = def?.[1] ?? ref?.[1];
+  return id != null ? processPid.get(id) : undefined;
 }
 
 function resolveBacktrace(
@@ -310,7 +348,6 @@ export function parseLeaksXml(xml: string): RawLeak[] {
   const rowRe = /<row\s+([^>]*?)\/>/g;
   let rm;
   while ((rm = rowRe.exec(xml)) !== null) {
-    const rowAttrs = rm[1];
     const objectType = attr(rm[0], "leaked-object") ?? "Unknown";
     const sizeStr = attr(rm[0], "size");
     const sizeBytes = sizeStr ? parseInt(sizeStr, 10) : 0;
@@ -335,11 +372,14 @@ export function parseLeaksXml(xml: string): RawLeak[] {
 // File-level entry points
 // ---------------------------------------------------------------------------
 
-export async function parseCpuFile(filePath: string | null): Promise<CpuSample[]> {
+export async function parseCpuFile(
+  filePath: string | null,
+  targetPid: number | null = null
+): Promise<CpuSample[]> {
   if (!filePath) return [];
   try {
     const xml = await fs.readFile(filePath, "utf8");
-    return parseCpuXml(xml);
+    return parseCpuXml(xml, targetPid);
   } catch {
     return [];
   }

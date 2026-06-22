@@ -61,7 +61,9 @@ async function waitForHttp(url, timeoutMs = 20_000) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
       if (res.ok) return true;
-    } catch {}
+    } catch {
+      /* not up yet — keep polling until the deadline */
+    }
     await new Promise((r) => setTimeout(r, 400));
   }
   return false;
@@ -200,7 +202,9 @@ function restoreMcpEntry(configPath, originalEntry, existedBefore) {
   if (!existedBefore && Object.keys(config).length === 0) {
     try {
       fs.unlinkSync(configPath);
-    } catch {}
+    } catch {
+      /* file already absent — nothing to remove */
+    }
     return;
   }
 
@@ -265,7 +269,9 @@ function cleanup() {
   }
   try {
     fs.unlinkSync(STATE_FILE);
-  } catch {}
+  } catch {
+    /* state file already absent — nothing to remove */
+  }
 
   // Restore editor configs
   restoreMcpEntry(CLAUDE_JSON, originalArgentEntry, claudeConfigExists);
@@ -299,7 +305,9 @@ async function main() {
   }
   try {
     fs.unlinkSync(STATE_FILE);
-  } catch {}
+  } catch {
+    /* state file already absent — nothing to remove */
+  }
 
   // ── Step 6: Start tool-server from source ──────────────────────────────────
 

@@ -144,7 +144,7 @@ export function createChromiumServerRouter(server: ChromiumServer): Router {
     let session: { stop: () => Promise<void> } | null = null;
     try {
       session = await server.startScreencast({ format: "jpeg", quality: 70 });
-    } catch (err) {
+    } catch {
       server.events.off("frame", onFrame);
       res.end();
       return;
@@ -250,9 +250,14 @@ function bindWsToServer(ws: WebSocket, server: ChromiumServer): void {
   });
 
   ws.on("message", async (raw) => {
+    const text = Buffer.isBuffer(raw)
+      ? raw.toString()
+      : Array.isArray(raw)
+        ? Buffer.concat(raw).toString()
+        : Buffer.from(raw).toString();
     let msg: WsRequest;
     try {
-      msg = JSON.parse(raw.toString()) as WsRequest;
+      msg = JSON.parse(text) as WsRequest;
     } catch (err) {
       sendJson({ status: "error", message: `parse error: ${(err as Error).message}` });
       return;

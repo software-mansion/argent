@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 import { DISABLE_LOGBOX_SCRIPT } from "../../utils/debugger/scripts/disable-logbox";
 import { RN_ONLY_TOOL_CAPABILITY } from "./debugger-service-ref";
@@ -37,7 +37,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
   services: (params) => ({
     debugger: `JsRuntimeDebugger:${params.port}:${params.device_id}`,
   }),
-  async execute(services, params) {
+  async execute(services, _params) {
     const api = services.debugger as JsRuntimeDebuggerApi;
     const port = api.port;
 
@@ -56,7 +56,7 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
 
     try {
       await api.cdp.send("Page.reload");
-      disableLogBox();
+      void disableLogBox();
       return { reloaded: true, port, method: "cdp", ...context };
     } catch {
       // Fall through to HTTP fallback
@@ -68,11 +68,17 @@ Use when you want to apply code changes or reset JS state. Returns { reloaded, p
       method: "POST",
     });
     if (!res.ok) {
-      throw new Error(
-        `Failed to reload: CDP Page.reload unsupported and Metro HTTP /reload returned ${res.status} ${res.statusText}.`
+      throw new FailureError(
+        `Failed to reload: CDP Page.reload unsupported and Metro HTTP /reload returned ${res.status} ${res.statusText}.`,
+        {
+          error_code: FAILURE_CODES.DEBUGGER_RELOAD_FAILED,
+          failure_stage: "debugger_reload_metro",
+          failure_area: "tool_server",
+          error_kind: "network",
+        }
       );
     }
-    disableLogBox();
+    void disableLogBox();
     return { reloaded: true, port, method: "http", ...context };
   },
 };

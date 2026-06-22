@@ -10,6 +10,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
+const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-ios/src/index.ts"
@@ -25,6 +26,7 @@ const TOOLS_CLIENT_ENTRY = path.resolve(
 const INSTALLER_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-installer/src/index.ts");
 const MCP_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-mcp/src/index.ts");
 const CLI_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/argent-cli/src/index.ts");
+const PREVIEW_WINDOW_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/preview-window/src/main.ts");
 const CONFIGURATION_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/configuration-core/src/index.ts"
@@ -33,6 +35,7 @@ const OUT_FILE = path.resolve(__dirname, "../dist/tool-server.cjs");
 const INSTALLER_OUT_FILE = path.resolve(__dirname, "../dist/installer.mjs");
 const MCP_OUT_FILE = path.resolve(__dirname, "../dist/mcp-server.mjs");
 const CLI_OUT_FILE = path.resolve(__dirname, "../dist/cli-cmds.mjs");
+const PREVIEW_WINDOW_OUT_FILE = path.resolve(__dirname, "../dist/preview-window/main.cjs");
 
 // Shared aliases so each bundle resolves workspace deps from source. Resolving
 // from source (rather than each package's compiled dist/) keeps the bundle
@@ -46,6 +49,22 @@ const ALIASES = {
   "@argent/mcp": MCP_ENTRY,
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
+  "@argent/telemetry": TELEMETRY_ENTRY,
+};
+
+// Build-time constants for @argent/telemetry. The PostHog project token is a
+// checked-in public write-only key; only version metadata needs esbuild defines.
+const TELEMETRY_CLI_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    return String(pkg.version ?? "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+const TELEMETRY_DEFINE = {
+  ARGENT_CLI_VERSION: JSON.stringify(TELEMETRY_CLI_VERSION),
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which
@@ -119,6 +138,8 @@ const ANDROID_MANIFEST_DEST = path.resolve(__dirname, "../assets/manifest.json")
 const ANDROID_APK_SRC_DIR = path.join(ANDROID_PKG_DIR, "bin");
 const UI_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/index.html");
 const UI_DEST = path.resolve(__dirname, "../dist/preview-ui/index.html");
+const UI_THEME_SRC = path.resolve(WORKSPACE_ROOT, "packages/ui/theme.css");
+const UI_THEME_DEST = path.resolve(__dirname, "../dist/preview-ui/theme.css");
 const TRACE_TEMPLATE_SRC = path.resolve(
   WORKSPACE_ROOT,
   "packages/tool-server/src/utils/ios-profiler/Argent.tracetemplate"
@@ -240,7 +261,9 @@ const ASSETS = [
     hint: "Run: bash scripts/download-native-binaries.sh (fetches from argent-private-releases)",
   },
   // Preview UI (@argent/ui) next to the bundled tool-server so that tool-server's
-  // /preview/ endpoint can locate it via __dirname lookup.
+  // /preview/ endpoint can locate it via __dirname lookup. index.html AND its
+  // externalised theme.css must both ship — a partial copy would 404
+  // /preview/theme.css and serve an unstyled UI.
   {
     kind: "file",
     src: UI_SRC,
@@ -248,6 +271,14 @@ const ASSETS = [
     required: false,
     copiedLabel: "preview UI",
     missLabel: "Preview UI",
+  },
+  {
+    kind: "file",
+    src: UI_THEME_SRC,
+    dest: UI_THEME_DEST,
+    required: false,
+    copiedLabel: "preview UI theme.css",
+    missLabel: "Preview UI theme.css",
   },
   // Argent.tracetemplate so native-profiler-start (iOS) can find it at runtime.
   {
@@ -326,9 +357,9 @@ const ASSETS = [
 
 /**
  * Bundle a single entry point with esbuild and log the result.
- * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string }} opts
+ * @param {{ entry: string, out: string, format: "cjs" | "esm", label: string, external?: string[] }} opts
  */
-function buildBundle({ entry, out, format, label }) {
+function buildBundle({ entry, out, format, label, external = [] }) {
   esbuild.buildSync({
     entryPoints: [entry],
     bundle: true,
@@ -338,9 +369,16 @@ function buildBundle({ entry, out, format, label }) {
     outfile: out,
     alias: ALIASES,
     mainFields: MAIN_FIELDS,
+    define: TELEMETRY_DEFINE,
     // ESM bundles need the require() shim (for inlined CJS deps) and must keep
-    // node: builtins external; the CJS bundle needs neither.
-    ...(format === "esm" ? { banner: ESM_REQUIRE_BANNER, external: ["node:*"] } : {}),
+    // node: builtins external; CJS bundles only externalise what the caller
+    // passes (e.g. `electron`, or tree-sitter's native addons — see the
+    // tools-server call site).
+    ...(format === "esm"
+      ? { banner: ESM_REQUIRE_BANNER, external: [...new Set(["node:*", ...external])] }
+      : external.length > 0
+        ? { external }
+        : {}),
   });
   console.log(`✓ Bundled ${label} → ${path.relative(process.cwd(), out)}`);
 }
@@ -470,7 +508,27 @@ fs.rmSync(ANDROID_MANIFEST_DEST, { force: true });
 fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
 // Bundle the tools server (CJS — the dispatcher loads it via require()).
-buildBundle({ entry: TOOLS_ENTRY, out: OUT_FILE, format: "cjs", label: "tools server" });
+//
+// tree-sitter / tree-sitter-typescript are native addons (.node) that esbuild
+// cannot inline; keep them external so the bundle `require()`s them at runtime
+// from the published package's own dependencies (see package.json).
+//
+// `electron` MUST stay external too. It is a runtime dependency of
+// @swmansion/argent (npm installs it into node_modules/electron). If esbuild
+// inlines electron's index.js into this bundle, electron's binary-path lookup
+// runs with __dirname = <install>/dist (no path.txt there) and throws
+// "Electron failed to install correctly" at eval time. That throw is swallowed
+// by preview-window.ts's try/catch, so the variant-selection window silently
+// never opens. Keeping it external means the runtime `require("electron")` in
+// preview-window.ts resolves against the real node_modules/electron with an
+// intact __dirname. (The preview-window bundle below externalises it too.)
+buildBundle({
+  entry: TOOLS_ENTRY,
+  out: OUT_FILE,
+  format: "cjs",
+  label: "tools server",
+  external: ["tree-sitter", "tree-sitter-typescript", "electron"],
+});
 
 // The remaining bundles are ESM so that:
 //   - installer: import.meta.dirname works at runtime (the dispatcher
@@ -490,6 +548,22 @@ for (const b of ESM_BUNDLES) {
 for (const a of ASSETS) {
   copyAsset(a);
 }
+
+// Bundle the Electron preview-window main entrypoint. CJS, with `electron`
+// externalised — the dependency is declared on @swmansion/argent so npm
+// installs it alongside, and the spawn helper in tool-server's
+// preview-window.ts resolves the executable via `require("electron")`.
+// The bundled main.cjs lives next to the tool-server bundle so the same
+// helper can find it via `path.join(__dirname, "preview-window", "main.cjs")`
+// without needing @argent/preview-window to be a published sibling pkg.
+fs.mkdirSync(path.dirname(PREVIEW_WINDOW_OUT_FILE), { recursive: true });
+buildBundle({
+  entry: PREVIEW_WINDOW_ENTRY,
+  out: PREVIEW_WINDOW_OUT_FILE,
+  format: "cjs",
+  label: "preview-window main",
+  external: ["electron", "node:*"],
+});
 
 // Copy simulator-server for every supported host platform that's present in
 // the staging area. Require the darwin binary only when bundling ON darwin

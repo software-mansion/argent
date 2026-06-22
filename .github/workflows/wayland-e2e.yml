@@ -55,7 +55,7 @@ jobs:
           node-version: "20"
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: "temurin"
           java-version: "17"
@@ -222,26 +222,49 @@ jobs:
 
       - name: Screenshot returns real pixels (not all-zero framebuffer)
         run: |
-          set -e
-          # After boot_completed=1 the SurfaceFlinger compositor needs a few
-          # more seconds to paint the lockscreen UI. On fast cold boots (~40s)
-          # screencap can still return an all-zero framebuffer if taken
-          # immediately. 15s is enough headroom without meaningfully extending
-          # the overall job time.
-          sleep 15
-          curl -sS -m 60 -X POST http://127.0.0.1:3033/tools/screenshot \
-            -H 'Content-Type: application/json' \
-            -d '{"udid":"emulator-5554"}' > /tmp/shot.json
-          # The screenshot tool returns an ArtifactHandle ({ image: { hostPath, ... } })
-          # since the remote-artifacts change; the job runs co-located with the
-          # tool-server so hostPath is directly readable.
-          PATH_PNG=$(python3 -c "import json,sys;print(json.load(open('/tmp/shot.json'))['data']['image']['hostPath'])")
-          cp "$PATH_PNG" /tmp/wayland-cold-boot.png
-          SZ=$(stat -c%s /tmp/wayland-cold-boot.png)
-          echo "size=${SZ}B"
-          # All-zero framebuffer PNG-compresses to ~3-7 KB. Lockscreen UI
-          # (clock + battery + nav pill) is reliably > 20 KB.
-          test "$SZ" -gt 20000 || { echo "screenshot too small"; exit 1; }
+          set -euo pipefail
+          # After boot_completed=1 two things still need to settle before a
+          # screenshot carries real pixels: SurfaceFlinger has to paint the
+          # lockscreen UI, and the simulator-server's screenshot stream only
+          # starts warming on the first capture request. An immediate screencap
+          # can therefore return either a "no image to export" error (cold stream,
+          # response has no .data envelope) or an all-zero framebuffer that
+          # PNG-compresses to a few KB. A single fixed sleep races both of these,
+          # which is flaky on slow/contended runners. Poll instead: each request
+          # also warms the stream, so we retry until we get a real frame or time
+          # out. All-zero framebuffer compresses to ~3-7 KB; the real lockscreen
+          # UI (clock + battery + nav pill) is reliably > 20 KB.
+          # A healthy capture returns sub-second (and a cold stream errors
+          # immediately), so a tight per-attempt timeout keeps the cadence near
+          # the 4s interval and bounds the worst case (~6 min if the tool-server
+          # wedges) instead of 15x60s.
+          attempts=15
+          for i in $(seq 1 "$attempts"); do
+            curl -sS -m 20 -X POST http://127.0.0.1:3033/tools/screenshot \
+              -H 'Content-Type: application/json' \
+              -d '{"udid":"emulator-5554"}' > /tmp/shot.json || true
+            # The screenshot tool returns an ArtifactHandle ({ data: { image:
+            # { hostPath, ... } } }); the job runs co-located with the tool-server
+            # so hostPath is directly readable. A cold stream returns
+            # { error: "...no image to export" } with no .data — tolerate that and
+            # retry rather than aborting the step.
+            PATH_PNG=$(python3 -c "import json;print(json.load(open('/tmp/shot.json'))['data']['image']['hostPath'])" 2>/dev/null || true)
+            if [ -n "$PATH_PNG" ] && [ -f "$PATH_PNG" ]; then
+              cp "$PATH_PNG" /tmp/wayland-cold-boot.png
+              SZ=$(stat -c%s /tmp/wayland-cold-boot.png)
+              echo "attempt ${i}/${attempts}: size=${SZ}B"
+              if [ "$SZ" -gt 20000 ]; then
+                echo "got a real frame after ${i} attempt(s)"
+                exit 0
+              fi
+            else
+              echo "attempt ${i}/${attempts}: no image yet ($(head -c 160 /tmp/shot.json))"
+            fi
+            # No need to wait after the final attempt before failing.
+            if [ "$i" -lt "$attempts" ]; then sleep 4; fi
+          done
+          echo "screenshot never returned a real frame after ${attempts} attempts"
+          exit 1
 
       - name: gesture-tap round-trips
         run: |
@@ -252,7 +275,7 @@ jobs:
 
       - name: Upload artifacts on failure or success
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wayland-e2e-artifacts
           path: |

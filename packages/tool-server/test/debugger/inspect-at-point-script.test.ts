@@ -235,7 +235,7 @@ describe("makeInspectScript — Fabric host fiber with unrealized public instanc
     const rnRoot = rootOf(comp("FreshButton", host));
     const rn = makeRenderer(comp("FreshButton", null));
 
-    const out = runInspect(makeHook([[1, rn.renderer, [rnRoot]]])); // fabric: true (default)
+    runInspect(makeHook([[1, rn.renderer, [rnRoot]]])); // fabric: true (default)
 
     expect(rn.fn).toHaveBeenCalledTimes(1);
     expect(rn.fn.mock.calls[0][0]).toBe(null);

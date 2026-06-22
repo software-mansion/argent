@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { Registry } from "../src/registry";
 import { ServiceState } from "../src/types";
-import { ServiceInitializationError } from "../src/errors";
+import {
+  getFailureSignal,
+  ServiceInitializationError,
+  subprocessFailureMetadata,
+  withFailureSignal,
+} from "../src/errors";
+import { FAILURE_CODES } from "../src/failure-codes";
 import { createStaticBlueprint, staticUrn } from "./helpers";
 
 describe("Registry — serviceError events carry cause", () => {
@@ -137,5 +143,94 @@ describe("Registry — serviceError events carry cause", () => {
 
     expect(registry.getServiceState(staticUrn("Clean"))).toBe(ServiceState.IDLE);
     expect(errors.find((e) => e.serviceId === staticUrn("Clean"))).toBeUndefined();
+  });
+});
+
+describe("Registry — failure signals", () => {
+  it("preserves a safe failure signal when wrapping tool execution errors", async () => {
+    const registry = new Registry();
+    registry.registerTool({
+      id: "failing-tool",
+      services: () => ({}),
+      async execute() {
+        throw withFailureSignal(new Error("private /Users/alice/project failure"), {
+          error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+          failure_stage: "failing_tool_execute",
+          failure_area: "tool_server",
+          error_kind: "unknown",
+        });
+      },
+    });
+
+    let emittedError: Error | null = null;
+    registry.events.on("toolFailed", (_toolId, _toolInvocationId, error) => {
+      emittedError = error;
+    });
+
+    await expect(registry.invokeTool("failing-tool")).rejects.toThrow();
+
+    expect(emittedError).toBeInstanceOf(Error);
+    expect(getFailureSignal(emittedError)).toEqual({
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "failing_tool_execute",
+      failure_area: "tool_server",
+      error_kind: "unknown",
+    });
+  });
+
+  it("derives only safe subprocess metadata", () => {
+    expect(
+      subprocessFailureMetadata(
+        { code: 127, signal: "SIGKILL", stderr: "secret", message: "/Users/alice/private" },
+        "xcrun_simctl"
+      )
+    ).toEqual({
+      failure_command: "xcrun_simctl",
+      failure_exit_code: 127,
+      failure_signal: "SIGKILL",
+    });
+
+    expect(
+      subprocessFailureMetadata(
+        { code: "ENOENT", signal: "SIGUSR1", path: "/Users/alice/private" },
+        "adb"
+      )
+    ).toEqual({
+      failure_command: "adb",
+      failure_spawn_code: "ENOENT",
+    });
+  });
+
+  it("finds a signal attached to a wrapped cause", () => {
+    const inner = withFailureSignal(new Error("inner"), {
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "inner_stage",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
+    const outer = new Error("outer", { cause: inner });
+
+    expect(getFailureSignal(outer)?.error_code).toBe(FAILURE_CODES.TOOL_DEPENDENCY_MISSING);
+  });
+
+  it("finds a signal attached to an AggregateError sub-error", () => {
+    const sub = withFailureSignal(new Error("sub"), {
+      error_code: FAILURE_CODES.TOOL_DEPENDENCY_MISSING,
+      failure_stage: "sub_stage",
+      failure_area: "tool_server",
+      error_kind: "dependency_missing",
+    });
+    const aggregate = new AggregateError([new Error("noise"), sub], "all failed");
+
+    expect(getFailureSignal(aggregate)?.error_code).toBe(FAILURE_CODES.TOOL_DEPENDENCY_MISSING);
+  });
+
+  it("terminates on a cyclic cause chain", () => {
+    const a = new Error("a");
+    const b = new Error("b");
+    (a as Error & { cause?: unknown }).cause = b;
+    (b as Error & { cause?: unknown }).cause = a;
+
+    expect(getFailureSignal(a)).toBeNull();
   });
 });
