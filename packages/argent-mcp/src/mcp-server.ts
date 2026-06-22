@@ -240,7 +240,7 @@ export async function startMcpServer(options: StartMcpServerOptions): Promise<vo
         "Argent — iOS Simulator, Android Emulator, and Chromium app control for interacting, testing, profiling and debugging mobile and Chromium applications. " +
         "Always use discovery tools (describe / debugger-component-tree / screenshot) before tapping — never guess coordinates. " +
         "On session end: call stop-all-simulator-servers and perform any necessary cleanup. " +
-        "Full guidance is in the argent rule loaded from .claude/rules/argent.md.",
+        "Load the argent skill for full workflow guidance and sub-skill routing.",
     }
   );
 
