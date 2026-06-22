@@ -457,9 +457,17 @@ export async function analyzeNativeProfilerIos(
     payload,
     traceFile: api.traceFile,
     exportErrors,
-    // wallClockStartMs is the recording's start time, set at start on the
-    // session that persists for the whole tool-server run. A large gap to "now"
-    // means analyze is reusing a trace from an earlier capture, not a fresh one.
+    // wallClockStartMs is the recording's start time, stamped in-memory at
+    // native-profiler-start. A large gap to "now" means analyze is reusing a
+    // trace from an earlier capture in this same process run, not a fresh one.
+    //
+    // Limitation (iOS): unlike Android, iOS has no on-disk metadata sidecar, so
+    // profiler-load (which restores only the raw_*.xml) cannot recover the start
+    // time — wallClockStartMs is null for a loaded session and this note stays
+    // off. The note therefore fires only for a live in-process session, never
+    // for one restored from disk. Restoring iOS start-time across loads needs an
+    // iOS sidecar this Android-scoped change does not add; formatTraceFreshness
+    // degrades cleanly to null in that case. See test/ios-instruments/load-freshness.test.ts.
     freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
   });
 }

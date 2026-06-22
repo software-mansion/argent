@@ -140,8 +140,11 @@ export function extractResumedPackages(output: string): Set<string> {
 }
 
 /**
- * Parse the `pm list packages -3` output into a Set. The output is one line
- * per user-installed package in the shape `package:com.example.app`.
+ * Parse `pm list packages` output into a Set of package names. Each line has
+ * the shape `package:com.example.app`. Caller-dependent scope: auto-detect
+ * passes `-3` (user-installed only, to reject system overlays) while explicit
+ * app_process validation passes the unfiltered list (an explicit target may
+ * legitimately be any installed package, including a system one).
  */
 export function parseUserPackages(output: string): Set<string> {
   const result = new Set<string>();
