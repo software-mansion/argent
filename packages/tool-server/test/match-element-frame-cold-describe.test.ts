@@ -129,6 +129,24 @@ describe("captureElementFrame — holds out for the exact element through warm-u
     expect(frame).toBeNull();
     expect(describeIosMock.mock.calls.length).toBe(3);
   });
+
+  it("keeps a substring partial when a LATER attempt re-empties (tree regressed mid-warm-up)", async () => {
+    // A substring hit lands first, then the AX tree re-empties (a transient the
+    // device can return while still settling). The held partial must survive —
+    // an "if the latest attempt is empty, return null" refactor would drop it.
+    describeIosMock
+      .mockResolvedValueOnce(ROW)
+      .mockResolvedValueOnce(COLD)
+      .mockResolvedValueOnce(COLD);
+    const frame = await captureElementFrame(
+      registry,
+      "TEST-UDID",
+      { by: "text", value: "simisear" },
+      { attempts: 3, retryMs: 0 }
+    );
+    expect(frame).toEqual(rowFrame); // the attempt-1 partial, not null
+    expect(describeIosMock.mock.calls.length).toBe(3); // no exact hit → full budget
+  });
 });
 
 describe("findElementMatch — exact beats substring", () => {
