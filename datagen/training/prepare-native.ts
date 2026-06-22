@@ -31,12 +31,18 @@ const catalog: ToolSpec[] = JSON.parse(
 const validator = new Validator(catalog);
 const OFFERED_TOOLS = +(process.argv[process.argv.indexOf("--tools") + 1] || 8); // tools offered per example
 
+const NO_NARRATION = process.argv.includes("--no-narration");
+
 /** OpenAI-style {messages, tools} with tool_call arguments as OBJECTS (the gemma4
  *  chat template renders dicts, not JSON strings). */
 function toNative(traj: Trajectory) {
   const messages = traj.messages.map((m) => {
     if (m.role === "assistant") {
-      const out: Record<string, unknown> = { role: "assistant", content: m.content || "" };
+      // With --no-narration, a tool-call turn carries ONLY the call (no prose), so the
+      // model can't confuse mid-task narration with a narration-only final answer and
+      // stop early. The final answer turn (no tool_calls) keeps its content.
+      const content = NO_NARRATION && m.tool_calls ? "" : m.content || "";
+      const out: Record<string, unknown> = { role: "assistant", content };
       if (m.tool_calls)
         out.tool_calls = m.tool_calls.map((c) => ({
           id: c.id,
