@@ -351,18 +351,43 @@ function renderFullReport(
     }
   }
 
-  // Memory Leaks section (iOS only in v1)
+  // Memory Leaks section (iOS only in v1).
+  // Attributed leaks (a resolved responsible frame) are actionable and shown in
+  // full. Unattributed leaks (`<Call stack limit reached>` under `--attach`) are
+  // collapsed into one low-confidence line so the noise can't masquerade as a
+  // wall of RED findings — see isLeakAttributed in pipeline/01-correlate.ts.
   if (memoryLeaks.length > 0) {
+    const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
+    const unattributedLeaks = memoryLeaks.filter((b) => !b.attributed);
+
     lines.push(``, `---`, ``, `## Memory Leaks`, ``);
-    lines.push(
-      `| # | Object Type | Count | Total Size | Responsible Frame | Library | Severity |`,
-      `|---|---|---|---|---|---|---|`
-    );
-    memoryLeaks.forEach((b, i) => {
+
+    if (attributedLeaks.length > 0) {
       lines.push(
-        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        `| # | Object Type | Count | Total Size | Responsible Frame | Library | Severity |`,
+        `|---|---|---|---|---|---|---|`
       );
-    });
+      attributedLeaks.forEach((b, i) => {
+        lines.push(
+          `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        );
+      });
+    } else {
+      lines.push(`_No attributed leaks — nothing with a resolved responsible frame._`);
+    }
+
+    if (unattributedLeaks.length > 0) {
+      const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
+      const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+      lines.push(
+        ``,
+        `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+          `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+          `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+          `stack logging enabled at launch.`
+      );
+    }
   }
 
   // RSS Growth section (Android-only weak signal)
@@ -410,9 +435,10 @@ function renderFullReport(
     lines.push(``);
   }
 
-  if (memoryLeaks.length > 0) {
+  const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
+  if (attributedLeaks.length > 0) {
     lines.push(`### Memory Leaks`, ``);
-    for (const b of memoryLeaks) {
+    for (const b of attributedLeaks) {
       lines.push(
         `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
@@ -440,10 +466,10 @@ function renderFullReport(
     );
     lines.push(`   - mode=\`thread_breakdown\` — CPU distribution across threads`);
   }
-  if (memoryLeaks.length > 0) {
-    const topLeak = memoryLeaks.sort((a, b) => b.totalSizeBytes - a.totalSizeBytes)[0]!;
+  const topAttributedLeak = memoryLeaks.find((b) => b.attributed);
+  if (topAttributedLeak) {
     lines.push(
-      `   - mode=\`leak_stacks\` object_type=\`${topLeak.objectType}\` — detailed leak analysis`
+      `   - mode=\`leak_stacks\` object_type=\`${topAttributedLeak.objectType}\` — detailed leak analysis`
     );
   }
   lines.push(

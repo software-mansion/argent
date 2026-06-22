@@ -69,6 +69,8 @@ export interface InvokeToolOptions {
    * "legacy caller — behave exactly as before the file boundary existed".
    */
   fileInputs?: Record<string, ResolvedFileInput>;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
 }
 
 /**
@@ -222,7 +224,7 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string) => void;
-  toolCompleted: (toolId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, error: Error) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string) => void;
+  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
+  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
 };

@@ -72,7 +72,16 @@ export interface MemoryLeak {
   count: number;
   responsibleFrame: string;
   responsibleLibrary: string;
-  severity: "RED";
+  /**
+   * Whether xctrace resolved a real responsible frame for this leak. Captures
+   * via `xctrace --attach` (what Argent does) have no malloc-stack history, so
+   * most simulator leaks are unattributed: frame `<Call stack limit reached>`,
+   * empty library, generic `Malloc N Bytes` object types — benign system noise
+   * rather than confirmed app leaks. Drives severity.
+   */
+  attributed: boolean;
+  /** RED only when attributed; unattributed leaks are a low-confidence YELLOW. */
+  severity: "RED" | "YELLOW";
 }
 
 /** Android-only weak signal — never emitted on iOS. */

@@ -8,17 +8,26 @@ const rec = vi.hoisted(() => ({
 }));
 
 vi.mock("child_process", () => ({
-  execFileSync: (file: string, args: string[]) => {
-    rec.calls.push({ fn: "execFileSync", file, args });
-    if (args.includes("version")) return "xctrace version 16.0\n";
+  // export.ts shells out via promisify(execFile). The callback form is
+  // (file, args, options?, cb) — record the argv and return canned stdout.
+  execFile: (file: string, args: string[], ...rest: unknown[]) => {
+    rec.calls.push({ fn: "execFile", file, args });
+    const cb = rest.find((r) => typeof r === "function") as
+      | ((e: unknown, r: { stdout: string; stderr: string }) => void)
+      | undefined;
     // `--toc` discovery: advertise a known CPU schema so the cpu export runs
     // the TOC-resolved path (not just the brute-force fallback).
-    if (args.includes("--toc")) return 'data table schema="time-profile" /';
-    // export with --output: success, no stdout needed.
-    return "";
+    const stdout = args.includes("--toc") ? 'data table schema="time-profile" /' : "";
+    cb?.(null, { stdout, stderr: "" });
+    return undefined;
   },
   // A regression back to shell interpolation would route the command (with the
-  // trace path baked into the string) through execSync — make that fail loudly.
+  // trace path baked into the string) through exec / execSync — fail loudly.
+  exec: (cmd: string, ...rest: unknown[]) => {
+    rec.calls.push({ fn: "exec", file: String(cmd), args: [] });
+    const cb = rest.find((r) => typeof r === "function") as ((e: unknown) => void) | undefined;
+    cb?.(new Error(`exec must not be used here (shell-injection risk): ${cmd}`));
+  },
   execSync: (cmd: string) => {
     rec.calls.push({ fn: "execSync", file: String(cmd), args: [] });
     throw new Error(`execSync must not be used here (shell-injection risk): ${cmd}`);
@@ -31,17 +40,17 @@ vi.mock("child_process", () => ({
 import { exportIosTraceData } from "../src/utils/ios-profiler/export";
 
 describe("native iOS profiler: trace-export shell-injection guard", () => {
-  it("passes a hostile trace path only as discrete argv elements (never via a shell)", () => {
+  it("passes a hostile trace path only as discrete argv elements (never via a shell)", async () => {
     rec.calls.length = 0;
     // A path loaded with shell metacharacters: if any export ever went through
     // /bin/sh, this would break out of the command. As an argv element it is inert.
     const hostileTrace = '/tmp/a b"; touch /tmp/argent-pwned #.trace';
 
-    exportIosTraceData(hostileTrace);
+    await exportIosTraceData(hostileTrace);
 
     // Nothing was routed through a shell.
-    expect(rec.calls.every((c) => c.fn === "execFileSync")).toBe(true);
-    expect(rec.calls.some((c) => c.fn === "execSync")).toBe(false);
+    expect(rec.calls.every((c) => c.fn === "execFile")).toBe(true);
+    expect(rec.calls.some((c) => c.fn === "exec" || c.fn === "execSync")).toBe(false);
 
     // Every xctrace invocation ran the real binary (not a shell) and carried the
     // hostile path as an exact, standalone argv element — never concatenated
