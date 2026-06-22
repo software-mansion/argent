@@ -112,12 +112,44 @@ done
 log "training complete -> $ADAPTER/adapters.safetensors"
 
 # ---- PACKAGE (skipped in dry-run; package-native.sh is proven separately) ----
+PACKAGED=0
 if [ "$DRY_RUN" = "1" ]; then
   log "DRY_RUN: skipping packaging"
 elif ./package-native.sh "$ADAPTER" silver-realistic:e4b silver-realistic; then
-  log "packaged silver-realistic:e4b OK"
+  log "packaged silver-realistic:e4b OK"; PACKAGED=1
 else
   log "WARNING: packaging failed — adapter safe at $ADAPTER (package manually in the morning)"
+fi
+
+# ---- HF UPLOAD (best-effort): overwrite LatekVo/silver with the fixed model. HF keeps
+#      history like git, so this is a clean overwrite of the broken upload. The merged
+#      Gemma4ForCausalLM weights are fused/silver-realistic-causal (from packaging). ----
+HF_DIR="fused/silver-realistic-causal"
+if [ "$DRY_RUN" != "1" ] && [ "$PACKAGED" = "1" ] && [ -f "$HF_DIR/config.json" ]; then
+  # stage the adapter + a preliminary card alongside the merged weights
+  mkdir -p "$HF_DIR/adapter"
+  cp "$ADAPTER/adapters.safetensors" "$ADAPTER/adapter_config.json" "$HF_DIR/adapter/" 2>/dev/null || true
+  cat > "$HF_DIR/README.md" <<'CARD'
+---
+license: gemma
+base_model: google/gemma-4-e4b-it
+library_name: mlx
+pipeline_tag: text-generation
+tags: [argent, tool-use, agent, gemma4, lora]
+---
+
+# silver:e4b — Gemma 4 E4B fine-tuned to drive the Argent toolkit
+
+Corrected training: native gemma4 tool-call format, a fixed 8-tool nav set (train ==
+inference), and realistic observations (the model must `describe` for screen state, as real
+argent returns an unreadable post-action screenshot). A true drop-in for gemma4:e4b — same
+chat template + tool parser, only the weights differ. Eval numbers land after the benchmark run.
+CARD
+  if command -v hf >/dev/null && hf upload-large-folder LatekVo/silver "$HF_DIR" --repo-type model --private; then
+    log "HF upload OK -> LatekVo/silver (overwrote the broken upload)"
+  else
+    log "WARNING: HF upload failed — re-run by hand: hf upload-large-folder LatekVo/silver $HF_DIR --repo-type model"
+  fi
 fi
 
 touch "$DONE_MARKER"
