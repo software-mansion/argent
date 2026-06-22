@@ -1,0 +1,142 @@
+name: Vega VVD E2E (remote + screenshot)
+
+# Regression guard for argent's Vega (Fire TV) `remote` + `screenshot` tools on a
+# free GitHub-hosted runner. Builds THIS branch's tool-server, boots the Vega
+# Virtual Device (VVD) via finloop/vega-virtual-device-action (a QEMU emulator in
+# a Docker container, KVM-accelerated, software-GL — no GPU, no self-hosted
+# runner), installs the kepler video sample app, and drives the two tools over
+# the tool-server HTTP API (scripts/ci/vega-vvd-test.sh).
+#
+# Both tools are pure adb now: screenshot → `adb emu screenrecord`, remote →
+# `adb shell inputd-cli button_press` (the channel proven to work on the CI VVD;
+# the old vega-fast-cli host binary was a no-op there). So there is no
+# per-platform binary, no glibc/arch handling, nothing to bundle. The Vega
+# analogue of wayland-e2e.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      host-image:
+        description: "vega-virtual-device-host image to boot the VVD from (override the pinned digest for manual runs)"
+        required: false
+        default: "ghcr.io/finloop/vega-virtual-device-host@sha256:2110746fa9ba579635c6bdeac00c742749776fd135483d72f056cd1f2092d486"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "packages/tool-server/src/tools/tv-remote/**"
+      - "packages/tool-server/src/tools/keyboard/index.ts"
+      - "packages/tool-server/src/tools/screenshot/index.ts"
+      - "packages/tool-server/src/tools/describe/platforms/vega/**"
+      - "packages/tool-server/src/tools/describe/platforms/vega.ts"
+      - "packages/tool-server/src/tools/devices/boot-device.ts"
+      - "packages/tool-server/src/tools/devices/list-devices.ts"
+      - "packages/tool-server/src/utils/vega-*.ts"
+      - "packages/tool-server/src/utils/device-info.ts"
+      - "scripts/ci/vega-vvd-test.sh"
+      - ".github/workflows/vega-vvd-e2e.yml"
+
+concurrency:
+  group: vega-vvd-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+# Third-party actions, the host image, and the fixture are pinned to immutable
+# refs (commit SHA / image digest / content checksum) rather than mutable
+# `@main` / `:latest` tags: this job runs on `pull_request` (untrusted), so a
+# floating ref could change under the workflow with no diff. Re-pin deliberately
+# when bumping.
+env:
+  # Pinned by digest; manual `workflow_dispatch` runs may override via the input.
+  HOST_IMAGE: ${{ github.event.inputs.host-image || 'ghcr.io/finloop/vega-virtual-device-host@sha256:2110746fa9ba579635c6bdeac00c742749776fd135483d72f056cd1f2092d486' }}
+  KEPLER_FIXTURE_URL: "https://github.com/finloop/vega-virtual-device-action/releases/download/fixtures-keplervideoapp-0.22.1/keplervideoapp_aarch64.vpkg"
+  # Verified against the downloaded fixture below (the release tag is mutable).
+  KEPLER_FIXTURE_SHA256: "4ec7e0db348fe53bf3798410b4de1cf4aed5fc1f6935dff0b890d0611559201e"
+
+jobs:
+  vega-vvd-e2e:
+    name: Boot VVD, drive remote + screenshot
+    # Pin to 24.04 to match the host container (ubuntu:24.04), so the
+    # runner-built node_modules native prebuilts (tree-sitter, esbuild) run
+    # unchanged inside it — same glibc, no cross-version skew.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # The vega-virtual-device-host GHCR package is public, so the image pulls
+    # without auth — no packages: read / login step needed.
+    permissions:
+      contents: read
+
+    steps:
+      # The host image is large (Vega SDK + emulator); reclaim runner disk first.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Build this branch's tool-server. The action runs it (node dist/index.js)
+      # inside the container against this bind-mounted node_modules + dist.
+      - name: Build tool-server
+        run: |
+          npm ci
+          npx tsc --build
+
+      - name: Enable KVM
+        # The VVD's QEMU needs /dev/kvm; ubuntu runners expose it but the runner
+        # user isn't in the kvm group until this rule lands.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download kepler video app fixture
+        # Prebuilt aarch64 Release vpkg (AmazonAppDev/vega-video-sample@v0.22.1),
+        # hosted on the action repo's fixtures release. Lands in the checkout so
+        # the action bind-mounts it into the container at /workspace/fixtures.
+        run: |
+          mkdir -p fixtures
+          curl -fsSL -o fixtures/keplervideoapp_aarch64.vpkg "$KEPLER_FIXTURE_URL"
+          # The release tag is mutable, so verify the asset's content against the
+          # pinned checksum — fail loudly if it changed under us.
+          echo "${KEPLER_FIXTURE_SHA256}  fixtures/keplervideoapp_aarch64.vpkg" | sha256sum -c -
+          ls -la fixtures
+
+      - name: Boot VVD; drive remote + screenshot
+        id: vvd
+        uses: finloop/vega-virtual-device-action/vega-virtual-device-action@ed210f760d5aec5cd3f7e54e1529d353b4e66a11 # main
+        with:
+          image: ${{ env.HOST_IMAGE }}
+          pull: true
+          boot-timeout: 420
+          screenshot-path: artifacts/vvd-ready.png
+          container-options: -e KEPLER_VPKG=fixtures/keplervideoapp_aarch64.vpkg
+          script: |
+            set -ex
+            bash scripts/ci/vega-vvd-test.sh
+
+      - name: Show action outputs
+        if: always()
+        run: |
+          echo "boot-status=${{ steps.vvd.outputs.boot-status }}"
+          echo "screenshot=${{ steps.vvd.outputs.screenshot }}"
+
+      - name: Upload screenshots + logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vega-vvd-e2e-artifacts
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7

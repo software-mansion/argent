@@ -3,10 +3,11 @@ import type { Registry, ServiceRef, ToolCapability, ToolDefinition } from "@arge
 import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { LaunchAppResult } from "./types";
+import type { LaunchAppResult, LaunchAppVegaServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
 import { chromiumImpl, type LaunchAppChromiumServices } from "./platforms/chromium";
+import { vegaImpl } from "./platforms/vega";
 
 // Android package grammar is `[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+`;
 // iOS bundle ids use the same reverse-DNS shape with dashes allowed. The union
@@ -46,6 +47,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 // `launch-app` resolves native-devtools through `registry` inside the iOS
@@ -64,16 +66,18 @@ export function createLaunchAppTool(registry: Registry): ToolDefinition<Params, 
 Use when starting any app — prefer this over tapping home-screen / launcher icons. Also prepares the native-devtools injection before the app starts (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { launched, bundleId }. Fails if the app is not installed on the target device (iOS / Android).
 For Chromium, the app is already running behind a CDP port; this call simply refreshes the cached viewport and acknowledges the bundleId tag. To change the visible route, use \`open-url\`.
+On Vega (Fire TV), pass the interactive component app id from manifest.toml (e.g. com.example.app.main) as bundleId.
 
 Common iOS bundle ids: com.apple.MobileSMS, com.apple.mobilesafari, com.apple.Preferences, com.apple.Maps, com.apple.camera, com.apple.Photos, com.apple.mobilemail, com.apple.mobilenotes, com.apple.MobileAddressBook
 Common Android packages: com.android.settings, com.android.chrome, com.google.android.apps.maps, com.google.android.gm, com.android.vending, com.google.android.dialer, com.google.android.apps.messaging`,
     alwaysLoad: true,
-    searchHint: "open start app bundle id package simulator emulator chromium launch tvos apple tv",
+    searchHint:
+      "open start app bundle id package simulator emulator chromium vega launch tvos apple tv fire tv",
     zodSchema,
     capability,
     // Only Chromium declares an eager service (its CDP session). iOS resolves
     // native-devtools lazily in its handler so a tvOS udid never spins up the
-    // iOS-only injection (see header comment); Android needs no service.
+    // iOS-only injection (see header comment); Android and Vega need no service.
     services: (params): Record<string, ServiceRef> => {
       const device = resolveDevice(params.udid);
       if (device.platform === "chromium") return { chromium: chromiumCdpRef(device) };
@@ -84,13 +88,15 @@ Common Android packages: com.android.settings, com.android.chrome, com.google.an
       Record<string, unknown>,
       Params,
       LaunchAppResult,
-      LaunchAppChromiumServices
+      LaunchAppChromiumServices,
+      LaunchAppVegaServices
     >({
       toolId: "launch-app",
       capability,
       ios: makeIosImpl(registry),
       android: androidImpl,
       chromium: chromiumImpl,
+      vega: vegaImpl,
     }),
   };
 }

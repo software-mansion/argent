@@ -1,6 +1,15 @@
 import express, { Request, Response } from "express";
 import { isFlagEnabled } from "@argent/configuration-core";
-import type { FileInputSpec, Registry, ResolvedFileInput } from "@argent/registry";
+import { randomUUID } from "node:crypto";
+import {
+  FAILURE_CODES,
+  type FailureSignal,
+  type FileInputSpec,
+  type Platform,
+  type Registry,
+  type ResolvedFileInput,
+} from "@argent/registry";
+import { AI_CLIENTS, type AiTelemetryProps } from "@argent/telemetry";
 import { ToolNotFoundError } from "@argent/registry";
 import { createIdleTimer, IDLE_CHECK_INTERVAL_MS } from "./utils/idle-timer";
 import { DependencyMissingError, ensureDeps } from "./utils/check-deps";
@@ -63,29 +72,79 @@ function isToolExposed(def: { featureFlag?: string } | undefined): boolean {
 }
 
 function findDependencyMissing(err: unknown): DependencyMissingError | null {
-  let current: unknown = err;
-  // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
-  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
-    if (current instanceof DependencyMissingError) return current;
-    current = current.cause;
-  }
-  return null;
+  return findErrorInCauseChain(err, DependencyMissingError);
 }
 
-/**
- * Walk the `.cause` chain for the first error of type `T`. The registry wraps
- * everything thrown from a tool's `execute` (and from a service factory) in
- * ToolExecutionError / ServiceInitializationError, so a domain error like
- * UnsupportedOperationError only ever reaches this catch nested inside a wrapper
- * — a top-level `instanceof` would miss it and mis-map a clean 4xx to a 500.
- */
-function findInChain<T extends Error>(err: unknown, ctor: new (...args: never[]) => T): T | null {
+function findErrorInCauseChain<T extends Error>(
+  err: unknown,
+  ctor: new (...args: never[]) => T
+): T | null {
   let current: unknown = err;
+  // Bounded to avoid pathological cycles; in practice the chain is ≤ 2 links.
   for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
     if (current instanceof ctor) return current;
     current = current.cause;
   }
   return null;
+}
+
+function extractDeviceArg(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  if (typeof record.udid === "string") return record.udid;
+  if (typeof record.device_id === "string") return record.device_id;
+  return null;
+}
+
+type InvocationMeta = { platform?: Platform } & AiTelemetryProps;
+// Only coarse platform context is retained for failure telemetry. The raw
+// device id (UDID / serial) is used transiently to infer platform and never
+// stored or forwarded.
+type HttpFailureMeta = { platform?: Platform } & AiTelemetryProps;
+
+function inferPlatform(deviceId: string | null): HttpFailureMeta["platform"] | null {
+  if (!deviceId) return null;
+  try {
+    return resolveDevice(deviceId).platform;
+  } catch {
+    return null;
+  }
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+// The MCP server forwards the coarse AI-client identity as a request header (it
+// lives in a different process). We re-validate here against the same allowlist
+// the sanitizer enforces, so a misbehaving client can't inject an arbitrary value
+// into telemetry. Only the coarse client slug is carried — we never record the
+// raw client name.
+function extractAiTelemetryMeta(req: Request): AiTelemetryProps {
+  const meta: AiTelemetryProps = {};
+  const client = firstHeader(req.headers["x-argent-ai-client"]);
+  if (client && (AI_CLIENTS as readonly string[]).includes(client)) {
+    meta.ai_client = client as AiTelemetryProps["ai_client"];
+  }
+  return meta;
+}
+
+function extractInvocationMeta(
+  hasCapability: boolean,
+  data: unknown,
+  aiMeta: AiTelemetryProps
+): InvocationMeta | null {
+  const meta: InvocationMeta = { ...aiMeta };
+  if (hasCapability && data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    const deviceArg = extractDeviceArg(record);
+    if (deviceArg) {
+      meta.platform = resolveDevice(deviceArg).platform;
+    } else if (typeof record.avdName === "string") {
+      meta.platform = "android";
+    }
+  }
+  return Object.keys(meta).length > 0 ? meta : null;
 }
 
 // ── HTTP app ────────────────────────────────────────────────────────
@@ -104,6 +163,15 @@ export interface HttpAppOptions {
    * opted into network exposure (and is warned at startup).
    */
   bindHost?: string;
+  /** Optional telemetry hook for per-invocation platform/device metadata. */
+  recordInvocation?: (toolInvocationId: string, meta: InvocationMeta) => () => void;
+  /** Optional telemetry hook for HTTP failures that happen before registry invocation. */
+  recordFailure?: (
+    toolId: string,
+    meta: HttpFailureMeta,
+    signal: FailureSignal,
+    durationMs: number
+  ) => void;
 }
 
 export interface HttpAppHandle {
@@ -340,9 +408,35 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
     },
     async (req: Request, res: Response) => {
       const name = req.params.name as string;
+      const requestStartedAt = performance.now();
+      const aiMeta = extractAiTelemetryMeta(req);
+
+      const emitHttpFailure = (
+        signal: FailureSignal,
+        parsedDataForMeta: unknown = req.body
+      ): void => {
+        if (!options?.recordFailure) return;
+        const failedDeviceArg = extractDeviceArg(parsedDataForMeta);
+        const platform = inferPlatform(failedDeviceArg);
+        options.recordFailure(
+          name,
+          {
+            ...(platform ? { platform } : {}),
+            ...aiMeta,
+          },
+          signal,
+          performance.now() - requestStartedAt
+        );
+      };
 
       const def = registry.getTool(name);
       if (!def) {
+        emitHttpFailure({
+          error_code: FAILURE_CODES.HTTP_TOOL_NOT_FOUND,
+          failure_stage: "http_lookup_tool",
+          failure_area: "http",
+          error_kind: "not_found",
+        });
         res.status(404).json({ error: `Tool "${name}" not found` });
         return;
       }
@@ -384,6 +478,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       if (def.zodSchema) {
         const parseResult = def.zodSchema.safeParse(bodyArgs);
         if (!parseResult.success) {
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_ZOD_VALIDATION_FAILED,
+              failure_stage: "http_zod_validation",
+              failure_area: "http",
+              error_kind: "validation",
+            },
+            req.body
+          );
           res.status(400).json({ error: parseResult.error.message });
           return;
         }
@@ -401,22 +504,40 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
       // tools). Honour both so an Android serial reaching an iOS-only
       // device_id-tool is rejected at the gate instead of falling through
       // to the deeper blueprint error (which surfaces as a generic 500).
-      const deviceArg =
-        typeof parsedData?.udid === "string"
-          ? parsedData.udid
-          : typeof parsedData?.device_id === "string"
-            ? parsedData.device_id
-            : null;
+      const deviceArg = extractDeviceArg(parsedData);
       if (def.capability && deviceArg) {
         try {
           const device = resolveDevice(deviceArg);
           assertSupported(def.id, def.capability, device);
         } catch (err) {
           if (err instanceof UnsupportedOperationError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_CAPABILITY_UNSUPPORTED_OPERATION,
+                failure_stage: "http_capability_gate",
+                failure_area: "http",
+                error_kind: "unsupported",
+              },
+              parsedData
+            );
             res.status(400).json({ error: err.message });
             return;
           }
-          throw err;
+          // Reaching here means resolveDevice/assertSupported threw something
+          // other than UnsupportedOperationError (today only a custom supports()
+          // refiner can) — an internal fault, not a client validation error, so
+          // surface it as 500/unknown rather than mislabeling it 400/validation.
+          emitHttpFailure(
+            {
+              error_code: FAILURE_CODES.HTTP_DEVICE_RESOLUTION_FAILED,
+              failure_stage: "http_capability_device_resolution",
+              failure_area: "http",
+              error_kind: "unknown",
+            },
+            parsedData
+          );
+          res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
         }
       }
 
@@ -431,6 +552,15 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           await ensureDeps(def.requires);
         } catch (err) {
           if (err instanceof DependencyMissingError) {
+            emitHttpFailure(
+              {
+                error_code: FAILURE_CODES.HTTP_DEPENDENCY_PREFLIGHT_MISSING,
+                failure_stage: "http_dependency_preflight",
+                failure_area: "http",
+                error_kind: "dependency_missing",
+              },
+              parsedData
+            );
             res.status(424).json({ error: err.message, missing: err.missing });
             return;
           }
@@ -454,10 +584,21 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
           : null;
       if (keepAlive) keepAlive.unref?.();
 
+      // Hashing happens in the telemetry listener, not in the HTTP layer.
+      const toolInvocationId = randomUUID();
+      let releaseInvocationMeta: (() => void) | undefined;
+      if (options?.recordInvocation) {
+        const invocationMeta = extractInvocationMeta(Boolean(def.capability), parsedData, aiMeta);
+        if (invocationMeta) {
+          releaseInvocationMeta = options.recordInvocation(toolInvocationId, invocationMeta);
+        }
+      }
+
       try {
         const data = await registry.invokeTool(name, parsedData, {
           signal: controller.signal,
           ...(resolvedFileInputs ? { fileInputs: resolvedFileInputs } : {}),
+          toolInvocationId,
         });
         // Gate on `updateInstallable` (not `updateAvailable`) and advertise the
         // version the resolver would install — both account for the release-age policy.
@@ -495,24 +636,25 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         // Unwrap the cause chain: these are thrown from inside execute() / a
         // service factory and reach here wrapped in ToolExecutionError, so a
         // top-level instanceof would miss them and fall through to a 500.
-        const unsupported = findInChain(err, UnsupportedOperationError);
-        if (unsupported) {
-          res.status(400).json({ error: unsupported.message });
+        const unsupportedErr = findErrorInCauseChain(err, UnsupportedOperationError);
+        if (unsupportedErr) {
+          res.status(400).json({ error: unsupportedErr.message });
           return;
         }
-        const notImpl = findInChain(err, NotImplementedOnPlatformError);
-        if (notImpl) {
+        const notImplementedErr = findErrorInCauseChain(err, NotImplementedOnPlatformError);
+        if (notImplementedErr) {
           res.status(501).json({
-            error: notImpl.message,
-            toolId: notImpl.toolId,
-            platform: notImpl.platform,
-            hint: notImpl.hint,
+            error: notImplementedErr.message,
+            toolId: notImplementedErr.toolId,
+            platform: notImplementedErr.platform,
+            hint: notImplementedErr.hint,
           });
           return;
         }
         res.status(500).json({ error: formatErrorForAgent(err) });
       } finally {
         if (keepAlive) clearInterval(keepAlive);
+        releaseInvocationMeta?.();
       }
     }
   );

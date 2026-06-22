@@ -9,6 +9,7 @@ import { chromiumCdpRef, type ChromiumCdpApi } from "../../blueprints/chromium-c
 import { resolveDevice } from "../../utils/device-info";
 import { getScreenshotScale, httpScreenshot } from "../../utils/simulator-client";
 import { isTvOsSimulator } from "../../utils/ios-devices";
+import { captureVegaScreenshotPng } from "../../utils/vega-screen";
 import { requireArtifacts, type ArtifactHandle } from "../../artifacts";
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +64,7 @@ const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
+  vega: { vvd: true },
 };
 
 /**
@@ -131,6 +133,15 @@ Fails if the simulator-server / emulator backend / Chromium CDP is not reachable
       // tvOS has no simulator-server backend, so capture via xcrun instead.
       if (device.platform === "ios" && (await isTvOsSimulator(params.udid))) {
         const pngPath = await tvScreenshot(params.udid, scale, signal);
+        const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
+        return { image };
+      }
+
+      // Vega captures host-side via the Android emulator console (`adb emu`) and
+      // needs no simulator-server (resolving the iOS/Android-only blueprint for a
+      // Vega device would throw), so capture directly here.
+      if (device.platform === "vega") {
+        const pngPath = await captureVegaScreenshotPng({ scale: params.scale });
         const image = await requireArtifacts(ctx).register(pngPath, { mimeType: "image/png" });
         return { image };
       }

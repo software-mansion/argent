@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -78,7 +78,12 @@ If status is restart_required: call restart-app then retry.`,
     )) as { screenFrame?: unknown; elements?: unknown[]; error?: string };
 
     if (result.error) {
-      throw new Error(result.error);
+      throw new FailureError(result.error, {
+        error_code: FAILURE_CODES.NATIVE_DEVTOOLS_DESCRIBE_ERROR,
+        failure_stage: "native_devtools_describe_screen",
+        failure_area: "tool_server",
+        error_kind: "unknown",
+      });
     }
 
     const parsed = parseNativeDescribeScreenResult(result);

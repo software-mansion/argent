@@ -59,15 +59,17 @@ export function attachRegistryLogger(registry: Registry): void {
     console.log(`${PREFIX} toolRegistered ${toolId}`);
   });
 
-  registry.events.on("toolInvoked", (toolId) => {
-    console.log(`${PREFIX} toolInvoked ${toolId}`);
+  registry.events.on("toolInvoked", (toolId, toolInvocationId) => {
+    console.log(`${PREFIX} toolInvoked ${toolId} (${toolInvocationId})`);
   });
 
-  registry.events.on("toolCompleted", (toolId, durationMs) => {
-    console.log(`${PREFIX} toolCompleted ${toolId} (${durationMs.toFixed(2)}ms)`);
+  registry.events.on("toolCompleted", (toolId, toolInvocationId, durationMs) => {
+    console.log(
+      `${PREFIX} toolCompleted ${toolId} (${toolInvocationId}, ${durationMs.toFixed(2)}ms)`
+    );
   });
 
-  registry.events.on("toolFailed", (toolId, error) => {
-    console.error(`${PREFIX} toolFailed ${toolId}:\n${formatError(error)}`);
+  registry.events.on("toolFailed", (toolId, toolInvocationId, error) => {
+    console.error(`${PREFIX} toolFailed ${toolId} (${toolInvocationId}):\n${formatError(error)}`);
   });
 }

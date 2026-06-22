@@ -81,6 +81,8 @@ export interface InvokeToolOptions {
    * "legacy caller — behave exactly as before the file boundary existed".
    */
   fileInputs?: Record<string, ResolvedFileInput>;
+  /** Optional caller-provided id used to correlate outer request metadata. */
+  toolInvocationId?: string;
 }
 
 /**
@@ -98,9 +100,9 @@ export interface ToolContext extends InvokeToolOptions {
 
 // ── Device + Capability Types ──
 
-export type Platform = "ios" | "android" | "chromium";
+export type Platform = "ios" | "android" | "chromium" | "vega";
 
-export type DeviceKind = "simulator" | "emulator" | "device" | "app" | "unknown";
+export type DeviceKind = "simulator" | "emulator" | "vvd" | "device" | "app" | "unknown";
 
 /**
  * Universal device handle. Platform-aware tools resolve a `udid` parameter into
@@ -134,6 +136,10 @@ export interface ToolCapability {
   chromium?: {
     app?: boolean;
   };
+  vega?: {
+    vvd?: boolean;
+    device?: boolean;
+  };
   /** Optional refiner. Returns true if this device is supported. */
   supports?: (device: DeviceInfo) => boolean;
 }
@@ -158,7 +164,7 @@ export interface ToolCapability {
  * On a missing binary, the HTTP layer returns 424 Failed Dependency with an
  * install hint the agent can surface verbatim.
  */
-export type ToolDependency = "adb" | "xcrun" | "emulator";
+export type ToolDependency = "adb" | "xcrun" | "emulator" | "vega";
 
 // ── Tool Types ──
 
@@ -234,7 +240,7 @@ export type RegistryEvents = {
   serviceError: (serviceId: string, error: Error) => void;
   serviceRegistered: (serviceId: string) => void;
   toolRegistered: (toolId: string) => void;
-  toolInvoked: (toolId: string) => void;
-  toolCompleted: (toolId: string, durationMs: number) => void;
-  toolFailed: (toolId: string, error: Error) => void;
+  toolInvoked: (toolId: string, toolInvocationId: string) => void;
+  toolCompleted: (toolId: string, toolInvocationId: string, durationMs: number) => void;
+  toolFailed: (toolId: string, toolInvocationId: string, error: Error, durationMs?: number) => void;
 };

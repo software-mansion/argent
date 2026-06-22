@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
 import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import type { RestartAppResult } from "./types";
+import type { RestartAppResult, RestartAppVegaServices } from "./types";
 import { makeIosImpl } from "./platforms/ios";
 import { androidImpl } from "./platforms/android";
+import { vegaImpl } from "./platforms/vega";
 
 // Bundle id / package name. Head must be letter or underscore so a bundleId
 // like `--user` can't masquerade as a flag inside `am force-stop …`.
@@ -37,6 +38,7 @@ type Params = z.infer<typeof zodSchema>;
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
+  vega: { vvd: true },
 };
 
 // `restart-app` resolves native-devtools through `registry` inside the iOS
@@ -55,22 +57,28 @@ export function createRestartAppTool(registry: Registry): ToolDefinition<Params,
 Use when you need a clean in-memory state without a full reinstall. Also refreshes the native-devtools injection before the relaunch (the iOS slice on iOS, the tvOS slice on Apple TV); on tvOS, interaction is focus-driven — use the tv-* tools rather than coordinate taps.
 Returns { restarted, bundleId }. Fails if the app is not installed.`,
     alwaysLoad: true,
-    searchHint: "terminate relaunch restart reset app bundle id package simulator emulator tvos",
+    searchHint:
+      "terminate relaunch restart reset app bundle id package simulator emulator vega tvos fire tv",
     zodSchema,
     capability,
     // No eager service: the iOS handler resolves native-devtools lazily so a
-    // tvOS udid never spins up the iOS-only injection (see header comment).
+    // tvOS udid never spins up the iOS-only injection (see header comment);
+    // Android and Vega need no service.
     services: () => ({}),
     execute: dispatchByPlatform<
       Record<string, unknown>,
       Record<string, unknown>,
       Params,
-      RestartAppResult
+      RestartAppResult,
+      // No chromium branch — falls back to the ChromiumServices default.
+      Record<string, unknown>,
+      RestartAppVegaServices
     >({
       toolId: "restart-app",
       capability,
       ios: makeIosImpl(registry),
       android: androidImpl,
+      vega: vegaImpl,
     }),
   };
 }

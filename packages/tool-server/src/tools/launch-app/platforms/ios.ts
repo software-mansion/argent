@@ -1,6 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Registry } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type Registry,
+} from "@argent/registry";
 import {
   nativeDevtoolsRef,
   precheckNativeDevtools,
@@ -28,7 +33,21 @@ export function makeIosImpl(
       );
       const blocked = await precheckNativeDevtools(nativeDevtools, params.udid);
       if (blocked) return blocked;
-      await execFileAsync("xcrun", ["simctl", "launch", params.udid, params.bundleId]);
+      try {
+        await execFileAsync("xcrun", ["simctl", "launch", params.udid, params.bundleId]);
+      } catch (err) {
+        throw new FailureError(
+          `Failed to launch iOS app ${params.bundleId} on ${params.udid}.`,
+          {
+            error_code: FAILURE_CODES.IOS_LAUNCH_SIMCTL_FAILED,
+            failure_stage: "ios_launch_app_simctl_launch",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+            ...subprocessFailureMetadata(err, "xcrun_simctl"),
+          },
+          { cause: err instanceof Error ? err : new Error(String(err)) }
+        );
+      }
       return { launched: true, bundleId: params.bundleId };
     },
   };

@@ -108,6 +108,24 @@ function classifyHangSeverity(hangType: string): "RED" | "YELLOW" {
 // Leak aggregation
 // ---------------------------------------------------------------------------
 
+/**
+ * xctrace only records malloc-stack history when the target is launched under
+ * the Allocations/Leaks instrument. Argent records via `xctrace --attach`, so
+ * leaks of pre-existing allocations — in practice most leaks on the simulator —
+ * come back with no responsible frame: xctrace emits the sentinel
+ * `<Call stack limit reached>` and an empty library. Those leaks are not
+ * actionable and are dominated by benign system allocations (`Malloc N Bytes`,
+ * `xpc_*`), so they are reported as a low-confidence (YELLOW) signal rather than
+ * a confirmed (RED) app leak. Verified empirically against xctrace 16: both an
+ * idle system app and an actively-allocating RN app return only unattributed
+ * leaks under `--attach`, while CPU/hang stacks symbolicate normally.
+ */
+const UNATTRIBUTED_LEAK_FRAMES = new Set(["", "Unknown", "<Call stack limit reached>"]);
+
+export function isLeakAttributed(responsibleFrame: string): boolean {
+  return !UNATTRIBUTED_LEAK_FRAMES.has(responsibleFrame.trim());
+}
+
 export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
   const groups = new Map<
     string,
@@ -131,15 +149,21 @@ export function aggregateLeaks(rawLeaks: RawLeak[]): MemoryLeak[] {
   }
 
   return [...groups.entries()]
-    .sort((a, b) => b[1].totalSize - a[1].totalSize)
-    .map(([objectType, g]) => ({
-      type: "memory_leak" as const,
-      platform: "ios" as const,
-      objectType,
-      totalSizeBytes: g.totalSize,
-      count: g.count,
-      responsibleFrame: g.frame,
-      responsibleLibrary: g.library,
-      severity: "RED" as const,
-    }));
+    .map(([objectType, g]) => {
+      const attributed = isLeakAttributed(g.frame);
+      return {
+        type: "memory_leak" as const,
+        platform: "ios" as const,
+        objectType,
+        totalSizeBytes: g.totalSize,
+        count: g.count,
+        responsibleFrame: g.frame,
+        responsibleLibrary: g.library,
+        attributed,
+        severity: (attributed ? "RED" : "YELLOW") as "RED" | "YELLOW",
+      };
+    })
+    .sort((a, b) =>
+      a.attributed === b.attributed ? b.totalSizeBytes - a.totalSizeBytes : a.attributed ? -1 : 1
+    );
 }

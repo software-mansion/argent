@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote, isAndroidTv } from "../../../utils/adb";
 import type { LaunchAppParams, LaunchAppResult } from "../types";
@@ -9,7 +10,12 @@ import type { LaunchAppParams, LaunchAppResult } from "../types";
 // false-succeeded on `Status: null` when the activity failed in onCreate.
 export function assertAmStartOk(out: string): void {
   if (!/Status:\s*ok/i.test(out)) {
-    throw new Error(`am start failed: ${out.trim()}`);
+    throw new FailureError(`am start failed: ${out.trim()}`, {
+      error_code: FAILURE_CODES.ANDROID_LAUNCH_AM_START_FAILED,
+      failure_stage: "android_launch_am_start",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    });
   }
   // "Warning: Activity not started, its current task has been brought to the
   // front" also comes with Status: ok and means the app is foregrounded.
@@ -26,6 +32,10 @@ function parseResolvedActivity(raw: string): string | null {
     .map((l) => l.trim())
     .filter(Boolean)
     .pop();
+  // Return null (not throw) when no concrete component resolves, so the TV
+  // LEANBACK_LAUNCHER attempt can fall through to the standard LAUNCHER in
+  // resolveLauncherActivity. That function throws (with the resolve-activity
+  // output) only after every category has been tried.
   return last && /^[\w.]+\/[\w.$]+$/.test(last) ? last : null;
 }
 
@@ -61,9 +71,15 @@ export async function resolveLauncherActivity(
   const launcher = await resolveFor();
   if (launcher) return launcher;
 
-  throw new Error(
+  throw new FailureError(
     `Could not resolve a ${isTv ? "LEANBACK_LAUNCHER or LAUNCHER" : "LAUNCHER"} activity for ${bundleId}. ` +
-      `Install the app first, or pass an explicit \`activity\`.`
+      `Install the app first, or pass an explicit \`activity\`.`,
+    {
+      error_code: FAILURE_CODES.ANDROID_LAUNCH_ACTIVITY_RESOLVE_FAILED,
+      failure_stage: "android_launch_resolve_activity",
+      failure_area: "tool_server",
+      error_kind: "subprocess",
+    }
   );
 }
 
