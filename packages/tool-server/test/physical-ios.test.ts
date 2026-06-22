@@ -9,6 +9,8 @@ import { parsePhysicalIosDevices } from "../src/utils/ios-devices";
 import { toHid, tunneldStartCommand, appleScriptQuote } from "../src/blueprints/core-device";
 import { launchAppTool } from "../src/tools/launch-app";
 import { restartAppTool } from "../src/tools/restart-app";
+import { devicesToPreviewEntries } from "../src/preview";
+import type { ListDevicesResult } from "../src/tools/devices/list-devices";
 
 // A real iPhone's UDID: 8-hex ECID, one dash, 16 hex.
 const PHYSICAL_UDID = "00008120-000E6D0C0ABBA01E";
@@ -146,5 +148,65 @@ describe("lifecycle tools don't resolve native-devtools for physical iOS", () =>
   it("restart-app: omit for physical device, keep for simulator", () => {
     expect(restartAppTool.services(params(PHYSICAL_UDID)).nativeDevtools).toBeUndefined();
     expect(restartAppTool.services(params(SIM_UDID)).nativeDevtools).toBeDefined();
+  });
+});
+
+describe("preview target list excludes targets it can't stream", () => {
+  // Regression guard: the preview / Lens UI streams frames over simulator-server,
+  // which refuses physical iOS (kind === "device", driven over CoreDevice) and
+  // never serves Chromium. Those must not leak into the selectable target list.
+  const devices: ListDevicesResult["devices"] = [
+    {
+      platform: "ios",
+      udid: SIM_UDID,
+      name: "iPhone 16 Pro",
+      state: "Booted",
+      kind: "simulator",
+      runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-5",
+    },
+    {
+      platform: "ios",
+      udid: PHYSICAL_UDID,
+      name: "iPhone 15",
+      state: "connected",
+      kind: "device",
+      productType: "iPhone15,4",
+    },
+    {
+      platform: "android",
+      serial: "emulator-5554",
+      state: "device",
+      isEmulator: true,
+      kind: "emulator",
+      model: "Pixel 7",
+      avdName: "Pixel_7_API_33",
+      sdkLevel: 34,
+    },
+    {
+      platform: "chromium",
+      id: "chromium-1",
+      title: "App",
+      port: 9222,
+      url: "about:blank",
+      browser: "Chrome/120",
+      state: "Running",
+    },
+  ];
+
+  it("includes the simulator and the Android emulator", () => {
+    const entries = devicesToPreviewEntries(devices);
+    expect(entries.map((e) => e.udid).sort()).toEqual([SIM_UDID, "emulator-5554"].sort());
+  });
+
+  it("excludes the physical iPhone and the Chromium app", () => {
+    const entries = devicesToPreviewEntries(devices);
+    expect(entries.some((e) => e.udid === PHYSICAL_UDID)).toBe(false);
+    expect(entries.some((e) => e.platform !== "ios" && e.platform !== "android")).toBe(false);
+  });
+
+  it("keeps `runtime` a string for a simulator that reports one", () => {
+    const [sim] = devicesToPreviewEntries(devices);
+    expect(typeof sim!.runtime).toBe("string");
+    expect(sim!.runtime.length).toBeGreaterThan(0);
   });
 });

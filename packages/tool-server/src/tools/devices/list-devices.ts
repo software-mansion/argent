@@ -36,7 +36,7 @@ type AndroidDevice = {
   sdkLevel: number | null;
 };
 
-type ListDevicesResult = {
+export type ListDevicesResult = {
   devices: Array<IosDevice | AndroidDevice | ChromiumDevice>;
   avds: Array<{ name: string }>;
 };
