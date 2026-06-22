@@ -13,7 +13,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"android","serial":"emulator-5558","state":"offline","kind":"emulator","model":"Pixel 7","avdName":"Pixel_7_API_33","sdkLevel":34}],"avds":[{"name":"Pixel_7_API_33"},{"name":"Pixel_8_API_34"}]}
+{"devices":[{"platform":"android","serial":"emulator-5558","state":"offline","isEmulator":true,"kind":"emulator","model":"Pixel 7","avdName":"Pixel_7_API_33","sdkLevel":34}],"avds":[{"name":"Pixel_7_API_33"},{"name":"Pixel_8_API_34"}]}
 ```
 
 **assistant:** No device is booted, so I'll boot Pixel 7.
@@ -45,7 +45,7 @@ debugger-status {"port":8081,"device_id":"emulator-5558"}
 ```
 
 ```tool_result (debugger-status)
-{"connected":true,"logicalDeviceId":"emulator-5558","loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
+{"port":8081,"projectRoot":"/Users/dev/app","deviceName":"Pixel 7","appName":"ShopMart","logicalDeviceId":"emulator-5558","isNewDebugger":false,"connected":true,"loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
 ```
 
 **assistant:** Let me read the component tree to find the element and its tap coordinates.
@@ -130,7 +130,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"android","serial":"emulator-5556","state":"device","kind":"emulator","model":"sdk_gphone64_arm64","avdName":"Medium_Phone_API_35","sdkLevel":35}],"avds":[{"name":"Medium_Phone_API_35"},{"name":"Pixel_8_API_34"}]}
+{"devices":[{"platform":"android","serial":"emulator-5556","state":"device","isEmulator":true,"kind":"emulator","model":"sdk_gphone64_arm64","avdName":"Medium_Phone_API_35","sdkLevel":35}],"avds":[{"name":"Medium_Phone_API_35"},{"name":"Pixel_8_API_34"}]}
 ```
 
 **assistant:** Opening ShopMart straight to the target via its deep link.
@@ -152,7 +152,7 @@ debugger-status {"port":8081,"device_id":"emulator-5556"}
 ```
 
 ```tool_result (debugger-status)
-{"connected":true,"logicalDeviceId":"emulator-5556","loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
+{"port":8081,"projectRoot":"/Users/dev/app","deviceName":"sdk_gphone64_arm64","appName":"ShopMart","logicalDeviceId":"emulator-5556","isNewDebugger":false,"connected":true,"loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
@@ -239,7 +239,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"ios","udid":"24831B7C-E5B4-A8D8-0E4E-C6B25B007D9A","name":"iPhone 15 Pro","state":"Booted"},{"platform":"ios","udid":"99158D67-79CD-A5BB-7FEB-AFC018D58478","name":"iPhone 16","state":"Shutdown"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
+{"devices":[{"platform":"ios","udid":"24831B7C-E5B4-A8D8-0E4E-C6B25B007D9A","name":"iPhone 15 Pro","state":"Booted","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"},{"platform":"ios","udid":"99158D67-79CD-A5BB-7FEB-AFC018D58478","name":"iPhone 16","state":"Shutdown","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
 ```
 
 **assistant:** Opening Settings straight to the target via its deep link.
@@ -333,7 +333,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"ios","udid":"F9BC5BE8-B67B-EF75-C4C8-57078C1C6580","name":"iPhone 16","state":"Booted"},{"platform":"ios","udid":"482FDE52-A71C-F07E-B8F4-C57B038CD17A","name":"iPhone 15 Pro","state":"Shutdown"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
+{"devices":[{"platform":"ios","udid":"F9BC5BE8-B67B-EF75-C4C8-57078C1C6580","name":"iPhone 16","state":"Booted","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"},{"platform":"ios","udid":"482FDE52-A71C-F07E-B8F4-C57B038CD17A","name":"iPhone 15 Pro","state":"Shutdown","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
 ```
 
 **assistant:** Now I'll launch ShopMart.
@@ -355,7 +355,7 @@ debugger-status {"port":8081,"device_id":"F9BC5BE8-B67B-EF75-C4C8-57078C1C6580"}
 ```
 
 ```tool_result (debugger-status)
-{"connected":true,"logicalDeviceId":"F9BC5BE8-B67B-EF75-C4C8-57078C1C6580","loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
+{"port":8081,"projectRoot":"/Users/dev/app","deviceName":"iPhone 16","appName":"ShopMart","logicalDeviceId":"F9BC5BE8-B67B-EF75-C4C8-57078C1C6580","isNewDebugger":false,"connected":true,"loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
 ```
 
 **assistant:** Looking for "Add to Cart". Let me read the Home screen to decide where to go.
@@ -440,7 +440,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"ios","udid":"B7E3CBA0-74E4-CB40-C341-7F31D56F463D","name":"iPhone 16","state":"Booted"},{"platform":"ios","udid":"E8CA2A95-C90E-55D3-2D4F-05C5A11B84E0","name":"iPhone 16","state":"Shutdown"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
+{"devices":[{"platform":"ios","udid":"B7E3CBA0-74E4-CB40-C341-7F31D56F463D","name":"iPhone 16","state":"Booted","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"},{"platform":"ios","udid":"E8CA2A95-C90E-55D3-2D4F-05C5A11B84E0","name":"iPhone 16","state":"Shutdown","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
 ```
 
 **assistant:** Now I'll launch Habitly.
@@ -462,7 +462,7 @@ debugger-status {"port":8081,"device_id":"B7E3CBA0-74E4-CB40-C341-7F31D56F463D"}
 ```
 
 ```tool_result (debugger-status)
-{"connected":true,"logicalDeviceId":"B7E3CBA0-74E4-CB40-C341-7F31D56F463D","loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
+{"port":8081,"projectRoot":"/Users/dev/app","deviceName":"iPhone 16","appName":"Habitly","logicalDeviceId":"B7E3CBA0-74E4-CB40-C341-7F31D56F463D","isNewDebugger":false,"connected":true,"loadedScripts":412,"enabledDomains":["Runtime","Debugger","Network"],"sourceMapReady":true}
 ```
 
 **assistant:** Getting the component tree so I tap the right coordinates rather than guessing.
@@ -517,7 +517,7 @@ debugger-inspect-element {"x":197,"y":294,"port":8081,"device_id":"B7E3CBA0-74E4
 ```
 
 ```tool_result (debugger-inspect-element)
-{"source":"src/screens/DashboardScreen.tsx:29","fragment":"<Pressable onPress={handlePress} testID=\"el\">"}
+{"x":197,"y":294,"items":[{"name":"DashboardRow","source":{"file":"src/screens/DashboardScreen.tsx","line":29,"column":4},"code":"<Pressable onPress={handlePress} testID=\"el\">"}],"deviceName":"iPhone 16","appName":"Habitly","logicalDeviceId":"B7E3CBA0-74E4-CB40-C341-7F31D56F463D"}
 ```
 
 **assistant:** "Read 20 min" is rendered by the component identified in the source mapping above.
@@ -537,7 +537,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"ios","udid":"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69","name":"iPhone 16","state":"Booted"},{"platform":"ios","udid":"E9EB94DC-365A-0544-4451-51E817707A44","name":"iPhone 15 Pro","state":"Shutdown"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
+{"devices":[{"platform":"ios","udid":"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69","name":"iPhone 16","state":"Booted","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"},{"platform":"ios","udid":"E9EB94DC-365A-0544-4451-51E817707A44","name":"iPhone 15 Pro","state":"Shutdown","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
 ```
 
 **assistant:** Now I'll launch Settings.
@@ -559,7 +559,7 @@ flow-start-recording {"name":"ios-settings-to-low-power","project_root":"/Users/
 ```
 
 ```tool_result (flow-start-recording)
-{"recording":true,"name":"ios-settings-to-low-power"}
+{"message":"Started recording \"ios-settings-to-low-power\" flow. Subsequent tool calls will be appended.","flowFile":"name: ios-settings-to-low-power\nsteps: []\n","savedTo":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.flow.yaml"}
 ```
 
 **assistant:** I'll run describe to find the element before tapping.
@@ -592,11 +592,11 @@ flow-add-step {"command":"gesture-tap","args":"{\"udid\":\"0EF3E600-7CA7-63FF-4F
 ```
 
 ```tool_result (flow-add-echo)
-{"added":"echo"}
+{"message":"Added echo step to \"ios-settings-to-low-power\".","flowFile":"name: ios-settings-to-low-power\nsteps:\n  - echo: Tap Settings\n","savedTo":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.flow.yaml"}
 ```
 
 ```tool_result (flow-add-step)
-{"added":"gesture-tap","result":{"tapped":true,"timestampMs":1750000004600}}
+{"message":"Recorded gesture-tap step in \"ios-settings-to-low-power\".","toolResult":{"tapped":true,"timestampMs":1750000004600},"flowFile":"name: ios-settings-to-low-power\nsteps:\n  - echo: Tap Settings\n  - tool: gesture-tap\n    args: {\"udid\":\"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69\",\"x\":0.36,\"y\":0.085}\n","savedTo":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.flow.yaml"}
 ```
 
 **assistant:** Reading the accessibility tree so I don't guess coordinates.
@@ -629,11 +629,11 @@ flow-add-step {"command":"gesture-tap","args":"{\"udid\":\"0EF3E600-7CA7-63FF-4F
 ```
 
 ```tool_result (flow-add-echo)
-{"added":"echo"}
+{"message":"Added echo step to \"ios-settings-to-low-power\".","flowFile":"name: ios-settings-to-low-power\nsteps:\n  - echo: Tap Settings\n  - tool: gesture-tap\n    args: {\"udid\":\"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69\",\"x\":0.36,\"y\":0.085}\n  - echo: Tap Settings\n","savedTo":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.flow.yaml"}
 ```
 
 ```tool_result (flow-add-step)
-{"added":"gesture-tap","result":{"tapped":true,"timestampMs":1750000006200}}
+{"message":"Recorded gesture-tap step in \"ios-settings-to-low-power\".","toolResult":{"tapped":true,"timestampMs":1750000006200},"flowFile":"name: ios-settings-to-low-power\nsteps:\n  - echo: Tap Settings\n  - tool: gesture-tap\n    args: {\"udid\":\"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69\",\"x\":0.36,\"y\":0.085}\n  - echo: Tap Settings\n  - tool: gesture-tap\n    args: {\"udid\":\"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69\",\"x\":0.36,\"y\":0.085}\n","savedTo":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.flow.yaml"}
 ```
 
 **assistant:** Finishing the recording.
@@ -643,7 +643,7 @@ flow-finish-recording {}
 ```
 
 ```tool_result (flow-finish-recording)
-{"saved":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.yaml","summary":"4 steps (2 tool, 2 echo)"}
+{"message":"Finished recording \"ios-settings-to-low-power\" flow (4 steps)","path":"/Users/dev/ios-settings/.argent/flows/ios-settings-to-low-power.flow.yaml","executionPrerequisite":"App launched on the Settings screen","steps":4,"summary":["1. echo: Tap Settings","2. tool: gesture-tap {\"udid\":\"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69\",\"x\":0.36,\"y\":0.085}","3. echo: Tap Settings","4. tool: gesture-tap {\"udid\":\"0EF3E600-7CA7-63FF-4FDF-BFFF38343D69\",\"x\":0.36,\"y\":0.085}"],"flowFile":"name: ios-settings-to-low-power\nsteps:\n  - echo: Tap Settings\n  - tool: gesture-tap\n    args: {\ …
 ```
 
 **assistant:** Returning to the start state so the replay matches the prerequisite.
@@ -663,7 +663,7 @@ flow-execute {"name":"ios-settings-to-low-power","project_root":"/Users/dev/ios-
 ```
 
 ```tool_result (flow-execute)
-{"notice":"This flow requires: \"App launched on the Settings screen\". Verify it is met, then call flow-execute again with prerequisiteAcknowledged: true."}
+{"flow":"ios-settings-to-low-power","notice":"This flow requires: \"App launched on the Settings screen\". Verify it is met, then call flow-execute again with prerequisiteAcknowledged: true.","executionPrerequisite":"App launched on the Settings screen"}
 ```
 
 **assistant:** The prerequisite is satisfied, so I'll acknowledge it and run the flow.
@@ -673,7 +673,7 @@ flow-execute {"name":"ios-settings-to-low-power","project_root":"/Users/dev/ios-
 ```
 
 ```tool_result (flow-execute)
-{"executed":"ios-settings-to-low-power","steps":[{"kind":"echo","message":"Tap Settings"},{"kind":"tool","tool":"gesture-tap","result":{"tapped":true,"timestampMs":1750000010700}},{"kind":"echo","message":"Tap Settings"},{"kind":"tool","tool":"gesture-tap","result":{"tapped":true,"timestampMs":1750000012200}}]}
+{"flow":"ios-settings-to-low-power","executionPrerequisite":"App launched on the Settings screen","steps":[{"kind":"echo","message":"Tap Settings"},{"kind":"tool","tool":"gesture-tap","result":{"tapped":true,"timestampMs":1750000010700}},{"kind":"echo","message":"Tap Settings"},{"kind":"tool","tool":"gesture-tap","result":{"tapped":true,"timestampMs":1750000012200}}]}
 
 [screenshot] "Settings" screen showing: Settings, Wi-Fi, General, Display & Brightness, Privacy & Security
 ```
@@ -695,7 +695,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"ios","udid":"8B42C835-484F-3E32-248C-1E89AF9ED025","name":"iPhone 16 Pro","state":"Booted"},{"platform":"ios","udid":"01C567FB-B552-2E53-A50A-E8DAE18AEFD9","name":"iPhone 15 Pro","state":"Shutdown"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
+{"devices":[{"platform":"ios","udid":"8B42C835-484F-3E32-248C-1E89AF9ED025","name":"iPhone 16 Pro","state":"Booted","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"},{"platform":"ios","udid":"01C567FB-B552-2E53-A50A-E8DAE18AEFD9","name":"iPhone 15 Pro","state":"Shutdown","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
 ```
 
 **assistant:** Opening Settings on the device.
@@ -853,7 +853,7 @@ list-devices {}
 ```
 
 ```tool_result (list-devices)
-{"devices":[{"platform":"ios","udid":"D3808193-2FB1-2087-CC07-58581D5BE8AC","name":"iPhone 16","state":"Booted"},{"platform":"ios","udid":"4414F960-7CF3-D188-2611-FD30F9C67064","name":"iPhone 16","state":"Shutdown"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
+{"devices":[{"platform":"ios","udid":"D3808193-2FB1-2087-CC07-58581D5BE8AC","name":"iPhone 16","state":"Booted","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"},{"platform":"ios","udid":"4414F960-7CF3-D188-2611-FD30F9C67064","name":"iPhone 16","state":"Shutdown","runtime":"com.apple.CoreSimulator.SimRuntime.iOS-18-2"}],"avds":[{"name":"Pixel_8_API_34"},{"name":"Pixel_7_API_33"}]}
 ```
 
 **assistant:** Let me launch the app (Settings).

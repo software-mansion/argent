@@ -14,7 +14,7 @@ import {
   SCREEN_PX,
   visibleElements,
 } from "./format.ts";
-import type { ElementDef, ScreenDef, World } from "./types.ts";
+import type { ElementDef, FlowStep, ScreenDef, World } from "./types.ts";
 
 const BASE_EPOCH = 1_750_000_000_000;
 
@@ -59,6 +59,39 @@ export function elementAt(world: World, x: number, y: number): ElementDef | unde
 
 function json(obj: unknown): string {
   return JSON.stringify(obj);
+}
+
+// Synthetic project root used by tools that report a workspace path.
+const PROJECT_ROOT = "/Users/dev/app";
+
+/** The display name of the device the task is operating on. */
+function deviceName(world: World): string {
+  return world.devices.find((d) => d.id === world.deviceId)?.name ?? world.deviceId;
+}
+
+/**
+ * The serialized form of an Argent artifact handle — the keys that survive
+ * JSON.stringify when a tool returns a file via the registry's ArtifactHandle
+ * (packages/registry/src/artifacts.ts). The `__argentArtifact` marker is a real
+ * wire key, not a Symbol, so it is part of the ground-truth shape.
+ */
+function artifact(
+  world: World,
+  filename: string,
+  mimeType: string,
+  size: number,
+  extra?: { archive?: "tar.gz" }
+): Record<string, unknown> {
+  return {
+    __argentArtifact: true,
+    id: `art-${world.clock}-${filename}`,
+    filename,
+    mimeType,
+    size,
+    hostPath: `/tmp/argent/artifacts/${filename}`,
+    mtimeMs: BASE_EPOCH + world.clock,
+    ...(extra?.archive ? { archive: extra.archive } : {}),
+  };
 }
 
 // The post-action screenshot, rendered as the content the image conveys. For a
@@ -149,8 +182,7 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
       return inspectElement(world, args);
 
     case "debugger-reload-metro":
-      tick(world, 1200);
-      return { content: json({ reloaded: true }) };
+      return debuggerReloadMetro(world);
 
     case "gesture-tap":
       return gestureTap(world, args);
@@ -181,38 +213,92 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
       world.reactProfileStartMs = tick(world, 200);
       return {
         content: json({
+          started_at: new Date(world.reactProfileStartMs).toISOString(),
           startedAtEpochMs: world.reactProfileStartMs,
-          startedAtRelativeMs: 0,
-          platform: world.platform,
+          hermes_version: "0.12.0",
+          detected_architecture: "new",
         }),
       };
 
-    case "native-profiler-start":
+    case "native-profiler-start": {
       world.nativeProfiling = true;
       tick(world, 200);
-      return { content: json({ started: true, platform: world.platform }) };
+      return {
+        content: json({
+          status: "recording",
+          pid: 48213,
+          traceFile: `/tmp/argent/profiler/${world.deviceId}.trace`,
+        }),
+      };
+    }
 
     case "react-profiler-stop": {
       world.reactProfiling = false;
       const cap = tick(world, 100) - (world.reactProfileStartMs ?? BASE_EPOCH);
-      return { content: json({ stopped: true, capturedMs: cap, fiber_renders_captured: 38 }) };
+      return {
+        content: json({
+          duration_ms: cap,
+          sample_count: 1840,
+          fiber_renders_captured: 38,
+          total_react_commits: 12,
+          hot_commit_indices: [0, 4],
+          any_compiler_optimized: false,
+          fiber_renders_analyzed: 38,
+          selection_note: "2 of 12 commits at ≥16ms absolute floor",
+        }),
+      };
     }
 
     case "native-profiler-stop":
       world.nativeProfiling = false;
-      return { content: json({ stopped: true, capturedMs: 5200 }) };
+      return {
+        content: json({
+          traceFile: artifact(world, "capture.trace", "application/octet-stream", 4_812_544, {
+            archive: "tar.gz",
+          }),
+          exportedFiles: {
+            cpu: artifact(world, "cpu.json", "application/json", 182_344),
+            hangs: artifact(world, "hangs.json", "application/json", 9_204),
+          },
+          // iOS stop always carries export diagnostics (ExportDiagnostics).
+          exportDiagnostics: {
+            tocSchemas: ["time-profile", "kdebug"],
+            cpuSchemaUsed: "time-profile",
+            errors: {},
+          },
+        }),
+      };
 
     case "react-profiler-analyze":
-      return { content: reactAnalyzeReport(world) };
+      return { content: reactAnalyze(world) };
 
     case "native-profiler-analyze":
-      return { content: nativeAnalyzeReport(world) };
+      return { content: nativeAnalyze(world) };
 
     case "profiler-combined-report":
       return { content: combinedReport(world) };
 
     case "react-profiler-status":
-      return { content: json({ isRecording: world.reactProfiling }) };
+      return {
+        content: json({
+          hook_exists: true,
+          renderer_interface_found: true,
+          is_running: world.reactProfiling,
+          current_session_id: world.reactProfiling ? `sess_${world.reactProfileStartMs}` : null,
+          // Real current_owner is a ProfilerSessionOwner, not a pid/device pair.
+          current_owner: world.reactProfiling
+            ? {
+                sessionId: `sess_${world.reactProfileStartMs}`,
+                startedAtEpochMs: world.reactProfileStartMs ?? BASE_EPOCH,
+                lastHeartbeatEpochMs: BASE_EPOCH + world.clock,
+              }
+            : null,
+          session_status: world.reactProfiling ? "active" : "stopped",
+          note: world.reactProfiling
+            ? "A profiling session is currently recording."
+            : "No active profiling session.",
+        }),
+      };
 
     case "react-profiler-renders":
       return { content: reactRendersReport(world) };
@@ -221,7 +307,7 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
       return { content: reactCpuSummary(world) };
 
     case "react-profiler-fiber-tree":
-      return { content: fiberTree(world) };
+      return { content: json(fiberTree(world)) };
 
     case "react-profiler-component-source":
       return { content: componentSource(world, args) };
@@ -241,14 +327,10 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
     }
 
     case "rotate": {
-      const ts = tick(world, 1000);
+      tick(world, 1000);
       return {
         content:
-          json({
-            rotated: true,
-            orientation: String(args.orientation ?? "Portrait"),
-            timestampMs: ts,
-          }) + screenshotNote(world),
+          json({ orientation: String(args.orientation ?? "Portrait") }) + screenshotNote(world),
         autoScreenshot: true,
       };
     }
@@ -294,15 +376,15 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
 
     case "stop-all-simulator-servers":
       world.simServerRunning = false;
-      return { content: json({ stopped: true, count: 1 }) };
+      return { content: json({ stopped: [`simulator-server:${world.deviceId}`] }) };
 
     case "stop-simulator-server":
       world.simServerRunning = false;
-      return { content: json({ stopped: true }) };
+      return { content: json({ stopped: true, udid: world.deviceId }) };
 
     case "stop-metro":
       world.metroRunning = false;
-      return { content: json({ stopped: true }) };
+      return { content: json({ stopped: true, port: world.app.metroPort ?? 8081, pids: [40217] }) };
 
     default:
       throw new GymError(`gym has no transition for tool '${tool}'`);
@@ -320,6 +402,7 @@ function listDevices(world: World) {
           udid: d.id,
           name: d.name,
           state: d.booted ? "Booted" : "Shutdown",
+          runtime: "com.apple.CoreSimulator.SimRuntime.iOS-18-2",
         };
       }
       if (d.platform === "android") {
@@ -327,13 +410,22 @@ function listDevices(world: World) {
           platform: "android",
           serial: d.id,
           state: d.booted ? "device" : "offline",
+          isEmulator: true,
           kind: "emulator",
           model: d.name,
           avdName: d.avdName ?? null,
           sdkLevel: d.sdkLevel ?? null,
         };
       }
-      return { platform: "chromium", id: d.id, port: d.port, booted: true };
+      return {
+        platform: "chromium",
+        id: d.id,
+        port: d.port,
+        title: world.app.name,
+        url: Object.keys(world.app.urls ?? { "about:blank": "" })[0] ?? "about:blank",
+        browser: "Chrome/124.0.0.0",
+        state: "Running",
+      };
     }),
     avds: world.avds.map((name) => ({ name })),
   };
@@ -361,7 +453,16 @@ function bootDevice(world: World, args: ToolArgs): ToolResult {
     return {
       content: json({ platform: "android", serial: dev.id, avdName: dev.avdName, booted: true }),
     };
-  return { content: json({ platform: "chromium", id: dev.id, port: dev.port, booted: true }) };
+  return {
+    content: json({
+      platform: "chromium",
+      id: dev.id,
+      port: dev.port,
+      pid: 48201,
+      appPath: world.app.bundleId,
+      booted: true,
+    }),
+  };
 }
 
 function launchApp(world: World, args: ToolArgs): ToolResult {
@@ -425,8 +526,13 @@ function debuggerStatus(world: World): ToolResult {
   world.debuggerConnected = true;
   return {
     content: json({
-      connected: true,
+      port: world.app.metroPort ?? 8081,
+      projectRoot: PROJECT_ROOT,
+      deviceName: deviceName(world),
+      appName: world.app.name,
       logicalDeviceId: world.deviceId,
+      isNewDebugger: false,
+      connected: true,
       loadedScripts: 412,
       enabledDomains: ["Runtime", "Debugger", "Network"],
       sourceMapReady: true,
@@ -437,7 +543,31 @@ function debuggerStatus(world: World): ToolResult {
 function debuggerConnect(world: World): ToolResult {
   world.metroRunning = true;
   world.debuggerConnected = true;
-  return { content: json({ connected: true, logicalDeviceId: world.deviceId }) };
+  return {
+    content: json({
+      port: world.app.metroPort ?? 8081,
+      projectRoot: PROJECT_ROOT,
+      deviceName: deviceName(world),
+      appName: world.app.name,
+      logicalDeviceId: world.deviceId,
+      isNewDebugger: false,
+      connected: true,
+    }),
+  };
+}
+
+function debuggerReloadMetro(world: World): ToolResult {
+  tick(world, 1200);
+  return {
+    content: json({
+      reloaded: true,
+      port: world.app.metroPort ?? 8081,
+      method: "cdp",
+      deviceName: deviceName(world),
+      appName: world.app.name,
+      logicalDeviceId: world.deviceId,
+    }),
+  };
 }
 
 function debuggerEvaluate(world: World, args: ToolArgs): ToolResult {
@@ -469,11 +599,26 @@ function componentTree(world: World): ToolResult {
 
 function inspectElement(world: World, args: ToolArgs): ToolResult {
   const screen = currentScreenDef(world);
+  const x = Number(args.x ?? 0.5);
+  const y = Number(args.y ?? 0.5);
+  const el = elementAt(world, x, y);
+  const compName = el?.component ?? `${cap(screen.key)}Row`;
   const file = `src/screens/${cap(screen.key)}Screen.tsx`;
+  const line = 24 + (screen.elements.length % 30);
   return {
     content: json({
-      source: `${file}:${24 + (screen.elements.length % 30)}`,
-      fragment: `<Pressable onPress={handlePress} testID="${screen.elements[0]?.identifier ?? "el"}">`,
+      x,
+      y,
+      items: [
+        {
+          name: compName,
+          source: { file, line, column: 4 },
+          code: `<Pressable onPress={handlePress} testID="${el?.identifier ?? screen.elements[0]?.identifier ?? "el"}">`,
+        },
+      ],
+      deviceName: deviceName(world),
+      appName: world.app.name,
+      logicalDeviceId: world.deviceId,
     }),
   };
 }
@@ -581,20 +726,23 @@ export function stripScreenshotNote(s: string): string {
 
 function screenshot(world: World, args: ToolArgs): ToolResult {
   const include = args.includeImageInContext !== false;
-  const path = `/tmp/argent/shot-${world.clock}.png`;
+  // The real tool always returns { image: ArtifactHandle }; the flag only
+  // controls whether the image bytes are attached to context (the note).
+  const content = json({
+    image: artifact(world, `shot-${world.clock}.png`, "image/png", 184_320),
+  });
   if (!include) {
-    return { content: json({ image: { path } }) };
+    return { content };
   }
-  return { content: json({ image: { path } }) + screenshotNote(world) };
+  return { content: content + screenshotNote(world) };
 }
 
 function screenshotDiff(world: World, args: ToolArgs): ToolResult {
   return {
     content: json({
-      changed: true,
-      diffPixelRatio: 0.0123,
-      diffImage: { path: `/tmp/argent/diff-${world.clock}.png` },
-      summary: "1.2% of pixels changed, localized to the region under test.",
+      summary: "1.2% of pixels changed (1843 of 152064), localized to the region under test.",
+      diffPath: artifact(world, `diff-${world.clock}.png`, "image/png", 96_240),
+      contextDiffPath: artifact(world, `diff-context-${world.clock}.png`, "image/png", 142_880),
     }),
   };
 }
@@ -635,33 +783,82 @@ function networkDetails(world: World, args: ToolArgs): ToolResult {
 }
 
 function workspaceData(world: World) {
+  // Mirrors the WorkspaceSnapshot returned by workspace-reader.ts. The derived
+  // booleans (is_react_native, etc.) the gym used to emit live downstream, not
+  // on the snapshot — only the raw filesystem/config facts belong here.
+  const rn = world.app.isReactNative;
+  const hasIos = world.app.platforms.includes("ios");
+  const hasAndroid = world.app.platforms.includes("android");
   return {
-    is_react_native: world.app.isReactNative,
-    is_native_ios: !world.app.isReactNative && world.platform === "ios",
-    is_native_android: !world.app.isReactNative && world.platform === "android",
-    platforms: world.app.platforms,
+    workspace_path: PROJECT_ROOT,
+    package_json: {
+      name: world.app.id,
+      dependencies: rn ? { "react-native": "0.81.0", "react": "19.0.0" } : {},
+    } as Record<string, unknown>,
+    metro_config_raw: rn ? "module.exports = { transformer: {} };" : null,
+    app_json: null,
+    eas_json: null,
+    tsconfig: { compilerOptions: { strict: true } } as Record<string, unknown>,
+    babel_config_raw: rn
+      ? "module.exports = { presets: ['module:metro-react-native-babel-preset'] };"
+      : null,
     metro_port: world.app.metroPort ?? null,
-    bundle_id: world.app.bundleId,
-    start_command: world.app.isReactNative ? "npx react-native start" : null,
+    has_ios_dir: hasIos,
+    has_android_dir: hasAndroid,
+    ios_workspace: hasIos ? `ios/${cap(world.app.id)}.xcworkspace` : null,
+    ios_has_podfile: hasIos,
+    android_has_gradle: hasAndroid,
+    lockfile: "package-lock.json" as const,
+    env_files: [] as unknown[],
+    tool_versions: { "node": "20.11.0", "react-native": rn ? "0.81.0" : null } as Record<
+      string,
+      string | null
+    >,
+    scripts_dir_entries: null,
+    husky_hooks: null,
+    ci_config: null,
+    makefile_targets: null,
+    lint_staged_config: null,
+    config_files_found: rn
+      ? ["package.json", "metro.config.js", "babel.config.js", "tsconfig.json"]
+      : ["package.json", "tsconfig.json"],
   };
 }
 
 // ---- flow recording / replay ----
 
+function flowPath(world: World, name: string): string {
+  return `${world.flowRecording?.projectRoot ?? PROJECT_ROOT}/.argent/flows/${name}.flow.yaml`;
+}
+
 function flowStart(world: World, args: ToolArgs): ToolResult {
   world.flowRecording = {
     name: String(args.name ?? "flow"),
-    projectRoot: String(args.project_root ?? "/Users/dev/app"),
+    projectRoot: String(args.project_root ?? PROJECT_ROOT),
     prereq: String(args.executionPrerequisite ?? ""),
     steps: [],
   };
-  return { content: json({ recording: true, name: world.flowRecording.name }) };
+  const path = flowPath(world, world.flowRecording.name);
+  return {
+    content: json({
+      message: `Started recording "${world.flowRecording.name}" flow. Subsequent tool calls will be appended.`,
+      flowFile: `name: ${world.flowRecording.name}\nsteps: []\n`,
+      savedTo: path,
+    }),
+  };
 }
 
 function flowAddEcho(world: World, args: ToolArgs): ToolResult {
   if (!world.flowRecording) throw new GymError("no active recording");
-  world.flowRecording.steps.push({ kind: "echo", message: String(args.message ?? "") });
-  return { content: json({ added: "echo" }) };
+  const message = String(args.message ?? "");
+  world.flowRecording.steps.push({ kind: "echo", message });
+  return {
+    content: json({
+      message: `Added echo step to "${world.flowRecording.name}".`,
+      flowFile: serializeFlow(world.flowRecording),
+      savedTo: flowPath(world, world.flowRecording.name),
+    }),
+  };
 }
 
 function flowAddStep(world: World, args: ToolArgs): ToolResult {
@@ -672,23 +869,44 @@ function flowAddStep(world: World, args: ToolArgs): ToolResult {
   // The step runs immediately during recording.
   const r = execute(world, command, parsed);
   world.flowRecording.steps.push({ kind: "tool", name: command, args: parsed });
-  return { content: json({ added: command, result: JSON.parse(stripScreenshotNote(r.content)) }) };
+  return {
+    content: json({
+      message: `Recorded ${command} step in "${world.flowRecording.name}".`,
+      toolResult: JSON.parse(stripScreenshotNote(r.content)),
+      flowFile: serializeFlow(world.flowRecording),
+      savedTo: flowPath(world, world.flowRecording.name),
+    }),
+  };
 }
 
 function flowFinish(world: World): ToolResult {
   if (!world.flowRecording) throw new GymError("no active recording");
   const f = world.flowRecording;
   world.flowsOnDisk[f.name] = { prereq: f.prereq, steps: f.steps };
-  const path = `${f.projectRoot}/.argent/flows/${f.name}.yaml`;
-  const summary = `${f.steps.length} steps (${f.steps.filter((s) => s.kind === "tool").length} tool, ${f.steps.filter((s) => s.kind === "echo").length} echo)`;
+  const path = flowPath(world, f.name);
+  const summary = f.steps.map((s, i) =>
+    s.kind === "echo"
+      ? `${i + 1}. echo: ${s.message}`
+      : `${i + 1}. tool: ${s.name} ${JSON.stringify(s.args ?? {})}`
+  );
+  const flowFile = serializeFlow(f);
+  const result = {
+    message: `Finished recording "${f.name}" flow (${f.steps.length} steps)`,
+    path,
+    executionPrerequisite: f.prereq,
+    steps: f.steps.length,
+    summary,
+    flowFile,
+    savedTo: path,
+  };
   world.flowRecording = undefined;
-  return { content: json({ saved: path, summary }) };
+  return { content: json(result) };
 }
 
 function flowReadPrereq(world: World, args: ToolArgs): ToolResult {
   const name = String(args.name ?? "");
   const f = world.flowsOnDisk[name];
-  return { content: json({ executionPrerequisite: f?.prereq ?? "" }) };
+  return { content: json({ flow: name, executionPrerequisite: f?.prereq ?? "" }) };
 }
 
 function flowExecute(world: World, args: ToolArgs): ToolResult {
@@ -698,7 +916,9 @@ function flowExecute(world: World, args: ToolArgs): ToolResult {
   if (f.prereq && args.prerequisiteAcknowledged !== true) {
     return {
       content: json({
+        flow: name,
         notice: `This flow requires: "${f.prereq}". Verify it is met, then call flow-execute again with prerequisiteAcknowledged: true.`,
+        executionPrerequisite: f.prereq,
       }),
     };
   }
@@ -716,10 +936,52 @@ function flowExecute(world: World, args: ToolArgs): ToolResult {
     }
   }
   tick(world, 1000);
-  return { content: json({ executed: name, steps }) + screenshotNote(world), autoScreenshot: true };
+  return {
+    content: json({ flow: name, executionPrerequisite: f.prereq, steps }) + screenshotNote(world),
+    autoScreenshot: true,
+  };
 }
 
-// ---- profiler reports (markdown) ----
+/** Render a recording as the YAML-ish flow file body the real serializer emits. */
+function serializeFlow(f: { name: string; steps: FlowStep[] }): string {
+  const lines = [`name: ${f.name}`, "steps:"];
+  for (const s of f.steps) {
+    if (s.kind === "echo") {
+      lines.push(`  - echo: ${s.message}`);
+    } else {
+      lines.push(`  - tool: ${s.name}`, `    args: ${JSON.stringify(s.args ?? {})}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+// ---- profiler reports (JSON envelopes wrapping a markdown report) ----
+
+// react-profiler-analyze returns a JSON object whose `report` is the markdown.
+function reactAnalyze(world: World): string {
+  return json({
+    report: reactAnalyzeReport(world),
+    reportFile: artifact(world, "react-profile-report.md", "text/markdown", 2_148),
+    hotCommitsTotal: 2,
+    hotCommitsShown: 2,
+    sessionFiles: {
+      sessionId: `sess_${world.reactProfileStartMs ?? BASE_EPOCH}`,
+      cpuProfile: artifact(world, "cpu.cpuprofile", "application/json", 412_880),
+      commits: artifact(world, "commits.json", "application/json", 38_204),
+    },
+  });
+}
+
+// native-profiler-analyze returns a JSON object whose `report` is the markdown.
+function nativeAnalyze(world: World): string {
+  return json({
+    report: nativeAnalyzeReport(world),
+    reportFile: artifact(world, "native-profile-report.md", "text/markdown", 1_624),
+    bottlenecksTotal: 3,
+    status: "ok",
+    exportErrors: {} as Record<string, string>,
+  });
+}
 
 function reactAnalyzeReport(world: World): string {
   const screen = cap(currentScreenDef(world).key);
@@ -782,19 +1044,49 @@ function reactCpuSummary(world: World): string {
 - Other: 18%`;
 }
 
-function fiberTree(world: World): string {
+interface FiberNode {
+  name: string;
+  tag: number;
+  actualDuration: number;
+  selfBaseDuration: number;
+  children: FiberNode[];
+}
+
+// react-profiler-fiber-tree returns parsed JSON: an array of nested fiber nodes
+// (the real tool returns { tree: null, message } only when nothing was committed).
+function fiberTree(world: World): FiberNode[] | { tree: null; message: string } {
   const els = currentVisible(world);
-  const lines = [`Fiber tree (${currentScreenDef(world).title})`];
-  for (const e of els) lines.push(`  ${e.component ?? "View"}${e.label ? ` "${e.label}"` : ""}`);
-  return lines.join("\n");
+  const screen = cap(currentScreenDef(world).key);
+  const children: FiberNode[] = els.map((e, i) => ({
+    name: e.component ?? "View",
+    tag: e.role === "text" || e.role === "heading" ? 6 : 5,
+    actualDuration: round2(0.8 + (i % 4) * 0.35),
+    selfBaseDuration: round2(0.4 + (i % 3) * 0.2),
+    children: [],
+  }));
+  return [
+    {
+      name: `${screen}Screen`,
+      tag: 1,
+      actualDuration: round2(12.1),
+      selfBaseDuration: round2(2.3),
+      children,
+    },
+  ];
 }
 
 function componentSource(world: World, args: ToolArgs): string {
   const name = String(args.component_name ?? "Component");
   return json({
+    found: true,
     component: name,
-    source: `src/components/${name}.tsx:1`,
-    code: `export const ${name} = ({ item }) => {\n  return <Pressable onPress={() => onPress(item.id)}>...</Pressable>;\n};`,
+    file: `src/components/${name}.tsx`,
+    line: 1,
+    col: 0,
+    isMemoized: false,
+    hasUseCallback: false,
+    hasUseMemo: false,
+    source: `export const ${name} = ({ item }) => {\n  return <Pressable onPress={() => onPress(item.id)}>...</Pressable>;\n};`,
   });
 }
 
@@ -815,10 +1107,20 @@ function logRegistry(world: World): string {
     file: `/tmp/argent/logs/${world.deviceId}.log`,
     totalEntries: 1284,
     byLevel: { log: 1102, warn: 156, error: 26 },
+    fileSizeBytes: 248_512,
     clusters: [
-      { pattern: "VirtualizedList: missing keys", count: 48, level: "warn" },
-      { pattern: "Failed prop type", count: 12, level: "error" },
+      {
+        message: "VirtualizedList: missing keys",
+        count: 48,
+        level: "warn",
+        firstId: 12,
+        lastId: 1240,
+      },
+      { message: "Failed prop type", count: 12, level: "error", firstId: 88, lastId: 1101 },
     ],
+    deviceName: deviceName(world),
+    appName: world.app.name,
+    logicalDeviceId: world.deviceId,
   });
 }
 
@@ -828,6 +1130,16 @@ function nativeDescribe(world: World) {
     status: "ok",
     screenFrame: { x: 0, y: 0, width: px.w, height: px.h },
     elements: currentVisible(world).map((e) => ({
+      frame: {
+        x: Math.round(e.frame.x * px.w),
+        y: Math.round(e.frame.y * px.h),
+        width: Math.round(e.frame.w * px.w),
+        height: Math.round(e.frame.h * px.h),
+      },
+      tapPoint: {
+        x: Math.round((e.frame.x + e.frame.w / 2) * px.w),
+        y: Math.round((e.frame.y + e.frame.h / 2) * px.h),
+      },
       normalizedFrame: {
         x: round3(e.frame.x),
         y: round3(e.frame.y),
@@ -871,6 +1183,7 @@ function traitsFor(role: string): string[] {
 
 function chromiumTabs(world: World, args: ToolArgs): ToolResult {
   const action = String(args.action ?? "list");
+  const firstUrl = Object.keys(world.app.urls ?? { "about:blank": "" })[0] ?? "about:blank";
   if (action === "new") {
     const url = String(args.url ?? "about:blank");
     const target = world.app.urls?.[url];
@@ -878,23 +1191,43 @@ function chromiumTabs(world: World, args: ToolArgs): ToolResult {
       world.navStack.push(world.currentScreen);
       world.currentScreen = target;
     }
+    const newId = "t" + (3 + (world.clock % 97));
+    // Every action returns the full tab list; the freshly opened tab is active.
     return {
       content:
-        json({ opened: true, tabId: "t" + (world.clock % 97), url, active: true }) +
-        screenshotNote(world),
+        json({
+          tabs: [
+            {
+              tabId: "t1",
+              targetId: "TARGET-1",
+              title: world.app.name,
+              url: firstUrl,
+              active: false,
+            },
+            {
+              tabId: "t2",
+              targetId: "TARGET-2",
+              title: "Docs",
+              url: "https://docs.example.com",
+              active: false,
+            },
+            { tabId: newId, targetId: `TARGET-${newId}`, title: url, url, active: true },
+          ],
+        }) + screenshotNote(world),
       autoScreenshot: true,
     };
   }
   return {
     content: json({
       tabs: [
+        { tabId: "t1", targetId: "TARGET-1", title: world.app.name, url: firstUrl, active: true },
         {
-          tabId: "t1",
-          title: world.app.name,
-          url: Object.keys(world.app.urls ?? { x: "" })[0],
-          active: true,
+          tabId: "t2",
+          targetId: "TARGET-2",
+          title: "Docs",
+          url: "https://docs.example.com",
+          active: false,
         },
-        { tabId: "t2", title: "Docs", url: "https://docs.example.com", active: false },
       ],
     }),
   };
@@ -904,6 +1237,10 @@ function chromiumTabs(world: World, args: ToolArgs): ToolResult {
 
 function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function safeParse(s: string): Record<string, unknown> {
