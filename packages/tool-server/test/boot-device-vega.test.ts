@@ -85,6 +85,26 @@ describe("boot-device — Vega VVD path", () => {
     expect(startVvd).not.toHaveBeenCalled();
   });
 
+  it("rejects a non-force boot when the running VVD's image cannot be confirmed (vvdImage: null)", async () => {
+    isVvdRunning.mockResolvedValue(true);
+    listVvdImages.mockResolvedValue([
+      { name: "tv", path: "/sdk/vvd/images/tv" },
+      { name: "tablet", path: "/sdk/vvd/images/tablet" },
+    ]);
+    // A VVD is running but its image could not be resolved (profile mismatch with
+    // 2+ images, or 2+ running VVDs). An unconfirmable running image must be treated
+    // as a mismatch — NOT silently reported as a successful boot of the requested
+    // image while a different VVD is actually running.
+    listVegaDevices.mockResolvedValue([
+      { platform: "vega", kind: "vvd", state: "running", serial: SERIAL, vvdImage: null },
+    ]);
+
+    await expect(
+      createBootDeviceTool(registry).execute!({}, { vvdImage: "tablet" })
+    ).rejects.toThrow(/already running/i);
+    expect(startVvd).not.toHaveBeenCalled();
+  });
+
   it("force-restarts a running VVD (stop then start)", async () => {
     isVvdRunning.mockResolvedValue(true);
 

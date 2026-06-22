@@ -1145,17 +1145,24 @@ async function bootVegaImpl(params: {
     const current = await listVegaDevices();
     const runningVvd = current.find((d) => d.kind === "vvd" && d.state === "running" && d.serial);
     const runningImage = runningVvd?.vvdImage ?? null;
-    if (runningImage && runningImage !== params.vvdImage) {
+    // Only report the request as already-satisfied when we can POSITIVELY confirm
+    // the running image is the requested one. An unconfirmable running image
+    // (`null` — e.g. an unresolved profile with 2+ installed images, or 2+ running
+    // VVDs) must be treated as a mismatch, not a match: otherwise we'd return
+    // booted:true for `params.vvdImage` while a *different* VVD is actually running
+    // and every later tool would silently drive that other device.
+    if (runningImage !== params.vvdImage) {
+      const which = runningImage ? `("${runningImage}")` : "(its image could not be confirmed)";
       throw new Error(
-        `A Vega VVD ("${runningImage}") is already running; argent v1 supports a single ` +
-          `running VVD. To switch to "${params.vvdImage}", re-run boot-device with force:true ` +
-          "(stops the current VVD first) or stop it via `vega virtual-device stop`."
+        `A Vega VVD ${which} is already running; argent v1 supports a single running VVD. ` +
+          `To boot "${params.vvdImage}", re-run boot-device with force:true (stops the current ` +
+          "VVD first) or stop it via `vega virtual-device stop`."
       );
     }
     return {
       platform: "vega",
       serial: runningVvd?.serial ?? (await resolveRunningVvdSerial()),
-      vvdImage: runningImage ?? params.vvdImage,
+      vvdImage: runningImage, // == params.vvdImage (positively confirmed above)
       booted: true,
     };
   }
