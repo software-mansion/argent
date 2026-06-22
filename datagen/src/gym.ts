@@ -143,7 +143,7 @@ export function execute(world: World, tool: string, args: ToolArgs): ToolResult 
       return componentTree(world);
 
     case "debugger-evaluate":
-      return { content: json({ value: evalExpr(world, String(args.expression ?? "")) }) };
+      return debuggerEvaluate(world, args);
 
     case "debugger-inspect-element":
       return inspectElement(world, args);
@@ -440,6 +440,19 @@ function debuggerConnect(world: World): ToolResult {
   return { content: json({ connected: true, logicalDeviceId: world.deviceId }) };
 }
 
+function debuggerEvaluate(world: World, args: ToolArgs): ToolResult {
+  const device = world.devices.find((d) => d.id === world.deviceId);
+  // Real debugger-evaluate returns the value under `result`, plus device/app context.
+  return {
+    content: json({
+      result: evalExpr(world, String(args.expression ?? "")),
+      deviceName: device?.name ?? world.deviceId,
+      appName: world.app.name,
+      logicalDeviceId: world.deviceId,
+    }),
+  };
+}
+
 function componentTree(world: World): ToolResult {
   if (!world.debuggerConnected) {
     return {
@@ -518,11 +531,15 @@ function gestureScroll(world: World, args: ToolArgs): ToolResult {
 
 function keyboard(world: World, args: ToolArgs): ToolResult {
   const text = args.text != null ? String(args.text) : undefined;
+  const key = args.key != null ? String(args.key) : undefined;
   const focus = getFocus(world);
   if (text && focus) world.fieldValues[focus] = text;
-  const ts = tick(world, 300);
+  tick(world, 300);
+  // Mirror the real keyboard tool: { typed, keys } where `keys` is the number of
+  // key presses (one per code point of `text`, plus one for a named `key`).
+  const keys = (key ? 1 : 0) + (text ? [...text].length : 0);
   return {
-    content: json({ ok: true, timestampMs: ts }) + screenshotNote(world),
+    content: json({ typed: text ?? key ?? "", keys }) + screenshotNote(world),
     autoScreenshot: true,
   };
 }
@@ -532,9 +549,10 @@ function pressButton(world: World, args: ToolArgs): ToolResult {
   if ((button === "back" || button === "home") && world.navStack.length) {
     world.currentScreen = world.navStack.pop()!;
   }
-  const ts = tick(world, 1500);
+  tick(world, 1500);
+  // Real button tool returns just { pressed: <buttonName> }.
   return {
-    content: json({ pressed: true, button, timestampMs: ts }) + screenshotNote(world),
+    content: json({ pressed: button }) + screenshotNote(world),
     autoScreenshot: true,
   };
 }

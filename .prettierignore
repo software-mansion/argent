@@ -11,9 +11,22 @@ pnpm-lock.yaml
 
 # Generated.
 **/tsconfig.tsbuildinfo
+
+# datagen machine-generated artifacts. These mirror datagen/.gitignore because
+# Prettier only honors the repo-root .gitignore, not nested ones — without this,
+# running any datagen subtool (generate / bench / training) leaves output that
+# `prettier --check .` then chokes on.
 datagen/out/
+datagen/bench/out/
 datagen/training/runs/
 datagen/training/data/
+datagen/training/data-native/
+datagen/training/data-native-poc/
+datagen/training/data-realistic/
+datagen/training/data-nonarr/
 datagen/training/adapters/
 datagen/training/fused/
 datagen/training/base/
+datagen/training/models/
+datagen/training/.cache/
+**/__pycache__/

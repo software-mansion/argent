@@ -234,7 +234,7 @@
   "generation": {
     "train_accepted": 800,
     "train_attempts": 800,
-    "train_pass_rate_pct": 50,
+    "train_pass_rate_pct": 100,
     "train_rejected": 0,
     "eval_accepted": 100,
     "eval_rejected": 0

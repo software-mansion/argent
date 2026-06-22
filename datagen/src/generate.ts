@@ -172,7 +172,8 @@ function renderSampleMarkdown(traj: Trajectory): string {
 }
 
 function writeJsonl(path: string, rows: unknown[]) {
-  writeFileSync(path, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  // Empty array -> empty file, not a lone newline that reads as one blank record.
+  writeFileSync(path, rows.length ? rows.map((r) => JSON.stringify(r)).join("\n") + "\n" : "");
 }
 
 function main() {
@@ -207,10 +208,10 @@ function main() {
     generation: {
       train_accepted: train.accepted.length,
       train_attempts: train.attempts,
+      // Of the trajectories that reached the validator, the fraction accepted.
       train_pass_rate_pct:
         Math.round(
-          (train.accepted.length /
-            Math.max(1, train.attempts - train.failures.length + train.accepted.length)) *
+          (train.accepted.length / Math.max(1, train.accepted.length + train.failures.length)) *
             1000
         ) / 10,
       train_rejected: train.failures.length,
