@@ -1,7 +1,13 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
+import {
+  FAILURE_CODES,
+  FailureError,
+  type Registry,
+  type ToolCapability,
+  type ToolDefinition,
+} from "@argent/registry";
 import {
   buildInitFailedResult,
   nativeDevtoolsRef,
@@ -182,9 +188,15 @@ function selectGpuMode(): string {
   if (override && override.trim()) {
     const value = override.trim();
     if (!VALID_GPU_MODES.has(value)) {
-      throw new Error(
+      throw new FailureError(
         `ARGENT_EMULATOR_GPU_MODE=${JSON.stringify(value)} is not a known emulator -gpu value. ` +
-          `Valid values: ${[...VALID_GPU_MODES].join(", ")}.`
+          `Valid values: ${[...VALID_GPU_MODES].join(", ")}.`,
+        {
+          error_code: FAILURE_CODES.BOOT_ANDROID_GPU_MODE_INVALID,
+          failure_stage: "boot_android_gpu_mode",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     return value;
@@ -330,9 +342,15 @@ async function assertScreencapAlive(
     await new Promise((r) => setTimeout(r, 1_500));
   }
   await killEmulatorQuietly(serial);
-  throw new Error(
+  throw new FailureError(
     `hot-boot composite did not restore within ${budgetMs / 1000}s — \`screencap\` last returned ` +
-      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`
+      `${JSON.stringify(lastReading ?? "no probe response")}. Falling back to cold boot so screenshots are usable.`,
+    {
+      error_code: FAILURE_CODES.BOOT_ANDROID_HOT_BOOT_FRAME_UNUSABLE,
+      failure_stage: "boot_android_hot_boot_frame",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
   );
 }
 
@@ -372,9 +390,15 @@ async function awaitFirstRealFrame(serial: string, timeoutMs: number): Promise<v
     }
     await new Promise((r) => setTimeout(r, 1_500));
   }
-  throw new Error(
+  throw new FailureError(
     `SurfaceFlinger did not composite a real frame within ${timeoutMs / 1000}s of boot_completed ` +
-      `(${lastError ?? "no probe response"}). The emulator booted but every screenshot would be all-black.`
+      `(${lastError ?? "no probe response"}). The emulator booted but every screenshot would be all-black.`,
+    {
+      error_code: FAILURE_CODES.BOOT_ANDROID_FIRST_FRAME_TIMEOUT,
+      failure_stage: "boot_android_first_real_frame",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    }
   );
 }
 
@@ -412,9 +436,15 @@ async function bootIos(
   // Catch the non-darwin case before `ensureDep("xcrun")` so a Linux user
   // gets "iOS requires macOS" rather than a misleading "install xcode-select".
   if (process.platform !== "darwin") {
-    throw new Error(
+    throw new FailureError(
       `iOS Simulator is unavailable on ${process.platform}: it requires a macOS host. ` +
-        `Pass \`avdName\` (Android) instead of \`udid\` (iOS) to boot a device from this host.`
+        `Pass \`avdName\` (Android) instead of \`udid\` (iOS) to boot a device from this host.`,
+      {
+        error_code: FAILURE_CODES.BOOT_IOS_UNSUPPORTED_HOST,
+        failure_stage: "boot_ios_host_platform",
+        failure_area: "tool_server",
+        error_kind: "unsupported",
+      }
     );
   }
   await ensureDep("xcrun");
@@ -586,9 +616,15 @@ async function attemptBoot(params: {
       throw launchError;
     }
     killDetachedEmulator(child);
-    throw new Error(
+    throw new FailureError(
       `Emulator "${params.avdName}" did not register within ${params.adbRegisterBudgetMs / 1000}s. ` +
-        `The emulator process has been terminated.`
+        `The emulator process has been terminated.`,
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_ADB_REGISTER_TIMEOUT,
+        failure_stage: "boot_android_adb_register",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
     );
   }
 
@@ -675,9 +711,15 @@ async function attemptBoot(params: {
     // with nothing to fall back to.
     if (params.tearDownIfUnready) {
       await killEmulatorQuietly(serial, child);
-      throw new Error(
+      throw new FailureError(
         `PackageManager did not respond on ${serial} within ${Math.round(pmBudgetMs / 1000)}s ` +
-          `after boot_completed. Emulator has been terminated.`
+          `after boot_completed. Emulator has been terminated.`,
+        {
+          error_code: FAILURE_CODES.BOOT_ANDROID_PACKAGE_MANAGER_UNAVAILABLE,
+          failure_stage: "boot_android_package_manager",
+          failure_area: "tool_server",
+          error_kind: "timeout",
+        }
       );
     }
     process.stderr.write(
@@ -769,13 +811,25 @@ async function bootAndroidImpl(params: {
   // out the binary-missing case.
   const avds = await listAvds();
   if (avds.length === 0) {
-    throw new Error(
-      "`emulator -list-avds` returned no AVDs. Create one via Android Studio or `avdmanager create avd`."
+    throw new FailureError(
+      "`emulator -list-avds` returned no AVDs. Create one via Android Studio or `avdmanager create avd`.",
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_NO_AVDS,
+        failure_stage: "boot_android_avd_list",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
   if (!avds.some((a) => a.name === params.avdName)) {
-    throw new Error(
-      `AVD "${params.avdName}" not found. Available: ${avds.map((a) => a.name).join(", ")}.`
+    throw new FailureError(
+      `AVD "${params.avdName}" not found. Available: ${avds.map((a) => a.name).join(", ")}.`,
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_AVD_NOT_FOUND,
+        failure_stage: "boot_android_avd_lookup",
+        failure_area: "tool_server",
+        error_kind: "not_found",
+      }
     );
   }
 
@@ -784,11 +838,18 @@ async function bootAndroidImpl(params: {
   try {
     await runAdb(["version"], { timeoutMs: 5_000 });
   } catch (err) {
-    throw new Error(
+    throw new FailureError(
       `\`adb\` is not available on PATH (${
         err instanceof Error ? err.message : String(err)
       }). Install Android SDK Platform Tools before booting an emulator.`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_ADB_UNAVAILABLE,
+        failure_stage: "boot_android_adb_version",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+        failure_command: "adb",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -969,10 +1030,16 @@ async function bootAndroidImpl(params: {
     const suffix = hotBootFailureReason
       ? ` Hot-boot was not viable (${hotBootFailureReason}).`
       : "";
-    throw new Error(
+    throw new FailureError(
       `${base} Emulator has been terminated so the next boot starts clean.` +
         ` If this keeps happening, wipe the AVD with \`emulator -avd ${params.avdName} -wipe-data\`.${suffix}`,
-      { cause: err }
+      {
+        error_code: FAILURE_CODES.BOOT_ANDROID_COLD_BOOT_FAILED,
+        failure_stage: "boot_android_cold_boot",
+        failure_area: "tool_server",
+        error_kind: "subprocess",
+      },
+      { cause: err instanceof Error ? err : new Error(String(err)) }
     );
   }
 
@@ -1159,8 +1226,14 @@ Android boots take 2–10 minutes depending on machine and cold/warm state; the 
       const hasElectron = Boolean(params.electronAppPath);
       const provided = [hasUdid, hasAvd, hasVega, hasElectron].filter(Boolean).length;
       if (provided !== 1) {
-        throw new Error(
-          "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron)."
+        throw new FailureError(
+          "Provide exactly one of `udid` (iOS), `avdName` (Android), `vvdImage` (Vega VVD), or `electronAppPath` (Electron).",
+          {
+            error_code: FAILURE_CODES.BOOT_DEVICE_TARGET_SELECTION_INVALID,
+            failure_stage: "boot_device_target_selection",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          }
         );
       }
       if (hasUdid) {

@@ -10,6 +10,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, "../../..");
 // esbuild entry points (source) and bundle outputs.
 const TOOLS_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/tool-server/src/index.ts");
 const REGISTRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/registry/src/index.ts");
+const TELEMETRY_ENTRY = path.resolve(WORKSPACE_ROOT, "packages/telemetry/src/index.ts");
 const NATIVE_DEVTOOLS_IOS_ENTRY = path.resolve(
   WORKSPACE_ROOT,
   "packages/native-devtools-ios/src/index.ts"
@@ -48,6 +49,22 @@ const ALIASES = {
   "@argent/mcp": MCP_ENTRY,
   "@argent/cli": CLI_ENTRY,
   "@argent/configuration-core": CONFIGURATION_ENTRY,
+  "@argent/telemetry": TELEMETRY_ENTRY,
+};
+
+// Build-time constants for @argent/telemetry. The PostHog project token is a
+// checked-in public write-only key; only version metadata needs esbuild defines.
+const TELEMETRY_CLI_VERSION = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
+    return String(pkg.version ?? "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+})();
+
+const TELEMETRY_DEFINE = {
+  ARGENT_CLI_VERSION: JSON.stringify(TELEMETRY_CLI_VERSION),
 };
 
 // esbuild on platform:"node" defaults mainFields to ["main","module"], which
@@ -320,9 +337,11 @@ function buildBundle({ entry, out, format, label, external = [] }) {
     outfile: out,
     alias: ALIASES,
     mainFields: MAIN_FIELDS,
+    define: TELEMETRY_DEFINE,
     // ESM bundles need the require() shim (for inlined CJS deps) and must keep
     // node: builtins external; CJS bundles only externalise what the caller
-    // passes (e.g. `electron` — see the tools-server call site).
+    // passes (e.g. `electron`, or tree-sitter's native addons — see the
+    // tools-server call site).
     ...(format === "esm"
       ? { banner: ESM_REQUIRE_BANNER, external: [...new Set(["node:*", ...external])] }
       : external.length > 0
@@ -458,7 +477,11 @@ fs.mkdirSync(path.dirname(OUT_FILE), { recursive: true });
 
 // Bundle the tools server (CJS — the dispatcher loads it via require()).
 //
-// `electron` MUST stay external. It is a runtime dependency of
+// tree-sitter / tree-sitter-typescript are native addons (.node) that esbuild
+// cannot inline; keep them external so the bundle `require()`s them at runtime
+// from the published package's own dependencies (see package.json).
+//
+// `electron` MUST stay external too. It is a runtime dependency of
 // @swmansion/argent (npm installs it into node_modules/electron). If esbuild
 // inlines electron's index.js into this bundle, electron's binary-path lookup
 // runs with __dirname = <install>/dist (no path.txt there) and throws
@@ -472,7 +495,7 @@ buildBundle({
   out: OUT_FILE,
   format: "cjs",
   label: "tools server",
-  external: ["electron"],
+  external: ["tree-sitter", "tree-sitter-typescript", "electron"],
 });
 
 // The remaining bundles are ESM so that:

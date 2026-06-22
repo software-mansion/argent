@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -7,6 +7,15 @@ import {
   normalizeBundleUrl,
   createSourceResolver,
 } from "../../src/utils/debugger/source-resolver";
+
+const mockFetch = vi.fn();
+vi.stubGlobal("fetch", mockFetch);
+
+function symbolicateResponse(frame: { file?: string; lineNumber?: number; column?: number }) {
+  return new Response(JSON.stringify({ stack: [frame] }), {
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 describe("parseDebugStack", () => {
   it("parses stack frames correctly", () => {
@@ -111,5 +120,71 @@ describe("readSourceFragment containment + extension allowlist", () => {
       1
     );
     expect(out).toBeNull();
+  });
+});
+
+describe("createSourceResolver — symbolicate", () => {
+  const projectRoot = "/Users/dev/myapp";
+  const bundleUrl = "http://localhost:8081/index.bundle?platform=ios&dev=true";
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it("keeps genuinely-mapped node_modules sources", async () => {
+    // A route component (expo-router / react-navigation) legitimately resolves
+    // into node_modules. Metro returns a real file path — it must be kept.
+    mockFetch.mockResolvedValueOnce(
+      symbolicateResponse({
+        file: `${projectRoot}/node_modules/expo-router/build/views/Navigator.js`,
+        lineNumber: 42,
+        column: 7,
+      })
+    );
+
+    const resolver = createSourceResolver(8081, projectRoot);
+    const result = await resolver.symbolicate(bundleUrl, 100, 20, "Navigator");
+
+    expect(result).toEqual({
+      file: "node_modules/expo-router/build/views/Navigator.js",
+      line: 42,
+      column: 7,
+    });
+  });
+
+  it("rejects unmapped bundle URLs echoed back by Metro", async () => {
+    // A failed symbolication echoes the bundle URL back unchanged.
+    mockFetch.mockResolvedValueOnce(
+      symbolicateResponse({ file: bundleUrl, lineNumber: 100, column: 20 })
+    );
+
+    const resolver = createSourceResolver(8081, projectRoot);
+    const result = await resolver.symbolicate(bundleUrl, 100, 20, "App");
+
+    expect(result).toBeNull();
+  });
+
+  it("maps real app source paths relative to the project root", async () => {
+    mockFetch.mockResolvedValueOnce(
+      symbolicateResponse({
+        file: `${projectRoot}/app/index.tsx`,
+        lineNumber: 12,
+        column: 4,
+      })
+    );
+
+    const resolver = createSourceResolver(8081, projectRoot);
+    const result = await resolver.symbolicate(bundleUrl, 100, 20, "Index");
+
+    expect(result).toEqual({ file: "app/index.tsx", line: 12, column: 4 });
+  });
+
+  it("returns null when the symbolicate request throws", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("network down"));
+
+    const resolver = createSourceResolver(8081, projectRoot);
+    const result = await resolver.symbolicate(bundleUrl, 100, 20, "App");
+
+    expect(result).toBeNull();
   });
 });

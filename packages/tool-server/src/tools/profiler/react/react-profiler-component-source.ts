@@ -42,10 +42,20 @@ Returns found: false if the component is not found in user-owned code (e.g. live
     const entry = astIndex.index.get(params.component_name);
 
     if (!entry) {
+      if (!astIndex.treeSitterAvailable) {
+        return {
+          found: false,
+          component: params.component_name,
+          message:
+            `Component source lookup is unavailable: the tree-sitter parser could not be loaded, ` +
+            `so no source files were indexed. Ensure @swmansion/argent's "tree-sitter" and ` +
+            `"tree-sitter-typescript" dependencies are installed.`,
+        };
+      }
       return {
         found: false,
         component: params.component_name,
-        message: `Component "${params.component_name}" not found in ${params.project_root}`,
+        message: `Component "${params.component_name}" not found in ${params.project_root} (searched ${astIndex.indexedFiles} files).`,
       };
     }
 

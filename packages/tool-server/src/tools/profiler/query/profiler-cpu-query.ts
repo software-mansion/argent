@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "@argent/registry";
+import { FAILURE_CODES, FailureError, type ToolDefinition } from "@argent/registry";
 import { RN_ONLY_TOOL_CAPABILITY } from "../../debugger/debugger-service-ref";
 import {
   type ProfilerSessionPaths,
@@ -63,8 +63,14 @@ async function getIndex(sessionPaths: ProfilerSessionPaths): Promise<{
   } | null;
 }> {
   if (!sessionPaths?.cpuProfilePath) {
-    throw new Error(
-      "No CPU profile stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first."
+    throw new FailureError(
+      "No CPU profile stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first.",
+      {
+        error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+        failure_stage: "profiler_cpu_query_load_data",
+        failure_area: "tool_server",
+        error_kind: "validation",
+      }
     );
   }
 
@@ -356,8 +362,14 @@ Fails if no CPU profile is stored — run react-profiler-stop first.`,
   async execute(_services, params) {
     const sessionPaths = getCachedProfilerPaths(params.port, params.device_id);
     if (!sessionPaths) {
-      throw new Error(
-        "No profiling data stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first."
+      throw new FailureError(
+        "No profiling data stored. Run react-profiler-start → exercise the app → react-profiler-stop → react-profiler-analyze first.",
+        {
+          error_code: FAILURE_CODES.PROFILER_DATA_NOT_LOADED,
+          failure_stage: "profiler_cpu_query_load_session",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        }
       );
     }
     const { index, commitTree } = await getIndex(sessionPaths);
@@ -373,7 +385,12 @@ Fails if no CPU profile is stored — run react-profiler-stop first.`,
 
       case "time_window": {
         if (!params.time_window_ms) {
-          throw new Error("time_window mode requires the time_window_ms parameter.");
+          throw new FailureError("time_window mode requires the time_window_ms parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_cpu_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderTopFunctions(
           index,
@@ -385,20 +402,35 @@ Fails if no CPU profile is stored — run react-profiler-stop first.`,
 
       case "call_tree": {
         if (!params.function_name) {
-          throw new Error("call_tree mode requires the function_name parameter.");
+          throw new FailureError("call_tree mode requires the function_name parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_cpu_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderCallTree(index, params.function_name, params.top_n, params.include_callers);
       }
 
       case "component_cpu": {
         if (!params.component_name) {
-          throw new Error("component_cpu mode requires the component_name parameter.");
+          throw new FailureError("component_cpu mode requires the component_name parameter.", {
+            error_code: FAILURE_CODES.PROFILER_QUERY_REQUIRED_PARAM_MISSING,
+            failure_stage: "profiler_cpu_query_params",
+            failure_area: "tool_server",
+            error_kind: "validation",
+          });
         }
         return renderComponentCpu(index, commitTree, params.component_name, params.top_n);
       }
 
       default:
-        throw new Error(`Unknown mode: ${params.mode}`);
+        throw new FailureError(`Unknown mode: ${params.mode}`, {
+          error_code: FAILURE_CODES.PROFILER_QUERY_MODE_INVALID,
+          failure_stage: "profiler_cpu_query_mode",
+          failure_area: "tool_server",
+          error_kind: "validation",
+        });
     }
   },
 };
