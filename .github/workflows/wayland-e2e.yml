@@ -222,7 +222,7 @@ jobs:
 
       - name: Screenshot returns real pixels (not all-zero framebuffer)
         run: |
-          set -u
+          set -euo pipefail
           # After boot_completed=1 two things still need to settle before a
           # screenshot carries real pixels: SurfaceFlinger has to paint the
           # lockscreen UI, and the simulator-server's screenshot stream only
@@ -234,9 +234,13 @@ jobs:
           # also warms the stream, so we retry until we get a real frame or time
           # out. All-zero framebuffer compresses to ~3-7 KB; the real lockscreen
           # UI (clock + battery + nav pill) is reliably > 20 KB.
+          # A healthy capture returns sub-second (and a cold stream errors
+          # immediately), so a tight per-attempt timeout keeps the cadence near
+          # the 4s interval and bounds the worst case (~6 min if the tool-server
+          # wedges) instead of 15x60s.
           attempts=15
           for i in $(seq 1 "$attempts"); do
-            curl -sS -m 60 -X POST http://127.0.0.1:3033/tools/screenshot \
+            curl -sS -m 20 -X POST http://127.0.0.1:3033/tools/screenshot \
               -H 'Content-Type: application/json' \
               -d '{"udid":"emulator-5554"}' > /tmp/shot.json || true
             # The screenshot tool returns an ArtifactHandle ({ data: { image:
@@ -256,7 +260,8 @@ jobs:
             else
               echo "attempt ${i}/${attempts}: no image yet ($(head -c 160 /tmp/shot.json))"
             fi
-            sleep 4
+            # No need to wait after the final attempt before failing.
+            if [ "$i" -lt "$attempts" ]; then sleep 4; fi
           done
           echo "screenshot never returned a real frame after ${attempts} attempts"
           exit 1
