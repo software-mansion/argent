@@ -322,11 +322,11 @@ describe("boot-device — iOS path", () => {
   });
 
   // A tvOS reboot orphans the host-side tvos-hid-daemon (it holds a
-  // SimDeviceLegacyClient bound to the prior boot for its whole lifetime, so
-  // tv-navigate silently no-ops afterward). boot-device must drop the cached
-  // TvControl service on a boot transition so the next tv-* call rebuilds it
-  // against the fresh boot. The ax-service self-heals (it runs inside the sim
-  // and the reboot kills it), so it doesn't need this.
+  // SimDeviceLegacyClient bound to the prior boot for its whole lifetime, so a
+  // TV `button` press silently no-ops afterward). boot-device must drop the
+  // cached TvControl service on a boot transition so the next TV call rebuilds
+  // it against the fresh boot. The ax-service self-heals (it runs inside the
+  // sim and the reboot kills it), so it doesn't need this.
   const TV_UDID = "77777777-7777-7777-7777-777777777777";
 
   it("disposes the cached TvControl service when a tvOS sim is booted from Shutdown", async () => {

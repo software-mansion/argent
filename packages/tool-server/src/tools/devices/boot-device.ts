@@ -446,10 +446,11 @@ async function bootIos(
   // on the next describe — the tvos-hid-daemon runs on the host and holds a
   // SimDeviceLegacyClient bound to the *previous* boot for its whole lifetime.
   // The reboot invalidates that client, but the daemon process stays alive and
-  // its `navigate`/`type` sends are fire-and-forget, so tv-navigate silently
-  // no-ops with no error and no recovery path (the daemon-exit reconnect never
-  // fires). Dropping the cached TvControl service here forces the next tv-*
-  // call to rebuild it with a fresh daemon bound to the new boot. Disposal is
+  // its `navigate`/`type` sends are fire-and-forget, so a TV `button` press
+  // silently no-ops with no error and no recovery path (the daemon-exit
+  // reconnect never fires). Dropping the cached TvControl service here forces
+  // the next TV call to rebuild it with a fresh daemon bound to the new boot.
+  // Disposal is
   // best-effort: ServiceNotFoundError just means nothing was cached (the common
   // fresh-boot case), which is a no-op.
   if (isTvOs && needsPreBoot) {
@@ -458,7 +459,7 @@ async function bootIos(
       process.stderr.write(
         `[boot-device ${udid.slice(0, 8)}] failed to recycle stale TvControl service after reboot (${
           err instanceof Error ? err.message : String(err)
-        }); tv-navigate may no-op until the tool-server restarts.\n`
+        }); TV button presses may no-op until the tool-server restarts.\n`
       );
     });
 

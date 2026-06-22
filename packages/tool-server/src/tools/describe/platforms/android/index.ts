@@ -17,8 +17,9 @@ export const androidRequires: ToolDependency[] = ["adb"];
 // the tv-* tools as a hint rather than blocking the (still-useful) tree.
 const ANDROID_TV_HINT =
   "This is an Android TV (leanback) device — it is focus-driven and has no touch. " +
-  "Prefer the `tv-describe` tool to read the focused / focusable elements, and " +
-  "`tv-navigate` / `tv-set-focus` / `tv-type` to interact, rather than coordinate taps.";
+  "Prefer the `describe` tool to read the focused / focusable elements, and `button` " +
+  "(up/down/left/right/select/menu/home/playpause) / `tv-set-focus` / `keyboard` to interact, " +
+  "rather than coordinate taps.";
 
 /**
  * Try the persistent `android-devtools` helper first; on any error fall back

@@ -32,8 +32,8 @@ import { gestureDragTool } from "../tools/gesture-drag";
 import { gestureCustomTool } from "../tools/gesture-custom";
 import { gesturePinchTool } from "../tools/gesture-pinch";
 import { gestureRotateTool } from "../tools/gesture-rotate";
-import { buttonTool } from "../tools/button";
-import { keyboardTool } from "../tools/keyboard";
+import { createButtonTool } from "../tools/button";
+import { createKeyboardTool } from "../tools/keyboard";
 import { rotateTool } from "../tools/rotate";
 import { createRunSequenceTool } from "../tools/run-sequence";
 import { debuggerConnectTool } from "../tools/debugger/debugger-connect";
@@ -81,10 +81,7 @@ import { awaitUserSelectionTool } from "../tools/variants/await-user-selection";
 import { chromiumTabsTool } from "../tools/chromium-tabs";
 import { chromiumCookiesTool } from "../tools/chromium-cookies";
 import { chromiumStorageTool } from "../tools/chromium-storage";
-import { tvDescribeTool } from "../tools/tv/tv-describe";
-import { tvNavigateTool } from "../tools/tv/tv-navigate";
 import { tvSetFocusTool } from "../tools/tv/tv-set-focus";
-import { tvTypeTool } from "../tools/tv/tv-type";
 
 export function createRegistry(): Registry {
   // Inject the real feature-flag check so the gate is enforced for EVERY
@@ -124,8 +121,8 @@ export function createRegistry(): Registry {
   registry.registerTool(gestureCustomTool);
   registry.registerTool(gesturePinchTool);
   registry.registerTool(gestureRotateTool);
-  registry.registerTool(buttonTool);
-  registry.registerTool(keyboardTool);
+  registry.registerTool(createButtonTool(registry));
+  registry.registerTool(createKeyboardTool(registry));
   registry.registerTool(rotateTool);
   registry.registerTool(createRunSequenceTool(registry));
   registry.registerTool(debuggerConnectTool);
@@ -163,11 +160,11 @@ export function createRegistry(): Registry {
   registry.registerTool(nativeViewAtPointTool);
   registry.registerTool(nativeUserInteractableViewAtPointTool);
 
-  // tvOS (Apple TV) control tools — focus-driven, backed by the tvOS daemons.
-  registry.registerTool(tvDescribeTool);
-  registry.registerTool(tvNavigateTool);
+  // TV focus control. Reading focus state, pressing remote buttons, and typing
+  // are folded into the cross-platform `describe` / `button` / `keyboard` tools
+  // (they route a runtimeKind 'tv' target to the focus-driven backend). Only
+  // focus-by-label remains TV-specific — it has no phone/tablet analog.
   registry.registerTool(tvSetFocusTool);
-  registry.registerTool(tvTypeTool);
 
   // Cleanup tools (close over registry for direct service disposal)
   registry.registerTool(createStopSimulatorServerTool(registry));

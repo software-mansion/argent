@@ -11,14 +11,18 @@ import { adaptNativeDescribeToDescribeResult } from "./ios-native-adapter";
 const DEGRADED_HINT =
   "This simulator was not booted through argent — system dialogs and native modals may not appear. You MUST call boot-device with force=true now to restart the simulator and apply full accessibility settings before continuing.";
 
-// tvOS classifies as platform "ios" by UDID shape, so describe dispatches here.
-// The iOS ax-service can't read the Apple TV focus engine — surface the right
-// tool instead of spawning a daemon that times out and degrades with the
-// misleading boot-device hint.
+// tvOS classifies as platform "ios" by UDID shape. The `describe` tool routes
+// TV targets to the focus-driven `describeTv` before this iOS branch runs, so
+// the short-circuit below is only reached by internal callers that invoke
+// `describeIos` directly (preview / match-element-frame). The iOS ax-service
+// can't read the Apple TV focus engine — surface the right tool instead of
+// spawning a daemon that times out and degrades with the misleading
+// boot-device hint.
 const TVOS_HINT =
   "This is an Apple TV (tvOS) simulator, which the iOS accessibility service does not support. " +
-  "Use the `tv-describe` tool to read the focused and focusable elements, and `tv-navigate` / " +
-  "`tv-set-focus` / `tv-type` to interact. See the argent-tv-interact skill.";
+  "Use the `describe` tool to read the focused and focusable elements, and `button` " +
+  "(up/down/left/right/select/menu/home/playpause) / `tv-set-focus` / `keyboard` to interact. " +
+  "See the argent-tv-interact skill.";
 
 function emptyTree(): DescribeNode {
   return parseDescribeResult({

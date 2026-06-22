@@ -14,7 +14,7 @@ const zodSchema = z.object({
     .string()
     .min(1)
     .describe(
-      "Accessibility label of the focusable element to move focus to, as shown by `tv-describe` " +
+      "Accessibility label of the focusable element to move focus to, as shown by `describe` " +
         "(use the first line of a compound label — matching is case-insensitive with prefix/substring fallback)."
     ),
 });
@@ -29,8 +29,8 @@ interface Result {
 
 const tvSetFocusTool: ToolDefinition<Params, Result> = {
   id: "tv-set-focus",
-  description: `Move focus to a TV element by its accessibility label, skipping step-by-step \`tv-navigate\`.
-On Apple TV this jumps focus directly (native setNativeFocus); on Android TV there is no jump primitive, so it walks the D-pad toward the target's on-screen position (best-effort, bounded) — prefer \`tv-navigate\` when validating an exact navigation path.
+  description: `Move focus to a TV element by its accessibility label, skipping step-by-step \`button\` presses.
+On Apple TV this jumps focus directly (native setNativeFocus); on Android TV there is no jump primitive, so it walks the D-pad toward the target's on-screen position (best-effort, bounded) — prefer \`button\` (up/down/left/right) when validating an exact navigation path.
 Returns { ok, message, label }. ok=false (with a message) when the label isn't on screen, focus can't reach it, or (Apple TV) the simulator lacks AutomationEnabled.
 Requires a booted TV target (runtimeKind 'tv'); fails for phones/tablets.`,
   searchHint:

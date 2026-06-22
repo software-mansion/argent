@@ -103,7 +103,7 @@ When: Performing touch interactions, typing, pressing hardware buttons, launchin
 
 TV (APPLE TV / ANDROID TV) INTERACTION
 Skill: `argent-tv-interact`
-When: Interacting with a TV target (a `list-devices` entry with `runtimeKind: "tv"` — Apple TV simulator or Android TV device) — moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` / `button` / `keyboard` tools do NOT apply; use `tv-describe` / `tv-navigate` / `tv-set-focus` / `tv-type` (the same tools drive both platforms).
+When: Interacting with a TV target (a `list-devices` entry with `runtimeKind: "tv"` — Apple TV simulator or Android TV device) — moving focus with the remote / D-pad, activating elements, typing into search fields, or reading TV focus state. A TV UI is focus-driven, not touch-driven: the `gesture-*` tools do NOT apply. Use `describe` to read focus, `button` for remote presses (up/down/left/right/select/menu/home/playpause), `keyboard` to type, and `tv-set-focus` to jump focus by label (the same tools drive both platforms).
 
 SCREENSHOT DIFF & VISUAL REGRESSION
 Skill: `argent-screenshot-diff`

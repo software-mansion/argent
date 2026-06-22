@@ -12,15 +12,12 @@ const ALLOWED_TOOLS = new Set([
   "gesture-custom",
   "gesture-pinch",
   "gesture-rotate",
+  // `button` and `keyboard` also drive TV targets (remote buttons / text into
+  // the focused field); `tv-set-focus` is the only TV-specific batchable step.
   "button",
   "keyboard",
   "rotate",
-  // TV targets (Apple TV / Android TV) — focus-driven interaction has no
-  // coordinates, so the gesture tools don't apply; these are the batchable
-  // TV equivalents.
-  "tv-navigate",
   "tv-set-focus",
-  "tv-type",
 ]);
 
 const zodSchema = z.object({
@@ -35,7 +32,7 @@ const zodSchema = z.object({
         tool: z
           .string()
           .describe(
-            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate (iOS/Android/Chromium), or tv-navigate, tv-set-focus, tv-type (Apple TV / Android TV)"
+            "Tool name — one of: gesture-tap, gesture-swipe, gesture-scroll, gesture-drag, gesture-custom, gesture-pinch, gesture-rotate, button, keyboard, rotate, tv-set-focus. On a TV target (Apple TV / Android TV) use button (remote presses), keyboard (text), and tv-set-focus."
           ),
         args: z
           .record(z.string(), z.unknown())
@@ -97,15 +94,14 @@ Allowed tools and their args (udid is auto-injected, do NOT include it in args):
   gesture-custom: { events: [{ type: "Down"|"Move"|"Up", x: number, y: number, x2?: number, y2?: number, delayMs?: number }], interpolate?: number }  [ios/android]
   gesture-pinch:  { centerX: number, centerY: number, startDistance: number, endDistance: number, angle?: number, durationMs?: number }              [ios only]
   gesture-rotate: { centerX: number, centerY: number, radius: number, startAngle: number, endAngle: number, durationMs?: number }                    [ios only]
-  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" }                  [ios/android]
-  keyboard:       { text?: string, key?: string, delayMs?: number }                                                     [ios/android/chromium]
+  button:         { button: "home"|"back"|"power"|"volumeUp"|"volumeDown"|"appSwitch"|"actionButton" (phone/tablet)      [ios/android/tv]
+                            | "up"|"down"|"left"|"right"|"select"|"menu"|"home"|"playpause" (TV remote) }
+  keyboard:       { text?: string, key?: string, delayMs?: number }  (TV: text only)                                    [ios/android/chromium/tv]
   rotate:         { orientation: "Portrait"|"LandscapeLeft"|"LandscapeRight"|"PortraitUpsideDown" }                     [ios/android]
 
 TV-only (Apple TV / Android TV — focus-driven, no coordinates):
 
-  tv-navigate:    { direction: "up"|"down"|"left"|"right"|"select"|"menu"|"home"|"playpause" }
   tv-set-focus:   { label: string }
-  tv-type:        { text: string }
 
 Example — scroll down three times (use gesture-scroll with positive deltaY on Chromium):
   { "udid": "<UDID>", "steps": [
@@ -122,9 +118,9 @@ Example — type text and submit:
 
 Example — TV: move focus right twice then activate:
   { "udid": "<TV-TARGET-ID>", "steps": [
-    { "tool": "tv-navigate", "args": { "direction": "right" } },
-    { "tool": "tv-navigate", "args": { "direction": "right" } },
-    { "tool": "tv-navigate", "args": { "direction": "select" } }
+    { "tool": "button", "args": { "button": "right" } },
+    { "tool": "button", "args": { "button": "right" } },
+    { "tool": "button", "args": { "button": "select" } }
   ]}
 
 Stops on the first error and returns partial results.`,

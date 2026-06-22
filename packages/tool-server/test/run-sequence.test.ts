@@ -20,7 +20,7 @@ function makeMockRegistry() {
 const TVOS_UDID = "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD";
 
 describe("run-sequence", () => {
-  it("allows tvOS tools and dispatches them in order with the shared udid injected", async () => {
+  it("allows TV steps and dispatches them in order with the shared udid injected", async () => {
     const { registry, calls } = makeMockRegistry();
     const tool = createRunSequenceTool(registry);
 
@@ -29,10 +29,10 @@ describe("run-sequence", () => {
       {
         udid: TVOS_UDID,
         steps: [
-          { tool: "tv-navigate", args: { direction: "right" } },
+          { tool: "button", args: { button: "right" } },
           { tool: "tv-set-focus", args: { label: "Settings" } },
-          { tool: "tv-type", args: { text: "hello" } },
-          { tool: "tv-navigate", args: { direction: "select" } },
+          { tool: "keyboard", args: { text: "hello" } },
+          { tool: "button", args: { button: "select" } },
         ],
       }
     );
@@ -40,16 +40,11 @@ describe("run-sequence", () => {
     expect(result.completed).toBe(4);
     expect(result.total).toBe(4);
     // Every step ran through the registry with udid auto-injected.
-    expect(calls.map((c) => c.tool)).toEqual([
-      "tv-navigate",
-      "tv-set-focus",
-      "tv-type",
-      "tv-navigate",
-    ]);
+    expect(calls.map((c) => c.tool)).toEqual(["button", "tv-set-focus", "keyboard", "button"]);
     for (const c of calls) {
       expect(c.args.udid).toBe(TVOS_UDID);
     }
-    expect(calls[0]!.args).toMatchObject({ direction: "right", udid: TVOS_UDID });
+    expect(calls[0]!.args).toMatchObject({ button: "right", udid: TVOS_UDID });
   });
 
   it("rejects a tool that isn't in the allow-list and stops the sequence", async () => {
@@ -61,16 +56,16 @@ describe("run-sequence", () => {
       {
         udid: TVOS_UDID,
         steps: [
-          { tool: "tv-navigate", args: { direction: "down" } },
+          { tool: "button", args: { button: "down" } },
           { tool: "screenshot", args: {} },
-          { tool: "tv-navigate", args: { direction: "select" } },
+          { tool: "button", args: { button: "select" } },
         ],
       }
     );
 
     // First step ran; the disallowed second step halts execution before the third.
     expect(result.completed).toBe(1);
-    expect(calls.map((c) => c.tool)).toEqual(["tv-navigate"]);
+    expect(calls.map((c) => c.tool)).toEqual(["button"]);
     const failed = result.steps[1];
     expect(failed && "error" in failed && failed.error).toMatch(/not allowed/);
   });

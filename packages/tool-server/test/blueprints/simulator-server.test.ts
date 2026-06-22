@@ -62,7 +62,7 @@ describe("simulator-server blueprint — input validation", () => {
     ).rejects.toThrow(UnsupportedOperationError);
     await expect(
       simulatorServerBlueprint.factory({}, "ignored" as unknown as DeviceInfo, { device })
-    ).rejects.toThrow(/Apple TV|tvOS|tv-navigate/);
+    ).rejects.toThrow(/Apple TV|tvOS/);
     mockIsTvOsSimulator.mockResolvedValue(false);
   });
 });

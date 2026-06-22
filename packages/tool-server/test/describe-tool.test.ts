@@ -411,21 +411,36 @@ describe("describe tool", () => {
     expect(elementLineCount(result.description)).toBe(0);
   });
 
-  it("short-circuits tvOS with a tv-describe hint instead of degrading on ax-service", async () => {
+  it("routes a tvOS target to the focus-driven view instead of the iOS ax-service", async () => {
     mockIsTvOsSimulator.mockResolvedValue(true);
-    // ax-service intentionally unavailable: a tvOS device must never reach it.
-    const registry = makeMockRegistry({});
+    // The TV focus backend answers; the iOS ax-service must never be resolved
+    // for an Apple TV device.
+    const tvApi = {
+      describe: vi.fn().mockResolvedValue({
+        bundleId: "com.example.tv",
+        focused: { label: "Home", isFocused: true },
+        focusable: [{ label: "Home", isFocused: true }, { label: "Search" }],
+      }),
+      recycleAx: vi.fn().mockResolvedValue(undefined),
+    };
+    const registry = {
+      resolveService: vi.fn(async (urn: string) => {
+        if (urn.startsWith("TvControl:")) return tvApi;
+        throw new Error(`ax-service must not be resolved for tvOS: ${urn}`);
+      }),
+    } as any;
     const tool = createDescribeTool(registry);
 
     const result = await tool.execute({}, { udid: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD" });
 
-    expect(result.source).toBe("ax-service");
-    expect(result.hint).toMatch(/tvOS|Apple TV/);
-    expect(result.hint).toMatch(/tv-describe/);
-    // Did not fall back to the misleading boot-device hint…
-    expect(result.hint).not.toMatch(/boot-device/);
-    // …and never tried to resolve the iOS ax-service for an Apple TV device.
-    expect(registry.resolveService).not.toHaveBeenCalled();
-    expect(elementLineCount(result.description)).toBe(0);
+    expect(result.source).toBe("tv-focus");
+    expect(result.description).toContain("Focused: Home");
+    expect(result.description).toContain("Focusable (2):");
+    expect(result.hint).toBeUndefined();
+    // Resolved the TV control service, never the iOS ax-service.
+    expect(registry.resolveService).toHaveBeenCalledWith(
+      "TvControl:DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
+      expect.anything()
+    );
   });
 });

@@ -304,7 +304,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
             ok: false,
             message:
               `No focusable element matching "${label}" is on screen. ` +
-              `Call tv-describe to see the available labels, or tv-navigate step by step.`,
+              `Call describe to see the available labels, or press button step by step.`,
           };
         }
 
@@ -334,7 +334,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
               ok: false,
               message:
                 `Could not reach "${label}" by D-pad navigation (focus looped without landing on it). ` +
-                `It may be in a separate focus group — use tv-navigate to cross over manually.`,
+                `It may be in a separate focus group — use button (up/down/left/right) to cross over manually.`,
             };
           }
           seen.add(fingerprint);
@@ -353,7 +353,7 @@ export const androidTvControlBlueprint: ServiceBlueprint<TvControlApi, DeviceInf
           ok: false,
           message:
             `Could not reach "${label}" within ${MAX_FOCUS_STEPS} D-pad steps (focus is on "${landed}"). ` +
-            `Use tv-navigate to step the remaining distance.`,
+            `Use button (up/down/left/right) to step the remaining distance.`,
         };
       },
 

@@ -1,14 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
-import { tvDescribeTool } from "../src/tools/tv/tv-describe";
+import type { DeviceInfo } from "@argent/registry";
+import { describeTv } from "../src/tools/describe/platforms/tv";
 import type { TvControlApi, TvDescribeResponse } from "../src/blueprints/tv-control";
 
 // The tool touches `describe()` and `recycleAx()`; the rest is unused here.
 function makeApi(
-  describe: TvControlApi["describe"],
+  describeFn: TvControlApi["describe"],
   recycleAx: TvControlApi["recycleAx"] = vi.fn().mockResolvedValue(undefined)
 ): TvControlApi {
   return {
-    describe,
+    describe: describeFn,
     recycleAx,
     hierarchy: vi.fn(),
     setFocus: vi.fn(),
@@ -17,6 +18,19 @@ function makeApi(
     ping: vi.fn(),
   } as unknown as TvControlApi;
 }
+
+// describeTv resolves the TvControlApi through the registry; the unit tests
+// inject it directly by stubbing resolveService.
+function makeRegistry(api: TvControlApi) {
+  return { resolveService: vi.fn(async () => api) } as never;
+}
+
+// Apple TV target — platform "ios" by UDID shape, so no Android fallback fires.
+const TVOS_DEVICE: DeviceInfo = {
+  id: "DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD",
+  platform: "ios",
+  kind: "simulator",
+};
 
 const populated: TvDescribeResponse = {
   bundleId: "com.nfl.gamecenter",
@@ -31,65 +45,63 @@ const empty: TvDescribeResponse = {
 };
 
 async function run(api: TvControlApi) {
-  // execute ignores params; the udid only matters for service resolution, which
-  // the registry does — here we inject the api directly.
-  return tvDescribeTool.execute({ tv: api }, { udid: "x" } as never);
+  return describeTv(makeRegistry(api), TVOS_DEVICE);
 }
 
-describe("tv-describe — empty-state resilience", () => {
-  it("returns the populated tree without retrying", async () => {
-    const describe = vi.fn().mockResolvedValue(populated);
-    const res = await run(makeApi(describe));
+describe("describe (TV) — empty-state resilience", () => {
+  it("returns the populated focus view without retrying", async () => {
+    const describeFn = vi.fn().mockResolvedValue(populated);
+    const res = await run(makeApi(describeFn));
 
-    expect(describe).toHaveBeenCalledTimes(1);
-    expect(res.focusableCount).toBe(2);
-    expect(res.focusedLabel).toBe("Home");
+    expect(describeFn).toHaveBeenCalledTimes(1);
+    expect(res.source).toBe("tv-focus");
+    expect(res.description).toContain("Focused: Home");
+    expect(res.description).toContain("Focusable (2):");
     expect(res.hint).toBeUndefined();
     expect(res.description).not.toContain("Note:");
   });
 
   it("retries while empty and returns the tree once it populates (app finished loading)", async () => {
     // First two probes hit the splash/loading window, third sees the real UI.
-    const describe = vi
+    const describeFn = vi
       .fn()
       .mockResolvedValueOnce(empty)
       .mockResolvedValueOnce(empty)
       .mockResolvedValue(populated);
-    const res = await run(makeApi(describe));
+    const res = await run(makeApi(describeFn));
 
-    expect(describe).toHaveBeenCalledTimes(3);
-    expect(res.focusableCount).toBe(2);
+    expect(describeFn).toHaveBeenCalledTimes(3);
+    expect(res.description).toContain("Focusable (2):");
     expect(res.hint).toBeUndefined();
   });
 
   it("recycles the daemon and recovers when the cache was stale", async () => {
     // The transition-window retries stay empty (stale primaryApp cache), then a
     // recycle rebinds to the real foreground app and the next probe populates.
-    const describe = vi
+    const describeFn = vi
       .fn()
       .mockResolvedValueOnce(empty)
       .mockResolvedValueOnce(empty)
       .mockResolvedValueOnce(empty)
       .mockResolvedValue(populated);
     const recycleAx = vi.fn().mockResolvedValue(undefined);
-    const res = await run(makeApi(describe, recycleAx));
+    const res = await run(makeApi(describeFn, recycleAx));
 
-    expect(describe).toHaveBeenCalledTimes(4);
+    expect(describeFn).toHaveBeenCalledTimes(4);
     expect(recycleAx).toHaveBeenCalledTimes(1);
-    expect(res.focusableCount).toBe(2);
+    expect(res.description).toContain("Focusable (2):");
     expect(res.hint).toBeUndefined();
   });
 
   it("exhausts retries, recycles, and surfaces the hint when still empty", async () => {
-    const describe = vi.fn().mockResolvedValue(empty);
+    const describeFn = vi.fn().mockResolvedValue(empty);
     const recycleAx = vi.fn().mockResolvedValue(undefined);
-    const res = await run(makeApi(describe, recycleAx));
+    const res = await run(makeApi(describeFn, recycleAx));
 
     // 3 transition-window probes + 1 post-recycle probe.
-    expect(describe).toHaveBeenCalledTimes(4);
+    expect(describeFn).toHaveBeenCalledTimes(4);
     expect(recycleAx).toHaveBeenCalledTimes(1);
-    expect(res.focusableCount).toBe(0);
-    expect(res.focusedLabel).toBeNull();
+    expect(res.description).toContain("Focusable: (none reported)");
     expect(res.hint).toMatch(/still launching|loading|transition|recycl/i);
     expect(res.description).toContain("Note:");
   });
