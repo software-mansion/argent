@@ -25,7 +25,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 
 ## 2. Best Practices
 
-1. **Always refer to tapping_rule** from your argent.md rule before tapping.
+1. **Before every tap, call a discovery tool** — never derive coordinates from screenshots (see the `argent` skill Mandatory Rules).
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
 4. **Tap a text field before typing** — on iOS try `paste` first then fall back to `keyboard`; on Android use `keyboard` directly (`paste` is iOS-only).

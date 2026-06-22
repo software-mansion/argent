@@ -8,7 +8,7 @@ import { FAILURE_CODES, type FailureSignal } from "@argent/registry";
 import {
   ALL_ADAPTERS,
   getManagedContentTargets,
-  removeCodexRules,
+  pruneStaleArgentRules,
   type ManagedContentTarget,
 } from "./mcp-configs.js";
 import {
@@ -465,25 +465,18 @@ export async function uninstall(args: string[]): Promise<void> {
         },
       ];
 
+      for (const message of [
+        ...pruneStaleArgentRules(ALL_ADAPTERS, projectRoot, "local"),
+        ...pruneStaleArgentRules(ALL_ADAPTERS, projectRoot, "global"),
+      ]) {
+        pruneResults.push(`${pc.green("+")} ${message}`);
+      }
+
       for (const { sourceDir, targets, contentLabel } of bundledTargets) {
         try {
           pruneResults.push(...cleanupBundledTargets(sourceDir, targets, contentLabel));
         } catch {
           // non-fatal
-        }
-      }
-
-      // Codex: remove argent rules from developer_instructions in config.toml
-      for (const { targetPath, label } of [
-        ...localTargets.codexConfigTargets,
-        ...globalTargets.codexConfigTargets,
-      ]) {
-        try {
-          if (removeCodexRules(targetPath)) {
-            pruneResults.push(`${pc.green("+")} Removed argent rules from ${label}`);
-          }
-        } catch (err) {
-          pruneResults.push(`${pc.red("x")} Could not clean ${label}: ${err}`);
         }
       }
 

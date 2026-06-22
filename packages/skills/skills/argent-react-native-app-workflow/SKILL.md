@@ -45,7 +45,7 @@ In a **separate** terminal (Metro keeps running in the first):
 
 **Use the project's custom build/run script if one exists** (e.g. `npm run ios`, `npm run android`, `yarn ios:debug`). Only fall back to the defaults below if no custom scripts are defined.
 
-**Pass the target device explicitly** — derive it from `list-devices` (see `<device_selection_rule>`):
+**Pass the target device explicitly** — derive it from `list-devices` (see Device Selection in the `argent` skill):
 
 ```bash
 npx react-native run-ios --simulator="<name>"        # iOS (or --udid <UDID>)
