@@ -1,6 +1,5 @@
 import { runVega } from "./vega-cli";
 import { runAdb, parseAdbDevices } from "./adb";
-import { parseVegaDeviceList } from "./vega-devices";
 import { listRunningVvdConsolePorts } from "./vega-process";
 
 /**
@@ -70,9 +69,13 @@ export async function discoverVegaConsolePort(
 }
 
 export async function isVvdRunning(): Promise<boolean> {
+  // The OS process table is the authoritative running-VVD signal (a `vega`/`kepler`
+  // `-virtual-device` QEMU process). `vega device list` is unreliable here: a stray
+  // `adb connect` switches it to adb-form rows that report no VirtualDevice, so a
+  // plainly-running VVD would read as stopped — and `boot-device` would then start a
+  // second one. `listRunningVvdConsolePorts` is the same probe the adb channel uses.
   try {
-    const { stdout } = await runVega(["device", "list"], { timeoutMs: 20_000 });
-    return parseVegaDeviceList(stdout).some((r) => /virtual/i.test(r.type));
+    return (await listRunningVvdConsolePorts()).size > 0;
   } catch {
     return false;
   }

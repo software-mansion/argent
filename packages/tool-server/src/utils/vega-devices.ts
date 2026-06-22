@@ -1,5 +1,6 @@
-import { runVega, resolveVegaBinary } from "./vega-cli";
+import { runVega, runVegaDevice, resolveVegaBinary } from "./vega-cli";
 import { listVvdImages } from "./vega-sdk";
+import { listRunningVvdConsolePorts } from "./vega-process";
 
 /**
  * A Vega (Fire TV) device as surfaced to `list-devices`. A VVD is listed whether
@@ -88,7 +89,9 @@ export function filterVvdShadowsFromAndroid<T extends { serial: string }>(
 
 async function readVegaInfo(): Promise<VegaInfo | null> {
   try {
-    const { stdout } = await runVega(["device", "info"], { timeoutMs: 20_000 });
+    // `runVegaDevice` pins `-d emulator-<port>`; without it, `device info` returns an
+    // empty `{idme:"", os:"unknown", …}` device when the VVD has a 2nd adb transport.
+    const { stdout } = await runVegaDevice(["info"], { timeoutMs: 20_000 });
     return JSON.parse(stdout) as VegaInfo;
   } catch {
     return null;
@@ -118,7 +121,20 @@ export async function listVegaDevices(): Promise<VegaDevice[]> {
     rows = []; // CLI listing failed; still surface installed images below
   }
 
-  const info = rows.length === 1 ? await readVegaInfo() : null;
+  // `vega device list` drops its `VirtualDevice : …` row once a stray
+  // `adb connect 127.0.0.1:<port+1>` adds a 2nd adb transport for the VVD (it falls
+  // back to adb-form rows that `parseVegaDeviceList` skips). The process table is the
+  // authoritative running-VVD signal, so when the parse is empty but a VVD is running,
+  // recover its identity via `device info` (now pinned to the VVD by -d emulator-<port>)
+  // — otherwise the running VVD is mis-reported as gone and re-listed as a phantom
+  // stopped image, and its adb shadow rows surface as bare Android devices.
+  let info: VegaInfo | null = null;
+  if (rows.length === 0 && (await listRunningVvdConsolePorts()).size >= 1) {
+    info = await readVegaInfo();
+    if (info?.hostname) rows = [{ serial: info.hostname, type: "VirtualDevice" }];
+  } else if (rows.length === 1) {
+    info = await readVegaInfo();
+  }
 
   // The stopped list is the installed SDK images; the running VVD is one of them
   // and must be excluded so it doesn't appear twice. The link is the image

@@ -10,6 +10,7 @@ import {
   type FailureSignal,
 } from "@argent/registry";
 import { formatSubprocessFailure } from "./subprocess-error";
+import { listRunningVvdConsolePorts } from "./vega-process";
 
 const execFileAsync = promisify(execFile);
 
@@ -151,17 +152,47 @@ export async function runVega(
   }
 }
 
+// `-d emulator-<port>` selector for the single running VVD, resolved from the OS
+// process table (the authoritative running-VVD signal, shared with the adb channel).
+//
+// The `vega` CLI selects a device by its adb-transport serial (`emulator-<port>`),
+// NOT by the `amazon-…` serial it prints in `device list`/`info` — passing the latter
+// yields an empty "unknown" device (verified on a live VVD). With no selector the CLI
+// targets the sole connected device, but a stray `adb connect 127.0.0.1:<port+1>` adds
+// a SECOND adb transport for the same VVD, after which an un-targeted call errors
+// "Too many devices connected" (launch/terminate/install) or returns an empty device
+// (info). Pinning `-d emulator-<port>` is correct in both the single- and dual-transport
+// states. Returns [] when there isn't exactly one running VVD, so a no-VVD / multi-VVD
+// call falls back to the CLI's own selection (or its own erroring).
+async function singleVvdSelector(): Promise<string[]> {
+  let ports: Set<number>;
+  try {
+    ports = await listRunningVvdConsolePorts();
+  } catch {
+    return [];
+  }
+  return ports.size === 1 ? ["-d", `emulator-${[...ports][0]!}`] : [];
+}
+
 /**
- * Run `vega device <subcommand…>` against a device.
- *
- * NOTE (v1, Virtual-Device-only): the CLI's `-d/--device <serial>` flag does
- * NOT match the running Virtual Device by the serial that `device list`/`info`
- * report — passing it yields an empty `unknown` device, while omitting it
- * correctly targets the single connected device (the CLI documents `-d` as
- * "Defaults to the connected device if there is only one"). So we rely on that
- * default and do not inject `-d`; with more than one device connected the CLI
- * itself errors rather than guessing. `serial` is validated non-empty to catch
- * a caller that forgot to thread the udid, but is not otherwise used.
+ * Run `vega device <subcommand…>` against the single running VVD, pinned with
+ * `-d emulator-<port>` so the call is unambiguous even when a stray `adb connect`
+ * has added a second adb transport for the same device. `device list` is the one
+ * subcommand that rejects `-d` — callers that need it use `runVega` directly.
+ */
+export async function runVegaDevice(
+  subcommand: string[],
+  options: { timeoutMs?: number } = {}
+): Promise<VegaRunResult> {
+  const selector = await singleVvdSelector();
+  return runVega(["device", ...subcommand, ...selector], options);
+}
+
+/**
+ * Run `vega device <subcommand…>` against a device. `serial` is validated non-empty
+ * to catch a caller that forgot to thread the udid; the actual target is resolved by
+ * `runVegaDevice` (the running VVD's adb-transport serial), since the `vega` CLI does
+ * not select by the `amazon-…` serial the udid carries.
  */
 export async function vegaDevice(
   serial: string,
@@ -169,5 +200,5 @@ export async function vegaDevice(
   options: { timeoutMs?: number } = {}
 ): Promise<VegaRunResult> {
   if (!serial) throw new Error("vegaDevice requires a non-empty device serial");
-  return runVega(["device", ...subcommand], options);
+  return runVegaDevice(subcommand, options);
 }
