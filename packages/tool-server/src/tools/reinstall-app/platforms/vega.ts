@@ -23,11 +23,16 @@ export const vegaImpl: PlatformImpl<ReinstallAppServices, ReinstallAppParams, Re
       const { stdout, stderr } = await vegaDevice(udid, ["install-app", "-p", absolute], {
         timeoutMs: 180_000,
       });
-      // `install-app` prints "Installing/Updating '…' ...success" on success.
-      // Anchor on the `...success` line so failure phrases like "unsuccessful"
-      // or "was not successful" can't read as success.
+      // `install-app` prints a per-phase result line ("Installing/Updating '…'
+      // ...success", "Activating '…' ...failed"). Success requires a `...success`
+      // marker AND no `...failed` one: a multi-phase run where an early phase
+      // succeeds but a later one fails must not read as success just because
+      // `...success` appears somewhere. Anchoring on `...success\b`/`...failed\b`
+      // also keeps prose like "unsuccessful" from matching either marker.
       const output = `${stdout}\n${stderr}`;
-      if (!/\.\.\.\s*success\b/i.test(output)) {
+      const succeeded = /\.\.\.\s*success\b/i.test(output);
+      const failed = /\.\.\.\s*failed\b/i.test(output);
+      if (!succeeded || failed) {
         throw new Error(`vega install-app failed: ${output.trim()}`);
       }
       return { reinstalled: true, bundleId };
