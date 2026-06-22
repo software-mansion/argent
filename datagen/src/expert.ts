@@ -309,7 +309,8 @@ function solveVisualRegression(b: Builder, task: TaskSpec) {
     "Capturing a full-resolution baseline now (suppressing the image from context so the large PNG isn't loaded).",
     [{ name: "screenshot", args: { udid: w.deviceId, scale: 1.0, includeImageInContext: false } }]
   );
-  const baselinePath = JSON.parse(shot[0]!.content).image.path as string;
+  // The screenshot tool returns an ArtifactHandle; the saved file is `hostPath`.
+  const baselinePath = JSON.parse(shot[0]!.content).image.hostPath as string;
   walkRoute(b, task);
   discover(b);
   b.act("Now diffing the current screen against the saved baseline.", [

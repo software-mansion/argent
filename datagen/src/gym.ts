@@ -18,6 +18,11 @@ import type { ElementDef, FlowStep, ScreenDef, World } from "./types.ts";
 
 const BASE_EPOCH = 1_750_000_000_000;
 
+// Tools that declare an `outputHint` on their ToolDefinition (the only one today
+// is screenshot). flow-execute echoes it back on each tool step; everything else
+// resolves to undefined and is dropped from the JSON.
+const OUTPUT_HINTS: Record<string, string | undefined> = { screenshot: "image" };
+
 export interface ToolResult {
   /** String content for the `tool` message. */
   content: string;
@@ -932,6 +937,10 @@ function flowExecute(world: World, args: ToolArgs): ToolResult {
         kind: "tool",
         tool: s.name,
         result: JSON.parse(stripScreenshotNote(r.content)),
+        // Real flow-run attaches the tool's outputHint (undefined for most tools
+        // -> dropped by JSON.stringify) and always the step's args.
+        outputHint: OUTPUT_HINTS[s.name!],
+        args: s.args ?? {},
       });
     }
   }
