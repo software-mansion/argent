@@ -87,14 +87,15 @@ function hasEnv(entry: McpServerEntry): entry is McpServerEntry & { env: Record<
   return entry.env != null && Object.keys(entry.env).length > 0;
 }
 
-function removeDirIfEmpty(dirPath: string): void {
+function removeDirIfEmpty(dirPath: string): boolean {
   try {
-    if (!fs.existsSync(dirPath)) return;
-    if (!fs.statSync(dirPath).isDirectory()) return;
-    if (fs.readdirSync(dirPath).length > 0) return;
+    if (!fs.existsSync(dirPath)) return false;
+    if (!fs.statSync(dirPath).isDirectory()) return false;
+    if (fs.readdirSync(dirPath).length > 0) return false;
     fs.rmdirSync(dirPath);
+    return true;
   } catch {
-    // non-fatal
+    return false;
   }
 }
 
@@ -1133,6 +1134,51 @@ export function removeCodexRules(configPath: string): boolean {
   return true;
 }
 
+// ── Stale rule pruning ───────────────────────────────────────────────────────
+
+// Argent guidance moved from always-on editor rules to the on-demand argent skill.
+// Prune legacy argent.md files (and Codex developer_instructions injection) on
+// init, update, and uninstall so stale always-on rules do not linger.
+
+/** @internal Exported for tests. */
+export const DEPRECATED_ARGENT_RULE_FILES = ["argent.md"] as const;
+
+export function pruneStaleArgentRules(
+  adapters: McpConfigAdapter[],
+  root: string,
+  scope: ManagedContentScope
+): string[] {
+  const results: string[] = [];
+  const managedTargets = getManagedContentTargets(adapters, root, scope);
+
+  for (const target of managedTargets.ruleTargets) {
+    for (const fileName of DEPRECATED_ARGENT_RULE_FILES) {
+      const filePath = path.join(target.targetPath, fileName);
+      try {
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) continue;
+        fs.rmSync(filePath, { force: true });
+        const removedRoot = removeDirIfEmpty(target.targetPath);
+        const rootLabel = removedRoot ? " (removed empty rules directory)" : "";
+        results.push(`Removed stale ${fileName} from ${target.label}${rootLabel}`);
+      } catch (err) {
+        results.push(`Could not remove stale ${fileName} from ${target.label}: ${err}`);
+      }
+    }
+  }
+
+  for (const target of managedTargets.codexConfigTargets) {
+    try {
+      if (removeCodexRules(target.targetPath)) {
+        results.push(`Removed stale argent rules from ${target.label}`);
+      }
+    } catch (err) {
+      results.push(`Could not remove stale argent rules from ${target.label}: ${err}`);
+    }
+  }
+
+  return results;
+}
+
 // ── Copy orchestrator ────────────────────────────────────────────────────────
 // MARK: Copy orchestrator
 
@@ -1145,6 +1191,10 @@ export function copyRulesAndAgents(
 ): string[] {
   const results: string[] = [];
   const managedTargets = getManagedContentTargets(adapters, root, scope);
+
+  for (const message of pruneStaleArgentRules(adapters, root, scope)) {
+    results.push(`  ${message}`);
+  }
 
   for (const target of managedTargets.ruleTargets) {
     try {
