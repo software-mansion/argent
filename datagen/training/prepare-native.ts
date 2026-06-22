@@ -56,9 +56,7 @@ const FIXED_TOOL_NAMES = [
   "gesture-swipe",
   "keyboard",
   "button",
-  "screenshot",
-  "stop-all-simulator-servers",
-];
+]; // 8 tools — MUST match bench/opencode/argentbench.md and data-realistic/
 const FIXED_TOOLS: ToolSpec[] = FIXED_TOOL_NAMES.map(
   (n) => catalog.find((t) => t.name === n)!
 ).filter(Boolean);

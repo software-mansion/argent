@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.silver.nightrun</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/ignacylatka/dev/argent-finetune-data/datagen/training/night-run.sh</string>
+  </array>
+
+  <!-- Fire at 00:00, with a 04:00 recovery shot. The script's stale-aware lock + done
+       marker make the second firing a no-op if the first is still running or finished,
+       and a resume if the first died (process death / reboot). -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+  </array>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/ignacylatka/dev/argent-finetune-data/datagen/training</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/ignacylatka</string>
+  </dict>
+
+  <!-- launchd-level stdout/stderr (the script keeps its own detailed log too). -->
+  <key>StandardOutPath</key>
+  <string>/Users/ignacylatka/dev/argent-finetune-data/datagen/training/runs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ignacylatka/dev/argent-finetune-data/datagen/training/runs/launchd.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
