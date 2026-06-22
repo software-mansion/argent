@@ -77,6 +77,11 @@ Single press: { button: "down" }. Repeat the same button: { button: "down", repe
 Multi-step navigation: pass a path as { button: ["up","right","right","select"] } — it runs in one tool call, far cheaper than separate presses.
 Returns { pressed, count }.`,
   alwaysLoad: true,
+  // A path (≤64 buttons) × repeat (≤50) flattens to thousands of presses that
+  // settle ~0.3s apart in one held `adb shell` — minutes of wall-clock. Mark
+  // long-running so the MCP adapter doesn't abort it at its per-request fetch
+  // timeout and the idle-shutdown timer is kept warm for the call's duration.
+  longRunning: true,
   searchHint:
     "vega fire tv remote dpad d-pad navigate focus up down left right select ok back home menu play pause rewind fast forward sequence path",
   zodSchema,
