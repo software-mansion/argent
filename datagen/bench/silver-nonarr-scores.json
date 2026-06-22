@@ -1,56 +1,56 @@
 {
-  "cell": "argent_gemma4",
+  "cell": "argent_silver_nonarr",
   "n": 8,
-  "passed": 2,
-  "success_pct": 25.0,
+  "passed": 0,
+  "success_pct": 0.0,
   "backend": "manual-claude",
   "rows": [
     {
       "id": "ios-version",
-      "pass": true,
-      "reason": "navigated Settings>General>About via describe, reported iOS 18.5",
+      "pass": false,
+      "reason": "3 calls, never reached About, confused final answer",
       "backend": "manual-claude"
     },
     {
       "id": "device-name",
       "pass": false,
-      "reason": "20-call loop, complained images unreadable, no device name reported",
+      "reason": "4 calls, rambled about 'unowned device', no name reported",
       "backend": "manual-claude"
     },
     {
       "id": "airplane-on",
       "pass": false,
-      "reason": "got lost near VPN & Device Management, never confirmed Airplane toggle on",
+      "reason": "3 calls then hallucinated garbage URLs, toggle not set",
       "backend": "manual-claude"
     },
     {
       "id": "wifi-state",
       "pass": false,
-      "reason": "empty final answer; many blind swipes, never reported wifi state",
+      "reason": "3 calls, said it would navigate then ask user; incomplete",
       "backend": "manual-claude"
     },
     {
       "id": "appearance",
       "pass": false,
-      "reason": "derailed by 'Cannot read image' errors, never reported Light/Dark",
+      "reason": "4 calls incl malformed name, image-error confusion, no Light/Dark",
       "backend": "manual-claude"
     },
     {
       "id": "accessibility-option",
-      "pass": true,
-      "reason": "reached Accessibility, reported a real option (Motion)",
+      "pass": false,
+      "reason": "2 calls then image-error excuse, no option reported",
       "backend": "manual-claude"
     },
     {
       "id": "search-bluetooth",
       "pass": false,
-      "reason": "confused at end, did not confirm Bluetooth screen opened",
+      "reason": "15 calls of real navigation but ended on image-error, Bluetooth not confirmed",
       "backend": "manual-claude"
     },
     {
       "id": "back-to-root",
       "pass": false,
-      "reason": "only 2 calls (list-devices, launch-app), empty answer",
+      "reason": "8 calls but HALLUCINATED tools (app-clear-ios-settings), confused",
       "backend": "manual-claude"
     }
   ]

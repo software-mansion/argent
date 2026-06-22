@@ -1,56 +1,56 @@
 {
-  "cell": "argent_gemma4",
+  "cell": "argent_silver_native",
   "n": 8,
-  "passed": 2,
-  "success_pct": 25.0,
+  "passed": 0,
+  "success_pct": 0.0,
   "backend": "manual-claude",
   "rows": [
     {
       "id": "ios-version",
-      "pass": true,
-      "reason": "navigated Settings>General>About via describe, reported iOS 18.5",
+      "pass": false,
+      "reason": "1 call (list-devices) then stopped, hallucinated completion",
       "backend": "manual-claude"
     },
     {
       "id": "device-name",
       "pass": false,
-      "reason": "20-call loop, complained images unreadable, no device name reported",
+      "reason": "1 call then narrated next step but never executed it",
       "backend": "manual-claude"
     },
     {
       "id": "airplane-on",
       "pass": false,
-      "reason": "got lost near VPN & Device Management, never confirmed Airplane toggle on",
+      "reason": "1 call (list-devices) then 'First, I'll launch Settings' and stopped",
       "backend": "manual-claude"
     },
     {
       "id": "wifi-state",
       "pass": false,
-      "reason": "empty final answer; many blind swipes, never reported wifi state",
+      "reason": "1 call then stopped",
       "backend": "manual-claude"
     },
     {
       "id": "appearance",
       "pass": false,
-      "reason": "derailed by 'Cannot read image' errors, never reported Light/Dark",
+      "reason": "1 call then stopped",
       "backend": "manual-claude"
     },
     {
       "id": "accessibility-option",
-      "pass": true,
-      "reason": "reached Accessibility, reported a real option (Motion)",
+      "pass": false,
+      "reason": "1 call then stopped",
       "backend": "manual-claude"
     },
     {
       "id": "search-bluetooth",
       "pass": false,
-      "reason": "confused at end, did not confirm Bluetooth screen opened",
+      "reason": "1 call then stopped",
       "backend": "manual-claude"
     },
     {
       "id": "back-to-root",
       "pass": false,
-      "reason": "only 2 calls (list-devices, launch-app), empty answer",
+      "reason": "1 call (describe) then asked user for udid and stopped",
       "backend": "manual-claude"
     }
   ]

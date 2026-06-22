@@ -5,13 +5,20 @@ as the agent harness (an established runtime — we do not reimplement the agent
 driving a model through a toolkit's MCP tools against a **real booted iOS simulator**,
 plus a thin judge pass for task success.
 
-Planned matrix (2 toolkits × 3 models):
+**Full write-up + the silver fine-tuning journey: [RESULTS.md](./RESULTS.md).**
 
-|                  | **Argent** (MCP)  | **agent-device** (MCP) |
-| ---------------- | ----------------- | ---------------------- |
-| **gemma4:e4b**   | ✅ baseline (25%) | pending (build)        |
-| **silver:e4b**   | ⚠️ see "Silver"   | pending                |
-| **Claude Haiku** | pending (key)     | pending (key)          |
+Matrix (2 toolkits × 3 models) — Argent column run; agent-device + Haiku pending:
+
+|                  | **Argent** (MCP)       | **agent-device** (MCP) |
+| ---------------- | ---------------------- | ---------------------- |
+| **gemma4:e4b**   | **2/8 (25%)** baseline | pending (build)        |
+| **silver:e4b**   | 0/8 — see RESULTS.md   | pending                |
+| **Claude Haiku** | pending (key)          | pending (key)          |
+
+Short version: the silver fine-tune was retrained until it became a true OpenCode drop-in
+(native gemma4 tool format → executes tools; `--no-narration` → full multi-step), but the
+4B model still wanders and completes 0/8 vs gemma's 2/8. The harness-compatibility problems
+are solved; navigation quality is the open gap. Details + next steps in RESULTS.md.
 
 ## The setup that works (OpenCode + ollama + argent)
 
