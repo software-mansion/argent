@@ -617,7 +617,10 @@ export function createHttpApp(registry: Registry, options?: HttpAppOptions): Htt
         if (invocationMeta) {
           releaseInvocationMeta = recordInvocation(toolInvocationId, invocationMeta);
           recordChildInvocation = (childInvocationId, childArgs) =>
-            recordInvocation(childInvocationId, deriveChildInvocationMeta(invocationMeta, childArgs));
+            recordInvocation(
+              childInvocationId,
+              deriveChildInvocationMeta(invocationMeta, childArgs)
+            );
         }
       }
 
