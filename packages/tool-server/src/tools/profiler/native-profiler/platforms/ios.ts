@@ -17,6 +17,7 @@ import { runIosProfilerPipeline } from "../../../../utils/ios-profiler/pipeline/
 import { selectIosCaptureStrategy } from "../../../../utils/ios-profiler/capture-strategy";
 import type { NativeProfilerAnalyzeResult } from "../../../../utils/ios-profiler/types";
 import { renderNativeProfilerReport } from "../../../../utils/ios-profiler/render";
+import { formatTraceFreshness } from "../../../../utils/profiler-shared/freshness";
 import { RECORDING_CAP_MS } from "../../../../utils/profiler-shared/types";
 
 // Two candidates because __dirname differs by runtime: bundled it's argent/dist/
@@ -600,5 +601,17 @@ export async function analyzeNativeProfilerIos(
     payload,
     traceFile: api.traceFile,
     exportErrors,
+    // wallClockStartMs is the recording's start time, stamped in-memory at
+    // native-profiler-start. A large gap to "now" means analyze is reusing a
+    // trace from an earlier capture in this same process run, not a fresh one.
+    //
+    // Limitation (iOS): unlike Android, iOS has no on-disk metadata sidecar, so
+    // profiler-load (which restores only the raw_*.xml) cannot recover the start
+    // time — wallClockStartMs is null for a loaded session and this note stays
+    // off. The note therefore fires only for a live in-process session, never
+    // for one restored from disk. Restoring iOS start-time across loads needs an
+    // iOS sidecar this Android-scoped change does not add; formatTraceFreshness
+    // degrades cleanly to null in that case. See test/ios-instruments/load-freshness.test.ts.
+    freshnessNote: formatTraceFreshness(api.wallClockStartMs, Date.now()) ?? undefined,
   });
 }

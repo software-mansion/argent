@@ -16,9 +16,7 @@ const zodSchema = z.object({
   text: z
     .string()
     .optional()
-    .describe(
-      "Text to type character by character. Handles uppercase and common punctuation. Use when paste is unreliable."
-    ),
+    .describe("Text to type character by character. Handles uppercase and common punctuation."),
   key: z
     .string()
     .optional()
@@ -59,7 +57,7 @@ Returns { typed: string, keys: number }. Fails if an unsupported key name is pro
 - text: types a string character by character (supports uppercase, digits, common punctuation)
 - key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
 On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
-Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
+Provide text, key, or both.`,
     zodSchema,
     capability,
     searchHint:

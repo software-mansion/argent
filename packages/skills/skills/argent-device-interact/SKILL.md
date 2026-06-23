@@ -30,7 +30,7 @@ Use `list-devices` to get a target id. Results are tagged with `platform` (`ios`
 1. **Always refer to tapping_rule** from your argent.md rule before tapping.
 2. Before performing interactions, consider whether they can be **dispatched sequentially** - more on that in `run-sequence`.
 3. **Use `gesture-swipe` for lists/scrolling**, not `gesture-custom`, unless you need non-linear movement. On Chromium use `gesture-scroll` instead — `gesture-swipe` is touch-only. Consider whether you need multiple swipes, if yes - use `run-sequence`.
-4. **Tap a text field before typing** — on iOS try `paste` first then fall back to `keyboard`; on Android use `keyboard` directly (`paste` is iOS-only).
+4. **Tap a text field before typing**, then use `keyboard` to enter text.
 5. **Coordinates are normalized** — always 0.0–1.0, not pixels.
 6. **For app navigation, prefer `describe` first.** It works on any screen without app restart. Do not navigate from screenshots on regular in-app screens unless `describe` failed to expose a reliable target. Use `native-describe-screen` only when you need app-scoped UIKit properties.
 
@@ -56,25 +56,24 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool             | Notes                                                                  |
-| ----------------- | ---------------- | ---------------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`   | Batch steps in one call (no intermediate screenshots)                  |
-| Open an app       | `launch-app`     | **Always — never tap home-screen icons**                               |
-| Restart an app    | `restart-app`    | Terminate and relaunch by bundle ID                                    |
-| Open URL/scheme   | `open-url`       | Web pages, deep links, URL schemes                                     |
-| Single tap        | `gesture-tap`    | Buttons, links, checkboxes                                             |
-| Scroll/swipe      | `gesture-swipe`  | Straight-line scroll or swipe                                          |
-| Scroll (Chromium) | `gesture-scroll` | Wheel-based; deltas are window fractions, positive deltaY = down       |
-| Drag (Chromium)   | `gesture-drag`   | Sliders, drag-and-drop, text selection                                 |
-| Long press        | `gesture-custom` | Context menus, drag start                                              |
-| Drag & drop       | `gesture-custom` | Complex drag interactions                                              |
-| Pinch/zoom        | `gesture-pinch`  | Two-finger pinch with auto-interpolation                               |
-| Rotation          | `gesture-rotate` | Two-finger rotation with auto-interpolation                            |
-| Custom gesture    | `gesture-custom` | Arbitrary touch sequences, optional interpolation                      |
-| Hardware key      | `button`         | Home, back, power, volume, appSwitch, actionButton                     |
-| Type text (fast)  | `paste`          | iOS only. Form fields — uses clipboard                                 |
-| Type text         | `keyboard`       | iOS+Android. Fallback when paste fails; supports Enter, Escape, arrows |
-| Rotate device     | `rotate`         | Orientation changes                                                    |
+| Action            | Tool             | Notes                                                            |
+| ----------------- | ---------------- | ---------------------------------------------------------------- |
+| Multiple actions  | `run-sequence`   | Batch steps in one call (no intermediate screenshots)            |
+| Open an app       | `launch-app`     | **Always — never tap home-screen icons**                         |
+| Restart an app    | `restart-app`    | Terminate and relaunch by bundle ID                              |
+| Open URL/scheme   | `open-url`       | Web pages, deep links, URL schemes                               |
+| Single tap        | `gesture-tap`    | Buttons, links, checkboxes                                       |
+| Scroll/swipe      | `gesture-swipe`  | Straight-line scroll or swipe                                    |
+| Scroll (Chromium) | `gesture-scroll` | Wheel-based; deltas are window fractions, positive deltaY = down |
+| Drag (Chromium)   | `gesture-drag`   | Sliders, drag-and-drop, text selection                           |
+| Long press        | `gesture-custom` | Context menus, drag start                                        |
+| Drag & drop       | `gesture-custom` | Complex drag interactions                                        |
+| Pinch/zoom        | `gesture-pinch`  | Two-finger pinch with auto-interpolation                         |
+| Rotation          | `gesture-rotate` | Two-finger rotation with auto-interpolation                      |
+| Custom gesture    | `gesture-custom` | Arbitrary touch sequences, optional interpolation                |
+| Hardware key      | `button`         | Home, back, power, volume, appSwitch, actionButton               |
+| Type text         | `keyboard`       | iOS+Android. Supports Enter, Escape, arrows                      |
+| Rotate device     | `rotate`         | Orientation changes                                              |
 
 ## 5. Finding Tap Targets
 
@@ -163,14 +162,6 @@ For long-press, drag-and-drop, and other complex sequences, see `references/gest
 
 Values: `home`, `back`, `power`, `volumeUp`, `volumeDown`, `appSwitch`, `actionButton`
 
-### paste — Type text into focused field (iOS only)
-
-```json
-{ "udid": "<UDID>", "text": "Hello, world!" }
-```
-
-Tap the field first, then paste. Fall back to `keyboard` if it doesn't work. On Android the call is rejected by the capability gate ("Tool 'paste' is not supported on android") — use `keyboard` directly.
-
 ### keyboard — Type text or press special keys
 
 ```json
@@ -248,7 +239,7 @@ Use the sequencing when:
 
 ### Allowed tools inside `run-sequence`
 
-`gesture-tap`, `gesture-swipe`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`
 
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 

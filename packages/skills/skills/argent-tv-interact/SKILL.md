@@ -1,6 +1,6 @@
 ---
 name: argent-tv-interact
-description: Control and inspect Apple TV (tvOS) and Android TV (leanback) apps via argent — boot the target, read the on-screen focus state, navigate with the D-pad remote, and type. Use for any task on a TV target (a `list-devices` entry with `runtimeKind: "tv"`), or when the user mentions Apple TV / tvOS / Android TV / leanback.
+description: Control and inspect Apple TV (tvOS) and Android TV (leanback) apps via argent — boot the target, read the on-screen focus state, navigate with the D-pad remote, and type. Use when a task targets a TV (a `list-devices` entry with `runtimeKind: "tv"`), or when the user mentions Apple TV / tvOS / Android TV / leanback.
 ---
 
 # Argent TV (Apple TV + Android TV)
