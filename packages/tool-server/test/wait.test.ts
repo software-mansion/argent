@@ -23,9 +23,7 @@ function makeSequencedAXService(responses: AXDescribeResponse[]): {
   return { api, calls: () => i };
 }
 
-function axResponse(
-  elements: AXDescribeResponse["elements"]
-): AXDescribeResponse {
+function axResponse(elements: AXDescribeResponse["elements"]): AXDescribeResponse {
   return { alertVisible: false, screenFrame: { width: 440, height: 956 }, elements };
 }
 
@@ -192,11 +190,9 @@ describe("wait tool", () => {
     const controller = new AbortController();
     setTimeout(() => controller.abort(), 20);
 
-    const result = await tool.execute(
-      {},
-      { condition: "time", durationMs: 5000 },
-      { signal: controller.signal } as never
-    );
+    const result = await tool.execute({}, { condition: "time", durationMs: 5000 }, {
+      signal: controller.signal,
+    } as never);
 
     expect(result.success).toBe(false);
     expect(result.note).toMatch(/cancel/i);
@@ -315,10 +311,9 @@ describe("wait tool", () => {
     });
 
     it("`text` inspects the first match in tree order, not any match", () => {
-      const matches = findAll(
-        tree([node("Item one", VISIBLE), node("Item two", VISIBLE)]),
-        { text: "Item" }
-      );
+      const matches = findAll(tree([node("Item one", VISIBLE), node("Item two", VISIBLE)]), {
+        text: "Item",
+      });
       expect(evaluateMatches(params("text", "two"), matches)).toBe(false);
       expect(evaluateMatches(params("text", "one"), matches)).toBe(true);
     });
@@ -336,9 +331,9 @@ describe("wait tool", () => {
     });
 
     it("rejects a selector condition without udid", () => {
-      expect(
-        schema.safeParse({ condition: "visible", selector: { text: "x" } }).success
-      ).toBe(false);
+      expect(schema.safeParse({ condition: "visible", selector: { text: "x" } }).success).toBe(
+        false
+      );
     });
 
     it("rejects a selector condition without a selector", () => {
@@ -352,9 +347,9 @@ describe("wait tool", () => {
     });
 
     it("rejects a selector with no fields", () => {
-      expect(
-        schema.safeParse({ condition: "exists", udid: IOS_UDID, selector: {} }).success
-      ).toBe(false);
+      expect(schema.safeParse({ condition: "exists", udid: IOS_UDID, selector: {} }).success).toBe(
+        false
+      );
     });
 
     it("accepts a valid visible-condition payload", () => {
