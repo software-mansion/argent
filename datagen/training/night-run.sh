@@ -23,9 +23,10 @@ if [ "$DRY_RUN" = "1" ]; then
   TOTAL_ITERS="${TOTAL_ITERS:-4}"; CHUNK="${CHUNK:-2}"; SEQ=512; DATA="data-dryrun"
   ADAPTER="adapters/_dryrun"; PFX="runs/_dryrun"
 else
-  TOTAL_ITERS="${TOTAL_ITERS:-1200}"; CHUNK="${CHUNK:-300}"; SEQ="${SEQ:-4608}"; DATA="data-realistic"
-  ADAPTER="adapters/silver-realistic"; PFX="runs/nightrun"
+  TOTAL_ITERS="${TOTAL_ITERS:-1200}"; CHUNK="${CHUNK:-300}"; SEQ="${SEQ:-4608}"; DATA="${DATA:-data-realistic}"
+  ADAPTER="${ADAPTER:-adapters/silver-realistic}"; PFX="${PFX:-runs/nightrun}"
 fi
+OLLAMA_NAME="${OLLAMA_NAME:-silver-realistic:e4b}"; WORK="${WORK:-silver-realistic}"
 PROGRESS="$PFX.progress"; DONE_MARKER="$PFX.done"; LOCKDIR="$PFX.lock.d"
 
 ts()  { date "+%Y-%m-%d %H:%M:%S"; }
@@ -82,8 +83,8 @@ pkill -9 -f "ollama serve"  2>/dev/null || true
 sleep 2
 if [ "$DRY_RUN" = "1" ]; then
   mkdir -p "$DATA"
-  head -n 8 data-realistic/train.jsonl >"$DATA/train.jsonl" 2>/dev/null
-  head -n 4 data-realistic/valid.jsonl >"$DATA/valid.jsonl" 2>/dev/null
+  head -n 8 "${SEED_FROM:-data-realistic}/train.jsonl" >"$DATA/train.jsonl" 2>/dev/null
+  head -n 4 "${SEED_FROM:-data-realistic}/valid.jsonl" >"$DATA/valid.jsonl" 2>/dev/null
 fi
 for f in "base/gemma-4-e4b-clean/config.json" "$DATA/train.jsonl" "$DATA/valid.jsonl"; do
   [ -s "$f" ] || { log "FATAL: missing/empty $f"; exit 1; }
@@ -115,8 +116,8 @@ log "training complete -> $ADAPTER/adapters.safetensors"
 PACKAGED=0
 if [ "$DRY_RUN" = "1" ]; then
   log "DRY_RUN: skipping packaging"
-elif ./package-native.sh "$ADAPTER" silver-realistic:e4b silver-realistic; then
-  log "packaged silver-realistic:e4b OK"; PACKAGED=1
+elif ./package-native.sh "$ADAPTER" "$OLLAMA_NAME" "$WORK"; then
+  log "packaged $OLLAMA_NAME OK"; PACKAGED=1
 else
   log "WARNING: packaging failed — adapter safe at $ADAPTER (package manually in the morning)"
 fi
@@ -124,7 +125,7 @@ fi
 # ---- HF UPLOAD (best-effort): overwrite LatekVo/silver with the fixed model. HF keeps
 #      history like git, so this is a clean overwrite of the broken upload. The merged
 #      Gemma4ForCausalLM weights are fused/silver-realistic-causal (from packaging). ----
-HF_DIR="fused/silver-realistic-causal"
+HF_DIR="fused/$WORK-causal"
 if [ "$DRY_RUN" != "1" ] && [ "$PACKAGED" = "1" ] && [ -f "$HF_DIR/config.json" ]; then
   # stage the adapter + a preliminary card alongside the merged weights
   mkdir -p "$HF_DIR/adapter"
