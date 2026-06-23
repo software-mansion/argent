@@ -284,6 +284,7 @@ describe("FLAG_REGISTRY / getFlagDefinition", () => {
 
   it("getFlagDefinition defaults to the shipped registry", () => {
     expect(getFlagDefinition("disable-auto-screenshot")?.description).toMatch(/auto/i);
+    expect(getFlagDefinition("tool-server-event-log")?.description).toMatch(/event/i);
   });
 
   it("every shipped registry entry has a non-empty name and description", () => {
