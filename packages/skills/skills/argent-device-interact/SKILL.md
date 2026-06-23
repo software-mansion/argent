@@ -1,6 +1,6 @@
 ---
 name: argent-device-interact
-description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, or checking visible app state after interactions.
+description: Interact with an iOS simulator, Android emulator, or Chromium (CDP) app using argent MCP tools. Use when tapping UI elements, performing gestures, scrolling/swiping, typing text, pressing hardware buttons, launching apps, opening URLs, taking screenshots, waiting for an element to appear or disappear, or checking visible app state after interactions.
 ---
 
 ## Unified tool surface
@@ -54,24 +54,25 @@ Common schemes: `messages://`, `settings://`, `maps://?q=<query>`, `tel://<numbe
 
 ## 4. Choosing the Right Tool
 
-| Action            | Tool             | Notes                                                            |
-| ----------------- | ---------------- | ---------------------------------------------------------------- |
-| Multiple actions  | `run-sequence`   | Batch steps in one call (no intermediate screenshots)            |
-| Open an app       | `launch-app`     | **Always — never tap home-screen icons**                         |
-| Restart an app    | `restart-app`    | Terminate and relaunch by bundle ID                              |
-| Open URL/scheme   | `open-url`       | Web pages, deep links, URL schemes                               |
-| Single tap        | `gesture-tap`    | Buttons, links, checkboxes                                       |
-| Scroll/swipe      | `gesture-swipe`  | Straight-line scroll or swipe                                    |
-| Scroll (Chromium) | `gesture-scroll` | Wheel-based; deltas are window fractions, positive deltaY = down |
-| Drag (Chromium)   | `gesture-drag`   | Sliders, drag-and-drop, text selection                           |
-| Long press        | `gesture-custom` | Context menus, drag start                                        |
-| Drag & drop       | `gesture-custom` | Complex drag interactions                                        |
-| Pinch/zoom        | `gesture-pinch`  | Two-finger pinch with auto-interpolation                         |
-| Rotation          | `gesture-rotate` | Two-finger rotation with auto-interpolation                      |
-| Custom gesture    | `gesture-custom` | Arbitrary touch sequences, optional interpolation                |
-| Hardware key      | `button`         | Home, back, power, volume, appSwitch, actionButton               |
-| Type text         | `keyboard`       | iOS+Android. Supports Enter, Escape, arrows                      |
-| Rotate device     | `rotate`         | Orientation changes                                              |
+| Action            | Tool             | Notes                                                              |
+| ----------------- | ---------------- | ------------------------------------------------------------------ |
+| Multiple actions  | `run-sequence`   | Batch steps in one call (no intermediate screenshots)              |
+| Open an app       | `launch-app`     | **Always — never tap home-screen icons**                           |
+| Restart an app    | `restart-app`    | Terminate and relaunch by bundle ID                                |
+| Open URL/scheme   | `open-url`       | Web pages, deep links, URL schemes                                 |
+| Single tap        | `gesture-tap`    | Buttons, links, checkboxes                                         |
+| Scroll/swipe      | `gesture-swipe`  | Straight-line scroll or swipe                                      |
+| Scroll (Chromium) | `gesture-scroll` | Wheel-based; deltas are window fractions, positive deltaY = down   |
+| Drag (Chromium)   | `gesture-drag`   | Sliders, drag-and-drop, text selection                             |
+| Long press        | `gesture-custom` | Context menus, drag start                                          |
+| Drag & drop       | `gesture-custom` | Complex drag interactions                                          |
+| Pinch/zoom        | `gesture-pinch`  | Two-finger pinch with auto-interpolation                           |
+| Rotation          | `gesture-rotate` | Two-finger rotation with auto-interpolation                        |
+| Custom gesture    | `gesture-custom` | Arbitrary touch sequences, optional interpolation                  |
+| Hardware key      | `button`         | Home, back, power, volume, appSwitch, actionButton                 |
+| Type text         | `keyboard`       | iOS+Android. Supports Enter, Escape, arrows                        |
+| Rotate device     | `rotate`         | Orientation changes                                                |
+| Wait for UI       | `wait`           | Block until an element is visible/hidden/exists/has text, or sleep |
 
 ## 5. Finding Tap Targets
 
@@ -176,6 +177,23 @@ Special keys: `enter`, `escape`, `backspace`, `tab`, `space`, `arrow-up`, `arrow
 
 Values: `Portrait`, `LandscapeLeft`, `LandscapeRight`, `PortraitUpsideDown`
 
+### wait — Block until a UI condition holds
+
+Instead of polling `screenshot`/`describe` in a loop, use `wait` to block server-side until a condition is met (or `timeoutMs`, default 5000ms, elapses). It polls the same accessibility/DOM tree as `describe`.
+
+```json
+{ "udid": "<UDID>", "condition": "visible", "selector": { "text": "Continue" } }
+```
+
+- `condition`: `time` (just sleep `durationMs`, no device needed), `exists`, `visible`, `hidden`, or `text`.
+- `selector`: `{ text?, identifier?, role? }` — every provided field must match (case-insensitive substring). `text` matches the element's label or value; `identifier` matches its accessibility id / resource-id / testID; `role` matches its element role (e.g. `AXButton`, `button`, `TextView`, `StaticText`).
+- Prefer a **specific** selector. A loose substring can match several elements, and `wait` may then key off one you didn't mean: `text` reads the **first** match in tree order (a short word can land on a button, heading, or container that merely contains it), while `visible`/`exists` are satisfied by **any** match. Disambiguate with a longer or more exact string, an `identifier`, or a `role` (e.g. pin to a text role like `StaticText` to skip a same-named button). On a `text` timeout the `note` quotes the matched element's text, so you can see which one it landed on.
+- `text` condition also needs `expectedText` (substring the matched element must contain).
+- `hidden` treats a selector that matches **nothing** as already-hidden, so a typo'd selector returns an instant (false) success. Double-check the selector for `hidden` waits — the result `note` flags when the selector never matched any element.
+- Optional `timeoutMs` (default 5000) and `pollIntervalMs` (default 400).
+
+Returns `{ success, elapsed }`; on a timeout `success` is `false` and a `note` explains what was seen.
+
 ---
 
 ## 7. Screenshots
@@ -237,7 +255,7 @@ Use the sequencing when:
 
 ### Allowed tools inside `run-sequence`
 
-`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`
+`gesture-tap`, `gesture-swipe`, `gesture-scroll`, `gesture-drag`, `gesture-custom`, `gesture-pinch`, `gesture-rotate`, `button`, `keyboard`, `rotate`, `wait`
 
 The `udid` is shared — do **not** include it in each step's `args`. Optional `delayMs` per step (default 100ms).
 
