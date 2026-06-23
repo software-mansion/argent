@@ -112,6 +112,16 @@ while [ "$c" -le "$n_chunks" ]; do
 done
 log "training complete -> $ADAPTER/adapters.safetensors"
 
+# packaging's `ollama create` needs the daemon, which the preflight killed — restart it
+if [ "$DRY_RUN" != "1" ]; then
+  if ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
+    log "starting ollama serve for packaging"
+    nohup ollama serve >/dev/null 2>&1 &
+    for _ in $(seq 1 30); do curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break; sleep 1; done
+    curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && log "ollama serve up" || log "WARNING: ollama serve not responding — packaging may fail"
+  fi
+fi
+
 # ---- PACKAGE (skipped in dry-run; package-native.sh is proven separately) ----
 PACKAGED=0
 if [ "$DRY_RUN" = "1" ]; then
