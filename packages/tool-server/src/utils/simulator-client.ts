@@ -2,8 +2,20 @@ import WebSocket from "ws";
 import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { SimulatorServerApi } from "../blueprints/simulator-server";
 import { toSimulatorNetworkError } from "./format-error";
+import { sleep } from "./timing";
 
 const DEFAULT_SCREENSHOT_SCALE = 0.3;
+
+// A simulator-server captures screenshots from its live frame stream, so the
+// first frame must have arrived before a capture can succeed. Right after the
+// server starts streaming it replies HTTP 200 `{ error: "no image to export" }`
+// until that first frame lands — typically ~0.5-1s, and reliably so for a
+// backgrounded simulator when more than one is booted (the regression in
+// https://github.com/software-mansion/argent/issues/391). Poll past that
+// transient instead of surfacing it as a hard failure.
+const NO_IMAGE_ERROR = /no image to export/i;
+const FIRST_FRAME_WAIT_MS = 6_000;
+const FIRST_FRAME_POLL_MS = 250;
 
 const connections = new Map<string, WebSocket>();
 let cmdId = 0;
@@ -106,33 +118,51 @@ export async function httpScreenshot(
   if (rotation) body.rotation = rotation;
   if (resolvedScale !== 1.0) body.scale = resolvedScale;
 
-  const { res, body: resBody } = await simulatorPost<{
-    url?: string;
-    path?: string;
-    error?: string;
-  }>("Screenshot", api, "/api/screenshot", body, signal);
+  const deadline = Date.now() + FIRST_FRAME_WAIT_MS;
+  for (;;) {
+    const { res, body: resBody } = await simulatorPost<{
+      url?: string;
+      path?: string;
+      error?: string;
+    }>("Screenshot", api, "/api/screenshot", body, signal);
 
-  if (!res.ok) {
-    const serverMsg = resBody.error ?? `HTTP ${res.status}`;
-    throw new FailureError(
-      `Screenshot failed: ${serverMsg}. ` +
-        `Ensure the simulator is booted and the simulator-server is running.`,
-      {
-        error_code: FAILURE_CODES.SIMULATOR_HTTP_ERROR_RESPONSE,
-        failure_stage: "simulator_screenshot_http_response",
-        failure_area: "tool_server",
-        error_kind: "network",
-        network_failure: "invalid_response",
-      }
-    );
-  }
-  if (resBody.url == null || resBody.path == null) {
-    // Some capture failures come back as HTTP 200 with an `error` field rather
-    // than a non-2xx status (e.g. Android full-resolution requests that exceed
-    // what the emulator framebuffer can stream: "wrong data size, expected X
-    // got Y"). Surface that message instead of the misleading generic hint so
-    // the real cause is visible rather than sending callers to restart a
-    // perfectly healthy server.
+    if (!res.ok) {
+      const serverMsg = resBody.error ?? `HTTP ${res.status}`;
+      throw new FailureError(
+        `Screenshot failed: ${serverMsg}. ` +
+          `Ensure the simulator is booted and the simulator-server is running.`,
+        {
+          error_code: FAILURE_CODES.SIMULATOR_HTTP_ERROR_RESPONSE,
+          failure_stage: "simulator_screenshot_http_response",
+          failure_area: "tool_server",
+          error_kind: "network",
+          network_failure: "invalid_response",
+        }
+      );
+    }
+    if (resBody.url != null && resBody.path != null) {
+      return { url: resBody.url, path: resBody.path };
+    }
+
+    // HTTP 200 with no url/path. A "no image to export" means the frame stream
+    // hasn't produced its first frame yet; poll until it does (or the deadline
+    // passes) rather than failing a freshly-spawned or backgrounded simulator.
+    if (
+      resBody.error &&
+      NO_IMAGE_ERROR.test(resBody.error) &&
+      !signal?.aborted &&
+      Date.now() + FIRST_FRAME_POLL_MS < deadline
+    ) {
+      await sleep(FIRST_FRAME_POLL_MS);
+      continue;
+    }
+
+    // Other HTTP-200 capture failures carry an `error` field rather than a
+    // non-2xx status (e.g. Android full-resolution requests that exceed what
+    // the emulator framebuffer can stream: "wrong data size, expected X got
+    // Y"). Surface that message instead of the misleading generic hint so the
+    // real cause is visible rather than sending callers to restart a perfectly
+    // healthy server.
     if (resBody.error) {
       throw new Error(`Screenshot failed: ${resBody.error}.`);
     }
@@ -148,5 +178,4 @@ export async function httpScreenshot(
       }
     );
   }
-  return { url: resBody.url, path: resBody.path };
 }
