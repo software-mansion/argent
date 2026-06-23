@@ -1,0 +1,660 @@
+[
+  {
+    "meta": {
+      "id": "real-monkey-1",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the country selection screen (tap the city/country button at the top-left).",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"San Francisco\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"Germany\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:83961\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"San Francisco\"  (0.004, 0.124, 0.243, 0.021)\n  AXStaticText \"Germany\"  (0.308, 0.126, 0.136, 0.018)\n  AXStaticText \"total:83961\"  (0.795, 0.126, 0.173, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trekhleb\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"danielmiessler\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lydiahallie\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"twbs\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"evanw\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"cloudflare\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"netlify\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rakyll\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"BYVoid\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mnielsen\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"agentzh\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"garrytan\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"zenorocha\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"necolas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"hashicorp\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"sophiebits\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"discord\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"joshlong\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"colah\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bcherny\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, lucidrains\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"lucidrains\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, steipete\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"steipete\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, benawad\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"benawad\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, gvanrossum\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"gvanrossum\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, mojombo\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"mojombo\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, mdo\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"mdo\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, chiphuyen\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"chiphuyen\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, mbostock\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"mbostock\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, octocat\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"octocat\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, t3dotgg\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"t3dotgg\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.073,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select Country\"  (0.342, 0.073, 0.316, 0.025)\n  AXStaticText \"USA\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"USA\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"UK\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"UK\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Germany\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Germany\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"China\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"China\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Canada\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Canada\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"India\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"India\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"France\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"France\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"Australia\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"Australia\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"Other\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"Other\"  (0.043, 0.547, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"Select Country\" screen listing countries (USA, UK, Germany, China, ...)."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-2",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the programming-language selection screen (tap the language button at the top-right).",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"San Francisco\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"Germany\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:83961\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"San Francisco\"  (0.004, 0.124, 0.243, 0.021)\n  AXStaticText \"Germany\"  (0.308, 0.126, 0.136, 0.018)\n  AXStaticText \"total:83961\"  (0.795, 0.126, 0.173, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trekhleb\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"danielmiessler\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lydiahallie\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"twbs\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"evanw\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"cloudflare\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"netlify\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rakyll\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"BYVoid\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mnielsen\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"agentzh\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"garrytan\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"zenorocha\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"necolas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"hashicorp\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"sophiebits\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"discord\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"joshlong\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"colah\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bcherny\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, lucidrains\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"lucidrains\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, steipete\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"steipete\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, benawad\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"benawad\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, gvanrossum\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"gvanrossum\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, mojombo\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"mojombo\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, mdo\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"mdo\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, chiphuyen\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"chiphuyen\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, mbostock\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"mbostock\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, octocat\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"octocat\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, t3dotgg\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"t3dotgg\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.875,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Language\"  (0.396, 0.073, 0.210, 0.025)\n  AXStaticText \"Vue\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Kotlin\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Scala\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Perl\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Dart\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Rust\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"all languages\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"all languages\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"JavaScript\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"JavaScript\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Java\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Java\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"PHP\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"PHP\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Ruby\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Ruby\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"Python\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"Python\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"CSS\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"CSS\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"C++\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"C++\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"C\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"C\"  (0.043, 0.547, 0.915, 0.054)\n  AXStaticText \"Shell\"  (0.000, 0.601, 1.000, 0.054)\n  AXStaticText \"Shell\"  (0.043, 0.601, 0.915, 0.054)\n  AXStaticText \"HTML\"  (0.000, 0.655, 1.000, 0.054)\n  AXStaticText \"HTML\"  (0.043, 0.655, 0.915, 0.054)\n  AXStaticText \"TypeScript\"  (0.000, 0.709, 1.000, 0.054)\n  AXStaticText \"TypeScript\"  (0.043, 0.709, 0.915, 0.054)\n  AXStaticText \"R\"  (0.000, 0.764, 1.000, 0.054)\n  AXStaticText \"R\"  (0.043, 0.764, 0.915, 0.054)\n  AXStaticText \"Objective-C\"  (0.000, 0.818, 1.000, 0.054)\n  AXStaticText \"Objective-C\"  (0.043, 0.818, 0.915, 0.054)\n  AXStaticText \"Go\"  (0.000, 0.872, 1.000, 0.054)\n  AXStaticText \"Go\"  (0.043, 0.872, 0.915, 0.054)\n  AXStaticText \"Swift\"  (0.000, 0.926, 1.000, 0.054)\n  AXStaticText \"Swift\"  (0.043, 0.926, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)\n  AXStaticText \"Lua\"  (0.000, 0.980, 1.000, 0.020)\n  AXStaticText \"Lua\"  (0.043, 0.980, 0.915, 0.020)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the \"Language\" screen listing languages (Vue, Kotlin, Rust, ...)."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-3",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Change the ranking to Germany: open the country list, choose Germany, then choose the city Berlin.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"San Francisco\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"Germany\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:83961\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"San Francisco\"  (0.004, 0.124, 0.243, 0.021)\n  AXStaticText \"Germany\"  (0.308, 0.126, 0.136, 0.018)\n  AXStaticText \"total:83961\"  (0.795, 0.126, 0.173, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trekhleb\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"danielmiessler\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lydiahallie\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"twbs\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"evanw\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"cloudflare\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"netlify\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rakyll\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"BYVoid\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mnielsen\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"agentzh\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"garrytan\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"zenorocha\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"necolas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"hashicorp\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"sophiebits\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"discord\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"joshlong\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"colah\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bcherny\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, lucidrains\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"lucidrains\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, steipete\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"steipete\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, benawad\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"benawad\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, gvanrossum\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"gvanrossum\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, mojombo\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"mojombo\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, mdo\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"mdo\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, chiphuyen\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"chiphuyen\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, mbostock\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"mbostock\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, octocat\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"octocat\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, t3dotgg\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"t3dotgg\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.073,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select Country\"  (0.342, 0.073, 0.316, 0.025)\n  AXStaticText \"USA\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"USA\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"UK\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"UK\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Germany\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Germany\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"China\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"China\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Canada\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Canada\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"India\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"India\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"France\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"France\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"Australia\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"Australia\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"Other\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"Other\"  (0.043, 0.547, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.249
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Select Country\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select City\"  (0.385, 0.073, 0.230, 0.025)\n  AXStaticText \"Berlin\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"Berlin\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"Munich\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"Munich\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Hamburg\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Hamburg\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"Cologne\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"Cologne\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Stuttgart\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Stuttgart\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"Dresden\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"Dresden\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"Leipzig\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"Leipzig\"  (0.043, 0.438, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.14
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"Berlin\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"Germany\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:69939\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"Berlin\"  (0.076, 0.124, 0.099, 0.021)\n  AXStaticText \"Germany\"  (0.308, 0.126, 0.136, 0.018)\n  AXStaticText \"total:69939\"  (0.792, 0.126, 0.181, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"tonsky\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"sebastianruder\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"vakila\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"greenrobot\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orhun\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"vietnh1009\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"felixge\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"apaszke\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"ines\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"codebytere\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"vanhauser-thc\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"typst\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"armancodv\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dashersw\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"peterbourgon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nlohmann\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"floooh\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"KittyGiraudel\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"codepo8\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, tiangolo\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"tiangolo\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, schacon\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"schacon\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, muan\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"muan\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, rwieruch\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"rwieruch\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, marijnh\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"marijnh\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, android10\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"android10\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, posva\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"posva\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, nikic\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"nikic\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, mxmnk\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"mxmnk\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, alexeygrigorev\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"alexeygrigorev\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      }
+    ],
+    "finalAnswer": "Set the ranking location to Berlin, Germany; the developer ranking for Germany is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-4",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Change the ranking to the United Kingdom: open the country list, choose UK, then choose its first city.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"59 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"Berlin\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"Germany\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:69939\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"Berlin\"  (0.076, 0.124, 0.099, 0.021)\n  AXStaticText \"Germany\"  (0.308, 0.126, 0.136, 0.018)\n  AXStaticText \"total:69939\"  (0.792, 0.126, 0.181, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"tonsky\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"sebastianruder\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"vakila\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"greenrobot\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orhun\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"vietnh1009\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"felixge\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"apaszke\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"ines\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"codebytere\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"vanhauser-thc\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"typst\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"armancodv\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dashersw\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"peterbourgon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nlohmann\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"floooh\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"KittyGiraudel\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"codepo8\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, tiangolo\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"tiangolo\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, schacon\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"schacon\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, muan\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"muan\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, rwieruch\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"rwieruch\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, marijnh\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"marijnh\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, android10\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"android10\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, posva\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"posva\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, nikic\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"nikic\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, mxmnk\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"mxmnk\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, alexeygrigorev\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"alexeygrigorev\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.073,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select Country\"  (0.342, 0.073, 0.316, 0.025)\n  AXStaticText \"USA\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"USA\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"UK\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"UK\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Germany\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Germany\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"China\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"China\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Canada\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Canada\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"India\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"India\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"France\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"France\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"Australia\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"Australia\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"Other\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"Other\"  (0.043, 0.547, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.194
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Select Country\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select City\"  (0.385, 0.073, 0.230, 0.025)\n  AXStaticText \"London\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"London\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"Cambridge\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"Cambridge\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Manchester\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Manchester\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"Edinburgh\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"Edinburgh\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Bristol\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Bristol\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"Birmingham\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"Birmingham\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"Glasgow\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"Glasgow\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"Oxford\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"Oxford\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"Newcastle\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"Newcastle\"  (0.043, 0.547, 0.915, 0.054)\n  AXStaticText \"Leeds\"  (0.000, 0.601, 1.000, 0.054)\n  AXStaticText \"Leeds\"  (0.043, 0.601, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.14
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      }
+    ],
+    "finalAnswer": "Set the ranking location to the United Kingdom; the UK developer ranking is now shown."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-5",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the country selection screen, then press Back to return to the ranking.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.073,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select Country\"  (0.342, 0.073, 0.316, 0.025)\n  AXStaticText \"USA\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"USA\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"UK\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"UK\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Germany\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Germany\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"China\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"China\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Canada\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Canada\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"India\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"India\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"France\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"France\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"Australia\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"Australia\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"Other\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"Other\"  (0.043, 0.547, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.09,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned from the country picker to the developer ranking screen."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-6",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the language selection screen, then press Back to return to the ranking.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.875,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Language\"  (0.396, 0.073, 0.210, 0.025)\n  AXStaticText \"Vue\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Kotlin\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Scala\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Perl\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Dart\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"Rust\"  (0.000, 0.096, 0.780, 0.046)\n  AXStaticText \"all languages\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"all languages\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"JavaScript\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"JavaScript\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Java\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Java\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"PHP\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"PHP\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Ruby\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Ruby\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"Python\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"Python\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"CSS\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"CSS\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"C++\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"C++\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"C\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"C\"  (0.043, 0.547, 0.915, 0.054)\n  AXStaticText \"Shell\"  (0.000, 0.601, 1.000, 0.054)\n  AXStaticText \"Shell\"  (0.043, 0.601, 0.915, 0.054)\n  AXStaticText \"HTML\"  (0.000, 0.655, 1.000, 0.054)\n  AXStaticText \"HTML\"  (0.043, 0.655, 0.915, 0.054)\n  AXStaticText \"TypeScript\"  (0.000, 0.709, 1.000, 0.054)\n  AXStaticText \"TypeScript\"  (0.043, 0.709, 0.915, 0.054)\n  AXStaticText \"R\"  (0.000, 0.764, 1.000, 0.054)\n  AXStaticText \"R\"  (0.043, 0.764, 0.915, 0.054)\n  AXStaticText \"Objective-C\"  (0.000, 0.818, 1.000, 0.054)\n  AXStaticText \"Objective-C\"  (0.043, 0.818, 0.915, 0.054)\n  AXStaticText \"Go\"  (0.000, 0.872, 1.000, 0.054)\n  AXStaticText \"Go\"  (0.043, 0.872, 0.915, 0.054)\n  AXStaticText \"Swift\"  (0.000, 0.926, 1.000, 0.054)\n  AXStaticText \"Swift\"  (0.043, 0.926, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)\n  AXStaticText \"Lua\"  (0.000, 0.980, 1.000, 0.020)\n  AXStaticText \"Lua\"  (0.043, 0.980, 0.915, 0.020)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.09,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned from the language picker to the developer ranking screen."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-7",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "scroll-find",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "On the ranking screen, scroll the developer list down to see lower-ranked developers.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.5,
+            "fromY": 0.7,
+            "toX": 0.5,
+            "toY": 0.3
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"mattdesl\"  (0.387, 0.014, 0.573, 0.062)\n  AXStaticText \"10\"  (0.000, 0.026, 0.160, 0.037)\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"11, lissy93\"  (0.000, 0.091, 1.000, 0.087)\n  AXStaticText \"lissy93\"  (0.387, 0.101, 0.573, 0.062)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXStaticText \"11\"  (0.000, 0.114, 0.160, 0.037)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"50%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"12, jskeet\"  (0.000, 0.179, 1.000, 0.087)\n  AXStaticText \"jskeet\"  (0.387, 0.189, 0.573, 0.062)\n  AXStaticText \"12\"  (0.000, 0.201, 0.160, 0.037)\n  AXStaticText \"13, mlabonne\"  (0.000, 0.266, 1.000, 0.087)\n  AXStaticText \"mlabonne\"  (0.387, 0.276, 0.573, 0.062)\n  AXStaticText \"13\"  (0.000, 0.288, 0.160, 0.037)\n  AXStaticText \"14, nicklockwood\"  (0.000, 0.353, 1.000, 0.087)\n  AXStaticText \"nicklockwood\"  (0.387, 0.363, 0.573, 0.062)\n  AXStaticText \"14\"  (0.000, 0.376, 0.160, 0.037)\n  AXStaticText \"15, samuelcolvin\"  (0.000, 0.441, 1.000, 0.087)\n  AXStaticText \"samuelcolvin\"  (0.387, 0.451, 0.573, 0.062)\n  AXStaticText \"15\"  (0.000, 0.463, 0.160, 0.037)\n  AXStaticText \"16, orta\"  (0.000, 0.528, 1.000, 0.087)\n  AXStaticText \"orta\"  (0.387, 0.538, 0.573, 0.062)\n  AXStaticText \"16\"  (0.000, 0.550, 0.160, 0.037)\n  AXStaticText \"17, bizz84\"  (0.000, 0.616, 1.000, 0.087)\n  AXStaticText \"bizz84\"  (0.387, 0.626, 0.573, 0.062)\n  AXStaticText \"17\"  (0.000, 0.638, 0.160, 0.037)\n  AXStaticText \"jgthms, 18\"  (0.000, 0.703, 1.000, 0.087)\n  AXStaticText \"jgthms\"  (0.387, 0.713, 0.573, 0.062)\n  AXStaticText \"18\"  (0.000, 0.725, 0.160, 0.037)\n  AXStaticText \"19, championswimmer\"  (0.000, 0.791, 1.000, 0.087)\n  AXStaticText \"championswimmer\"  (0.387, 0.800, 0.573, 0.062)\n  AXStaticText \"19\"  (0.000, 0.813, 0.160, 0.037)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"20, trueadm\"  (0.000, 0.878, 1.000, 0.087)\n  AXStaticText \"trueadm\"  (0.387, 0.888, 0.573, 0.062)\n  AXStaticText \"20\"  (0.000, 0.900, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"21, jgilfelt\"  (0.000, 0.966, 1.000, 0.034)\n  AXStaticText \"jgilfelt\"  (0.387, 0.975, 0.573, 0.025)\n  AXStaticText \"21\"  (0.000, 0.987, 0.160, 0.013)"
+        }
+      }
+    ],
+    "finalAnswer": "Scrolled the developer ranking list down; lower-ranked developers are now visible."
+  },
+  {
+    "meta": {
+      "id": "real-monkey-8",
+      "app": "coderyi__Monkey",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "www.coderyi.com.Monkey",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Set the ranking to New York, USA: open the country list, choose USA, then choose New York.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"London\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"UK\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:147267\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"London\"  (0.060, 0.124, 0.131, 0.021)\n  AXStaticText \"UK\"  (0.353, 0.126, 0.045, 0.018)\n  AXStaticText \"total:147267\"  (0.787, 0.126, 0.189, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lissy93\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jskeet\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"mlabonne\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nicklockwood\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"samuelcolvin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"orta\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"bizz84\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgthms\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"championswimmer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"trueadm\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jgilfelt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"rohitg00\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"nickbutcher\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"florina-muntenescu\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dsyer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"SaraVieira\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"lewagon\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"matryer\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"playcanvas\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"adamchainz\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, steipete\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"steipete\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, kunal-kushwaha\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"kunal-kushwaha\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, angelabauer\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"angelabauer\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, jlord\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"jlord\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, cloudflare\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"cloudflare\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, Elfocrash\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"Elfocrash\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, alyssaxuu\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"alyssaxuu\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, eddiejaoude\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"eddiejaoude\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, LaravelDaily\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"LaravelDaily\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, mattdesl\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"mattdesl\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.073,
+            "y": 0.086
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Back\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select Country\"  (0.342, 0.073, 0.316, 0.025)\n  AXStaticText \"USA\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"USA\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"UK\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"UK\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Germany\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Germany\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"China\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"China\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Canada\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Canada\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"India\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"India\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"France\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"France\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"Australia\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"Australia\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"Other\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"Other\"  (0.043, 0.547, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.14
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"Select Country\"  (0.000, 0.059, 0.181, 0.054)\n  AXGroup \"Select City\"  (0.385, 0.073, 0.230, 0.025)\n  AXStaticText \"San Francisco\"  (0.000, 0.113, 1.000, 0.054)\n  AXStaticText \"San Francisco\"  (0.043, 0.113, 0.915, 0.054)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.912, 0.113, 0.080, 0.885)\n  AXStaticText \"New York\"  (0.000, 0.167, 1.000, 0.054)\n  AXStaticText \"New York\"  (0.043, 0.167, 0.915, 0.054)\n  AXStaticText \"Seattle\"  (0.000, 0.222, 1.000, 0.054)\n  AXStaticText \"Seattle\"  (0.043, 0.222, 0.915, 0.054)\n  AXStaticText \"Chicago\"  (0.000, 0.276, 1.000, 0.054)\n  AXStaticText \"Chicago\"  (0.043, 0.276, 0.915, 0.054)\n  AXStaticText \"Los Angeles\"  (0.000, 0.330, 1.000, 0.054)\n  AXStaticText \"Los Angeles\"  (0.043, 0.330, 0.915, 0.054)\n  AXStaticText \"Boston\"  (0.000, 0.384, 1.000, 0.054)\n  AXStaticText \"Boston\"  (0.043, 0.384, 0.915, 0.054)\n  AXStaticText \"Washington\"  (0.000, 0.438, 1.000, 0.054)\n  AXStaticText \"Washington\"  (0.043, 0.438, 0.915, 0.054)\n  AXStaticText \"San Diego\"  (0.000, 0.493, 1.000, 0.054)\n  AXStaticText \"San Diego\"  (0.043, 0.493, 0.915, 0.054)\n  AXStaticText \"San Jose\"  (0.000, 0.547, 1.000, 0.054)\n  AXStaticText \"San Jose\"  (0.043, 0.547, 0.915, 0.054)\n  AXStaticText \"Philadelphia\"  (0.000, 0.601, 1.000, 0.054)\n  AXStaticText \"Philadelphia\"  (0.043, 0.601, 0.915, 0.054)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.958, 1.000, 0.037)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.194
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"60 FPS\"  (0.567, 0.030, 0.133, 0.025)\n  AXButton \"city\"  (0.021, 0.059, 0.103, 0.054)\n  AXGroup \"all languages\"  (0.340, 0.059, 0.320, 0.054)\n  AXButton \"language\"  (0.771, 0.059, 0.208, 0.054)\n  AXStaticText \"pull down\"  (0.327, 0.101, 0.347, 0.043)\n  AXButton \"New York\"  (0.000, 0.113, 0.250, 0.043)\n  AXButton \"USA\"  (0.250, 0.113, 0.250, 0.043)\n  AXButton \"total:112962\"  (0.763, 0.123, 0.237, 0.025)\n  AXStaticText \"New York\"  (0.043, 0.124, 0.165, 0.021)\n  AXStaticText \"USA\"  (0.342, 0.126, 0.067, 0.018)\n  AXStaticText \"total:112962\"  (0.789, 0.126, 0.187, 0.018)\n  AXStaticText \"11\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"sebmarkbage\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"12\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"Nutlope\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"13\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"AI4Finance-Foundation\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"14\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"jxnblk\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"15\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"hussien89aa\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"16\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"hosseinhezami\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"17\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"gazijarin\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"18\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"kdn251\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"19\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"Marak\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"20\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"hmason\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"21\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"swannodette\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"22\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"tholman\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"23\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"dgrtwo\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"24\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"M0nica\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"25\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"ed-donner\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"26\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"harthur\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"27\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"srush\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"28\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"virattt\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"29\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"tmcw\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"30\"  (0.000, 0.133, 0.136, 0.031)\n  AXStaticText \"Atcold\"  (0.000, 0.133, 0.489, 0.052)\n  AXStaticText \"1, ry\"  (0.000, 0.156, 1.000, 0.087)\n  AXGroup \"Vertical scroll bar, 4 pages\" value=\"0%\"  (0.912, 0.156, 0.080, 0.748)\n  AXStaticText \"ry\"  (0.387, 0.169, 0.573, 0.062)\n  AXStaticText \"1\"  (0.000, 0.181, 0.160, 0.037)\n  AXStaticText \"2, buckyroberts\"  (0.000, 0.244, 1.000, 0.087)\n  AXStaticText \"buckyroberts\"  (0.387, 0.256, 0.573, 0.062)\n  AXStaticText \"2\"  (0.000, 0.269, 0.160, 0.037)\n  AXStaticText \"3, shiffman\"  (0.000, 0.331, 1.000, 0.087)\n  AXStaticText \"shiffman\"  (0.387, 0.344, 0.573, 0.062)\n  AXStaticText \"3\"  (0.000, 0.356, 0.160, 0.037)\n  AXStaticText \"4, cumsoft\"  (0.000, 0.419, 1.000, 0.087)\n  AXStaticText \"cumsoft\"  (0.387, 0.431, 0.573, 0.062)\n  AXStaticText \"4\"  (0.000, 0.444, 0.160, 0.037)\n  AXStaticText \"5, idimetrix\"  (0.000, 0.506, 1.000, 0.087)\n  AXStaticText \"idimetrix\"  (0.387, 0.519, 0.573, 0.062)\n  AXStaticText \"5\"  (0.000, 0.531, 0.160, 0.037)\n  AXStaticText \"6, acdlite\"  (0.000, 0.594, 1.000, 0.087)\n  AXStaticText \"acdlite\"  (0.387, 0.606, 0.573, 0.062)\n  AXStaticText \"6\"  (0.000, 0.619, 0.160, 0.037)\n  AXStaticText \"7, soumith\"  (0.000, 0.681, 1.000, 0.087)\n  AXStaticText \"soumith\"  (0.387, 0.694, 0.573, 0.062)\n  AXStaticText \"7\"  (0.000, 0.706, 0.160, 0.037)\n  AXStaticText \"8, bvaughn\"  (0.000, 0.768, 1.000, 0.087)\n  AXStaticText \"bvaughn\"  (0.387, 0.781, 0.573, 0.062)\n  AXStaticText \"8\"  (0.000, 0.793, 0.160, 0.037)\n  AXStaticText \"9, romannurik\"  (0.000, 0.856, 1.000, 0.087)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.863, 1.000, 0.037)\n  AXStaticText \"romannurik\"  (0.387, 0.869, 0.573, 0.062)\n  AXStaticText \"9\"  (0.000, 0.881, 0.160, 0.037)\n  AXGroup \"Tab Bar\"  (0.000, 0.904, 1.000, 0.096)\n  AXButton \"Users\"  (0.005, 0.905, 0.240, 0.059)\n  AXButton \"Repositories\"  (0.256, 0.905, 0.240, 0.059)\n  AXButton \"Discovery\"  (0.507, 0.905, 0.237, 0.059)\n  AXButton \"More\"  (0.755, 0.905, 0.240, 0.059)\n  AXStaticText \"10, jaredpalmer\"  (0.000, 0.943, 1.000, 0.057)\n  AXStaticText \"jaredpalmer\"  (0.387, 0.956, 0.573, 0.044)\n  AXStaticText \"10\"  (0.000, 0.968, 0.160, 0.032)"
+        }
+      }
+    ],
+    "finalAnswer": "Set the ranking location to New York, USA; that city's developer ranking is shown."
+  }
+]

@@ -1,0 +1,1583 @@
+[
+  {
+    "meta": {
+      "id": "real-notesapp-01-create-note",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Create a new note titled 'Buy groceries' and save it.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Buy groceries"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Buy groceries\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"242 characters remaining\"  (0.860, 0.320, 0.099, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Buy groceries\\n!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "The note 'Buy groceries' was created and now appears in the notes list."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-02-create-high-priority",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Add a note titled 'Call dentist' with High priority.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.4995,
+            "y": 0.17
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Call dentist"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Call dentist\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"243 characters remaining\"  (0.860, 0.320, 0.099, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Call dentist\\n!!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "A High-priority note 'Call dentist' (shown with '!!') was added to the list."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-03-create-very-high",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Add a note 'Pay rent' and set its priority to Very High.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.833,
+            "y": 0.17
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Pay rent"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Pay rent\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"247 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Pay rent\\n!!!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "A Very High priority note 'Pay rent' (shown with '!!!') was saved."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-04-open-add-screen",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the screen for adding a new note.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      }
+    ],
+    "finalAnswer": "The 'Add Note' screen is open, showing priority options and Title/Description fields."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-05-edit-title",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Create a note 'Draft', then open it and change its title to 'Draft v2'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Draft"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Draft\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"250 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Draft\\n!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.2475,
+            "y": 0.212
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Edit Note\"  (0.183, 0.085, 0.262, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Draft\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"250 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": " v2"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Edit Note\"  (0.183, 0.085, 0.262, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Draft v2\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"247 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Draft v2\\n!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "The note's title was changed to 'Draft v2'."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-06-delete-note",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Create a note 'Temp', then delete it.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Temp"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Temp\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"251 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Temp\\n!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.2475,
+            "y": 0.212
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Edit Note\"  (0.183, 0.085, 0.262, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Temp\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"251 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.939,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Delete Note?\"  (0.163, 0.425, 0.674, 0.028)\n  AXStaticText \"Are you sure you want to delete this note?\"  (0.163, 0.477, 0.674, 0.052)\n  AXButton \"No\"  (0.532, 0.566, 0.163, 0.056)\n  AXButton \"Yes\"  (0.715, 0.566, 0.163, 0.056)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8235,
+            "y": 0.594
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "The note 'Temp' was deleted and the list is empty again."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-07-cancel-delete",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Create a note 'Keep me', open it, start to delete it but cancel the deletion.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Keep me"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Keep me\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"248 characters remaining\"  (0.875, 0.320, 0.084, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Keep me\\n!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.2475,
+            "y": 0.212
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Edit Note\"  (0.183, 0.085, 0.262, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Keep me\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"248 characters remaining\"  (0.875, 0.320, 0.084, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.939,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Delete Note?\"  (0.163, 0.425, 0.674, 0.028)\n  AXStaticText \"Are you sure you want to delete this note?\"  (0.163, 0.477, 0.674, 0.052)\n  AXButton \"No\"  (0.532, 0.566, 0.163, 0.056)\n  AXButton \"Yes\"  (0.715, 0.566, 0.163, 0.056)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.6135,
+            "y": 0.594
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Edit Note\"  (0.183, 0.085, 0.262, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Keep me\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"248 characters remaining\"  (0.875, 0.320, 0.084, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      }
+    ],
+    "finalAnswer": "Deletion was cancelled; the note 'Keep me' is still there."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-08-toggle-view",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Create a note, then switch the notes list from grid view to list view using the view toggle.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "View test"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"View test\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"246 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"View test\\n!\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.939,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"View test\\n!\\nJun 23, 2026\"  (0.000, 0.135, 1.000, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "The notes are now shown in full-width list layout instead of the grid."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-09-add-description",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Create a note titled 'Shopping' with the description 'milk'.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Shopping"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Shopping\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"247 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.5
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "milk"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Shopping\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"247 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\" value=\"milk\"  (0.041, 0.374, 0.919, 0.607)\n  AXGroup \"251 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.817,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Shopping\\n!\\nmilk\\nJun 23, 2026\"  (0.000, 0.135, 0.495, 0.154)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "A note 'Shopping' with description 'milk' was saved."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-10-back-from-add",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Add Note screen, then go back to the notes list.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.071,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "Returned to the notes list from the Add Note screen."
+  },
+  {
+    "meta": {
+      "id": "real-notesapp-11-discard-changes",
+      "app": "bimsina__notes-app",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.bimsina.notesApp",
+      "device": "4C092A6E-49AF-4688-A101-006A533EC64D",
+      "gestures": [
+        "tap",
+        "text"
+      ],
+      "verified": true
+    },
+    "task": "Start adding a note titled 'Scratch', then leave without saving and discard the changes.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.888,
+            "y": 0.909
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\"  (0.041, 0.283, 0.919, 0.054)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.320, 0.087, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.5,
+            "y": 0.31
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "text": "Scratch"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton  (0.000, 0.069, 0.142, 0.066)\n  AXButton  (0.756, 0.069, 0.122, 0.066)\n  AXButton  (0.878, 0.069, 0.122, 0.066)\n  AXGroup \"Add Note\"  (0.183, 0.085, 0.267, 0.034)\n  AXStaticText \"Low\"  (0.000, 0.135, 0.333, 0.070)\n  AXStaticText \"High\"  (0.333, 0.135, 0.333, 0.070)\n  AXStaticText \"Very High\"  (0.667, 0.135, 0.333, 0.070)\n  AXGroup \"Title\" value=\"Scratch\"  (0.041, 0.283, 0.919, 0.054)\n  AXGroup \"248 characters remaining\"  (0.875, 0.320, 0.084, 0.016)\n  AXGroup \"Description\"  (0.041, 0.374, 0.919, 0.607)\n  AXStaticText \"255 characters remaining\"  (0.873, 0.642, 0.087, 0.016)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.071,
+            "y": 0.102
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"Dismiss\"  (0.000, 0.000, 1.000, 1.000)\n  AXStaticText \"Discard Changes?\"  (0.163, 0.425, 0.674, 0.028)\n  AXStaticText \"Are you sure you want to discard changes?\"  (0.163, 0.477, 0.674, 0.052)\n  AXButton \"No\"  (0.532, 0.566, 0.163, 0.056)\n  AXButton \"Yes\"  (0.715, 0.566, 0.163, 0.056)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D",
+            "x": 0.8235,
+            "y": 0.594
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "4C092A6E-49AF-4688-A101-006A533EC64D"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Notes\"  (0.416, 0.085, 0.168, 0.034)\n  AXStaticText \"Click on the add button to add a new note!\"  (0.041, 0.539, 0.919, 0.056)\n  AXButton \"Add Note\"  (0.817, 0.876, 0.142, 0.066)"
+        }
+      }
+    ],
+    "finalAnswer": "The changes were discarded; no note was added and the list stays empty."
+  }
+]

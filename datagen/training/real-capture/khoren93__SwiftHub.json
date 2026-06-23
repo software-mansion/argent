@@ -1,0 +1,926 @@
+[
+  {
+    "meta": {
+      "id": "real-swifthub-1",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Settings tab.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.83,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.925, 0.105, 0.068, 0.737)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"1\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"1\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.808, 1.000, 0.031)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.842, 0.068, 0.071)\n  AXStaticText \"Test mode\"  (0.383, 0.846, 0.236, 0.036)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Settings screen (Preferences with Night mode, Color theme, Language, etc.)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-2",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Login tab.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"OAuth\"  (0.159, 0.061, 0.227, 0.042)\n  AXButton \"Personal\"  (0.386, 0.061, 0.227, 0.042)\n  AXButton \"Basic\"  (0.614, 0.061, 0.227, 0.042)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"Welcome to SwiftHub\"  (0.036, 0.264, 0.927, 0.028)\n  AXStaticText \"For API requests using Basic Authentication or OAuth, you can make up to 5000 requests per hour. \\n\\nFor unauthenticated requests, the rate limit allows for up to 60 requests per hour.\"  (0.036, 0.308, 0.927, 0.106)\n  AXButton \"Sign in with Github\"  (0.036, 0.431, 0.927, 0.042)\n  AXStaticText \"Sign in with Github\"  (0.372, 0.441, 0.343, 0.023)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Login screen (OAuth / Personal / Basic with Sign in with Github)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-3",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Go to Settings and turn on Night mode.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.83,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.925, 0.105, 0.068, 0.737)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"1\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.808, 1.000, 0.031)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.842, 0.068, 0.071)\n  AXStaticText \"Test mode\"  (0.383, 0.846, 0.236, 0.036)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.919,
+            "y": 0.508
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.925, 0.105, 0.068, 0.737)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"1\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"1\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.808, 1.000, 0.031)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.842, 0.068, 0.071)\n  AXStaticText \"Test mode\"  (0.383, 0.846, 0.236, 0.036)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Night mode is now turned on (toggle value changed from 0 to 1)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-4",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Go to Settings and turn off the \"Ads enabled\" switch.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.83,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.925, 0.105, 0.068, 0.737)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"1\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.808, 1.000, 0.031)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.842, 0.068, 0.071)\n  AXStaticText \"Test mode\"  (0.383, 0.846, 0.236, 0.036)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.919,
+            "y": 0.457
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"0\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXStaticText \"Whats New\"  (0.000, 0.851, 1.000, 0.051)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "The \"Ads enabled\" switch is now off (toggle value changed from 1 to 0)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-5",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and go to the Color theme picker.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.83,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"0\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXStaticText \"Whats New\"  (0.000, 0.851, 1.000, 0.051)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.558
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation close\"  (0.027, 0.082, 0.105, 0.046)\n  AXGroup \"Color theme\"  (0.389, 0.094, 0.222, 0.021)\n  AXGroup \"Settings\"  (0.431, 0.130, 0.138, 0.019)\n  AXStaticText \"Orange\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Deep Orange\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Brown\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Gray\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Blue Gray\"  (0.000, 0.134, 0.750, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.925, 0.134, 0.068, 0.831)\n  AXStaticText \"Red\"  (0.000, 0.135, 1.000, 0.065)\n  AXStaticText \"Red\"  (0.159, 0.159, 0.750, 0.018)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.886, 0.160, 0.062, 0.735)\n  AXStaticText \"My Projects\"  (0.045, 0.182, 0.909, 0.038)\n  AXStaticText \"Pink\"  (0.000, 0.200, 1.000, 0.065)\n  AXStaticText \"Pink\"  (0.159, 0.224, 0.750, 0.018)\n  AXStaticText \"khoren93/SwiftHub\"  (0.190, 0.226, 0.682, 0.016)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.190, 0.244, 0.682, 0.014)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.190, 0.260, 0.682, 0.014)\n  AXStaticText \"Purple\"  (0.000, 0.265, 1.000, 0.065)\n  AXStaticText \"khoren93/FlutterHub\"  (0.190, 0.286, 0.682, 0.016)\n  AXStaticText \"Purple\"  (0.159, 0.289, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.190, 0.304, 0.682, 0.014)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.190, 0.319, 0.682, 0.014)\n  AXStaticText \"Deep Purple\"  (0.000, 0.331, 1.000, 0.065)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.190, 0.345, 0.682, 0.016)\n  AXStaticText \"Deep Purple\"  (0.159, 0.354, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.190, 0.363, 0.682, 0.014)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.190, 0.379, 0.682, 0.014)\n  AXStaticText \"Indigo\"  (0.000, 0.396, 1.000, 0.065)\n  AXStaticText \"Indigo\"  (0.159, 0.419, 0.750, 0.018)\n  AXStaticText \"Preferences\"  (0.045, 0.420, 0.909, 0.038)\n  AXGroup \"Preferences\"  (0.045, 0.420, 0.909, 0.038)\n  AXStaticText \"Blue\"  (0.000, 0.461, 1.000, 0.065)\n  AXButton \"Ads enabled\" value=\"0\"  (0.829, 0.466, 0.105, 0.029)\n  AXStaticText \"Ads enabled\"  (0.149, 0.473, 0.663, 0.016)\n  AXStaticText \"Blue\"  (0.159, 0.485, 0.750, 0.018)\n  AXButton \"Night mode\" value=\"0\"  (0.829, 0.512, 0.105, 0.029)\n  AXStaticText \"Night mode\"  (0.149, 0.519, 0.663, 0.016)\n  AXStaticText \"Light Blue\"  (0.000, 0.526, 1.000, 0.065)\n  AXStaticText \"Light Blue\"  (0.159, 0.550, 0.750, 0.018)\n  AXStaticText \"Color theme\"  (0.149, 0.565, 0.723, 0.016)\n  AXStaticText \"Cyan\"  (0.000, 0.591, 1.000, 0.065)\n  AXStaticText \"Language\"  (0.149, 0.611, 0.723, 0.016)\n  AXStaticText \"Cyan\"  (0.159, 0.615, 0.750, 0.018)\n  AXStaticText \"Teal\"  (0.000, 0.657, 1.000, 0.065)\n  AXStaticText \"Invite friends\"  (0.149, 0.657, 0.723, 0.016)\n  AXStaticText \"Teal\"  (0.159, 0.680, 0.750, 0.018)\n  AXStaticText \"Remove cache\"  (0.149, 0.703, 0.388, 0.016)\n  AXStaticText \"1,6 MB\"  (0.541, 0.703, 0.388, 0.016)\n  AXStaticText \"Green\"  (0.000, 0.722, 1.000, 0.065)\n  AXStaticText \"Green\"  (0.159, 0.745, 0.750, 0.018)\n  AXStaticText \"Support\"  (0.045, 0.755, 0.909, 0.038)\n  AXStaticText \"Light Green\"  (0.000, 0.787, 1.000, 0.065)\n  AXStaticText \"Acknowledgements\"  (0.149, 0.808, 0.723, 0.016)\n  AXStaticText \"Light Green\"  (0.159, 0.811, 0.750, 0.018)\n  AXStaticText \"Lime\"  (0.000, 0.852, 1.000, 0.065)\n  AXStaticText \"Whats New\"  (0.149, 0.853, 0.723, 0.016)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.045, 0.864, 0.909, 0.029)\n  AXStaticText \"Lime\"  (0.159, 0.876, 0.750, 0.018)\n  AXGroup \"Tab Bar\"  (0.045, 0.895, 0.909, 0.079)\n  AXButton \"Search\"  (0.050, 0.896, 0.295, 0.046)\n  AXButton \"Login\"  (0.353, 0.896, 0.293, 0.046)\n  AXButton \"Settings\"  (0.655, 0.896, 0.295, 0.046)\n  AXStaticText \"Yellow\"  (0.000, 0.917, 1.000, 0.065)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.930, 1.000, 0.031)\n  AXStaticText \"Yellow\"  (0.159, 0.941, 0.750, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "Opened the Color theme picker (list of colors like Red, Amber, Orange)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-6",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "back",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Color theme picker from Settings, then close it to return to Settings.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.83,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"0\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXStaticText \"Whats New\"  (0.000, 0.851, 1.000, 0.051)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.558
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation close\"  (0.027, 0.082, 0.105, 0.046)\n  AXGroup \"Color theme\"  (0.389, 0.094, 0.222, 0.021)\n  AXGroup \"Settings\"  (0.431, 0.130, 0.138, 0.019)\n  AXStaticText \"Orange\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Deep Orange\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Brown\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Gray\"  (0.000, 0.134, 0.750, 0.018)\n  AXStaticText \"Blue Gray\"  (0.000, 0.134, 0.750, 0.018)\n  AXGroup \"Vertical scroll bar, 2 pages\" value=\"0%\"  (0.925, 0.134, 0.068, 0.831)\n  AXStaticText \"Red\"  (0.000, 0.135, 1.000, 0.065)\n  AXStaticText \"Red\"  (0.159, 0.159, 0.750, 0.018)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.886, 0.160, 0.062, 0.735)\n  AXStaticText \"My Projects\"  (0.045, 0.182, 0.909, 0.038)\n  AXStaticText \"Pink\"  (0.000, 0.200, 1.000, 0.065)\n  AXStaticText \"Pink\"  (0.159, 0.224, 0.750, 0.018)\n  AXStaticText \"khoren93/SwiftHub\"  (0.190, 0.226, 0.682, 0.016)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.190, 0.244, 0.682, 0.014)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.190, 0.260, 0.682, 0.014)\n  AXStaticText \"Purple\"  (0.000, 0.265, 1.000, 0.065)\n  AXStaticText \"khoren93/FlutterHub\"  (0.190, 0.286, 0.682, 0.016)\n  AXStaticText \"Purple\"  (0.159, 0.289, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.190, 0.304, 0.682, 0.014)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.190, 0.319, 0.682, 0.014)\n  AXStaticText \"Deep Purple\"  (0.000, 0.331, 1.000, 0.065)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.190, 0.345, 0.682, 0.016)\n  AXStaticText \"Deep Purple\"  (0.159, 0.354, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.190, 0.363, 0.682, 0.014)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.190, 0.379, 0.682, 0.014)\n  AXStaticText \"Indigo\"  (0.000, 0.396, 1.000, 0.065)\n  AXStaticText \"Indigo\"  (0.159, 0.419, 0.750, 0.018)\n  AXStaticText \"Preferences\"  (0.045, 0.420, 0.909, 0.038)\n  AXGroup \"Preferences\"  (0.045, 0.420, 0.909, 0.038)\n  AXStaticText \"Blue\"  (0.000, 0.461, 1.000, 0.065)\n  AXButton \"Ads enabled\" value=\"0\"  (0.829, 0.466, 0.105, 0.029)\n  AXStaticText \"Ads enabled\"  (0.149, 0.473, 0.663, 0.016)\n  AXStaticText \"Blue\"  (0.159, 0.485, 0.750, 0.018)\n  AXButton \"Night mode\" value=\"0\"  (0.829, 0.512, 0.105, 0.029)\n  AXStaticText \"Night mode\"  (0.149, 0.519, 0.663, 0.016)\n  AXStaticText \"Light Blue\"  (0.000, 0.526, 1.000, 0.065)\n  AXStaticText \"Light Blue\"  (0.159, 0.550, 0.750, 0.018)\n  AXStaticText \"Color theme\"  (0.149, 0.565, 0.723, 0.016)\n  AXStaticText \"Cyan\"  (0.000, 0.591, 1.000, 0.065)\n  AXStaticText \"Language\"  (0.149, 0.611, 0.723, 0.016)\n  AXStaticText \"Cyan\"  (0.159, 0.615, 0.750, 0.018)\n  AXStaticText \"Teal\"  (0.000, 0.657, 1.000, 0.065)\n  AXStaticText \"Invite friends\"  (0.149, 0.657, 0.723, 0.016)\n  AXStaticText \"Teal\"  (0.159, 0.680, 0.750, 0.018)\n  AXStaticText \"Remove cache\"  (0.149, 0.703, 0.388, 0.016)\n  AXStaticText \"1,6 MB\"  (0.541, 0.703, 0.388, 0.016)\n  AXStaticText \"Green\"  (0.000, 0.722, 1.000, 0.065)\n  AXStaticText \"Green\"  (0.159, 0.745, 0.750, 0.018)\n  AXStaticText \"Support\"  (0.045, 0.755, 0.909, 0.038)\n  AXStaticText \"Light Green\"  (0.000, 0.787, 1.000, 0.065)\n  AXStaticText \"Acknowledgements\"  (0.149, 0.808, 0.723, 0.016)\n  AXStaticText \"Light Green\"  (0.159, 0.811, 0.750, 0.018)\n  AXStaticText \"Lime\"  (0.000, 0.852, 1.000, 0.065)\n  AXStaticText \"Whats New\"  (0.149, 0.853, 0.723, 0.016)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.045, 0.864, 0.909, 0.029)\n  AXStaticText \"Lime\"  (0.159, 0.876, 0.750, 0.018)\n  AXGroup \"Tab Bar\"  (0.045, 0.895, 0.909, 0.079)\n  AXButton \"Search\"  (0.050, 0.896, 0.295, 0.046)\n  AXButton \"Login\"  (0.353, 0.896, 0.293, 0.046)\n  AXButton \"Settings\"  (0.655, 0.896, 0.295, 0.046)\n  AXStaticText \"Yellow\"  (0.000, 0.917, 1.000, 0.065)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.930, 1.000, 0.031)\n  AXStaticText \"Yellow\"  (0.159, 0.941, 0.750, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.08,
+            "y": 0.105
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"0\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXStaticText \"Whats New\"  (0.000, 0.851, 1.000, 0.051)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Closed the Color theme picker and returned to the Settings screen."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-7",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "search",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "On the Search tab, search for \"swift\" and view the repository results.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.134
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.818, 0.038)\n  AXButton \"Cancel\"  (0.861, 0.118, 0.120, 0.031)\n  AXStaticText \"Cancel\"  (0.861, 0.122, 0.120, 0.022)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "text": "swift"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "keyboard",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "key": "enter"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\" value=\"Swift\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Clear text\"  (0.924, 0.124, 0.045, 0.020)\n  AXStaticText \"400.9K repositories\"  (0.000, 0.164, 0.765, 0.031)\n  AXButton \"Best match \u25bc\"  (0.783, 0.164, 0.217, 0.031)\n  AXStaticText \"Reactive Programming in Swift\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 24.6K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"ReactiveX/RxSwift\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Elegant HTTP Networking in Swift\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 42.4K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"Alamofire/Alamofire\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"The Swift code generator for your assets, storyboards, Localizable.strings, \u2026 \u2014 Get rid of all String-based APIs!\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 9.5K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"SwiftGen/SwiftGen\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Swift Language Weather is an iOS weather app developed in Swift 4. \"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 5.2K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"JakeLin/SwiftLanguageWeather\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"A collaborative list of awesome Swift libraries and resources. Feel free to contribute!\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 26.1K \\t\u25cf Ruby\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"matteocrippa/awesome-swift\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"\ud83d\udc14 Toolkit to parse, validate, manipulate, compare and display dates, time & timezones in Swift.\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 7.7K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"malcommac/SwiftDate\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Algorithms and data structures in Swift, with explanations!\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 29.1K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"kodecocodes/swift-algorithm-club\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"A very flexible message bar for UIKit and SwiftUI.\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 7.6K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"SwiftKickMobile/SwiftMessages\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"A command-line tool and Xcode Extension for formatting Swift code\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 8.8K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"nicklockwood/SwiftFormat\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Lightweight In App Purchases Swift framework for iOS 8.0+, tvOS 9.0+ and macOS 10.10+ \u26fa\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 6.7K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"bizz84/SwiftyStoreKit\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"This maintains proposals for changes and user-visible enhancements to the Swift Programming Language.\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 15.9K \\t\u25cf Markdown\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"swiftlang/swift-evolution\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Gathering all info published, both by Apple and by others, about new framework SwiftUI. \"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 7.1K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"Juanpe/About-SwiftUI\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"An exhaustive expansion of the standard SwiftUI library.\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 8.1K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"SwiftUIX/SwiftUIX\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Examples projects using SwiftUI released by WWDC2019. Include Layout, UI, Animations, Gestures, Draw and Data.\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 5.6K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"ivanvorobei/SwiftUI\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"\u4e2d\u6587\u7248 Apple \u5b98\u65b9\u300aSwift \u7f16\u7a0b\u8bed\u8a00\u300b\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 21.2K \\t\u25cf Markdown\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"SwiftGGTeam/the-swift-programming-language-in-chinese\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"Realm is a mobile database: a replacement for Core Data & SQLite\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 16.6K \\t\u25cf Objective-C\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"realm/realm-swift\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"swift implementation of flappy bird. More at fullstackedu.com\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 9.7K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"newlinedotco/FlappySwift\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"`SwiftUI` Framework  Learning and Usage Guide. \ud83d\ude80 \"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 5.4K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"Jinxiansen/SwiftUI\"  (0.000, 0.195, 0.750, 0.018)\n  AXStaticText \"SwiftEntryKit is a presentation library for iOS. It can be used to easily display overlays within your iOS apps.\"  (0.000, 0.195, 0.750, 0.015)\n  AXStaticText \"\ufffc 6.8K \\t\u25cf Swift\"  (0.000, 0.195, 0.750, 0.016)\n  AXStaticText \"huri000/SwiftEntryKit\"  (0.000, 0.195, 0.750, 0.018)\n  AXGroup \"Vertical scroll bar, 3 pages\" value=\"0%\"  (0.925, 0.195, 0.068, 0.718)\n  AXStaticText \"Search\"  (0.000, 0.219, 1.000, 0.042)\n  AXStaticText \"swiftlang/swift, The Swift Programming Language, \ufffc 70.1K \\t\u25cf Swift\"  (0.000, 0.261, 1.000, 0.066)\n  AXStaticText \"swiftlang/swift\"  (0.159, 0.267, 0.750, 0.018)\n  AXStaticText \"The Swift Programming Language\"  (0.159, 0.287, 0.750, 0.015)\n  AXStaticText \"\ufffc 70.1K \\t\u25cf Swift\"  (0.159, 0.304, 0.750, 0.016)\n  AXStaticText \"openstack/swift, OpenStack Storage (Swift). Mirror of code maintained at opendev.org., \ufffc 2.8K \\t\u25cf Python\"  (0.000, 0.326, 1.000, 0.066)\n  AXStaticText \"openstack/swift\"  (0.159, 0.333, 0.750, 0.018)\n  AXStaticText \"OpenStack Storage (Swift). Mirror of code maintained at opendev.org.\"  (0.159, 0.353, 0.750, 0.015)\n  AXStaticText \"\ufffc 2.8K \\t\u25cf Python\"  (0.159, 0.370, 0.750, 0.016)\n  AXStaticText \"tensorflow/swift, Swift for TensorFlow, \ufffc 6.1K \\t\u25cf Jupyter Notebook\"  (0.000, 0.392, 1.000, 0.066)\n  AXStaticText \"tensorflow/swift\"  (0.159, 0.399, 0.750, 0.018)\n  AXStaticText \"Swift for TensorFlow\"  (0.159, 0.418, 0.750, 0.015)\n  AXStaticText \"\ufffc 6.1K \\t\u25cf Jupyter Notebook\"  (0.159, 0.435, 0.750, 0.016)\n  AXStaticText \"SwiftyJSON/SwiftyJSON, The better way to deal with JSON data in Swift., \ufffc 23.0K \\t\u25cf Swift\"  (0.000, 0.457, 1.000, 0.066)\n  AXStaticText \"SwiftyJSON/SwiftyJSON\"  (0.159, 0.464, 0.750, 0.018)\n  AXStaticText \"The better way to deal with JSON data in Swift.\"  (0.159, 0.484, 0.750, 0.015)\n  AXStaticText \"\ufffc 23.0K \\t\u25cf Swift\"  (0.159, 0.501, 0.750, 0.016)\n  AXStaticText \"SwifterSwift/SwifterSwift, A handy collection of more than 500 native Swift extensions to boost your productivity., \ufffc 15.1K \\t\u25cf Swift\"  (0.000, 0.523, 1.000, 0.066)\n  AXStaticText \"SwifterSwift/SwifterSwift\"  (0.159, 0.530, 0.750, 0.018)\n  AXStaticText \"A handy collection of more than 500 native Swift extensions to boost your productivity.\"  (0.159, 0.550, 0.750, 0.015)\n  AXStaticText \"\ufffc 15.1K \\t\u25cf Swift\"  (0.159, 0.567, 0.750, 0.016)\n  AXStaticText \"ipader/SwiftGuide, Swift Featured Projects in brain Mapping, \ufffc 16.0K \\t\u25cf Swift\"  (0.000, 0.589, 1.000, 0.066)\n  AXStaticText \"ipader/SwiftGuide\"  (0.159, 0.595, 0.750, 0.018)\n  AXStaticText \"Swift Featured Projects in brain Mapping\"  (0.159, 0.615, 0.750, 0.015)\n  AXStaticText \"\ufffc 16.0K \\t\u25cf Swift\"  (0.159, 0.632, 0.750, 0.016)\n  AXStaticText \"realm/SwiftLint, A tool to enforce Swift style and conventions., \ufffc 19.6K \\t\u25cf Swift\"  (0.000, 0.654, 1.000, 0.066)\n  AXStaticText \"realm/SwiftLint\"  (0.159, 0.661, 0.750, 0.018)\n  AXStaticText \"A tool to enforce Swift style and conventions.\"  (0.159, 0.681, 0.750, 0.015)\n  AXStaticText \"\ufffc 19.6K \\t\u25cf Swift\"  (0.159, 0.698, 0.750, 0.016)\n  AXStaticText \"iOS-Swift-Developers/Swift, \ud83e\udd47Swift\u57fa\u7840\u77e5\u8bc6\u5927\u5168,\ud83d\ude80Swift\u5b66\u4e60\u4ece\u7b80\u5355\u5230\u590d\u6742,\u4e0d\u65ad\u5730\u5b8c\u5584\u4e0e\u66f4\u65b0, \u6b22\u8fceStar\u2764\ufe0f,\u6b22\u8fceFork, iOS\u5f00\u53d1\u8005\u4ea4\u6d41:\u2460\u7fa4:446310206 \u2461\u7fa4:426087546, \ufffc 1.9K \\t\u25cf C\"  (0.000, 0.720, 1.000, 0.066)\n  AXStaticText \"iOS-Swift-Developers/Swift\"  (0.159, 0.726, 0.750, 0.018)\n  AXStaticText \"\ud83e\udd47Swift\u57fa\u7840\u77e5\u8bc6\u5927\u5168,\ud83d\ude80Swift\u5b66\u4e60\u4ece\u7b80\u5355\u5230\u590d\u6742,\u4e0d\u65ad\u5730\u5b8c\u5584\u4e0e\u66f4\u65b0, \u6b22\u8fceStar\u2764\ufe0f,\u6b22\u8fceFork, iOS\u5f00\u53d1\u8005\u4ea4\u6d41:\u2460\u7fa4:446310206 \u2461\u7fa4:426087546\"  (0.159, 0.746, 0.750, 0.015)\n  AXStaticText \"\ufffc 1.9K \\t\u25cf C\"  (0.159, 0.763, 0.750, 0.016)\n  AXStaticText \"airbnb/swift, Airbnb's Swift Style Guide, \ufffc 2.7K \\t\u25cf Markdown\"  (0.000, 0.785, 1.000, 0.066)\n  AXStaticText \"airbnb/swift\"  (0.159, 0.792, 0.750, 0.018)\n  AXStaticText \"Airbnb's Swift Style Guide\"  (0.159, 0.812, 0.750, 0.015)\n  AXStaticText \"\ufffc 2.7K \\t\u25cf Markdown\"  (0.159, 0.829, 0.750, 0.016)\n  AXStaticText \"jaguar07/Swift, Sample Code, \ufffc 113 \\t\u25cf Swift\"  (0.000, 0.851, 1.000, 0.066)\n  AXStaticText \"jaguar07/Swift\"  (0.159, 0.857, 0.750, 0.018)\n  AXStaticText \"Sample Code\"  (0.159, 0.877, 0.750, 0.015)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXStaticText \"\ufffc 113 \\t\u25cf Swift\"  (0.159, 0.894, 0.750, 0.016)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)\n  AXStaticText \"facebookarchive/swift\"  (0.159, 0.923, 0.750, 0.018)\n  AXStaticText \"An annotation-based Java library for creating Thrift serializable types and services.\"  (0.159, 0.943, 0.750, 0.015)\n  AXStaticText \"\ufffc 897 \\t\u25cf Java\"  (0.159, 0.960, 0.750, 0.016)"
+        }
+      }
+    ],
+    "finalAnswer": "Searched for swift; a list of matching GitHub repositories is shown (e.g. ReactiveX/RxSwift)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-8",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Login tab and switch to the Personal access token method.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"OAuth\"  (0.159, 0.061, 0.227, 0.042)\n  AXButton \"Personal\"  (0.386, 0.061, 0.227, 0.042)\n  AXButton \"Basic\"  (0.614, 0.061, 0.227, 0.042)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"Welcome to SwiftHub\"  (0.036, 0.264, 0.927, 0.028)\n  AXStaticText \"For API requests using Basic Authentication or OAuth, you can make up to 5000 requests per hour. \\n\\nFor unauthenticated requests, the rate limit allows for up to 60 requests per hour.\"  (0.036, 0.308, 0.927, 0.106)\n  AXButton \"Sign in with Github\"  (0.036, 0.431, 0.927, 0.042)\n  AXStaticText \"Sign in with Github\"  (0.372, 0.441, 0.343, 0.023)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.082
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"OAuth\"  (0.159, 0.061, 0.227, 0.042)\n  AXButton \"Personal\"  (0.386, 0.061, 0.227, 0.042)\n  AXButton \"Basic\"  (0.614, 0.061, 0.227, 0.042)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"Personal Access Token\"  (0.036, 0.264, 0.927, 0.028)\n  AXStaticText \"These permissions are required user+repo+notifications+read:org\"  (0.036, 0.308, 0.927, 0.043)\n  AXGroup value=\"personal access token\"  (0.036, 0.368, 0.927, 0.042)\n  AXButton \"Login\"  (0.036, 0.426, 0.927, 0.042)\n  AXStaticText \"Login\"  (0.493, 0.435, 0.100, 0.023)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Switched the Login method to Personal Access Token (token entry field shown)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-9",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "Open the Login tab and switch to the Basic authentication method.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"OAuth\"  (0.159, 0.061, 0.227, 0.042)\n  AXButton \"Personal\"  (0.386, 0.061, 0.227, 0.042)\n  AXButton \"Basic\"  (0.614, 0.061, 0.227, 0.042)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"Welcome to SwiftHub\"  (0.036, 0.264, 0.927, 0.028)\n  AXStaticText \"For API requests using Basic Authentication or OAuth, you can make up to 5000 requests per hour. \\n\\nFor unauthenticated requests, the rate limit allows for up to 60 requests per hour.\"  (0.036, 0.308, 0.927, 0.106)\n  AXButton \"Sign in with Github\"  (0.036, 0.431, 0.927, 0.042)\n  AXStaticText \"Sign in with Github\"  (0.372, 0.441, 0.343, 0.023)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.73,
+            "y": 0.082
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"OAuth\"  (0.159, 0.061, 0.227, 0.042)\n  AXButton \"Personal\"  (0.386, 0.061, 0.227, 0.042)\n  AXButton \"Basic\"  (0.614, 0.061, 0.227, 0.042)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXGroup value=\"login\"  (0.036, 0.264, 0.927, 0.042)\n  AXGroup value=\"password\"  (0.036, 0.323, 0.927, 0.042)\n  AXButton \"Login\"  (0.036, 0.381, 0.927, 0.042)\n  AXStaticText \"Login\"  (0.493, 0.391, 0.100, 0.023)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Switched the Login method to Basic (login and password fields shown)."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-10",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "On the trending screen, switch from the Repositories tab to the Users tab.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.626,
+            "y": 0.082
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.250, 0.061, 0.150, 0.038)\n  AXButton \"Users\"  (0.400, 0.061, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Switched to the Users tab on the trending screen."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-11",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ],
+      "verified": true
+    },
+    "task": "On the trending screen, change the time range from Daily to Weekly.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.5,
+            "y": 0.185
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Changed the trending time range to Weekly."
+  },
+  {
+    "meta": {
+      "id": "real-swifthub-12",
+      "app": "khoren93__SwiftHub",
+      "platform": "ios",
+      "task_kind": "scroll-find",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "com.public.SwiftHub",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap",
+        "swipe"
+      ],
+      "verified": true
+    },
+    "task": "Open Settings and scroll down to find the Acknowledgements row.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"icon navigation language\"  (0.868, 0.059, 0.105, 0.046)\n  AXButton \"Repositories\"  (0.300, 0.063, 0.150, 0.038)\n  AXButton \"Users\"  (0.591, 0.063, 0.070, 0.038)\n  AXGroup \"Global Search\"  (0.018, 0.115, 0.964, 0.038)\n  AXTextField \"Search\"  (0.032, 0.124, 0.046, 0.020)\n  AXButton \"Daily\"  (0.018, 0.164, 0.321, 0.042)\n  AXButton \"Weekly\"  (0.339, 0.164, 0.321, 0.042)\n  AXButton \"Monthly\"  (0.661, 0.164, 0.321, 0.042)\n  AXGroup \"No Results\"  (0.000, 0.205, 1.000, 0.708)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.205, 0.068, 0.708)\n  AXStaticText \"No Results\"  (0.064, 0.548, 0.873, 0.034)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.83,
+            "y": 0.939
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"0\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXStaticText \"Whats New\"  (0.000, 0.851, 1.000, 0.051)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.5,
+            "fromY": 0.7,
+            "toX": 0.5,
+            "toY": 0.3
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels \u2014 pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"Settings\"  (0.424, 0.071, 0.152, 0.021)\n  AXGroup \"Vertical scroll bar, 1 page\" value=\"0%\"  (0.925, 0.105, 0.068, 0.808)\n  AXStaticText \"My Projects\"  (0.000, 0.129, 1.000, 0.042)\n  AXStaticText \"khoren93/SwiftHub, GitHub iOS client in RxSwift and MVVM-C clean architecture, \ufffc 3.1K \\t\u25cf Swift\"  (0.000, 0.171, 1.000, 0.066)\n  AXStaticText \"khoren93/SwiftHub\"  (0.159, 0.177, 0.750, 0.018)\n  AXStaticText \"GitHub iOS client in RxSwift and MVVM-C clean architecture\"  (0.159, 0.197, 0.750, 0.015)\n  AXStaticText \"\ufffc 3.1K \\t\u25cf Swift\"  (0.159, 0.214, 0.750, 0.016)\n  AXStaticText \"khoren93/FlutterHub, Cross-platform GitHub client in Flutter and BLoC clean architecture., \ufffc 65 \\t\u25cf Dart\"  (0.000, 0.236, 1.000, 0.066)\n  AXStaticText \"khoren93/FlutterHub\"  (0.159, 0.243, 0.750, 0.018)\n  AXStaticText \"Cross-platform GitHub client in Flutter and BLoC clean architecture.\"  (0.159, 0.263, 0.750, 0.015)\n  AXStaticText \"\ufffc 65 \\t\u25cf Dart\"  (0.159, 0.280, 0.750, 0.016)\n  AXStaticText \"khoren93/flutter_zxing, Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms, \ufffc 131 \\t\u25cf Dart\"  (0.000, 0.302, 1.000, 0.066)\n  AXStaticText \"khoren93/flutter_zxing\"  (0.159, 0.309, 0.750, 0.018)\n  AXStaticText \"Flutter plugin for scanning and generating QR codes using the ZXing library, supporting Android, iOS, and desktop platforms\"  (0.159, 0.328, 0.750, 0.015)\n  AXStaticText \"\ufffc 131 \\t\u25cf Dart\"  (0.159, 0.346, 0.750, 0.016)\n  AXStaticText \"Preferences\"  (0.000, 0.391, 1.000, 0.042)\n  AXStaticText \"Ads enabled\"  (0.000, 0.432, 1.000, 0.051)\n  AXButton \"Ads enabled\" value=\"0\"  (0.861, 0.441, 0.116, 0.032)\n  AXStaticText \"Ads enabled\"  (0.114, 0.449, 0.730, 0.018)\n  AXStaticText \"Night mode\"  (0.000, 0.483, 1.000, 0.051)\n  AXButton \"Night mode\" value=\"0\"  (0.861, 0.492, 0.116, 0.032)\n  AXStaticText \"Night mode\"  (0.114, 0.499, 0.730, 0.018)\n  AXStaticText \"Color theme\"  (0.000, 0.533, 1.000, 0.051)\n  AXStaticText \"Color theme\"  (0.114, 0.550, 0.795, 0.018)\n  AXStaticText \"Language\"  (0.000, 0.584, 1.000, 0.051)\n  AXStaticText \"Language\"  (0.114, 0.600, 0.795, 0.018)\n  AXStaticText \"Invite friends\"  (0.000, 0.635, 1.000, 0.051)\n  AXStaticText \"Invite friends\"  (0.114, 0.651, 0.795, 0.018)\n  AXStaticText \"Remove cache, 1,6 MB\"  (0.000, 0.685, 1.000, 0.051)\n  AXStaticText \"Remove cache\"  (0.114, 0.702, 0.427, 0.018)\n  AXStaticText \"1,6 MB\"  (0.545, 0.702, 0.427, 0.018)\n  AXStaticText \"Support\"  (0.000, 0.759, 1.000, 0.042)\n  AXStaticText \"Acknowledgements\"  (0.000, 0.801, 1.000, 0.051)\n  AXStaticText \"Acknowledgements\"  (0.114, 0.817, 0.795, 0.018)\n  AXStaticText \"Whats New\"  (0.000, 0.851, 1.000, 0.051)\n  AXStaticText \"Whats New\"  (0.114, 0.868, 0.795, 0.018)\n  AXGroup \"Horizontal scroll bar, 1 page\" value=\"0%\"  (0.000, 0.879, 1.000, 0.031)\n  AXGroup \"Tab Bar\"  (0.000, 0.913, 1.000, 0.087)\n  AXButton \"Search\"  (0.005, 0.914, 0.325, 0.050)\n  AXButton \"Login\"  (0.339, 0.914, 0.323, 0.050)\n  AXButton \"Settings\"  (0.670, 0.914, 0.325, 0.050)"
+        }
+      }
+    ],
+    "finalAnswer": "Scrolled the Settings list; the Acknowledgements row (under Support) is now visible."
+  }
+]
