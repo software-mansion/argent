@@ -119,6 +119,17 @@ function delay(ms: number): Promise<void> {
 // ~300ms comfortably spans that window.
 const CAPTURE_ATTEMPTS = 8;
 const CAPTURE_RETRY_MS = 300;
+// Hard wall-clock ceiling on the whole retry loop. `attempts × retryMs` only
+// bounds the loop when each describe is near-instant — true on iOS (~tens of ms)
+// but NOT on Android, where a describe can be a multi-second `uiautomator` dump.
+// Without this cap, 8 attempts on the Android `uiautomator` fallback path block
+// for ~8 × that (measured 18–23s) on a tool meant to return promptly. Capping
+// total elapsed time bounds the loop regardless of per-describe cost WITHOUT any
+// platform branching: a fast describe still samples many times across the
+// warm-up; a slow describe stops after roughly one call — and a describe slow
+// enough to blow the budget in one shot has itself already outlasted the warm-up,
+// so the tree it returns is settled and one sample is the right answer anyway.
+const CAPTURE_BUDGET_MS = 2_000;
 
 // Resolve the on-screen frame of the matched element for the device the agent
 // proposed against, by describing it RIGHT NOW (the variant is on screen at
@@ -134,16 +145,18 @@ export async function captureElementFrame(
   registry: Registry,
   udid: string,
   match: VariantMatch,
-  opts: { attempts?: number; retryMs?: number } = {}
+  opts: { attempts?: number; retryMs?: number; budgetMs?: number } = {}
 ): Promise<NormalizedFrame | null> {
   const attempts = Math.max(1, opts.attempts ?? CAPTURE_ATTEMPTS);
   const retryMs = opts.retryMs ?? CAPTURE_RETRY_MS;
+  const budgetMs = opts.budgetMs ?? CAPTURE_BUDGET_MS;
   try {
     const device = resolveDevice(udid);
     // Chromium (CDP) devices have no adb/sim-server describe path; skip frame
     // auto-capture rather than shelling adb against a non-existent serial.
     if (device.platform === "chromium") return null;
     let bestPartial: NormalizedFrame | null = null;
+    const startedAt = Date.now();
     for (let attempt = 0; attempt < attempts; attempt++) {
       const data =
         device.platform === "ios"
@@ -155,7 +168,11 @@ export async function captureElementFrame(
       // skips a half-built tree where only a same-text distractor exists yet.
       if (hit?.exact) return hit.frame;
       if (hit) bestPartial = hit.frame;
-      if (attempt < attempts - 1) await delay(retryMs);
+      if (attempt >= attempts - 1) break;
+      // Stop before another describe+delay once the time budget is spent — this
+      // is what bounds the slow-describe (Android `uiautomator`) worst case.
+      if (Date.now() - startedAt >= budgetMs) break;
+      await delay(retryMs);
     }
     // No exact hit within the budget → best-effort substring match (or null).
     return bestPartial;

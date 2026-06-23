@@ -147,6 +147,27 @@ describe("captureElementFrame — holds out for the exact element through warm-u
     expect(frame).toEqual(rowFrame); // the attempt-1 partial, not null
     expect(describeIosMock.mock.calls.length).toBe(3); // no exact hit → full budget
   });
+
+  it("stops well before the full attempt count once the wall-clock budget is spent (slow describe)", async () => {
+    // Each describe is slow, like an Android `uiautomator` dump. An instant
+    // describe would run all 8 attempts (see the absent-element test above); the
+    // time budget must cut the loop short so propose_variant can't block for
+    // 8 × a multi-second describe (the measured 18–23s Android stall).
+    describeIosMock.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 40));
+      return WARM_OTHER; // no "Favourites" → never an exact hit
+    });
+    const frame = await captureElementFrame(registry, "TEST-UDID", match, {
+      attempts: 8,
+      retryMs: 0,
+      budgetMs: 100,
+    });
+    expect(frame).toBeNull(); // absent → still best-effort null
+    // ~40ms/describe under a 100ms budget → a couple of calls, and crucially far
+    // fewer than the 8 attempts an instant describe would have run.
+    expect(describeIosMock.mock.calls.length).toBeLessThan(8);
+    expect(describeIosMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
 });
 
 describe("findElementMatch — exact beats substring", () => {
