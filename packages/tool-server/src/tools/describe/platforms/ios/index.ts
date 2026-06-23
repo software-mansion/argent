@@ -20,8 +20,8 @@ const DEGRADED_HINT =
 // boot-device hint.
 const TVOS_HINT =
   "This is an Apple TV (tvOS) simulator, which the iOS accessibility service does not support. " +
-  "Use the `describe` tool to read the focused and focusable elements, and `button` " +
-  "(up/down/left/right/select/menu/home/playpause) / `tv-set-focus` / `keyboard` to interact. " +
+  "Use the `describe` tool to read the focused and focusable elements, `tv-remote` " +
+  "(up/down/left/right/select/back/menu/home) to move focus, and `keyboard` to type. " +
   "See the argent-tv-interact skill.";
 
 function emptyTree(): DescribeNode {

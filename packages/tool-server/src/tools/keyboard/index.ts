@@ -23,7 +23,7 @@ const zodSchema = z.object({
     .string()
     .optional()
     .describe(
-      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Not supported on TV targets — move focus with `button` (up/down/left/right) instead."
+      "Named key to press: enter, escape, backspace, tab, space, arrow-up, arrow-down, arrow-left, arrow-right, f1–f12. Not supported on TV targets — move focus with `tv-remote` (up/down/left/right) instead."
     ),
   delayMs: z
     .number()
@@ -57,8 +57,8 @@ export function createKeyboardTool(registry: Registry): ToolDefinition<Params, K
 Use when you need to enter text or trigger a named key such as enter, escape, or arrow keys. On Vega and Apple TV / Android TV, prefer the remote tools for D-pad navigation; use keyboard to type into a focused text field (e.g. a search or login box).
 Returns { typed: string, keys: number }. Fails if an unsupported key name is provided or the simulator-server / emulator backend / Chromium CDP / Vega adb / TV control daemons are not reachable for the given device.
 - text: types a string character by character (supports uppercase, digits, common punctuation)
-- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`button\` instead.
-On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`button\` / \`tv-set-focus\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
+- key: presses a single named key (enter, escape, backspace, tab, arrow-up/down/left/right, f1–f12) — NOT supported on TV targets; move focus with \`tv-remote\` instead.
+On a TV target (runtimeKind 'tv') only \`text\` applies — focus a text field first (with \`tv-remote\`), then type into it (injected HID keyboard on Apple TV, \`adb input text\` on Android TV).
 Provide text, key, or both. Use instead of paste when paste is unreliable or unsupported by the focused field.`,
     zodSchema,
     capability,

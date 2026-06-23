@@ -83,9 +83,17 @@ describe("android-tv-control — navigate maps to keyevents", () => {
     ["left", 21],
     ["right", 22],
     ["select", 23],
-    ["menu", 4],
+    ["back", 4],
     ["home", 3],
-    ["playpause", 85],
+    ["menu", 82],
+    ["playPause", 85],
+    ["rewind", 89],
+    ["fastForward", 90],
+    ["next", 87],
+    ["previous", 88],
+    ["volumeUp", 24],
+    ["volumeDown", 25],
+    ["mute", 164],
   ] as const)("sends %s as keyevent %i", async (direction, code) => {
     const api = await makeApi();
     await api.navigate(direction);

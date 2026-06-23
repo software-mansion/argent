@@ -1,10 +1,8 @@
-import type { DeviceInfo, Registry, ServiceRef } from "@argent/registry";
+import type { Registry, ServiceRef } from "@argent/registry";
 import { resolveDevice } from "../../utils/device-info";
 import { tvControlRef } from "../../blueprints/tv-control";
 import { androidTvControlRef } from "../../blueprints/android-tv-control";
 import type { TvControlApi } from "../../blueprints/tv-control-types";
-import { isTvOsSimulator } from "../../utils/ios-devices";
-import { isAndroidTv } from "../../utils/adb";
 
 /**
  * Resolve the focus-driven TV control service for a target id, dispatching by
@@ -25,23 +23,9 @@ export function tvServiceRef(udid: string): ServiceRef {
 }
 
 /**
- * Whether a resolved device is a TV target (Apple TV simulator or Android TV /
- * leanback device). `resolveDevice` classifies by id shape only — a tvOS sim
- * looks like an iPhone, an Android TV emulator like a phone — so the real form
- * factor is an async runtime probe (both results are memoised). The
- * cross-platform tools (`describe`, `button`, `keyboard`) call this to route a
- * TV target to the focus-driven backend instead of the touch/key backend.
- */
-export async function isTvTarget(device: DeviceInfo): Promise<boolean> {
-  if (device.platform === "android") return isAndroidTv(device.id);
-  if (device.platform === "ios") return isTvOsSimulator(device.id);
-  return false;
-}
-
-/**
  * Resolve the `TvControlApi` for a target id through the registry, picking the
- * Apple TV or Android TV backend by platform. The merged `describe` / `button`
- * / `keyboard` tools resolve it lazily here (rather than declaring it in
+ * Apple TV or Android TV backend by platform. The focus-driven tools (`describe`,
+ * `tv-remote`, `keyboard`) resolve it lazily here (rather than declaring it in
  * `services()`) because telling a TV target apart from a phone is async, and
  * declaring it eagerly would also spin up the touch/key `simulator-server`
  * blueprint for a tvOS udid it cannot drive.

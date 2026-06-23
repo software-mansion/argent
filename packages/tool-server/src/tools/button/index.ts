@@ -1,65 +1,81 @@
 import { z } from "zod";
-import type { Registry, ToolCapability, ToolDefinition } from "@argent/registry";
-import { dispatchByPlatform } from "../../utils/cross-platform-tool";
-import { ALL_BUTTONS, type ButtonParams, type ButtonResult } from "./types";
-import { makeIosImpl } from "./platforms/ios";
-import { makeAndroidImpl } from "./platforms/android";
+import type { Platform, ToolCapability, ToolDefinition } from "@argent/registry";
+import { simulatorServerRef, type SimulatorServerApi } from "../../blueprints/simulator-server";
+import { resolveDevice } from "../../utils/device-info";
+import { UnsupportedOperationError } from "../../utils/capability";
+import { sendCommand } from "../../utils/simulator-client";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const zodSchema = z.object({
-  udid: z
-    .string()
-    .describe("Target device id from `list-devices` (iOS UDID, Android serial, or TV target)."),
+  udid: z.string().describe("Target device id from `list-devices` (iOS UDID or Android serial)."),
   button: z
-    .enum(ALL_BUTTONS)
-    .describe(
-      "Button to press. Phone/tablet hardware buttons: home, back, power, volumeUp, volumeDown, " +
-        "appSwitch, actionButton. TV remote buttons (runtimeKind 'tv' targets): up, down, left, " +
-        "right (move the focus highlight), select (activate the focused element), menu (back), " +
-        "home (exit to the TV home screen), playpause (toggle media). Buttons not valid for the " +
-        "target are rejected with a clear error."
-    ),
+    .enum(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"])
+    .describe("Hardware button to press"),
 });
 
 type Params = z.infer<typeof zodSchema>;
+
+interface Result {
+  pressed: string;
+}
+
+/**
+ * Hardware buttons that physically exist per platform. The zod enum is the
+ * union of both platforms' buttons (a flat enum can't express the dependency),
+ * so we refine here: iOS has no `back`, Android has no `actionButton`.
+ *
+ * Rejecting at the tool layer is required because the simulator-server
+ * transport is fire-and-forget (see `sendCommand`) and cannot report a backend
+ * rejection — an unsupported button would otherwise be a silent no-op that the
+ * tool still reports as a successful `{ pressed }`.
+ */
+const BUTTONS_BY_PLATFORM: Record<Platform, ReadonlySet<Params["button"]>> = {
+  ios: new Set(["home", "power", "volumeUp", "volumeDown", "appSwitch", "actionButton"]),
+  android: new Set(["home", "back", "power", "volumeUp", "volumeDown", "appSwitch"]),
+  // Chromium apps have no hardware buttons; the capability gate already
+  // excludes them, the empty set keeps the lookup total if one slips through.
+  chromium: new Set([]),
+  // Vega is remote-driven: hardware buttons / D-pad go through the dedicated
+  // `tv-remote` tool, and this tool's capability omits `vega` so a Vega device is
+  // rejected before this map is consulted. Empty set keeps the record total.
+  vega: new Set(),
+};
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
   android: { emulator: true, device: true, unknown: true },
 };
 
-// `button` goes through `dispatchByPlatform`. TV is not a `platform` (a tvOS sim
-// classifies as "ios" and an Android TV emulator as "android" by id shape), it's
-// a `runtimeKind` spanning both — so each platform branch runtime-probes its own
-// TV kind and routes a remote press to the shared tv-control backend, otherwise
-// sends the hardware button (see platforms/{ios,android,tv}.ts). No service is
-// declared eagerly: distinguishing a TV target is async, and declaring
-// simulator-server up front would also spawn it for a tvOS udid it can't drive.
-export function createButtonTool(registry: Registry): ToolDefinition<Params, ButtonResult> {
-  return {
-    id: "button",
-    description: `Press a device button — a phone/tablet hardware button (iOS simulator / Android emulator) or a TV remote button (Apple TV / Android TV). Sends Down then Up automatically.
-Phone/tablet hardware buttons: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
-On a TV target (runtimeKind 'tv') this is how you drive the remote: up/down/left/right move the focus highlight, select activates the focused element, menu goes back, home exits to the TV home screen, playpause toggles media. Call \`describe\` afterwards to see where focus landed. TV buttons are rejected on a phone/tablet and vice versa.
+export const buttonTool: ToolDefinition<Params, Result> = {
+  id: "button",
+  description: `Press a device hardware button (iOS simulator or Android emulator). Sends Down then Up events automatically.
+Supported buttons depend on the platform: home, back, power, volumeUp, volumeDown, appSwitch, actionButton — buttons not present on the target platform (e.g. 'back' on iOS, 'actionButton' on Android) are rejected with a clear error.
+Use when you need to trigger hardware button events.
 Returns { pressed: buttonName }.
-Fails if the simulator-server / emulator backend (phone/tablet) or the TV control daemons are not reachable for the given device.`,
-    zodSchema,
-    capability,
-    searchHint:
-      "hardware button home back power volume app switch tv remote dpad up down left right select menu play pause siri leanback",
-    // No eager service: each branch resolves its backend lazily (TV control vs
-    // simulator-server), since distinguishing a TV target is async and a tvOS
-    // udid must never resolve simulator-server.
-    services: () => ({}),
-    execute: dispatchByPlatform<
-      Record<string, unknown>,
-      Record<string, unknown>,
-      ButtonParams,
-      ButtonResult
-    >({
-      toolId: "button",
-      capability,
-      ios: makeIosImpl(registry),
-      android: makeAndroidImpl(registry),
-    }),
-  };
-}
+Fails if the simulator-server / emulator backend is not reachable for the given device.`,
+  zodSchema,
+  capability,
+  services: (params) => ({
+    simulatorServer: simulatorServerRef(resolveDevice(params.udid)),
+  }),
+  async execute(services, params) {
+    const device = resolveDevice(params.udid);
+    if (!BUTTONS_BY_PLATFORM[device.platform].has(params.button)) {
+      throw new UnsupportedOperationError(
+        "button",
+        device,
+        `button '${params.button}' is not available on ${device.platform}`
+      );
+    }
+    const api = services.simulatorServer as SimulatorServerApi;
+    sendCommand(api, {
+      cmd: "button",
+      direction: "Down",
+      button: params.button,
+    });
+    await sleep(50);
+    sendCommand(api, { cmd: "button", direction: "Up", button: params.button });
+    return { pressed: params.button };
+  },
+};

@@ -43,7 +43,7 @@ const EMPTY_HINT =
 const ANDROID_FOCUS_EMPTY_HINT =
   "The Android TV focus engine reported no focusable elements — common on react-native-tvos " +
   "screens that drive focus with RN's own engine (invisible to the OS accessibility tree). " +
-  "Falling back to the full UI tree below. `button` (direction/select) still moves focus on " +
+  "Falling back to the full UI tree below. `tv-remote` (direction/select) still moves focus on " +
   "these screens even though the labels aren't enumerable, so you can drive blind + screenshot " +
   "to confirm.";
 
@@ -81,8 +81,8 @@ function fmtElement(e: TvElement): string {
 
 /**
  * Render the TV focus state as text. A TV UI is focus-driven — there are no tap
- * coordinates to act on — so the agent moves the highlight with `button`
- * (direction / select) or `tv-set-focus` and confirms with another `describe`.
+ * coordinates to act on — so the agent moves the highlight with `tv-remote`
+ * (up/down/left/right/select/…) and confirms with another `describe`.
  * The rendering centers on "what's focused" and "what can be focused".
  */
 function renderFocusView(res: TvDescribeResponse): string {
@@ -105,8 +105,8 @@ function renderFocusView(res: TvDescribeResponse): string {
  * `describe` for a TV target (Apple TV simulator or Android TV / leanback
  * device). Returns the focus-driven view — the currently focused element and
  * all focusable elements — instead of the touch-oriented element tree, since a
- * TV UI has no tap coordinates. The agent moves the highlight with `button`
- * (up/down/left/right/select/…) or `tv-set-focus` and re-reads with `describe`.
+ * TV UI has no tap coordinates. The agent moves the highlight with `tv-remote`
+ * (up/down/left/right/select/…) and re-reads with `describe`.
  *
  * Routed here from `describe`'s execute before the iOS/Android dispatch, so the
  * agent uses one `describe` for every target and never has to know up front

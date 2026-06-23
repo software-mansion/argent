@@ -39,18 +39,27 @@ export function androidTvControlRef(device: DeviceInfo): {
 
 // D-pad / system keyevents. Android TV is driven entirely through the remote's
 // directional pad — there is no touch — so the same eight logical actions the
-// tvOS Siri-remote exposes map onto Android KEYCODE_* values:
-//   menu → BACK (tvOS "menu" is the back gesture; Android's equivalent is BACK,
-//   KEYCODE_MENU opens an options menu which is not the same affordance).
+// The full TV-remote vocabulary mapped onto Android KEYCODE_* values:
+//   back → BACK; menu → KEYCODE_MENU (the options-menu affordance, distinct from
+//   back). The media-transport and volume keys map onto the standard Android
+//   media/volume keycodes, all of which `adb input keyevent` accepts.
 const KEYEVENTS: Record<TvDirection, number> = {
   up: 19, // KEYCODE_DPAD_UP
   down: 20, // KEYCODE_DPAD_DOWN
   left: 21, // KEYCODE_DPAD_LEFT
   right: 22, // KEYCODE_DPAD_RIGHT
   select: 23, // KEYCODE_DPAD_CENTER
-  menu: 4, // KEYCODE_BACK
+  back: 4, // KEYCODE_BACK
   home: 3, // KEYCODE_HOME
-  playpause: 85, // KEYCODE_MEDIA_PLAY_PAUSE
+  menu: 82, // KEYCODE_MENU
+  playPause: 85, // KEYCODE_MEDIA_PLAY_PAUSE
+  rewind: 89, // KEYCODE_MEDIA_REWIND
+  fastForward: 90, // KEYCODE_MEDIA_FAST_FORWARD
+  next: 87, // KEYCODE_MEDIA_NEXT
+  previous: 88, // KEYCODE_MEDIA_PREVIOUS
+  volumeUp: 24, // KEYCODE_VOLUME_UP
+  volumeDown: 25, // KEYCODE_VOLUME_DOWN
+  mute: 164, // KEYCODE_VOLUME_MUTE
 };
 
 interface PixelRect {
@@ -164,7 +173,7 @@ function centre(r: PixelRect): { cx: number; cy: number } {
   return { cx: r.x + r.w / 2, cy: r.y + r.h / 2 };
 }
 
-// First line, lowercased+trimmed — the label `tv-set-focus` matches on (Android
+// First line, lowercased+trimmed — the label `setFocus` matches on (Android
 // labels are usually single-line, but content-desc can be compound).
 function normaliseLabel(label: string): string {
   return (label.split("\n")[0] ?? "").toLowerCase().trim();

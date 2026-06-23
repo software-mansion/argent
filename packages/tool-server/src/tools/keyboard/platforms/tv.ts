@@ -5,7 +5,7 @@ import type { KeyboardParams, KeyboardResult } from "../types";
 
 // TV typing goes through the focus-driven tv-control backend (injected HID
 // keyboard on Apple TV, `adb input text` on Android TV). Named keys are
-// navigation on a TV, which belongs to `button` — so they're rejected here.
+// navigation on a TV, which belongs to `tv-remote` — so they're rejected here.
 // Shared by the ios (Apple TV) and android (Android TV) branches.
 export async function typeTv(
   registry: Registry,
@@ -16,7 +16,7 @@ export async function typeTv(
     throw new UnsupportedOperationError(
       "keyboard",
       device,
-      "named keys are not supported on a TV target — move focus with `button` " +
+      "named keys are not supported on a TV target — move focus with `tv-remote` " +
         "(up/down/left/right/select) instead"
     );
   }

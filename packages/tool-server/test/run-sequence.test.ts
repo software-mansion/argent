@@ -29,18 +29,17 @@ describe("run-sequence", () => {
       {
         udid: TVOS_UDID,
         steps: [
-          { tool: "button", args: { button: "right" } },
-          { tool: "tv-set-focus", args: { label: "Settings" } },
+          { tool: "tv-remote", args: { button: "right" } },
           { tool: "keyboard", args: { text: "hello" } },
-          { tool: "button", args: { button: "select" } },
+          { tool: "tv-remote", args: { button: "select" } },
         ],
       }
     );
 
-    expect(result.completed).toBe(4);
-    expect(result.total).toBe(4);
+    expect(result.completed).toBe(3);
+    expect(result.total).toBe(3);
     // Every step ran through the registry with udid auto-injected.
-    expect(calls.map((c) => c.tool)).toEqual(["button", "tv-set-focus", "keyboard", "button"]);
+    expect(calls.map((c) => c.tool)).toEqual(["tv-remote", "keyboard", "tv-remote"]);
     for (const c of calls) {
       expect(c.args.udid).toBe(TVOS_UDID);
     }
@@ -56,16 +55,16 @@ describe("run-sequence", () => {
       {
         udid: TVOS_UDID,
         steps: [
-          { tool: "button", args: { button: "down" } },
+          { tool: "tv-remote", args: { button: "down" } },
           { tool: "screenshot", args: {} },
-          { tool: "button", args: { button: "select" } },
+          { tool: "tv-remote", args: { button: "select" } },
         ],
       }
     );
 
     // First step ran; the disallowed second step halts execution before the third.
     expect(result.completed).toBe(1);
-    expect(calls.map((c) => c.tool)).toEqual(["button"]);
+    expect(calls.map((c) => c.tool)).toEqual(["tv-remote"]);
     const failed = result.steps[1];
     expect(failed && "error" in failed && failed.error).toMatch(/not allowed/);
   });

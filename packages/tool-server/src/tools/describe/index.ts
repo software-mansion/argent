@@ -153,8 +153,8 @@ For React Native apps, debugger-component-tree returns React component names wit
 
 On a TV target (Apple TV / Android TV — a \`list-devices\` entry with runtimeKind 'tv') this returns
 the focus-driven view instead: the currently FOCUSED element and the list of FOCUSABLE elements,
-since a TV UI has no tap coordinates. Move the highlight with \`button\` (up/down/left/right/select/
-menu/home/playpause) or \`tv-set-focus\`, then call describe again to confirm where focus landed.`,
+since a TV UI has no tap coordinates. Move the highlight with \`tv-remote\` (up/down/left/right/select/
+back/menu/home), then call describe again to confirm where focus landed.`,
     alwaysLoad: true,
     searchHint:
       "accessibility element tree ui hierarchy tap coordinates ios android chromium vega dom tv tvos apple tv android tv fire tv focus focusable remote dpad",

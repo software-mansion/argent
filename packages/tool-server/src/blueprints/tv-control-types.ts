@@ -27,15 +27,29 @@ export interface TvDescribeResponse {
   screenFrame?: { width: number; height: number };
 }
 
+// The full TV-remote button vocabulary, shared by every focus-driven backend
+// (Apple TV daemon, Android TV adb, Vega inputd-cli). Member names match Vega's
+// `RemoteButton` (utils/vega-input) exactly so the `tv-remote` tool can pass a
+// button straight through to `navigate` with no mapping. The directional /
+// select / back / menu / home subset is the focus-engine core; the media-
+// transport and volume keys are honored where the backend supports them.
 export type TvDirection =
   | "up"
   | "down"
   | "left"
   | "right"
   | "select"
-  | "menu"
+  | "back"
   | "home"
-  | "playpause";
+  | "menu"
+  | "playPause"
+  | "rewind"
+  | "fastForward"
+  | "next"
+  | "previous"
+  | "volumeUp"
+  | "volumeDown"
+  | "mute";
 
 export const TV_DIRECTIONS: readonly TvDirection[] = [
   "up",
@@ -43,9 +57,17 @@ export const TV_DIRECTIONS: readonly TvDirection[] = [
   "left",
   "right",
   "select",
-  "menu",
+  "back",
   "home",
-  "playpause",
+  "menu",
+  "playPause",
+  "rewind",
+  "fastForward",
+  "next",
+  "previous",
+  "volumeUp",
+  "volumeDown",
+  "mute",
 ];
 
 export interface TvControlApi {
