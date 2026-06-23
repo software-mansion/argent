@@ -90,6 +90,7 @@ describe("update-argent tool", () => {
     expect(mockSpawn).toHaveBeenCalledWith("argent", ["update", "--yes", "--version", "99.0.0"], {
       detached: true,
       stdio: "ignore",
+      env: { ...process.env, ARGENT_UPDATE_TRIGGER: "mcp_update" },
     });
   });
 

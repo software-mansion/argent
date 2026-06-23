@@ -11,6 +11,7 @@ import type {
   MemoryRssGrowth,
   NativeProfilerAnalyzeResult,
 } from "./types";
+import { summarizeHangBlocking } from "../profiler-shared/native-frame-class";
 
 const MAX_INLINE_HOTSPOTS = 5;
 const MAX_INLINE_HANGS = 3;
@@ -19,6 +20,8 @@ interface RenderInput {
   payload: ProfilerPayload;
   traceFile: string | null;
   exportErrors?: Record<string, string>;
+  /** Optional markdown warning shown in the header when the trace is stale. */
+  freshnessNote?: string;
 }
 
 interface InlineCap {
@@ -34,7 +37,7 @@ interface InlineCap {
 export async function renderNativeProfilerReport(
   input: RenderInput
 ): Promise<NativeProfilerAnalyzeResult> {
-  const { payload, traceFile } = input;
+  const { payload, traceFile, freshnessNote } = input;
   const exportErrors = input.exportErrors ?? {};
   const bottlenecksTotal = payload.bottlenecks.length;
   const status: "ok" | "analysis_failed" =
@@ -45,22 +48,32 @@ export async function renderNativeProfilerReport(
 
   const fullReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors)
-      : renderFullReport(payload, exportErrors, {
-          hotspotLimit: Infinity,
-          hangLimit: Infinity,
-        });
+      ? renderAllClear(payload, exportErrors, freshnessNote)
+      : renderFullReport(
+          payload,
+          exportErrors,
+          {
+            hotspotLimit: Infinity,
+            hangLimit: Infinity,
+          },
+          freshnessNote
+        );
 
   const reportFile = traceFile ? deriveReportPath(traceFile) : null;
   const wroteFile = reportFile ? await writeReport(reportFile, fullReport) : false;
 
   const inlineReport =
     bottlenecksTotal === 0
-      ? renderAllClear(payload, exportErrors)
-      : renderFullReport(payload, exportErrors, {
-          hotspotLimit: MAX_INLINE_HOTSPOTS,
-          hangLimit: MAX_INLINE_HANGS,
-        });
+      ? renderAllClear(payload, exportErrors, freshnessNote)
+      : renderFullReport(
+          payload,
+          exportErrors,
+          {
+            hotspotLimit: MAX_INLINE_HOTSPOTS,
+            hangLimit: MAX_INLINE_HANGS,
+          },
+          freshnessNote
+        );
 
   const shownHotspots = Math.min(MAX_INLINE_HOTSPOTS, cpuHotspotsCount);
   const shownHangs = Math.min(MAX_INLINE_HANGS, uiHangsCount);
@@ -135,7 +148,11 @@ function reportTitle(payload: ProfilerPayload): string {
     : "iOS Instruments Analysis";
 }
 
-function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, string>): string {
+function renderAllClear(
+  payload: ProfilerPayload,
+  exportErrors?: Record<string, string>,
+  freshnessNote?: string
+): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
     : "unknown";
@@ -145,6 +162,8 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
   ];
+
+  if (freshnessNote) lines.push(freshnessNote, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -176,7 +195,8 @@ function renderAllClear(payload: ProfilerPayload, exportErrors?: Record<string, 
 function renderFullReport(
   payload: ProfilerPayload,
   exportErrors?: Record<string, string>,
-  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity }
+  cap: InlineCap = { hotspotLimit: Infinity, hangLimit: Infinity },
+  freshnessNote?: string
 ): string {
   const traceName = payload.metadata.traceFile
     ? `\`${path.basename(payload.metadata.traceFile)}\``
@@ -195,6 +215,8 @@ function renderFullReport(
     `**Trace:** ${traceName}  |  **Platform:** ${payload.metadata.platform}  |  **Analyzed:** ${payload.metadata.timestamp}`,
     ``,
   ];
+
+  if (freshnessNote) lines.push(freshnessNote, ``);
 
   const errorLines = renderExportErrors(exportErrors);
   if (errorLines.length > 0) {
@@ -231,6 +253,17 @@ function renderFullReport(
         `| ${i + 1} | \`${demangleSymbol(b.dominantFunction)}\` | ${b.thread} | ${b.totalWeightMs} | ${b.weightPercentage}% | ${b.sampleCount} | ${hangFlag} | ${severityEmoji(b.severity)} |`
       );
     });
+
+    const systemFrameCount = cpuHotspots.filter((b) => b.frameClass === "system").length;
+    if (systemFrameCount > 0) {
+      lines.push(
+        ``,
+        `> **Note:** ${systemFrameCount} of these ${systemFrameCount === 1 ? "hotspots is an emulator/kernel frame" : "hotspots are emulator/kernel frames"} ` +
+          `(e.g. \`goldfish_*\`, \`do_syscall_64\`, \`gup_*\`) — the QEMU GPU-transport pipe and Linux syscall paths, ` +
+          `not app code. They dominate RenderThread on the emulator and do not appear on physical devices. ` +
+          `Re-profile on a real device for representative app CPU numbers.`
+      );
+    }
 
     const hotspotDetailSlice = isFinite(cap.hotspotLimit)
       ? cpuHotspots.slice(0, cap.hotspotLimit)
@@ -351,18 +384,43 @@ function renderFullReport(
     }
   }
 
-  // Memory Leaks section (iOS only in v1)
+  // Memory Leaks section (iOS only in v1).
+  // Attributed leaks (a resolved responsible frame) are actionable and shown in
+  // full. Unattributed leaks (`<Call stack limit reached>` under `--attach`) are
+  // collapsed into one low-confidence line so the noise can't masquerade as a
+  // wall of RED findings — see isLeakAttributed in pipeline/01-correlate.ts.
   if (memoryLeaks.length > 0) {
+    const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
+    const unattributedLeaks = memoryLeaks.filter((b) => !b.attributed);
+
     lines.push(``, `---`, ``, `## Memory Leaks`, ``);
-    lines.push(
-      `| # | Object Type | Count | Total Size | Responsible Frame | Library | Severity |`,
-      `|---|---|---|---|---|---|---|`
-    );
-    memoryLeaks.forEach((b, i) => {
+
+    if (attributedLeaks.length > 0) {
       lines.push(
-        `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        `| # | Object Type | Count | Total Size | Responsible Frame | Library | Severity |`,
+        `|---|---|---|---|---|---|---|`
       );
-    });
+      attributedLeaks.forEach((b, i) => {
+        lines.push(
+          `| ${i + 1} | \`${b.objectType}\` | ${b.count} | ${formatBytes(b.totalSizeBytes)} | \`${demangleSymbol(b.responsibleFrame)}\` | ${b.responsibleLibrary || "—"} | ${severityEmoji(b.severity)} |`
+        );
+      });
+    } else {
+      lines.push(`_No attributed leaks — nothing with a resolved responsible frame._`);
+    }
+
+    if (unattributedLeaks.length > 0) {
+      const objs = unattributedLeaks.reduce((s, b) => s + b.count, 0);
+      const bytes = unattributedLeaks.reduce((s, b) => s + b.totalSizeBytes, 0);
+      lines.push(
+        ``,
+        `> ${severityEmoji("YELLOW")} **${unattributedLeaks.length} unattributed leak group(s)** ` +
+          `(${objs} object(s), ${formatBytes(bytes)}): responsible frame \`<Call stack limit reached>\`, no library. ` +
+          `Argent records via \`xctrace --attach\`, which has no malloc-stack history, so these are most likely ` +
+          `benign system allocations rather than confirmed app leaks. For attributed stacks, capture with malloc ` +
+          `stack logging enabled at launch.`
+      );
+    }
   }
 
   // RSS Growth section (Android-only weak signal)
@@ -388,8 +446,12 @@ function renderFullReport(
   if (cpuHotspots.length > 0) {
     lines.push(`### CPU Hotspots`, ``);
     for (const b of cpuHotspots) {
+      const advice =
+        b.frameClass === "system"
+          ? `Emulator/kernel overhead (GPU-transport pipe or syscall), not app code — it does not appear on a physical device, so it is not directly actionable. Re-profile on a real device to see the app's own CPU cost.`
+          : `High CPU in this function — inspect what calls it with \`function_callers\`, then move the heavy work off the main thread or memoize/throttle it.`;
       lines.push(
-        `- ${severityEmoji(b.severity)} \`${demangleSymbol(b.dominantFunction)}\` on ${b.thread} (${b.weightPercentage}%): High CPU in this function — reduce view hierarchy depth or batch UI updates.`
+        `- ${severityEmoji(b.severity)} \`${demangleSymbol(b.dominantFunction)}\` on ${b.thread} (${b.weightPercentage}%): ${advice}`
       );
     }
     lines.push(``);
@@ -404,15 +466,16 @@ function renderFullReport(
           : "";
       const reasonNote = b.jankReason ? ` Reason: \`${b.jankReason}\`.` : "";
       lines.push(
-        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): Main thread blocked — move heavy work to background queue.${reasonNote}${funcNote}`
+        `- ${severityEmoji(b.severity)} ${b.hangType} at ${b.startTimeFormatted} (${b.durationMs}ms): ${hangCoreAdvice(b)}${reasonNote}${funcNote}`
       );
     }
     lines.push(``);
   }
 
-  if (memoryLeaks.length > 0) {
+  const attributedLeaks = memoryLeaks.filter((b) => b.attributed);
+  if (attributedLeaks.length > 0) {
     lines.push(`### Memory Leaks`, ``);
-    for (const b of memoryLeaks) {
+    for (const b of attributedLeaks) {
       lines.push(
         `- ${severityEmoji(b.severity)} \`${b.objectType}\` x${b.count} (${formatBytes(b.totalSizeBytes)}) via \`${demangleSymbol(b.responsibleFrame)}\`: Check for retain cycles or strong delegate references.`
       );
@@ -428,22 +491,30 @@ function renderFullReport(
   );
   if (uiHangs.length > 0) {
     lines.push(
-      `   - mode=\`hang_stacks\` hang_index=0 — full native call chains during the worst hang`
+      `   - mode=\`hang_stacks\` hang_index=0 — main-thread state + any on-CPU stacks for the worst hang`
     );
   }
   if (cpuHotspots.length > 0) {
-    const topHotspot = cpuHotspots[0]!;
-    // Keep the RAW (possibly mangled) name here: function_callers matches it as a
-    // SQL substring of the mangled frame, and a demangled name isn't a substring.
-    lines.push(
-      `   - mode=\`function_callers\` function_name=\`${topHotspot.dominantFunction}\` — who calls this hot function`
-    );
+    // Prefer the top *app* hotspot for the callers suggestion: on Android the
+    // leading hotspot is often a `system` (emulator/kernel) frame, which the
+    // CPU Hotspots note and Suggested Improvements already flag as not directly
+    // actionable — suggesting `function_callers` on it would contradict that.
+    // iOS hotspots have no `frameClass` (undefined ≠ "system"), so they keep
+    // using cpuHotspots[0] unchanged.
+    const callerHotspot = cpuHotspots.find((b) => b.frameClass !== "system");
+    if (callerHotspot) {
+      // Keep the RAW (possibly mangled) name here: function_callers matches it as a
+      // SQL substring of the mangled frame, and a demangled name isn't a substring.
+      lines.push(
+        `   - mode=\`function_callers\` function_name=\`${callerHotspot.dominantFunction}\` — who calls this hot function`
+      );
+    }
     lines.push(`   - mode=\`thread_breakdown\` — CPU distribution across threads`);
   }
-  if (memoryLeaks.length > 0) {
-    const topLeak = memoryLeaks.sort((a, b) => b.totalSizeBytes - a.totalSizeBytes)[0]!;
+  const topAttributedLeak = memoryLeaks.find((b) => b.attributed);
+  if (topAttributedLeak) {
     lines.push(
-      `   - mode=\`leak_stacks\` object_type=\`${topLeak.objectType}\` — detailed leak analysis`
+      `   - mode=\`leak_stacks\` object_type=\`${topAttributedLeak.objectType}\` — detailed leak analysis`
     );
   }
   lines.push(
@@ -465,6 +536,38 @@ function renderExportErrors(exportErrors?: Record<string, string>): string[] {
     lines.push(`> - **${key}**: ${msg}`);
   }
   return lines;
+}
+
+/**
+ * Pick the core remediation sentence for a UI hang. On Android the main-thread
+ * state breakdown tells us whether the stall was CPU-bound work or a wait, so
+ * the advice must match: telling a developer to "move heavy work off the main
+ * thread" when the thread was asleep waiting on the GPU is actively misleading.
+ * iOS hangs carry no state breakdown, so they fall through to the generic line.
+ */
+function hangCoreAdvice(hang: UiHang): string {
+  const blocking = summarizeHangBlocking(hang.stateBreakdown);
+  if (!blocking) {
+    return "Main thread stalled past the frame budget — move heavy work off the main thread.";
+  }
+  switch (blocking.kind) {
+    case "blocked":
+      return (
+        `Main thread was off-CPU (state \`${blocking.dominantState}\`) for most of the hang — it was *waiting*, ` +
+        `not doing CPU work. Investigate what it is blocked on (GPU/vsync, a lock, binder IPC, or I/O) via ` +
+        "`hang_stacks`, rather than moving work off-thread."
+      );
+    case "runnable":
+      return (
+        `Main thread was runnable but not scheduled (state \`${blocking.dominantState}\`) for most of the hang — ` +
+        `ready to run but starved of CPU. Look for other busy threads or background work contending for cores.`
+      );
+    case "executing":
+      return (
+        "Main thread was executing (on-CPU) for most of the hang — genuine main-thread CPU work. " +
+        "Move heavy work off the main thread or reduce its cost."
+      );
+  }
 }
 
 function severityEmoji(severity: string): string {

@@ -1,4 +1,5 @@
 import type { ChildProcess } from "child_process";
+import { FAILURE_CODES, FailureError, subprocessFailureMetadata } from "@argent/registry";
 import type { NotifyHandle } from "./notify";
 
 export interface WaitForXctraceReadyOptions {
@@ -54,16 +55,46 @@ export function waitForXctraceReady(
     child.on("exit", (code, signal) => {
       settle(() =>
         reject(
-          new Error(
+          new FailureError(
             `xctrace record exited before recording started (code=${code}, signal=${signal}). ` +
-              `stderr: ${stderrBuffer.trim() || "<empty>"}`
+              `stderr: ${stderrBuffer.trim() || "<empty>"}`,
+            {
+              error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_EXITED,
+              failure_stage: "native_profiler_xctrace_ready",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              failure_command: "xctrace",
+              ...(typeof code === "number" ? { failure_exit_code: code } : {}),
+              ...(signal === "SIGABRT" ||
+              signal === "SIGHUP" ||
+              signal === "SIGINT" ||
+              signal === "SIGKILL" ||
+              signal === "SIGQUIT" ||
+              signal === "SIGTERM"
+                ? { failure_signal: signal }
+                : {}),
+            }
           )
         )
       );
     });
 
     child.on("error", (err: Error) => {
-      settle(() => reject(new Error(`Failed to start xctrace: ${err.message}`)));
+      settle(() =>
+        reject(
+          new FailureError(
+            `Failed to start xctrace: ${err.message}`,
+            {
+              error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_PROCESS_ERROR,
+              failure_stage: "native_profiler_xctrace_process",
+              failure_area: "tool_server",
+              error_kind: "subprocess",
+              ...subprocessFailureMetadata(err, "xctrace"),
+            },
+            { cause: err }
+          )
+        )
+      );
     });
 
     const startupTimer = setTimeout(() => {
@@ -74,9 +105,17 @@ export function waitForXctraceReady(
           // already dead
         }
         reject(
-          new Error(
+          new FailureError(
             `xctrace record did not start within ${timeoutMs} ms. ` +
-              `Last stderr: ${stderrBuffer.trim() || "<empty>"}`
+              `Last stderr: ${stderrBuffer.trim() || "<empty>"}`,
+            {
+              error_code: FAILURE_CODES.NATIVE_PROFILER_XCTRACE_READY_TIMEOUT,
+              failure_stage: "native_profiler_xctrace_ready",
+              failure_area: "tool_server",
+              error_kind: "timeout",
+              failure_command: "xctrace",
+              failure_signal: "SIGKILL",
+            }
           )
         );
       });

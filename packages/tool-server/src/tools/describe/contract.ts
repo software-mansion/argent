@@ -28,6 +28,13 @@ export interface DescribeNode {
   disabled?: boolean;
   password?: boolean;
   scrollHidden?: number;
+  // Vega (Fire TV) is D-pad driven, so "where is the cursor" is the key signal.
+  // `focused` is the element holding input focus; `selected` is the visually
+  // highlighted / active item (e.g. the current nav tab). On Vega the toolkit
+  // often reports the highlighted item via `selected` while `focused` stays
+  // false, so both are surfaced. Other platforms leave these unset.
+  focused?: boolean;
+  selected?: boolean;
 }
 
 export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
@@ -47,23 +54,25 @@ export const describeNodeSchema: z.ZodType<DescribeNode> = z.lazy(() =>
       disabled: z.boolean().optional(),
       password: z.boolean().optional(),
       scrollHidden: z.number().int().nonnegative().optional(),
+      focused: z.boolean().optional(),
+      selected: z.boolean().optional(),
     })
     .passthrough()
 );
 
 // Where the tree came from. "ax-service" / "native-devtools" come from iOS;
-// Where the tree came from. "ax-service" / "native-devtools" come from iOS;
 // "uiautomator" / "android-devtools" come from Android; "cdp-dom" is the
-// Chromium branch's DOM walk over Chrome DevTools Protocol. Agents that branch
-// on `source` (e.g. to decide whether to also call `native-find-views` for a
-// richer tree) need to distinguish each provider — which a shared label would
-// hide.
+// Chromium branch's DOM walk over Chrome DevTools Protocol; "vega-automation"
+// is the Vega on-device automation toolkit. Agents that branch on `source`
+// (e.g. to decide whether to also call `native-find-views` for a richer tree)
+// need to distinguish each provider — which a shared label would hide.
 export type DescribeSource =
   | "ax-service"
   | "native-devtools"
   | "uiautomator"
   | "android-devtools"
-  | "cdp-dom";
+  | "cdp-dom"
+  | "vega-automation";
 
 // Internal shape produced by the per-platform adapters. The `tree` is consumed
 // by the formatter in `format-tree.ts` and then dropped before the tool replies

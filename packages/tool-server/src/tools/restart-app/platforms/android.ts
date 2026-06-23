@@ -1,3 +1,4 @@
+import { FAILURE_CODES, FailureError } from "@argent/registry";
 import type { PlatformImpl } from "../../../utils/cross-platform-tool";
 import { adbShell, shellQuote } from "../../../utils/adb";
 import { assertAmStartOk, resolveLauncherActivity } from "../../launch-app/platforms/android";
@@ -33,9 +34,16 @@ export const androidImpl: PlatformImpl<
     try {
       assertAmStartOk(out);
     } catch (err) {
-      throw new Error(`relaunch failed: ${err instanceof Error ? err.message : String(err)}`, {
-        cause: err,
-      });
+      throw new FailureError(
+        `relaunch failed: ${err instanceof Error ? err.message : String(err)}`,
+        {
+          error_code: FAILURE_CODES.ANDROID_RESTART_FAILED,
+          failure_stage: "android_restart_am_start",
+          failure_area: "tool_server",
+          error_kind: "subprocess",
+        },
+        { cause: err instanceof Error ? err : new Error(String(err)) }
+      );
     }
     return { restarted: true, bundleId };
   },

@@ -1,6 +1,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import {
+  FAILURE_CODES,
+  FailureError,
+  subprocessFailureMetadata,
+  type FailureSignal,
+} from "@argent/registry";
 import { resolveAndroidBinary } from "./android-binary";
+import { formatSubprocessFailure } from "./subprocess-error";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,9 +23,15 @@ const execFileAsync = promisify(execFile);
 async function resolveAdbOrThrow(): Promise<string> {
   const path = await resolveAndroidBinary("adb");
   if (!path) {
-    throw new Error(
+    throw new FailureError(
       "`adb` not found on PATH or under `$ANDROID_HOME/platform-tools`. " +
-        "Install Android SDK Platform Tools or set `$ANDROID_HOME` to your SDK root."
+        "Install Android SDK Platform Tools or set `$ANDROID_HOME` to your SDK root.",
+      {
+        error_code: FAILURE_CODES.ANDROID_ADB_NOT_FOUND,
+        failure_stage: "android_adb_resolve_binary",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+      }
     );
   }
   return path;
@@ -27,9 +40,15 @@ async function resolveAdbOrThrow(): Promise<string> {
 export async function resolveEmulatorOrThrow(): Promise<string> {
   const path = await resolveAndroidBinary("emulator");
   if (!path) {
-    throw new Error(
+    throw new FailureError(
       "`emulator` not found on PATH or under `$ANDROID_HOME/emulator`. " +
-        "Install the Android Emulator package or set `$ANDROID_HOME` to your SDK root."
+        "Install the Android Emulator package or set `$ANDROID_HOME` to your SDK root.",
+      {
+        error_code: FAILURE_CODES.ANDROID_EMULATOR_NOT_FOUND,
+        failure_stage: "android_emulator_resolve_binary",
+        failure_area: "tool_server",
+        error_kind: "dependency_missing",
+      }
     );
   }
   return path;
@@ -99,28 +118,19 @@ export interface AdbRunResult {
 const ADB_KILL_SIGNAL = "SIGKILL" as const;
 
 function describeAdbFailure(args: string[], err: unknown): Error {
-  // Prefer adb's own stderr/stdout — that's the actionable diagnostic
-  // ("device offline", etc.). When both are empty (timeout-SIGKILL, daemon
-  // hang) fall back to the bare message + signal/killed/code so the failure
-  // mode is still identifiable instead of a tautological "Command failed".
-  const e = err as {
-    code?: string | number | null;
-    signal?: string | null;
-    killed?: boolean;
-    stderr?: string;
-    stdout?: string;
-    message?: string;
+  // The message (prefer adb's own stderr/stdout; fall back to signal/killed/code
+  // on a timeout-SIGKILL or daemon hang) is shared with the other subprocess
+  // wrappers — see formatSubprocessFailure. adb additionally attaches a
+  // FailureSignal so the failure is classified for telemetry.
+  const e = err as { signal?: string | null; killed?: boolean };
+  const signal: FailureSignal = {
+    error_code: FAILURE_CODES.ANDROID_ADB_COMMAND_FAILED,
+    failure_stage: "android_adb_command",
+    failure_area: "tool_server",
+    error_kind: e.killed || e.signal ? "timeout" : "subprocess",
+    ...subprocessFailureMetadata(err, "adb"),
   };
-  const argv = args.join(" ");
-  const ioDetail = (e.stderr ?? "").trim() || (e.stdout ?? "").trim();
-  if (ioDetail) return new Error(`adb ${argv} failed: ${ioDetail}`);
-  const meta: string[] = [];
-  if (e.killed) meta.push("killed=true");
-  if (e.signal) meta.push(`signal=${e.signal}`);
-  if (e.code) meta.push(`code=${e.code}`);
-  const baseMsg = (e.message ?? String(err)).trim();
-  const suffix = meta.length ? ` (${meta.join(" ")})` : "";
-  return new Error(`adb ${argv} failed: ${baseMsg}${suffix}`);
+  return new FailureError(formatSubprocessFailure("adb", args, err), signal);
 }
 
 /**
@@ -253,6 +263,19 @@ export function parseAdbDevices(stdout: string): Array<{ serial: string; state: 
 }
 
 /**
+ * Emulator *console* port for an adb serial, or `null`. `emulator-5554`→5554;
+ * loopback `127.0.0.1:5555`→5554 (adb port = console+1). Loopback-only, so a
+ * wireless physical device (`192.168.x.x:5555`) is never taken for an emulator/VVD.
+ */
+export function consolePortFromAdbSerial(serial: string): number | null {
+  const emu = serial.match(/^emulator-(\d+)$/);
+  if (emu) return parseInt(emu[1]!, 10);
+  const tcp = serial.match(/^(?:127\.0\.0\.1|localhost|::1):(\d+)$/);
+  if (tcp) return parseInt(tcp[1]!, 10) - 1;
+  return null;
+}
+
+/**
  * Light-weight listing for callers that only need which serials exist.
  * Skips the per-device getprop round-trips so the call is one `adb devices`
  * shell-out, not 1 + 3N. Used by `listAndroidDevices` as the first hop before
@@ -379,17 +402,28 @@ export async function waitForBootCompleted(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (isTerminalAdbError(message)) {
-        throw new Error(
+        throw new FailureError(
           `Cannot wait for ${serial} to boot — adb reports the device is in a terminal state: ${message}.` +
             ` Authorise the device, reconnect it, or pick a different target.`,
-          { cause: err }
+          {
+            error_code: FAILURE_CODES.ANDROID_ADB_BOOT_TERMINAL_STATE,
+            failure_stage: "android_wait_for_boot",
+            failure_area: "tool_server",
+            error_kind: "subprocess",
+          },
+          { cause: err instanceof Error ? err : new Error(String(err)) }
         );
       }
       // Otherwise: device may be mid-boot; swallow and retry.
     }
     await new Promise((r) => setTimeout(r, 1_000));
   }
-  throw new Error(`Timed out waiting for ${serial} to finish booting`);
+  throw new FailureError(`Timed out waiting for ${serial} to finish booting`, {
+    error_code: FAILURE_CODES.ANDROID_ADB_BOOT_TIMEOUT,
+    failure_stage: "android_wait_for_boot",
+    failure_area: "tool_server",
+    error_kind: "timeout",
+  });
 }
 
 export interface AvdInfo {
