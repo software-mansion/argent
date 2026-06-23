@@ -16,7 +16,7 @@ export HOME="/Users/ignacylatka"
 export PATH="$HOME/.nvm/versions/node/v24.14.1/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HERE="$HOME/dev/argent-finetune-data/datagen/training"
 PY="$HOME/dev/argent-finetune-data/.venv/bin/python"
-PLIST="$HOME/Library/LaunchAgents/com.silver.nightrun.plist"
+PLIST="${NIGHTRUN_PLIST:-$HOME/Library/LaunchAgents/com.silver.nightrun.plist}"
 
 DRY_RUN="${DRY_RUN:-0}"
 if [ "$DRY_RUN" = "1" ]; then
