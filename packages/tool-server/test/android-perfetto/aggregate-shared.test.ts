@@ -133,6 +133,41 @@ describe("aggregateCpuHotspots (shared)", () => {
     expect(hot.duringHang).toBe(false);
   });
 
+  it("carries dominantMapping through to the emitted hotspot (Android)", () => {
+    const rows: AggregatorInputRow[] = [
+      {
+        dominantFunction: "writel",
+        dominantMapping: "/kernel",
+        thread: "Main Thread",
+        weightNs: 100_000_000,
+        timestampsNs: [],
+        callChains: [{ chain: ["writel"], count: 1 }],
+        precomputedBursts: [{ startMs: 0, endMs: 10, sampleCount: 1 }],
+        firstMs: 0,
+        lastMs: 10,
+        sampleCount: 1,
+      },
+    ];
+    const out = aggregateCpuHotspots(rows, { platform: "android" });
+    expect(out[0]!.dominantMapping).toBe("/kernel");
+  });
+
+  it("omits the dominantMapping key entirely on the iOS path (shape unchanged)", () => {
+    const rows: AggregatorInputRow[] = [
+      {
+        dominantFunction: "fn",
+        thread: "Main Thread",
+        weightNs: 100_000_000,
+        timestampsNs: [1],
+        callChains: [],
+      },
+    ];
+    const out = aggregateCpuHotspots(rows, { platform: "ios" });
+    // Not just `=== undefined`: the key must be ABSENT so the iOS object shape
+    // is byte-identical to before this change.
+    expect("dominantMapping" in out[0]!).toBe(false);
+  });
+
   it("flags duringHang when any sample timestamp matches the hang set", () => {
     const rows: AggregatorInputRow[] = [
       {
