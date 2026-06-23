@@ -1,0 +1,195 @@
+{
+  "harness": "opencode",
+  "source_commit": "c6083a474",
+  "source_root": "/Users/ignacylatka/dev/opencode/packages/opencode/src",
+  "api": {
+    "shape": "openai-chat-completions",
+    "sdk": "vercel-ai-sdk (ai package, streamText)",
+    "provider_npm_for_ollama_and_openai_compatible": "@ai-sdk/openai-compatible",
+    "endpoint": "POST {options.baseURL}/chat/completions",
+    "request_fields": ["messages[]", "tools[]", "tool_choice", "stream"],
+    "tools_entry_shape": "{ type:'function', function:{ name, description, parameters } }",
+    "roles": ["system", "user", "assistant", "tool"],
+    "evidence": [
+      "session/llm.ts:9 (import streamText from 'ai')",
+      "session/llm.ts:280 (streamText({ model, messages, tools, ... }))",
+      "provider/provider.ts:117 (@ai-sdk/openai-compatible -> createOpenAICompatible)",
+      "provider/provider.ts:1180,1397 (default fallback npm = @ai-sdk/openai-compatible)",
+      "~/.config/opencode/opencode.json (ollama provider: npm @ai-sdk/openai-compatible, baseURL http://localhost:11434/v1)"
+    ],
+    "notes": "No ollama-ai-provider; ollama is an OpenAI-compatible endpoint. Flag-gated native runtime (experimentalNativeLlm, default off) also uses chat-completions for openai-compatible."
+  },
+  "system_prompt": {
+    "verbatim_or_path": "/Users/ignacylatka/dev/opencode/packages/opencode/src/session/prompt/default.txt",
+    "length_chars": 8528,
+    "length_chars_note": "raw file bytes incl. trailing newline; file is also reproduced verbatim in opencode.md section 2.4",
+    "length_lines": 96,
+    "selection_rule": "session/system.ts:25-39 SystemPrompt.provider(model) keys on model.api.id substring; ollama names (silver:e4b, gemma4:e4b, etc.) fall through to default.txt. Other branches: gpt-4/o1/o3->beast.txt, gpt+codex->codex.txt, gpt->gpt.txt, gemini- ->gemini.txt, claude->anthropic.txt, trinity->trinity.txt, kimi->kimi.txt",
+    "delivery": "Single role:'system' message. All parts joined with '\\n' at session/llm/request.ts:56-66, then prepended to messages[] at request.ts:101-112. NOT passed via AI SDK system: param. Plugin hook experimental.chat.system.transform may grow to at most 2 system messages (request.ts:74-78); default ollama path = exactly 1.",
+    "assembly_order_default_agent": ["default.txt (base prompt)", "env preamble (system.ts:55-92)", "instructions (AGENTS.md/CLAUDE.md, Instruction.system())", "skills blurb (if skill permission)"],
+    "env_preamble_template": "You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}\nHere is some useful information about the environment you are running in:\n<env>\n  Working directory: ${ctx.directory}\n  Workspace root folder: ${ctx.worktree}\n  Is directory a git repo: ${vcs===git ? yes : no}\n  Platform: ${process.platform}\n  Today's date: ${new Date().toDateString()}\n</env>",
+    "env_preamble_evidence": "session/system.ts:61-72",
+    "custom_agent": {
+      "path_glob": "~/.config/opencode/{agent,agents}/**/*.md",
+      "loading": "config/agent.ts:13,26-27 — YAML frontmatter merged into config; trimmed markdown body becomes agent.prompt",
+      "replacement_rule": "request.ts:60 — when input.agent.prompt is set it REPLACES SystemPrompt.provider(model) (i.e. replaces default.txt). env + instructions + skills still appended after it.",
+      "real_example_path": "/Users/ignacylatka/.config/opencode/agent/argentbench.md",
+      "real_example_note": "frontmatter tools: map whitelists namespaced names argent_describe, argent_gesture-tap, etc. — confirms namespacing end-to-end"
+    }
+  },
+  "tool_definition": {
+    "namespacing": {
+      "rule": "${sanitize(serverName)}_${sanitize(toolName)}",
+      "separator": "_",
+      "sanitize": "value.replace(/[^a-zA-Z0-9_-]/g, '_')  -- dashes and underscores PRESERVED, dots/colons/spaces -> _",
+      "truncation": "none (no max tool-name length)",
+      "evidence": ["mcp/index.ts:646", "mcp/catalog.ts:110"],
+      "examples": {
+        "list-devices": "argent_list-devices",
+        "describe": "argent_describe",
+        "gesture-tap": "argent_gesture-tap",
+        "gesture-swipe": "argent_gesture-swipe",
+        "launch-app": "argent_launch-app",
+        "open-url": "argent_open-url"
+      },
+      "invocation_note": "execute calls MCP server with ORIGINAL un-prefixed name: client.callTool({name: mcpTool.name}) (catalog.ts:54-58). Prompts/resources use ':' separator (catalog.ts:103) but are not callable tools."
+    },
+    "schema_format": "JSON Schema (JSONSchema7), forced type:'object' + additionalProperties:false; properties default {} if absent. For ollama/openai-compatible NOT further sanitized (sanitizeOpenAISchema is openai/azure only).",
+    "description_source": "MCP server's advertised tool description, verbatim (mcpTool.description ?? '') -- catalog.ts:51",
+    "serialized_object_shape": "AI SDK dynamicTool({ description, inputSchema: jsonSchema(...), execute }) -> wire { type:'function', function:{ name, description, parameters } }",
+    "evidence": ["mcp/catalog.ts:42-52", "session/tools.ts"],
+    "example": {
+      "type": "function",
+      "function": {
+        "name": "argent_gesture-tap",
+        "description": "<exact argent gesture-tap description>",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "device_id": { "type": "string" },
+            "x": { "type": "number" },
+            "y": { "type": "number" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "assistant_tool_call_format": {
+    "shape": "OpenAI tool_calls on assistant message: { role:'assistant', content:'', tool_calls:[{ id, type:'function', function:{ name, arguments } }] }",
+    "arguments": "JSON string (e.g. '{}' for no-arg tools)",
+    "tool_call_id": "NOT minted or prefixed by OpenCode for ollama/openai-compatible; model's emitted id used verbatim and echoed in tool result. Claude/Mistral get id scrubbing (transform.ts:190,223-228) but that does not apply here.",
+    "example": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_9f2a",
+          "type": "function",
+          "function": { "name": "argent_gesture-tap", "arguments": "{\"device_id\":\"ABC-123\",\"x\":0.5,\"y\":0.82}" }
+        }
+      ]
+    }
+  },
+  "tool_result_format": {
+    "shape": "role:'tool' message { role:'tool', tool_call_id, content }. Built as assistant part type:'tool-<name>' state:'output-available' (message-v2.ts:326-334) then convertToModelMessages (message-v2.ts:417) emits the tool role. toModelOutput: string output -> {type:'text', value}; object {text,attachments} -> {type:'content', value:[...]}.",
+    "error_framing": "No 'ERROR:' prefix, no isError flag on normal path. Failed tool uses state:'output-error' + errorText (message-v2.ts:348-358). MCP isError -> throws joined text or 'MCP tool returned an error' (catalog.ts:68-73). Placeholders: '[Tool execution was interrupted]' (message-v2.ts:368), '[Old tool result content cleared]' (message-v2.ts:305).",
+    "junk": [
+      {
+        "string": "Attached media from tool result:",
+        "evidence": "session/message-v2.ts:48 (SYNTHETIC_ATTACHMENT_PROMPT)",
+        "when": "Tool returns media AND provider not in supportsMediaInToolResult allowlist (anthropic/openai/bedrock/xai/google-vertex-anthropic/gemini-3). @ai-sdk/openai-compatible (ollama) is NOT in allowlist -> always taken: media re-injected as a separate role:'user' message led by this text + type:'file' parts (message-v2.ts:393-410)."
+      },
+      {
+        "string": "ERROR: Cannot read ${name} (this model does not support ${modality} input). Inform the user.",
+        "rendered_for_image": "ERROR: Cannot read image (this model does not support image input). Inform the user.",
+        "rendered_with_filename": "ERROR: Cannot read \"shot.png\" (this model does not support image input). Inform the user.",
+        "evidence": "provider/transform.ts:399-405 (unsupportedParts), applied at transform.ts:431",
+        "when": "User/synthetic message file/image part whose modality not in model.capabilities.input. Text-only ollama returning a screenshot: image re-injected via 'Attached media...' then REPLACED by this error text -> model sees the error string, not the image."
+      },
+      {
+        "string": "ERROR: Image file is empty or corrupted. Please provide a valid image.",
+        "evidence": "provider/transform.ts:389",
+        "when": "Empty base64 image data"
+      },
+      {
+        "string": "${output}\\n\\n[${n} image(s) omitted: could not be resized below the image size limit.]",
+        "evidence": "session/processor.ts:591",
+        "when": "Image attachment couldn't be resized under the size cap"
+      },
+      {
+        "string": "...${removed} ${unit} truncated...",
+        "evidence": "tool/truncate.ts:136-137",
+        "when": "Tool output exceeds 2000 lines OR 50KB (unit = 'lines' or 'bytes')"
+      },
+      {
+        "string": "The tool call succeeded but the output was truncated. Full output saved to: ${file}\\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.",
+        "evidence": "tool/truncate.ts:130 (Task-tool variant)",
+        "when": "Truncation hint, when Task tool available"
+      },
+      {
+        "string": "The tool call succeeded but the output was truncated. Full output saved to: ${file}\\nUse Grep to search the full content or Read with offset/limit to view specific sections.",
+        "evidence": "tool/truncate.ts:131 (no-Task variant)",
+        "when": "Truncation hint, when Task tool NOT available"
+      },
+      {
+        "string": "[Tool output truncated for compaction: omitted ${omitted} chars]",
+        "evidence": "session/message-v2.ts:54",
+        "when": "Compaction-only truncation"
+      },
+      {
+        "string": "[Tool execution was interrupted]",
+        "evidence": "session/message-v2.ts:368",
+        "when": "Pending/running tool at serialization time"
+      },
+      {
+        "string": "[Old tool result content cleared]",
+        "evidence": "session/message-v2.ts:305",
+        "when": "Compacted tool result"
+      },
+      {
+        "string": "<system-reminder>\\nThe user sent the following message:\\n${text}\\n\\nPlease address this message and continue with your tasks.\\n</system-reminder>",
+        "evidence": "session/prompt.ts:1313-1320",
+        "when": "User interjects mid-run; wraps the injected user text"
+      }
+    ],
+    "junk_that_does_NOT_exist": ["Tool ran without output", "[tool: ...] prefix", "Attached image(s) from tool result: (real string is 'Attached media from tool result:')"],
+    "image_handling": "Two-step for text-only ollama: (1) media not in supportsMediaInToolResult allowlist -> re-injected as synthetic role:'user' message 'Attached media from tool result:' + file parts (message-v2.ts:158-170, 393-410); (2) unsupportedParts replaces image part with 'ERROR: Cannot read image (this model does not support image input). Inform the user.' if model.capabilities.input.image is false (transform.ts:399-405). If model DOES declare image input, the real image part is sent instead. @ai-sdk/openai-compatible is NOT in the media-in-tool-result allowlist.",
+    "truncation": {
+      "max_lines": 2000,
+      "max_bytes": 51200,
+      "max_bytes_human": "50 KB",
+      "config_override": "tool_output.max_lines / tool_output.max_bytes",
+      "evidence": "tool/truncate.ts:15-16, fired at truncate.ts:93",
+      "marker": "...${removed} ${unit} truncated... + hint (full output saved to temp file)",
+      "note": "argent device-control outputs (describe JSON) are small and rarely hit this; media re-injection is the junk that actually appears in argent trajectories."
+    },
+    "example_text_result": { "role": "tool", "tool_call_id": "call_9f2a", "content": "{\"ok\":true,\"screen\":\"...\"}" },
+    "example_screenshot_result_ollama": [
+      { "role": "tool", "tool_call_id": "call_9f2a", "content": "<text portion if any>" },
+      { "role": "user", "content": [ { "type": "text", "text": "Attached media from tool result:" }, { "type": "text", "text": "ERROR: Cannot read image (this model does not support image input). Inform the user." } ] }
+    ]
+  },
+  "other_junk": [
+    { "string": "<contents of session/prompt/max-steps.txt>", "as": "extra { role:'assistant', content: MAX_STEPS } appended to messages on the final allowed step", "evidence": "session/prompt.ts:1343" },
+    { "string": "plan-mode reminders from prompt/plan.txt, build-switch.txt, plan-mode.txt (each <system-reminder>-wrapped)", "when": "plan mode only", "evidence": "session/reminders.ts" },
+    { "string": "STRUCTURED_OUTPUT_SYSTEM_PROMPT appended to system", "when": "turn requests json_schema output", "evidence": "session/prompt.ts:1335" },
+    { "string": "<system-reminder>${loaded context}</system-reminder> appended to read-tool output", "evidence": "tool/read.ts:356" },
+    { "note": "None of these fire for a normal argent device-control turn except MAX_STEPS on the very last step." }
+  ],
+  "capture_method": {
+    "approach": "Point the ollama provider's options.baseURL at a logging proxy instead of localhost:11434, then run a turn and capture the POST to /v1/chat/completions.",
+    "config_change": "In ~/.config/opencode/opencode.json set provider.ollama.options.baseURL to e.g. http://localhost:8080/v1 (proxy forwards to http://localhost:11434/v1).",
+    "tools": ["mitmproxy", "tiny express logger forwarding to 11434", "socat/ngrep on port 11434"],
+    "run": "opencode run --model ollama/silver:e4b \"Tap the Login button\"  (or TUI)",
+    "validate": ["system message count = 1", "exact joined system string", "argent_<tool> names", "additionalProperties:false schemas", "tool-result framing + media re-injection"]
+  },
+  "notes": [
+    "Ollama media gotcha: a tool returning a screenshot does NOT reach a text-only ollama model as an image; it is re-injected as a synthetic user message 'Attached media from tool result:' then the image part is REPLACED by 'ERROR: Cannot read image (this model does not support image input). Inform the user.' Render screenshot-returning tools this way for ollama training data unless model.capabilities.input.image is true.",
+    "Exactly ONE role:'system' message, all parts joined with '\\n' (default.txt + env + AGENTS + skills); not the SDK system: param.",
+    "Namespacing keeps dashes: argent_gesture-tap NOT argent_gesture_tap. Separator '_', tool's own dashes survive sanitize.",
+    "No tool-call-ID prefixing by OpenCode for ollama; model's emitted ids used verbatim and echoed in tool results.",
+    "default.txt selected because ollama model ids (silver:e4b, gemma4:e4b) lack the gpt/gemini-/claude/trinity/kimi substrings; avoid those substrings in model names to stay on default.txt.",
+    "Real user config has both default and a custom 'argentbench' agent; argentbench.md body REPLACES default.txt, env/instructions/skills still appended."
+  ]
+}

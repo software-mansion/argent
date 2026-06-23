@@ -1,0 +1,149 @@
+{
+  "harness": "OpenAI Codex CLI",
+  "harness_version_observed": "codex-cli 0.135.0 (sessions also from 0.119.0-alpha.11)",
+  "source_repo": "github.com/openai/codex (codex-rs/, ref=main)",
+  "api": {
+    "name": "OpenAI Responses API",
+    "endpoint": "POST /v1/responses",
+    "not": "Chat Completions",
+    "request_top_level_fields": ["model", "instructions", "input", "tools", "reasoning", "store", "stream", "parallel_tool_calls"],
+    "instructions_field": "carries the base system prompt (recorded in session_meta.payload.base_instructions.text)",
+    "input_item_types": [
+      {"type": "message", "role": "developer", "use": "permissions/sandbox, collaboration_mode, skills, (desktop) app-context fragments"},
+      {"type": "message", "role": "user", "use": "AGENTS.md injection, <environment_context>, then real user turn"},
+      {"type": "reasoning", "fields": ["summary[]", "content(null)", "encrypted_content(gAAAA... blob, round-tripped)"]},
+      {"type": "function_call", "use": "model tool call"},
+      {"type": "function_call_output", "use": "tool result"}
+    ],
+    "rollout_log_note": "~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl lines are {timestamp,type:'response_item',payload:<ITEM>}; payload IS the wire item. event_msg/turn_context/session_meta lines are local telemetry."
+  },
+  "system_prompt": {
+    "verbatim_or_path": "codex-rs/core/gpt_5_2_prompt.md | codex-rs/core/gpt-5.2-codex_prompt.md | codex-rs/core/prompt_with_apply_patch_instructions.md | (also gpt_5_1_prompt.md, gpt-5.1-codex-max_prompt.md, gpt_5_codex_prompt.md). Selected by model family. Full verbatim text fetched into codex.md.",
+    "opening_lines": {
+      "gpt_5_2_prompt.md": "You are GPT-5.2 running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. You are expected to be precise, safe, and helpful.",
+      "gpt-5.2-codex_prompt.md": "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.",
+      "prompt_with_apply_patch_instructions.md": "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. You are expected to be precise, safe, and helpful."
+    },
+    "length_chars": {
+      "gpt_5_2_prompt.md": 21672,
+      "gpt-5.2-codex_prompt.md": 7589,
+      "prompt_with_apply_patch_instructions.md": 24008
+    },
+    "major_sections": ["Personality", "AGENTS.md spec", "Planning (update_plan + plan examples)", "Task execution", "Validating your work", "Ambition vs. precision", "Presenting your work and final message", "Final answer structure and style guidelines", "Tool Guidelines (Shell commands, apply_patch, update_plan)"],
+    "override_note": "When config sets model_instructions_file, base_instructions.text is the user's file, not the stock prompt."
+  },
+  "tool_definition": {
+    "namespacing": "Responses tool names must match [A-Za-z0-9_]; every other char -> '_' (sanitize_responses_api_tool_name). MCP delimiter '__'. Modern form: bare de-dashed name + sibling 'namespace':'mcp__<server>' and tool nested under {'type':'namespace','name':'mcp__<server>','tools':[...]}. Legacy flat form: 'mcp__<server>__<tool>', 64-byte cap, SHA-1(12-hex) collision suffix. e.g. argent list-devices -> name 'list_devices', namespace 'mcp__argent'.",
+    "schema_format": "Flattened Responses-API: {'type':'function','name','description','strict','parameters':<JsonSchema>}. NOT Chat-Completions {'type':'function','function':{...}}. strict=false for MCP/dynamic tools. defer_loading omitted when None. output_schema is serde(skip) -> never on wire. apply_patch is a freeform {'type':'custom'} Lark-grammar tool.",
+    "example": {
+      "type": "function",
+      "name": "exec_command",
+      "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+      "strict": false,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "cmd": {"type": "string", "description": "Shell command to execute."},
+          "workdir": {"type": "string", "description": "Working directory for the command. Defaults to the turn cwd."},
+          "yield_time_ms": {"type": "number", "description": "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."},
+          "max_output_tokens": {"type": "number", "description": "Output token budget. Defaults to 10000 tokens; larger requests may be capped by policy."}
+        },
+        "required": ["cmd"],
+        "additionalProperties": false
+      }
+    },
+    "apply_patch_example": {
+      "type": "custom",
+      "name": "apply_patch",
+      "description": "Use the `apply_patch` tool to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.",
+      "format": {"type": "grammar", "syntax": "lark", "definition": "start: begin_patch hunk+ end_patch\nbegin_patch: \"*** Begin Patch\" LF\n... (apply_patch.lark)"}
+    },
+    "mcp_example": {
+      "type": "function",
+      "name": "list_devices",
+      "strict": false,
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false},
+      "_wrapper": "nested under {'type':'namespace','name':'mcp__argent','tools':[<this>]}"
+    }
+  },
+  "assistant_tool_call_format": {
+    "shape": "{'type':'function_call','name':<string>,'arguments':<JSON-encoded STRING>,'call_id':'call_<22alnum>'} plus optional 'namespace':'mcp__<server>' for MCP tools. arguments is always a string even when empty ('{}').",
+    "example": {
+      "type": "function_call",
+      "name": "gesture_swipe",
+      "namespace": "mcp__argent",
+      "arguments": "{\"udid\":\"6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB\",\"startX\":200,\"startY\":600,\"endX\":200,\"endY\":200}",
+      "call_id": "call_pMGZxs8XGC13A0UUnBwEx8wV"
+    },
+    "shell_example": {
+      "type": "function_call",
+      "name": "exec_command",
+      "arguments": "{\"cmd\":\"git status --short\",\"workdir\":\"/Users/x/argent\",\"yield_time_ms\":1000,\"max_output_tokens\":2000}",
+      "call_id": "call_mmSET2Sr5c4sAKmPRGQgmzRg"
+    }
+  },
+  "tool_result_format": {
+    "shape": "{'type':'function_call_output','call_id':<same call_id>,'output':<STRING or LIST>}. output is a string for text results (shell + text-only MCP), or a LIST of {input_text|input_image} parts for multimodal (screenshots).",
+    "junk": [
+      "Command: /bin/zsh -lc '<cmd>'",
+      "Chunk ID: <6hex>",
+      "Wall time: <float> seconds",
+      "Process exited with code <N>",
+      "Original token count: <N>",
+      "Output:",
+      "--- Screen after action ---",
+      "Saved: <abs path>.png"
+    ],
+    "shell_wrapper_lines": ["Command: <shell> -lc '<cmd>'", "Chunk ID: <hex>", "Wall time: <float> seconds", "Process exited with code <N>", "Original token count: <N>", "Output:"],
+    "mcp_wrapper_lines": ["Wall time: <float> seconds", "Output:", "<raw MCP content-array JSON: [{\"type\":\"text\",\"text\":\"...\"}]>"],
+    "mcp_wrapper_note": "MCP outputs omit 'Command:', 'Process exited with code', and 'Original token count'; body is the JSON-serialized MCP content array, not bare text.",
+    "image_handling": "Multimodal MCP outputs return output as a LIST. Image part = {'type':'input_image','image_url':'data:image/png;base64,<...>','detail':'high'}. Preceded by literal text part '--- Screen after action ---' and followed by a 'Saved: <abs path>.png' text part. Text parts use type 'input_text'.",
+    "truncation": "Output truncation elides the MIDDLE (head+tail kept) and inserts the literal Unicode-ellipsis marker '…<N> tokens truncated…' (regex: …\\d+ tokens truncated…). Budget = max_output_tokens (default 10000). NOT a head/tail '[... omitted N lines ...]' style marker.",
+    "example": {
+      "type": "function_call_output",
+      "call_id": "call_mmSET2Sr5c4sAKmPRGQgmzRg",
+      "output": "Command: /bin/zsh -lc 'git status --short --branch'\nChunk ID: d620f5\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 17\nOutput:\n## HEAD (no branch)\n/Users/x/argent\n"
+    },
+    "mcp_example": {
+      "type": "function_call_output",
+      "call_id": "call_pMGZxs8XGC13A0UUnBwEx8wV",
+      "output": "Wall time: 0.2211 seconds\nOutput:\n[{\"type\":\"text\",\"text\":\"{\\n  \\\"devices\\\": [ ... ]\\n}\"}]"
+    },
+    "multimodal_example": {
+      "type": "function_call_output",
+      "call_id": "call_b9V4ket7fut9nkeyeuI0iOj9",
+      "output": [
+        {"type": "input_text", "text": "Wall time: 3.2718 seconds\nOutput:"},
+        {"type": "input_text", "text": "{\n  \"launched\": true,\n  \"bundleId\": \"com.argent.bench2048\"\n}"},
+        {"type": "input_text", "text": "--- Screen after action ---"},
+        {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg...", "detail": "high"},
+        {"type": "input_text", "text": "Saved: /tmp/claude-501/simserver-xxxx/media/161793000-1780066076163.png"}
+      ]
+    }
+  },
+  "other_junk": [
+    "<permissions instructions>\nFilesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.\nApproval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.\n</permissions instructions>",
+    "<environment_context>\n  <cwd>/Users/x/argent</cwd>\n  <shell>zsh</shell>\n  <current_date>2026-04-10</current_date>\n  <timezone>Europe/Warsaw</timezone>\n</environment_context>",
+    "# AGENTS.md instructions for /Users/x/argent\n\n<INSTRUCTIONS>\n...AGENTS.md body...\n</INSTRUCTIONS>",
+    "<collaboration_mode># Collaboration Mode: Default ... </collaboration_mode>",
+    "<skills_instructions>\n## Skills\n...\n### Available skills\n- <name>: <desc> (file: <abs path>/SKILL.md)\n...\n</skills_instructions>",
+    "(desktop-only) <app-context># Codex desktop context ... </app-context>",
+    "newer main environment_context.rs renders richer XML: <filesystem>/<workspace_roots>/<permission_profile>/<network enabled=\"true\">/<approval_policy>, with &amp;/&lt;/&gt;/&quot;/&apos; XML-escaping"
+  ],
+  "approval_sandbox_values": {
+    "approval_policy": ["never", "untrusted", "on-failure", "on-request"],
+    "sandbox": ["danger-full-access", "workspace-write", "read-only"],
+    "exposed_via": ["developer <permissions instructions> block", "turn_context.approval_policy / sandbox_policy.type", "optionally <environment_context>"]
+  },
+  "capture_method": "1) BEST: read ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl — each {type:'response_item',payload} line is a verbatim Responses input[] item (jq -c 'select(.type==\"response_item\")|.payload'). 2) Proxy POST /v1/responses via HTTPS_PROXY/mitmproxy or OPENAI_BASE_URL to capture the raw request body (instructions+input+tools). 3) `codex exec \"<prompt>\"` for a clean one-shot, then read its fresh rollout file or the proxy. 4) Repo cross-check: gh api repos/openai/codex/contents/<path>?ref=main -H 'Accept: application/vnd.github.raw'.",
+  "notes": [
+    "Rollout .jsonl payloads ARE the wire items — no proxy needed.",
+    "Two output wrappers: heavy shell (Command/Chunk ID/Wall time/Process exited with code/Original token count/Output) vs light MCP (Wall time/Output + raw MCP content-array JSON).",
+    "MCP tool calls in 0.135 carry a 'namespace' field (mcp__argent) plus a de-dashed bare name; dashes illegal in Responses tool names.",
+    "Truncation elides the MIDDLE with '…N tokens truncated…' (Unicode ellipsis), not a head/tail '[... omitted ...]'.",
+    "Screenshots return as a multimodal output LIST with literal '--- Screen after action ---' separator + trailing 'Saved: <path>' text part; image detail 'high'.",
+    "apply_patch is a 'type':'custom' Lark-grammar freeform tool, not a JSON function.",
+    "reasoning items round-trip via encrypted_content (gAAAA... blob).",
+    "Tools are flattened Responses-API ({type:function,name,...}), not Chat-Completions nested."
+  ]
+}

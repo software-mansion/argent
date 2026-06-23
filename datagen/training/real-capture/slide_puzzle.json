@@ -1,0 +1,394 @@
+[
+  {
+    "meta": {
+      "id": "real-slide_puzzle-1",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Switch to the SEATTLE tab (tab 2 of 3).",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"8\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"15\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"14\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"13\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"9\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"3\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"1\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"6\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"10\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"11\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"5\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.4995,
+            "y": 0.2715
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXGroup \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"10\"  (0.100, 0.313, 0.186, 0.086)\n  AXButton \"12\"  (0.305, 0.313, 0.186, 0.086)\n  AXButton \"7\"  (0.509, 0.313, 0.186, 0.086)\n  AXButton \"13\"  (0.714, 0.313, 0.186, 0.086)\n  AXButton \"4\"  (0.100, 0.407, 0.186, 0.086)\n  AXButton \"11\"  (0.305, 0.407, 0.186, 0.086)\n  AXButton \"5\"  (0.509, 0.407, 0.186, 0.086)\n  AXButton \"1\"  (0.714, 0.407, 0.186, 0.086)\n  AXButton \"15\"  (0.100, 0.501, 0.186, 0.086)\n  AXButton \"2\"  (0.305, 0.501, 0.186, 0.086)\n  AXButton \"9\"  (0.714, 0.501, 0.186, 0.086)\n  AXButton \"3\"  (0.100, 0.595, 0.186, 0.086)\n  AXButton \"6\"  (0.305, 0.595, 0.186, 0.086)\n  AXButton \"8\"  (0.714, 0.595, 0.186, 0.086)\n  AXButton \"14\"  (0.509, 0.595, 0.186, 0.086)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "The SEATTLE tab is now selected (it is exposed as the focused AXGroup while SIMPLE and PLASTER are plain AXStaticText)."
+  },
+  {
+    "meta": {
+      "id": "real-slide_puzzle-2",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Switch to the PLASTER tab (tab 3 of 3).",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXGroup \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"10\"  (0.100, 0.313, 0.186, 0.086)\n  AXButton \"12\"  (0.305, 0.313, 0.186, 0.086)\n  AXButton \"7\"  (0.509, 0.313, 0.186, 0.086)\n  AXButton \"13\"  (0.714, 0.313, 0.186, 0.086)\n  AXButton \"4\"  (0.100, 0.407, 0.186, 0.086)\n  AXButton \"11\"  (0.305, 0.407, 0.186, 0.086)\n  AXButton \"5\"  (0.509, 0.407, 0.186, 0.086)\n  AXButton \"1\"  (0.714, 0.407, 0.186, 0.086)\n  AXButton \"15\"  (0.100, 0.501, 0.186, 0.086)\n  AXButton \"2\"  (0.305, 0.501, 0.186, 0.086)\n  AXButton \"9\"  (0.714, 0.501, 0.186, 0.086)\n  AXButton \"3\"  (0.100, 0.595, 0.186, 0.086)\n  AXButton \"6\"  (0.305, 0.595, 0.186, 0.086)\n  AXButton \"8\"  (0.714, 0.595, 0.186, 0.086)\n  AXButton \"14\"  (0.509, 0.595, 0.186, 0.086)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.8035,
+            "y": 0.2715
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXGroup \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"10\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"13\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"4\"  (0.104, 0.409, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"1\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"15\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"9\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"6\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"8\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"14\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "The PLASTER tab is now selected (exposed as the focused AXGroup)."
+  },
+  {
+    "meta": {
+      "id": "real-slide_puzzle-3",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Return to the SIMPLE tab (tab 1 of 3).",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXGroup \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"10\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"13\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"4\"  (0.104, 0.409, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"1\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"15\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"9\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"6\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"8\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"14\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.1965,
+            "y": 0.2715
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"10\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"13\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"4\"  (0.104, 0.409, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"1\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"15\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"9\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"6\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"8\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"14\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "The SIMPLE tab is now selected again (focused AXGroup)."
+  },
+  {
+    "meta": {
+      "id": "real-slide_puzzle-4",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Make one valid move on the puzzle (slide a tile into the empty slot) so the move counter goes from 0 to 1.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"13\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"11\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"3\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"8\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"4\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"15\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"1\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"10\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"6\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"12\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"9\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"2\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.3975,
+            "y": 0.356
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"15\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"10\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"9\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"3\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"11\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"8\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"12\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"1\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"6\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"4\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"13\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"7\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"1 Moves\"  (0.650, 0.715, 0.123, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "A tile was slid into the empty slot; the move counter incremented from \"0 Moves\" to \"1 Moves\"."
+  },
+  {
+    "meta": {
+      "id": "real-slide_puzzle-5",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Press Reset and confirm the move counter returns to 0.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"7\"  (0.119, 0.315, 0.177, 0.082)\n  AXButton \"6\"  (0.324, 0.315, 0.177, 0.082)\n  AXButton \"1\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"9\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"12\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"8\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"13\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"11\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"15\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"10\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"2 Moves\"  (0.645, 0.715, 0.127, 0.018)\n  AXStaticText \"14 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.0775,
+            "y": 0.724
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"7\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"6\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"1\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"9\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"8\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"12\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"13\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"11\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"2\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"15\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"10\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "Reset reshuffled the board and the move counter went back to \"0 Moves\"."
+  },
+  {
+    "meta": {
+      "id": "real-slide_puzzle-6",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Turn on Auto play.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"3\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"8\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"2\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"12\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"14\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"1\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"5\"  (0.309, 0.503, 0.177, 0.082)\n  AXButton \"13\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"15\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"10\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"6\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"9\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"0 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.1865,
+            "y": 0.724
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"7\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"9\"  (0.513, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"9\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"15\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.393, 0.177, 0.082)\n  AXButton \"6\"  (0.104, 0.409, 0.177, 0.082)\n  AXButton \"6\"  (0.111, 0.409, 0.177, 0.082)\n  AXButton \"10\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.412, 0.177, 0.082)\n  AXButton \"13\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.273, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.514, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"8\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"2\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"5\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"1\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"1\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"8 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "Auto play is now on: the Auto play button value changed from \"0\" to \"1\" and the solver began making moves automatically."
+  },
+  {
+    "meta": {
+      "id": "real-slide_puzzle-7",
+      "app": "slide_puzzle",
+      "platform": "ios",
+      "task_kind": "toggle",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "com.example.slidePuzzle",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Turn off Auto play.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"9\"  (0.514, 0.315, 0.177, 0.082)\n  AXButton \"15\"  (0.718, 0.315, 0.177, 0.082)\n  AXButton \"7\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"6\"  (0.104, 0.409, 0.177, 0.082)\n  AXButton \"10\"  (0.514, 0.409, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.412, 0.177, 0.082)\n  AXButton \"13\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.273, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"8\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"2\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"5\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"1\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"1\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"8 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.1865,
+            "y": 0.724
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXGroup \"SIMPLE\\nTab 1 of 3\"  (0.045, 0.245, 0.303, 0.053)\n  AXStaticText \"SEATTLE\\nTab 2 of 3\"  (0.348, 0.245, 0.303, 0.053)\n  AXStaticText \"PLASTER\\nTab 3 of 3\"  (0.652, 0.245, 0.303, 0.053)\n  AXButton \"7\"  (0.105, 0.315, 0.177, 0.082)\n  AXButton \"12\"  (0.309, 0.315, 0.177, 0.082)\n  AXButton \"15\"  (0.649, 0.315, 0.177, 0.082)\n  AXButton \"11\"  (0.309, 0.409, 0.177, 0.082)\n  AXButton \"6\"  (0.105, 0.409, 0.177, 0.082)\n  AXButton \"4\"  (0.718, 0.409, 0.177, 0.082)\n  AXButton \"9\"  (0.514, 0.419, 0.177, 0.082)\n  AXButton \"13\"  (0.105, 0.503, 0.177, 0.082)\n  AXButton \"14\"  (0.312, 0.503, 0.177, 0.082)\n  AXButton \"3\"  (0.718, 0.503, 0.177, 0.082)\n  AXButton \"10\"  (0.514, 0.513, 0.177, 0.082)\n  AXButton \"8\"  (0.309, 0.598, 0.177, 0.082)\n  AXButton \"2\"  (0.514, 0.598, 0.177, 0.082)\n  AXButton \"5\"  (0.718, 0.598, 0.177, 0.082)\n  AXButton \"1\"  (0.105, 0.598, 0.177, 0.082)\n  AXButton \"Reset\"  (0.023, 0.699, 0.109, 0.050)\n  AXButton \"Auto play\" value=\"0\"  (0.132, 0.699, 0.109, 0.050)\n  AXStaticText \"9 Moves\"  (0.643, 0.715, 0.130, 0.018)\n  AXStaticText \"15 Tiles left\"  (0.773, 0.715, 0.205, 0.018)"
+        }
+      }
+    ],
+    "finalAnswer": "Auto play is now off: the Auto play button value changed from \"1\" back to \"0\"."
+  }
+]

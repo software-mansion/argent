@@ -1,0 +1,638 @@
+[
+  {
+    "meta": {
+      "id": "real-swift_2048-1",
+      "app": "swift_2048",
+      "platform": "ios",
+      "task_kind": "navigate-tap",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "tap"
+      ]
+    },
+    "task": "Start a new game from the initial screen.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "restart-app",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "bundleId": "f3nghuang.swift-2048"
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXButton \"Start Game\"  (0.411, 0.484, 0.177, 0.031)\n  AXStaticText \"Start Game\"  (0.411, 0.491, 0.177, 0.019)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-tap",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "x": 0.4995,
+            "y": 0.4995
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 0\"  (0.341, 0.429, 0.318, 0.042)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.634, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.252, 0.605, 0.114, 0.052)"
+        }
+      }
+    ],
+    "finalAnswer": "A new game started: the SCORE: 0 header and a fresh board with two starting \"2\" tiles are now shown."
+  },
+  {
+    "meta": {
+      "id": "real-swift_2048-2",
+      "app": "swift_2048",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "easy",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "swipe"
+      ]
+    },
+    "task": "Swipe left to slide all tiles to the left edge of the board.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 0\"  (0.341, 0.429, 0.318, 0.042)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.634, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.252, 0.605, 0.114, 0.052)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 0\"  (0.341, 0.429, 0.318, 0.042)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.252, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.252, 0.605, 0.114, 0.052)\n  AXStaticText \"2\"  (0.634, 0.605, 0.114, 0.052)"
+        }
+      }
+    ],
+    "finalAnswer": "All tiles slid to the leftmost column and the game spawned a new \"2\" tile after the move."
+  },
+  {
+    "meta": {
+      "id": "real-swift_2048-3",
+      "app": "swift_2048",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "swipe"
+      ]
+    },
+    "task": "Swipe right; two matching tiles in a row should merge and raise the score.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 0\"  (0.341, 0.429, 0.318, 0.042)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.252, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.252, 0.605, 0.114, 0.052)\n  AXStaticText \"2\"  (0.634, 0.605, 0.114, 0.052)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 4\"  (0.341, 0.429, 0.318, 0.042)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.634, 0.546, 0.114, 0.052)\n  AXStaticText \"4\"  (0.634, 0.605, 0.114, 0.052)\n  AXStaticText \"4\"  (0.252, 0.663, 0.114, 0.052)"
+        }
+      }
+    ],
+    "finalAnswer": "Tiles slid right and two \"2\" tiles merged into a \"4\"; SCORE went from 0 to 4."
+  },
+  {
+    "meta": {
+      "id": "real-swift_2048-4",
+      "app": "swift_2048",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "medium",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "swipe"
+      ]
+    },
+    "task": "Merge two tiles with a single swipe so the score increases from 0.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 0\"  (0.341, 0.429, 0.318, 0.042)\n  AXStaticText \"2\"  (0.252, 0.487, 0.114, 0.052)\n  AXStaticText \"2\"  (0.380, 0.487, 0.114, 0.052)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.252, 0.546, 0.114, 0.052)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 4\"  (0.341, 0.429, 0.318, 0.042)\n  AXStaticText \"4\"  (0.252, 0.487, 0.114, 0.052)\n  AXStaticText \"2\"  (0.507, 0.487, 0.114, 0.052)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.252, 0.546, 0.114, 0.052)"
+        }
+      }
+    ],
+    "finalAnswer": "A swipe left merged two \"2\" tiles into a \"4\"; SCORE increased from 0 to 4."
+  },
+  {
+    "meta": {
+      "id": "real-swift_2048-5",
+      "app": "swift_2048",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "swipe"
+      ]
+    },
+    "task": "Play several moves (alternating left/right swipes) to raise the score above 15.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 4\"  (0.341, 0.429, 0.318, 0.042)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.634, 0.546, 0.114, 0.052)\n  AXStaticText \"4\"  (0.634, 0.605, 0.114, 0.052)\n  AXStaticText \"4\"  (0.252, 0.663, 0.114, 0.052)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 20\"  (0.341, 0.429, 0.318, 0.042)\n  AXStaticText \"2\"  (0.507, 0.487, 0.114, 0.052)\n  AXStaticText \"4\"  (0.634, 0.487, 0.114, 0.052)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"4\"  (0.507, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.634, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.380, 0.605, 0.114, 0.052)\n  AXStaticText \"2\"  (0.507, 0.605, 0.114, 0.052)\n  AXStaticText \"8\"  (0.634, 0.605, 0.114, 0.052)\n  AXStaticText \"8\"  (0.507, 0.663, 0.114, 0.052)\n  AXStaticText \"2\"  (0.634, 0.663, 0.114, 0.052)"
+        }
+      }
+    ],
+    "finalAnswer": "Eight alternating left/right swipes merged tiles repeatedly; SCORE climbed from 4 to 20 and the board reached an \"8\" tile."
+  },
+  {
+    "meta": {
+      "id": "real-swift_2048-6",
+      "app": "swift_2048",
+      "platform": "ios",
+      "task_kind": "swipe",
+      "source": "real",
+      "difficulty": "hard",
+      "bundleId": "f3nghuang.swift-2048",
+      "device": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+      "gestures": [
+        "swipe"
+      ]
+    },
+    "task": "Keep swiping (alternating left/right) until an \"8\" tile appears on the board.",
+    "tools": [],
+    "steps": [
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 4\"  (0.341, 0.429, 0.318, 0.042)\n  AXStaticText \"4\"  (0.252, 0.487, 0.114, 0.052)\n  AXStaticText \"2\"  (0.507, 0.487, 0.114, 0.052)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"2\"  (0.252, 0.546, 0.114, 0.052)"
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.72,
+            "fromY": 0.61,
+            "toX": 0.26,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "gesture-swipe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB",
+            "fromX": 0.26,
+            "fromY": 0.61,
+            "toX": 0.72,
+            "toY": 0.61,
+            "durationMs": 400
+          }
+        },
+        "observation": {
+          "text": "",
+          "hasScreenshot": true
+        }
+      },
+      {
+        "call": {
+          "name": "describe",
+          "arguments": {
+            "udid": "6DBF83B4-F341-4F8D-B48D-CD8FF312CCFB"
+          }
+        },
+        "observation": {
+          "text": "Source: ax-service\nMode: flat\nCoordinates are normalized [0,1] fractions of the screen (x, y, width, height), not pixels — pass them straight to gesture-tap / gesture-swipe / gesture-pinch, which expect this same space. To tap an element, use its centre: tap_x = frame.x + frame.width / 2, tap_y = frame.y + frame.height / 2.\n\nROOT  AXGroup (0.000, 0.000, 1.000, 1.000)\n\n  AXStaticText \"SCORE: 28\"  (0.341, 0.429, 0.318, 0.042)\n  AXStaticText \"4\"  (0.380, 0.487, 0.114, 0.052)\n  AXStaticText \"2\"  (0.507, 0.487, 0.114, 0.052)\n  AXStaticText \"4\"  (0.634, 0.487, 0.114, 0.052)\n  AXButton \"Start Game\"  (0.419, 0.505, 0.161, 0.029)\n  AXStaticText \"Start Game\"  (0.419, 0.511, 0.161, 0.017)\n  AXStaticText \"8\"  (0.507, 0.546, 0.114, 0.052)\n  AXStaticText \"2\"  (0.634, 0.546, 0.114, 0.052)\n  AXStaticText \"4\"  (0.634, 0.605, 0.114, 0.052)\n  AXStaticText \"2\"  (0.252, 0.663, 0.114, 0.052)\n  AXStaticText \"4\"  (0.634, 0.663, 0.114, 0.052)"
+        }
+      }
+    ],
+    "finalAnswer": "Repeated alternating swipes merged 2s into 4s and then two 4s into an \"8\" tile; SCORE reached 28."
+  }
+]
