@@ -97,6 +97,13 @@ n_chunks=$(( (TOTAL_ITERS + CHUNK - 1) / CHUNK ))
 log "training: $n_chunks chunks x $CHUNK iters ($done_chunks already done)"
 c=$((done_chunks + 1))
 while [ "$c" -le "$n_chunks" ]; do
+  # window guard: don't START a chunk past STOP_AFTER (a morning HHMM) — pause cleanly, resumable.
+  # (10# forces base-10 so 08xx/09xx don't error as bad octal; <1200 limits it to morning hours.)
+  now_hm=$((10#$(date +%H%M))); stop_hm=$((10#${STOP_AFTER:-0700}))
+  if [ "$stop_hm" -ne 0 ] && [ "$now_hm" -ge "$stop_hm" ] && [ "$now_hm" -lt 1200 ]; then
+    log "window end (${STOP_AFTER:-0700}) reached — pausing before chunk $c (resumable: rerun to continue)"
+    exit 0
+  fi
   ok=0
   for attempt in 1 2 3; do
     log "chunk $c/$n_chunks attempt $attempt (resume: $([ -f "$ADAPTER/adapters.safetensors" ] && echo yes || echo no))"
