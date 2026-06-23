@@ -6,6 +6,7 @@ import { chromiumCdpRef } from "../../blueprints/chromium-cdp";
 import { resolveDevice } from "../../utils/device-info";
 import { assertSupported, UnsupportedOperationError } from "../../utils/capability";
 import { sleep, DEFAULT_INTER_STEP_DELAY_MS } from "../../utils/timing";
+import { invokeSubTool } from "../../utils/sub-invoke";
 
 const ALLOWED_TOOLS = new Set([
   "gesture-tap",
@@ -127,7 +128,7 @@ Stops on the first error and returns partial results.`,
       }
       return { simulatorServer: simulatorServerRef(device) };
     },
-    async execute(_services, params) {
+    async execute(_services, params, ctx) {
       const { udid, steps } = params;
       const device = resolveDevice(udid);
       const results: StepResult[] = [];
@@ -161,7 +162,7 @@ Stops on the first error and returns partial results.`,
 
         try {
           const toolArgs = { ...step.args, udid };
-          const result = await registry.invokeTool(step.tool, toolArgs);
+          const result = await invokeSubTool(registry, ctx, step.tool, toolArgs);
           results.push({ tool: step.tool, result });
         } catch (err) {
           results.push({
